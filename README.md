@@ -25,6 +25,15 @@ Movi-Player is a powerful, modular video playback library that brings native-lik
 
 ---
 
+## 📖 Documentation & Examples
+
+- **[📚 Full Documentation](docs/)** - Comprehensive guides and API reference
+- **[🎮 Live Examples](https://github.com/MrUjjwalG/movi-player-examples)** - Interactive demos and sample code
+- **[🏗️ Architecture Guide](docs/ARCHITECTURE.md)** - System design and internals
+- **[🎬 API Reference](docs/PLAYER.md)** - Complete API documentation
+
+---
+
 ## 🚀 Quick Start
 
 ### Installation
@@ -336,6 +345,10 @@ Comprehensive documentation is available in the [docs/](docs/) directory:
 - [API Reference](docs/PLAYER.md#api-reference)
 - [Event Documentation](docs/PLAYER.md#events)
 - [Color Space & HDR](docs/DEMUXER.md#color-space-handling)
+
+### Examples
+- **[Live Examples Repository](https://github.com/MrUjjwalG/movi-player-examples)** - Interactive demos and sample implementations
+- Clone with: `git clone --recurse-submodules https://github.com/MrUjjwalG/movi-player.git`
 
 ---
 
