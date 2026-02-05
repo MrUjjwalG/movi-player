@@ -1,0 +1,64 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Simple Video Player - output.mp4</title>
+  <style>
+    * {
+      margin: 0;
+      padding: 0;
+      box-sizing: border-box;
+    }
+
+    body {
+      background: #000;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      min-height: 100vh;
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, sans-serif;
+    }
+
+    .container {
+      width: 100%;
+      max-width: 1280px;
+      padding: 20px;
+    }
+
+    h1 {
+      color: #fff;
+      text-align: center;
+      margin-bottom: 20px;
+      font-size: 24px;
+    }
+
+    video {
+      width: 100%;
+      height: auto;
+      background: #000;
+      border-radius: 8px;
+      display: block;
+    }
+
+    .info {
+      color: #888;
+      text-align: center;
+      margin-top: 20px;
+      font-size: 14px;
+    }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <h1>Simple Video Player</h1>
+    <video controls autoplay muted>
+      <source src="output.mp4" type="video/mp4">
+      Your browser does not support the video tag.
+    </video>
+    <div class="info">
+      Playing: output.mp4
+    </div>
+  </div>
+</body>
+</html>

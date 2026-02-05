@@ -1,0 +1,9 @@
+.DS_Store
+node_modules/
+dist/
+old/
+*.log
+.vite/
+.claude/
+*.mp4
+*.webm

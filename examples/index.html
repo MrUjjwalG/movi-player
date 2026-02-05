@@ -1,0 +1,542 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Movi Player Example (Dist Build)</title>
+    <style>
+      * {
+        box-sizing: border-box;
+        margin: 0;
+        padding: 0;
+      }
+
+      body {
+        font-family:
+          -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+        background: #0f0f0f;
+        color: #fff;
+        min-height: 100vh;
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        padding: 2rem;
+      }
+
+      h1 {
+        margin-bottom: 1rem;
+        background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+        -webkit-background-clip: text;
+        -webkit-text-fill-color: transparent;
+      }
+
+      .player-container {
+        width: 100%;
+        max-width: 1200px;
+        background: #1a1a1a;
+        border-radius: 12px;
+        overflow: hidden;
+        box-shadow: 0 20px 60px rgba(0, 0, 0, 0.5);
+      }
+
+      .video-wrapper {
+        position: relative;
+        width: 100%;
+        aspect-ratio: 16/9;
+        background: #000;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        overflow: hidden;
+      }
+
+      #video-canvas,
+      #video-element {
+        position: absolute;
+        top: 0;
+        left: 0;
+        width: 100%;
+        height: 100%;
+        object-fit: contain;
+      }
+
+      #video-element {
+        display: none; /* Hidden by default, shown when using native video */
+      }
+
+      .placeholder {
+        position: absolute;
+        top: 50%;
+        left: 50%;
+        transform: translate(-50%, -50%);
+        color: #666;
+        font-size: 1.2rem;
+        pointer-events: none;
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        gap: 1rem;
+        z-index: 10;
+      }
+
+      .controls {
+        padding: 1rem;
+        background: #242424;
+      }
+
+      .progress-bar {
+        width: 100%;
+        height: 6px;
+        background: #333;
+        border-radius: 3px;
+        margin-bottom: 1rem;
+        cursor: pointer;
+        position: relative;
+      }
+
+      .buffer-fill {
+        height: 100%;
+        background: #666;
+        border-radius: 0 3px 3px 0;
+        width: 0%;
+        position: absolute;
+        top: 0;
+        left: 0;
+        z-index: 1;
+      }
+
+      .progress-fill {
+        height: 100%;
+        background: linear-gradient(90deg, #667eea, #764ba2);
+        border-radius: 3px 0 0 3px;
+        width: 0%;
+        transition: width 0.1s;
+        position: relative;
+        z-index: 2;
+      }
+
+      .control-buttons {
+        display: flex;
+        gap: 1rem;
+        align-items: center;
+      }
+
+      button {
+        background: #333;
+        border: none;
+        color: #fff;
+        padding: 0.75rem 1.5rem;
+        border-radius: 8px;
+        cursor: pointer;
+        font-size: 1rem;
+        transition: background 0.2s;
+      }
+
+      button:hover {
+        background: #444;
+      }
+
+      button:disabled {
+        opacity: 0.5;
+        cursor: not-allowed;
+      }
+
+      #play-pause-btn {
+        width: 48px;
+        height: 48px;
+        padding: 0;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        border-radius: 50%;
+        background: #fff;
+        color: #000;
+      }
+
+      #play-pause-btn:hover:not(:disabled) {
+        transform: scale(1.05);
+        background: #f0f0f0;
+      }
+
+      #play-pause-btn .icon-play {
+        margin-left: 4px;
+      }
+
+      .time-display {
+        font-variant-numeric: tabular-nums;
+        color: #aaa;
+      }
+
+      .input-section {
+        margin-bottom: 1rem;
+        display: flex;
+        gap: 0.5rem;
+      }
+
+      input[type="text"] {
+        flex: 1;
+        padding: 0.75rem 1rem;
+        border: 1px solid #333;
+        border-radius: 8px;
+        background: #1a1a1a;
+        color: #fff;
+        font-size: 1rem;
+      }
+
+      .info-panel {
+        margin-top: 1rem;
+        padding: 1rem;
+        background: #1a1a1a;
+        border-radius: 8px;
+        font-size: 0.875rem;
+      }
+
+      .info-panel h3 {
+        margin-bottom: 0.5rem;
+        color: #888;
+      }
+
+      .track-list {
+        display: flex;
+        gap: 0.5rem;
+        flex-wrap: wrap;
+      }
+
+      .track {
+        background: #333;
+        padding: 0.5rem 1rem;
+        border-radius: 4px;
+        cursor: pointer;
+      }
+
+      .track.active {
+        background: #667eea;
+      }
+
+      .state-indicator {
+        padding: 0.25rem 0.75rem;
+        border-radius: 4px;
+        font-size: 0.875rem;
+        text-transform: uppercase;
+      }
+
+      .state-idle {
+        background: #333;
+      }
+
+      .state-loading {
+        background: #f59e0b;
+      }
+
+      .state-ready {
+        background: #10b981;
+      }
+
+      .state-playing {
+        background: #3b82f6;
+      }
+
+      .state-paused {
+        background: #6366f1;
+      }
+
+      .state-error {
+        background: #ef4444;
+      }
+    </style>
+  </head>
+
+  <body>
+    <h1>Movi Player (Dist Build)</h1>
+
+    <div class="player-container">
+      <div class="input-section">
+        <input
+          type="text"
+          id="url-input"
+          placeholder="Enter video URL or drag a file here"
+        />
+        <button id="load-btn">Load</button>
+        <input
+          type="file"
+          id="file-input"
+          accept="video/*,.mkv"
+          style="display: none"
+        />
+        <button id="file-btn">Open File</button>
+      </div>
+
+      <div class="video-wrapper">
+        <canvas id="video-canvas"></canvas>
+        <video id="video-element" controls></video>
+        <div class="placeholder" id="placeholder">
+          <svg
+            width="48"
+            height="48"
+            viewBox="0 0 24 24"
+            fill="none"
+            stroke="currentColor"
+            stroke-width="1"
+            stroke-linecap="round"
+            stroke-linejoin="round"
+          >
+            <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" />
+            <polyline points="17 8 12 3 7 8" />
+            <line x1="12" y1="3" x2="12" y2="15" />
+          </svg>
+          <div>Load a video to start</div>
+        </div>
+      </div>
+
+      <div class="controls">
+        <div class="progress-bar" id="progress-bar">
+          <div class="buffer-fill" id="buffer-fill"></div>
+          <div class="progress-fill" id="progress-fill"></div>
+        </div>
+
+        <div class="control-buttons">
+          <button id="play-pause-btn" disabled>
+            <svg
+              class="icon-play"
+              width="24"
+              height="24"
+              viewBox="0 0 24 24"
+              fill="currentColor"
+            >
+              <polygon points="5 3 19 12 5 21 5 3"></polygon>
+            </svg>
+            <svg
+              class="icon-pause"
+              width="24"
+              height="24"
+              viewBox="0 0 24 24"
+              fill="currentColor"
+              style="display: none"
+            >
+              <rect x="6" y="4" width="4" height="16"></rect>
+              <rect x="14" y="4" width="4" height="16"></rect>
+            </svg>
+          </button>
+          <span class="time-display">
+            <span id="current-time">0:00</span> /
+            <span id="duration">0:00</span>
+          </span>
+          <span class="state-indicator state-idle" id="state">idle</span>
+        </div>
+      </div>
+    </div>
+
+    <div class="info-panel" id="info-panel" style="display: none">
+      <h3>Tracks</h3>
+      <div id="tracks-container"></div>
+    </div>
+
+    <script type="module">
+      // Import from dist build instead of source
+      import { MoviPlayer, LogLevel } from "../dist/index.js";
+
+      // Set all logging
+      MoviPlayer.setLogLevel(LogLevel.DEBUG);
+
+      let player = null;
+
+      // DOM elements
+      const urlInput = document.getElementById("url-input");
+      const loadBtn = document.getElementById("load-btn");
+      const fileInput = document.getElementById("file-input");
+      const fileBtn = document.getElementById("file-btn");
+      const playPauseBtn = document.getElementById("play-pause-btn");
+      const iconPlay = playPauseBtn.querySelector(".icon-play");
+      const iconPause = playPauseBtn.querySelector(".icon-pause");
+      const progressBar = document.getElementById("progress-bar");
+      const progressFill = document.getElementById("progress-fill");
+      const bufferFill = document.getElementById("buffer-fill");
+      const currentTimeEl = document.getElementById("current-time");
+      const durationEl = document.getElementById("duration");
+      const stateEl = document.getElementById("state");
+      const placeholder = document.getElementById("placeholder");
+      const infoPanel = document.getElementById("info-panel");
+      const tracksContainer = document.getElementById("tracks-container");
+
+      function formatTime(seconds) {
+        const m = Math.floor(seconds / 60);
+        const s = Math.floor(seconds % 60);
+        return `${m}:${s.toString().padStart(2, "0")}`;
+      }
+
+      function updateState(state) {
+        stateEl.textContent = state;
+        stateEl.className = `state-indicator state-${state}`;
+      }
+
+      function updateTracks(tracks) {
+        tracksContainer.innerHTML = tracks
+          .map(
+            (track) => `
+        <div class="track" data-id="${track.id}" data-type="${track.type}">
+          ${track.type}: ${track.codec} ${track.type === "video" ? `(${track.width}x${track.height})` : ""}
+          ${track.type === "audio" ? `(${track.channels}ch, ${track.sampleRate}Hz)` : ""}
+        </div>
+      `,
+          )
+          .join("");
+        infoPanel.style.display = "block";
+      }
+
+      async function loadVideo(source) {
+        // Destroy existing player
+        if (player) {
+          player.destroy();
+        }
+
+        const videoElement = document.getElementById("video-element");
+        const canvas = document.getElementById("video-canvas");
+
+        let useVideoElement = false;
+
+        if (!videoElement || !("MediaSource" in window)) {
+          useVideoElement = false;
+        }
+
+        if (useVideoElement) {
+          canvas.style.display = "none";
+          videoElement.style.display = "block";
+          videoElement.removeAttribute("controls");
+          player = new MoviPlayer({
+            source,
+            renderer: "video",
+            decoder: "auto",
+            cache: { type: "lru", maxSizeMB: 520 },
+            videoElement: videoElement,
+            // Optional: Custom WASM path (default: '/dist/wasm/movi.wasm')
+            // wasmPath: '/custom/path/to/movi.wasm'
+          });
+        } else {
+          canvas.style.display = "block";
+          videoElement.style.display = "none";
+          player = new MoviPlayer({
+            source,
+            renderer: "canvas",
+            decoder: "auto",
+            cache: { type: "lru", maxSizeMB: 520 },
+            canvas: canvas,
+            // Optional: Custom WASM path (default: '/dist/wasm/movi.wasm')
+            // wasmPath: '/custom/path/to/movi.wasm'
+          });
+        }
+
+        // Event handlers
+        player.on("stateChange", (state) => {
+          updateState(state);
+
+          if (state === "playing") {
+            iconPlay.style.display = "none";
+            iconPause.style.display = "block";
+          } else {
+            iconPlay.style.display = "block";
+            iconPause.style.display = "none";
+          }
+        });
+        player.on("durationChange", (duration) => {
+          durationEl.textContent = formatTime(duration);
+        });
+        player.on("tracksChange", updateTracks);
+        player.on("error", (error) => {
+          if (
+            !error.message?.includes("Decoding error") &&
+            !error.message?.includes("decode")
+          ) {
+            alert("Error: " + error.message);
+          }
+        });
+        player.on("loadEnd", () => {
+          playPauseBtn.disabled = false;
+          placeholder.style.display = "none";
+        });
+
+        // Load
+        await player.load();
+      }
+
+      // Load from URL
+      loadBtn.addEventListener("click", async () => {
+        const url = urlInput.value.trim();
+        if (!url) return;
+
+        await loadVideo({ type: "url", url });
+      });
+
+      // Load from file
+      fileBtn.addEventListener("click", () => fileInput.click());
+      fileInput.addEventListener("change", async (e) => {
+        const file = e.target.files[0];
+        if (!file) return;
+
+        urlInput.value = file.name;
+        await loadVideo({ type: "file", file });
+      });
+
+      // Play/Pause Toggle
+      playPauseBtn.addEventListener("click", () => {
+        if (!player) return;
+
+        const state = player.getState();
+        if (state === "playing") {
+          player.pause();
+        } else {
+          player.play();
+        }
+      });
+
+      // Seek
+      progressBar.addEventListener("click", async (e) => {
+        if (!player) return;
+        const rect = progressBar.getBoundingClientRect();
+        const percent = (e.clientX - rect.left) / rect.width;
+        const time = percent * player.getDuration();
+        await player.seek(time);
+      });
+
+      // Update progress and buffer
+      if (!window.updateInterval) {
+        window.updateInterval = setInterval(() => {
+          if (!player) return;
+          const time = player.getCurrentTime();
+          const duration = player.getDuration();
+          if (duration > 0) {
+            currentTimeEl.textContent = formatTime(time);
+            progressFill.style.width = `${(time / duration) * 100}%`;
+
+            updateBufferIndicator();
+          }
+        }, 100);
+      }
+
+      function updateBufferIndicator() {
+        if (!player) return;
+
+        const duration = player.getDuration();
+        if (duration <= 0) {
+          bufferFill.style.width = "0%";
+          bufferFill.style.left = "0%";
+          return;
+        }
+
+        const bufferStartTime = player.getBufferStartTime();
+        const bufferEndTime = player.getBufferEndTime();
+
+        if (bufferStartTime >= 0 && bufferEndTime > bufferStartTime) {
+          const startPercent = Math.round((bufferStartTime / duration) * 100);
+          const endPercent = Math.round((bufferEndTime / duration) * 100);
+          const width = Math.max(0, endPercent - startPercent);
+
+          bufferFill.style.left = `${startPercent}%`;
+          bufferFill.style.width = `${width}%`;
+        } else {
+          bufferFill.style.width = "0%";
+          bufferFill.style.left = "0%";
+        }
+      }
+    </script>
+  </body>
+</html>
