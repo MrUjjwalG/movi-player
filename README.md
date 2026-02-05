@@ -1,4 +1,4 @@
-# Movi
+# Movi-Player
 
 **Modular streaming video library for browsers with WebAssembly FFmpeg pipeline**
 
@@ -6,7 +6,7 @@
 [![License: Apache 2.0](https://img.shields.io/badge/License-Apache%202.0-blue.svg)](LICENSE)
 [![Browser Support](https://img.shields.io/badge/browsers-Chrome%2094%2B%20%7C%20Safari%2016.4%2B%20%7C%20Edge%2094%2B-brightgreen.svg)](https://caniuse.com/webcodecs)
 
-Movi is a powerful, modular video playback library that brings native-like video performance to the web. Built on WebCodecs API and FFmpeg WASM, it offers hardware-accelerated decoding, HDR support, and a professional UI—all in a lightweight package.
+Movi-Player is a powerful, modular video playback library that brings native-like video performance to the web. Built on WebCodecs API and FFmpeg WASM, it offers hardware-accelerated decoding, HDR support, and a professional UI—all in a lightweight package.
 
 ---
 
@@ -111,7 +111,7 @@ Choose the right module for your needs:
 
 ## 💡 Use Cases
 
-Movi's modular design makes it perfect for a wide range of applications:
+Movi-Player's modular design makes it perfect for a wide range of applications:
 
 ### Demuxer Module (45KB)
 - **Media Asset Management**: Catalog video libraries without playing files
@@ -341,11 +341,11 @@ Comprehensive documentation is available in the [docs/](docs/) directory:
 
 ## 🏗️ Architecture
 
-Movi uses a modular, layered architecture:
+Movi-Player uses a modular, layered architecture:
 
 ```
 ┌─────────────────────────────────────────────────────────┐
-│                    Movi Library                         │
+│                    Movi-Player Library                   │
 ├─────────────────────────────────────────────────────────┤
 │                                                         │
 │  ┌───────────────────────────────────────────────────┐ │
@@ -577,7 +577,7 @@ We welcome contributions! Here's how to get started:
 ```bash
 # Clone repository
 git clone https://github.com/mrujjwalg/movi-player.git
-cd movi
+cd movi-player
 
 # Install dependencies
 npm install
@@ -653,7 +653,7 @@ MIT License - see the [LICENSE](LICENSE) file for details.
 
 ## ⭐ Star History
 
-If you find Movi useful, please consider giving it a star on GitHub!
+If you find Movi-Player useful, please consider giving it a star on GitHub!
 
 ---
 
