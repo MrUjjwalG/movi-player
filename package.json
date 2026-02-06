@@ -1,6 +1,6 @@
 {
   "name": "movi-player",
-  "version": "0.1.1",
+  "version": "0.1.2-beta.2",
   "description": "Modular streaming video library for browsers with WebAssembly FFmpeg pipeline",
   "type": "module",
   "main": "dist/index.js",
