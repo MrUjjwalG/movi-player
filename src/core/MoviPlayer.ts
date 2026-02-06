@@ -66,6 +66,12 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
     | CanvasRenderingContext2D
     | OffscreenCanvasRenderingContext2D
     | null = null;
+  // WebGL-based thumbnail rendering
+  private thumbnailGL: WebGL2RenderingContext | null = null;
+  private thumbnailGLProgram: WebGLProgram | null = null;
+  private thumbnailGLTexture: WebGLTexture | null = null;
+  private thumbnailGLVao: WebGLVertexArrayObject | null = null;
+  private thumbnailHDREnabled: boolean = true; // HDR enabled by default
   private isPreviewGenerating: boolean = false;
   private audioRenderer: AudioRenderer;
   private previewInitPromise: Promise<void> | null = null; // Guard for preview initialization
@@ -1373,6 +1379,174 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
   }
 
   /**
+   * Initialize WebGL context for thumbnail rendering
+   */
+  private initThumbnailWebGL(
+    canvas: HTMLCanvasElement | OffscreenCanvas,
+    colorSpace: string,
+  ): boolean {
+    try {
+      const contextOptions: WebGLContextAttributes = {
+        alpha: false,
+        desynchronized: false,
+        antialias: false,
+        depth: false,
+        preserveDrawingBuffer: true,
+      };
+
+      this.thumbnailGL = canvas.getContext(
+        "webgl2",
+        contextOptions,
+      ) as WebGL2RenderingContext;
+
+      if (!this.thumbnailGL) {
+        Logger.warn(TAG, "WebGL2 not supported for thumbnails, falling back to 2D");
+        return false;
+      }
+
+      const gl = this.thumbnailGL;
+
+      // Set color space
+      try {
+        // @ts-ignore
+        if (colorSpace !== "srgb" && gl.drawingBufferColorSpace !== undefined) {
+          // @ts-ignore
+          gl.drawingBufferColorSpace = colorSpace;
+          // @ts-ignore
+          gl.unpackColorSpace = colorSpace;
+          Logger.debug(TAG, `Thumbnail WebGL color space set to: ${colorSpace}`);
+        }
+      } catch (e) {
+        Logger.warn(TAG, "Failed to set thumbnail drawingBufferColorSpace", e);
+      }
+
+      // Create shaders
+      const vsSource = `#version 300 es
+        layout(location = 0) in vec2 a_position;
+        layout(location = 1) in vec2 a_texCoord;
+        out vec2 v_texCoord;
+        void main() {
+          gl_Position = vec4(a_position, 0.0, 1.0);
+          v_texCoord = a_texCoord;
+        }`;
+
+      const fsSource = `#version 300 es
+        precision highp float;
+        uniform sampler2D u_image;
+        in vec2 v_texCoord;
+        out vec4 outColor;
+        void main() {
+          outColor = texture(u_image, v_texCoord);
+        }`;
+
+      const createShader = (type: number, source: string) => {
+        const shader = gl.createShader(type);
+        if (!shader) return null;
+        gl.shaderSource(shader, source);
+        gl.compileShader(shader);
+        if (!gl.getShaderParameter(shader, gl.COMPILE_STATUS)) {
+          Logger.error(TAG, "Thumbnail shader compile error:", gl.getShaderInfoLog(shader));
+          gl.deleteShader(shader);
+          return null;
+        }
+        return shader;
+      };
+
+      const vert = createShader(gl.VERTEX_SHADER, vsSource);
+      const frag = createShader(gl.FRAGMENT_SHADER, fsSource);
+      if (!vert || !frag) return false;
+
+      this.thumbnailGLProgram = gl.createProgram();
+      if (!this.thumbnailGLProgram) return false;
+      gl.attachShader(this.thumbnailGLProgram, vert);
+      gl.attachShader(this.thumbnailGLProgram, frag);
+      gl.linkProgram(this.thumbnailGLProgram);
+
+      if (!gl.getProgramParameter(this.thumbnailGLProgram, gl.LINK_STATUS)) {
+        Logger.error(TAG, "Thumbnail program link error:", gl.getProgramInfoLog(this.thumbnailGLProgram));
+        return false;
+      }
+
+      // Create vertex array and buffer
+      const vertices = new Float32Array([
+        -1.0, 1.0, 0.0, 0.0,
+        -1.0, -1.0, 0.0, 1.0,
+        1.0, 1.0, 1.0, 0.0,
+        1.0, -1.0, 1.0, 1.0,
+      ]);
+
+      this.thumbnailGLVao = gl.createVertexArray();
+      gl.bindVertexArray(this.thumbnailGLVao);
+
+      const vbo = gl.createBuffer();
+      gl.bindBuffer(gl.ARRAY_BUFFER, vbo);
+      gl.bufferData(gl.ARRAY_BUFFER, vertices, gl.STATIC_DRAW);
+
+      gl.enableVertexAttribArray(0);
+      gl.vertexAttribPointer(0, 2, gl.FLOAT, false, 4 * 4, 0);
+
+      gl.enableVertexAttribArray(1);
+      gl.vertexAttribPointer(1, 2, gl.FLOAT, false, 4 * 4, 2 * 4);
+
+      this.thumbnailGLTexture = gl.createTexture();
+      gl.bindTexture(gl.TEXTURE_2D, this.thumbnailGLTexture);
+      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
+      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
+      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
+
+      const uImage = gl.getUniformLocation(this.thumbnailGLProgram, "u_image");
+      if (uImage && this.thumbnailGLProgram) {
+        gl.useProgram(this.thumbnailGLProgram);
+        gl.uniform1i(uImage, 0);
+      }
+
+      Logger.debug(TAG, "Thumbnail WebGL initialized successfully");
+      return true;
+    } catch (error) {
+      Logger.error(TAG, "Error initializing thumbnail WebGL", error);
+      return false;
+    }
+  }
+
+  /**
+   * Detect HDR color space for thumbnails
+   */
+  private detectThumbnailHDRColorSpace(): string {
+    if (!this.thumbnailHDREnabled) {
+      return "srgb";
+    }
+
+    const videoTrack = this.mediaInfo?.tracks?.find(
+      (t) => t.type === "video",
+    ) as VideoTrack | undefined;
+
+    if (!videoTrack) return "srgb";
+
+    const primaries = (videoTrack.colorPrimaries || "").toLowerCase();
+    const transfer = (videoTrack.colorTransfer || "").toLowerCase();
+
+    const isHDRTransfer =
+      transfer.includes("pq") ||
+      transfer.includes("hlg") ||
+      transfer.includes("smpte2084") ||
+      transfer.includes("arib-std-b67");
+
+    const isBT2020 =
+      primaries.includes("bt2020") || primaries.includes("rec2020");
+
+    if (isHDRTransfer || isBT2020) {
+      return "display-p3";
+    }
+
+    if (primaries.includes("p3") || primaries.includes("display-p3")) {
+      return "display-p3";
+    }
+
+    return "srgb";
+  }
+
+  /**
    * Generates a preview frame for the given time using C-based FFmpeg software decoding.
    * Fast and doesn't block main playback.
    */
@@ -1551,7 +1725,7 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
             `Thumbnail frame received: ${frame.codedWidth}x${frame.codedHeight}`,
           );
 
-          // 3. Render VideoFrame to Canvas
+          // 3. Render VideoFrame to Canvas using WebGL (with HDR support)
           const videoTrack = this.mediaInfo?.tracks?.find(
             (t) => t.type === "video",
           ) as VideoTrack | undefined;
@@ -1564,6 +1738,7 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
           const canvasW = isRotated ? frameH : frameW;
           const canvasH = isRotated ? frameW : frameH;
 
+          // Create canvas if needed
           if (!this.thumbnailCanvas) {
             if (typeof OffscreenCanvas !== "undefined") {
               this.thumbnailCanvas = new OffscreenCanvas(canvasW, canvasH);
@@ -1572,35 +1747,103 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
               this.thumbnailCanvas.width = canvasW;
               this.thumbnailCanvas.height = canvasH;
             }
-            this.thumbnailContext = this.thumbnailCanvas.getContext("2d", {
-              alpha: false,
-              willReadFrequently: true,
-            }) as any;
+
+            // Try to initialize WebGL with HDR support
+            const colorSpace = this.detectThumbnailHDRColorSpace();
+            const webglInitialized = this.initThumbnailWebGL(this.thumbnailCanvas, colorSpace);
+
+            // Fallback to 2D if WebGL fails
+            if (!webglInitialized) {
+              this.thumbnailContext = this.thumbnailCanvas.getContext("2d", {
+                alpha: false,
+                willReadFrequently: true,
+              }) as any;
+            }
           }
 
+          // Resize canvas if dimensions changed
           if (
             this.thumbnailCanvas.width !== canvasW ||
             this.thumbnailCanvas.height !== canvasH
           ) {
             this.thumbnailCanvas.width = canvasW;
             this.thumbnailCanvas.height = canvasH;
+
+            // Re-initialize WebGL if it was being used
+            if (this.thumbnailGL) {
+              const colorSpace = this.detectThumbnailHDRColorSpace();
+              this.initThumbnailWebGL(this.thumbnailCanvas, colorSpace);
+            }
           }
 
-          // Draw the VideoFrame with rotation
-          if (rotation !== 0 && this.thumbnailContext) {
-            this.thumbnailContext.save();
-            this.thumbnailContext.translate(canvasW / 2, canvasH / 2);
-            this.thumbnailContext.rotate((rotation * Math.PI) / 180);
-            this.thumbnailContext.drawImage(
-              frame,
-              -frameW / 2,
-              -frameH / 2,
-              frameW,
-              frameH,
-            );
-            this.thumbnailContext.restore();
+          // Render using WebGL if available, otherwise fall back to 2D
+          if (this.thumbnailGL && this.thumbnailGLProgram && this.thumbnailGLTexture && this.thumbnailGLVao) {
+            try {
+              const gl = this.thumbnailGL;
+
+              // Setup viewport
+              gl.viewport(0, 0, canvasW, canvasH);
+              gl.clearColor(0, 0, 0, 1);
+              gl.clear(gl.COLOR_BUFFER_BIT);
+
+              // Bind program and VAO
+              gl.useProgram(this.thumbnailGLProgram);
+              gl.bindVertexArray(this.thumbnailGLVao);
+
+              // Upload frame to texture
+              gl.activeTexture(gl.TEXTURE0);
+              gl.bindTexture(gl.TEXTURE_2D, this.thumbnailGLTexture);
+              gl.texImage2D(
+                gl.TEXTURE_2D,
+                0,
+                gl.RGBA,
+                gl.RGBA,
+                gl.UNSIGNED_BYTE,
+                frame,
+              );
+
+              // Draw
+              gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
+
+              Logger.debug(TAG, `Thumbnail rendered with WebGL (HDR: ${this.thumbnailHDREnabled})`);
+            } catch (e) {
+              Logger.warn(TAG, "WebGL thumbnail rendering failed, falling back to 2D", e);
+              // Fallback to 2D rendering
+              if (this.thumbnailContext) {
+                if (rotation !== 0) {
+                  this.thumbnailContext.save();
+                  this.thumbnailContext.translate(canvasW / 2, canvasH / 2);
+                  this.thumbnailContext.rotate((rotation * Math.PI) / 180);
+                  this.thumbnailContext.drawImage(
+                    frame,
+                    -frameW / 2,
+                    -frameH / 2,
+                    frameW,
+                    frameH,
+                  );
+                  this.thumbnailContext.restore();
+                } else {
+                  this.thumbnailContext.drawImage(frame, 0, 0, frameW, frameH);
+                }
+              }
+            }
           } else {
-            this.thumbnailContext?.drawImage(frame, 0, 0, frameW, frameH);
+            // Use 2D canvas as fallback
+            if (rotation !== 0 && this.thumbnailContext) {
+              this.thumbnailContext.save();
+              this.thumbnailContext.translate(canvasW / 2, canvasH / 2);
+              this.thumbnailContext.rotate((rotation * Math.PI) / 180);
+              this.thumbnailContext.drawImage(
+                frame,
+                -frameW / 2,
+                -frameH / 2,
+                frameW,
+                frameH,
+              );
+              this.thumbnailContext.restore();
+            } else {
+              this.thumbnailContext?.drawImage(frame, 0, 0, frameW, frameH);
+            }
           }
 
           frame.close();
@@ -1755,6 +1998,24 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
       this.thumbnailDecoder.close();
       this.thumbnailDecoder = null;
     }
+
+    // Cleanup WebGL resources
+    if (this.thumbnailGL) {
+      if (this.thumbnailGLTexture) {
+        this.thumbnailGL.deleteTexture(this.thumbnailGLTexture);
+        this.thumbnailGLTexture = null;
+      }
+      if (this.thumbnailGLVao) {
+        this.thumbnailGL.deleteVertexArray(this.thumbnailGLVao);
+        this.thumbnailGLVao = null;
+      }
+      if (this.thumbnailGLProgram) {
+        this.thumbnailGL.deleteProgram(this.thumbnailGLProgram);
+        this.thumbnailGLProgram = null;
+      }
+      this.thumbnailGL = null;
+    }
+
     this.thumbnailSource = null;
     this.thumbnailCanvas = null;
     this.thumbnailContext = null;
@@ -2001,8 +2262,36 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
    * Set HDR enabled state
    */
   setHDREnabled(enabled: boolean): void {
+    this.thumbnailHDREnabled = enabled;
     if (this.videoRenderer && (this.videoRenderer as any).setHDREnabled) {
       (this.videoRenderer as any).setHDREnabled(enabled);
+    }
+
+    // Destroy thumbnail canvas to force recreation with new color space
+    // WebGL contexts can't change color space after creation, so we need to recreate
+    if (this.thumbnailCanvas) {
+      Logger.debug(TAG, `Destroying thumbnail canvas to apply HDR: ${enabled}`);
+
+      // Cleanup WebGL resources
+      if (this.thumbnailGL) {
+        if (this.thumbnailGLTexture) {
+          this.thumbnailGL.deleteTexture(this.thumbnailGLTexture);
+          this.thumbnailGLTexture = null;
+        }
+        if (this.thumbnailGLVao) {
+          this.thumbnailGL.deleteVertexArray(this.thumbnailGLVao);
+          this.thumbnailGLVao = null;
+        }
+        if (this.thumbnailGLProgram) {
+          this.thumbnailGL.deleteProgram(this.thumbnailGLProgram);
+          this.thumbnailGLProgram = null;
+        }
+        this.thumbnailGL = null;
+      }
+
+      // Clear canvas references to force recreation
+      this.thumbnailCanvas = null;
+      this.thumbnailContext = null;
     }
   }
 
