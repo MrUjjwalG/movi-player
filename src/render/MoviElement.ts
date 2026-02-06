@@ -3533,8 +3533,17 @@ export class MoviElement extends HTMLElement {
       :host([theme="light"]) .movi-volume-slider::-webkit-slider-runnable-track {
          background: rgba(0, 0, 0, 0.15);
       }
-      
+
       :host([theme="light"]) .movi-volume-slider::-webkit-slider-thumb {
+         background: #11142d;
+         box-shadow: 0 2px 6px rgba(0, 0, 0, 0.2);
+      }
+
+      :host([theme="light"]) .movi-volume-slider::-moz-range-track {
+         background: rgba(0, 0, 0, 0.15);
+      }
+
+      :host([theme="light"]) .movi-volume-slider::-moz-range-thumb {
          background: #11142d;
          box-shadow: 0 2px 6px rgba(0, 0, 0, 0.2);
       }
@@ -3564,7 +3573,88 @@ export class MoviElement extends HTMLElement {
       :host([theme="light"]) .movi-osd-text {
         color: #11142d !important;
       }
-      
+
+      /* Light Theme Button Hover */
+      :host([theme="light"]) .movi-btn:hover {
+        background: var(--movi-btn-hover-bg) !important;
+      }
+
+      /* Light Theme Controls Overlay */
+      :host([theme="light"]) .movi-controls-overlay {
+        background: linear-gradient(to top, rgba(255, 255, 255, 0.4) 0%, transparent 30%) !important;
+      }
+
+      /* Light Theme Progress Bar */
+      :host([theme="light"]) .movi-progress-bar {
+        background: rgba(0, 0, 0, 0.15) !important;
+      }
+
+      :host([theme="light"]) .movi-progress-bar:hover {
+        background: rgba(0, 0, 0, 0.2) !important;
+      }
+
+      :host([theme="light"]) .movi-progress-buffer {
+        background: rgba(0, 0, 0, 0.1) !important;
+      }
+
+      /* Light Theme Center Play Button */
+      :host([theme="light"]) .movi-center-play-pause {
+        background: rgba(255, 255, 255, 0.8) !important;
+        border-color: rgba(0, 0, 0, 0.1) !important;
+        box-shadow: 0 8px 32px rgba(0, 0, 0, 0.15), inset 0 0 0 1px rgba(0, 0, 0, 0.05) !important;
+      }
+
+      :host([theme="light"]) .movi-center-play-pause:hover {
+        background: rgba(255, 255, 255, 0.95) !important;
+        box-shadow: 0 8px 40px rgba(0, 0, 0, 0.2), inset 0 0 0 1px rgba(0, 0, 0, 0.08) !important;
+      }
+
+      :host([theme="light"]) .movi-center-play-pause svg {
+        color: #11142d !important;
+        filter: none !important;
+      }
+
+      /* Light Theme Context Menu */
+      :host([theme="light"]) .movi-context-menu {
+        background: rgba(255, 255, 255, 0.95) !important;
+        border-color: rgba(0, 0, 0, 0.1) !important;
+        box-shadow: 0 20px 50px rgba(0, 0, 0, 0.15) !important;
+      }
+
+      :host([theme="light"]) .movi-context-menu-divider {
+        background: rgba(0, 0, 0, 0.1) !important;
+      }
+
+      :host([theme="light"]) .movi-speed-menu,
+      :host([theme="light"]) .movi-audio-track-menu,
+      :host([theme="light"]) .movi-subtitle-track-menu,
+      :host([theme="light"]) .movi-quality-menu {
+        background: rgba(255, 255, 255, 0.95) !important;
+        border-color: rgba(0, 0, 0, 0.1) !important;
+        box-shadow: 0 20px 50px rgba(0, 0, 0, 0.15) !important;
+      }
+
+      /* Light Theme Menu Items Hover */
+      :host([theme="light"]) .movi-audio-track-item:hover,
+      :host([theme="light"]) .movi-subtitle-track-item:hover,
+      :host([theme="light"]) .movi-speed-item:hover {
+        background: rgba(139, 92, 246, 0.08) !important;
+      }
+
+      :host([theme="light"]) .movi-audio-track-item.movi-audio-track-active,
+      :host([theme="light"]) .movi-subtitle-track-item.movi-subtitle-track-active,
+      :host([theme="light"]) .movi-speed-item.movi-speed-active {
+        background: rgba(139, 92, 246, 0.15) !important;
+      }
+
+      :host([theme="light"]) .movi-quality-item:hover {
+        background: rgba(0, 0, 0, 0.05) !important;
+      }
+
+      :host([theme="light"]) .movi-quality-item.movi-quality-active {
+        background: rgba(139, 92, 246, 0.12) !important;
+      }
+
       :host:focus,
       :host:active,
       :host:focus-visible {
@@ -4534,7 +4624,12 @@ export class MoviElement extends HTMLElement {
           -webkit-backdrop-filter: none !important;
           background: rgba(10, 10, 18, 0.95) !important; /* Solid dark background fallback */
         }
-        
+
+        /* Light theme mobile controls bar */
+        :host([theme="light"]) .movi-controls-bar {
+          background: rgba(255, 255, 255, 0.95) !important;
+        }
+
         /* Remove the slide-up/down effect */
         .movi-controls-container,
         .movi-controls-container.movi-controls-hidden,
@@ -4804,7 +4899,11 @@ export class MoviElement extends HTMLElement {
           background-color: rgba(255, 255, 255, 0.08);
           transform: scale(1.02);
         }
-        
+
+        :host([theme="light"]) .movi-context-menu-item:hover {
+          background-color: rgba(0, 0, 0, 0.05);
+        }
+
         .movi-context-menu-item:hover .movi-context-menu-arrow {
           transform: translateX(2px);
           color: var(--movi-primary-light);
@@ -5262,6 +5361,12 @@ export class MoviElement extends HTMLElement {
           z-index: 20000 !important;
         }
 
+        /* Light theme mobile context menu */
+        :host([theme="light"]) .movi-context-menu.movi-context-menu-mobile {
+          border-left-color: rgba(0, 0, 0, 0.1) !important;
+          box-shadow: -10px 0 50px rgba(0, 0, 0, 0.2) !important;
+        }
+
         .movi-context-menu.movi-context-menu-mobile.visible {
           transform: translateX(0) !important;
         }
@@ -5315,8 +5420,15 @@ export class MoviElement extends HTMLElement {
         .movi-context-menu-shortcut {
           display: none !important; /* Shortcuts don't make sense on mobile */
         }
+
+        /* Light theme mobile submenus */
+        :host([theme="light"]) .movi-context-menu-submenu,
+        :host([theme="light"]) .movi-context-menu-submenu-audio,
+        :host([theme="light"]) .movi-context-menu-submenu-subtitle {
+          background: rgba(255, 255, 255, 0.98) !important;
+        }
       }
-      
+
       /* Mobile Responsiveness for Context Menu */
       @media (max-width: 600px) {
         .movi-context-menu {
