@@ -48,23 +48,23 @@ The Demuxer is a core component of the Movi library responsible for:
 │                     Demuxer                             │
 ├─────────────────────────────────────────────────────────┤
 │                                                         │
-│  ┌──────────────┐      ┌──────────────────────┐       │
-│  │ SourceAdapter│─────>│  SourceDataAdapter   │       │
-│  │  Interface   │      │   (Async I/O Bridge) │       │
-│  └──────────────┘      └──────────┬───────────┘       │
+│  ┌──────────────┐      ┌──────────────────────┐         │
+│  │ SourceAdapter│─────>│  SourceDataAdapter   │         │
+│  │  Interface   │      │   (Async I/O Bridge) │         │
+│  └──────────────┘      └──────────┬───────────┘         │
 │                                    │                    │
 │                                    ▼                    │
-│                        ┌───────────────────────┐       │
-│                        │   WasmBindings        │       │
-│                        │  (TypeScript Wrapper) │       │
-│                        └───────────┬───────────┘       │
+│                        ┌───────────────────────┐        │
+│                        │   WasmBindings        │        │
+│                        │  (TypeScript Wrapper) │        │
+│                        └───────────┬───────────┘        │
 │                                    │                    │
 │                                    ▼                    │
-│                        ┌───────────────────────┐       │
-│                        │  FFmpeg WASM Module   │       │
-│                        │  (libavformat +       │       │
-│                        │   libavcodec)         │       │
-│                        └───────────────────────┘       │
+│                        ┌───────────────────────┐        │
+│                        │  FFmpeg WASM Module   │        │
+│                        │  (libavformat +       │        │
+│                        │   libavcodec)         │        │
+│                        └───────────────────────┘        │
 │                                                         │
 └─────────────────────────────────────────────────────────┘
 ```

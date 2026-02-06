@@ -55,29 +55,29 @@ The MoviPlayer is the main orchestrator component that coordinates:
 │                   (EventEmitter Core)                      │
 ├────────────────────────────────────────────────────────────┤
 │                                                            │
-│  ┌──────────────┐   ┌──────────────┐   ┌──────────────┐  │
-│  │ HttpSource / │──>│   Demuxer    │──>│ TrackManager │  │
-│  │  FileSource  │   │   (FFmpeg)   │   │              │  │
-│  └──────────────┘   └──────────────┘   └──────────────┘  │
+│  ┌──────────────┐   ┌──────────────┐   ┌──────────────┐    │
+│  │ HttpSource / │──>│   Demuxer    │──>│ TrackManager │    │
+│  │  FileSource  │   │   (FFmpeg)   │   │              │    │
+│  └──────────────┘   └──────────────┘   └──────────────┘    │
 │                                                            │
-│  ┌──────────────────────────────────────────────────────┐ │
-│  │              Decoding Pipeline                       │ │
-│  ├──────────────────────────────────────────────────────┤ │
-│  │  MoviVideoDecoder   MoviAudioDecoder   SubtitleDec  │ │
-│  │  (WebCodecs→SW)     (WebCodecs→SW)     (Text/Image) │ │
-│  └──────────────────────────────────────────────────────┘ │
+│  ┌──────────────────────────────────────────────────────┐  │
+│  │              Decoding Pipeline                       │  │
+│  ├──────────────────────────────────────────────────────┤  │
+│  │  MoviVideoDecoder   MoviAudioDecoder   SubtitleDec   │  │
+│  │  (WebCodecs→SW)     (WebCodecs→SW)     (Text/Image)  │  │
+│  └──────────────────────────────────────────────────────┘  │
 │                                                            │
-│  ┌──────────────────────────────────────────────────────┐ │
-│  │              Rendering Pipeline                      │ │
-│  ├──────────────────────────────────────────────────────┤ │
-│  │  CanvasRenderer           AudioRenderer              │ │
-│  │  (WebGL2 + P3)           (Web Audio API)             │ │
-│  └──────────────────────────────────────────────────────┘ │
+│  ┌──────────────────────────────────────────────────────┐  │
+│  │              Rendering Pipeline                      │  │
+│  ├──────────────────────────────────────────────────────┤  │
+│  │  CanvasRenderer           AudioRenderer              │  │
+│  │  (WebGL2 + P3)           (Web Audio API)             │  │
+│  └──────────────────────────────────────────────────────┘  │
 │                                                            │
-│  ┌──────────────┐   ┌──────────────┐   ┌──────────────┐  │
-│  │    Clock     │   │  StateManager│   │  WakeLock    │  │
-│  │  (A/V Sync)  │   │ (FSM + Error)│   │  (Screen)    │  │
-│  └──────────────┘   └──────────────┘   └──────────────┘  │
+│  ┌──────────────┐   ┌──────────────┐   ┌──────────────┐    │
+│  │    Clock     │   │  StateManager│   │  WakeLock    │    │
+│  │  (A/V Sync)  │   │ (FSM + Error)│   │  (Screen)    │    │
+│  └──────────────┘   └──────────────┘   └──────────────┘    │
 │                                                            │
 └────────────────────────────────────────────────────────────┘
 ```
@@ -103,27 +103,29 @@ constructor(config: PlayerConfig)
 ```
 
 **Parameters:**
+
 ```typescript
 interface PlayerConfig {
-  source: SourceConfig;              // Required: { url: string } or { file: File }
+  source: SourceConfig; // Required: { url: string } or { file: File }
   canvas?: HTMLCanvasElement | OffscreenCanvas;
-  renderer?: RendererType;           // 'canvas' | 'mse'
-  decoder?: DecoderType;             // 'hardware' | 'software'
-  cache?: CacheConfig;               // { maxSizeMB: number }
-  wasmBinary?: Uint8Array;           // Pre-loaded WASM binary
-  enablePreviews?: boolean;          // Enable thumbnail generation
+  renderer?: RendererType; // 'canvas' | 'mse'
+  decoder?: DecoderType; // 'hardware' | 'software'
+  cache?: CacheConfig; // { maxSizeMB: number }
+  wasmBinary?: Uint8Array; // Pre-loaded WASM binary
+  enablePreviews?: boolean; // Enable thumbnail generation
 }
 ```
 
 **Example:**
-```typescript
-import { MoviPlayer } from 'movi/player';
 
-const canvas = document.getElementById('canvas') as HTMLCanvasElement;
+```typescript
+import { MoviPlayer } from "movi/player";
+
+const canvas = document.getElementById("canvas") as HTMLCanvasElement;
 const player = new MoviPlayer({
-  source: { url: 'video.mp4' },
+  source: { url: "video.mp4" },
   canvas: canvas,
-  renderer: 'canvas'
+  renderer: "canvas",
 });
 ```
 
@@ -136,21 +138,23 @@ const player = new MoviPlayer({
 Loads a media source and initializes playback pipeline.
 
 **Parameters:**
+
 ```typescript
 interface SourceConfig {
-  url?: string;               // HTTP(S) URL
-  file?: File;                // File object from input
-  type?: 'http' | 'file';     // Auto-detected if omitted
-  wasmBinary?: Uint8Array;    // Optional pre-loaded WASM
+  url?: string; // HTTP(S) URL
+  file?: File; // File object from input
+  type?: "http" | "file"; // Auto-detected if omitted
+  wasmBinary?: Uint8Array; // Optional pre-loaded WASM
 }
 ```
 
 **Returns:** MediaInfo with tracks, duration, and format details
 
 **Example:**
+
 ```typescript
 const info = await player.load({
-  url: 'https://example.com/video.mp4'
+  url: "https://example.com/video.mp4",
 });
 
 console.log(`Loaded: ${info.duration}s, ${info.tracks.length} tracks`);
@@ -163,15 +167,17 @@ console.log(`Loaded: ${info.duration}s, ${info.tracks.length} tracks`);
 Starts playback from current position.
 
 **Behavior:**
+
 - Acquires wake lock (prevents screen sleep)
 - Starts demuxing loop
 - Begins rendering at 60Hz
 - Returns when playback starts (not when it ends)
 
 **Example:**
+
 ```typescript
 await player.play();
-console.log('Playback started');
+console.log("Playback started");
 ```
 
 ---
@@ -181,6 +187,7 @@ console.log('Playback started');
 Pauses playback immediately.
 
 **Behavior:**
+
 - Stops demuxing loop
 - Releases wake lock
 - Preserves current time
@@ -193,15 +200,18 @@ Pauses playback immediately.
 Seeks to a specific timestamp.
 
 **Parameters:**
+
 - `timestamp` - Target time in seconds (must be ≥ 0 and ≤ duration)
 
 **Behavior:**
+
 - Seeks demuxer to nearest keyframe before timestamp
 - Flushes video/audio decoders
 - Skips packets until reaching target time
 - Post-seek throttle (200ms) prevents rapid seeks
 
 **Example:**
+
 ```typescript
 await player.seek(120.5); // Seek to 2:00.5
 console.log(`Seeked to: ${player.getCurrentTime()}s`);
@@ -216,12 +226,14 @@ console.log(`Seeked to: ${player.getCurrentTime()}s`);
 Adjusts playback speed.
 
 **Parameters:**
+
 - `rate` - Speed multiplier (0.25 to 4.0 recommended)
   - `0.5` = half speed
   - `1.0` = normal speed (default)
   - `2.0` = double speed
 
 **Example:**
+
 ```typescript
 player.setPlaybackRate(1.5); // 1.5x speed
 ```
@@ -233,11 +245,13 @@ player.setPlaybackRate(1.5); // 1.5x speed
 Sets audio volume.
 
 **Parameters:**
+
 - `volume` - Volume level (0.0 to 1.0)
   - `0.0` = muted
   - `1.0` = maximum (default)
 
 **Example:**
+
 ```typescript
 player.setVolume(0.5); // 50% volume
 ```
@@ -255,6 +269,7 @@ Mutes or unmutes audio without changing volume level.
 Enables or disables loop mode.
 
 **Behavior:**
+
 - When enabled, playback restarts from beginning when reaching end
 - Fires `looped` event on each restart
 
@@ -265,6 +280,7 @@ Enables or disables loop mode.
 Destroys the player and releases all resources.
 
 **Behavior:**
+
 - Closes demuxer (frees WASM memory)
 - Destroys decoders
 - Clears frame queues
@@ -299,13 +315,13 @@ Returns current player state.
 
 ```typescript
 type PlayerState =
-  | 'idle'      // Not loaded
-  | 'loading'   // Loading source
-  | 'ready'     // Loaded, paused
-  | 'playing'   // Active playback
-  | 'seeking'   // Seeking in progress
-  | 'ended'     // Playback finished
-  | 'error';    // Error occurred
+  | "idle" // Not loaded
+  | "loading" // Loading source
+  | "ready" // Loaded, paused
+  | "playing" // Active playback
+  | "seeking" // Seeking in progress
+  | "ended" // Playback finished
+  | "error"; // Error occurred
 ```
 
 ---
@@ -377,14 +393,16 @@ Returns subtitle tracks only.
 Switches to a different video track.
 
 **Use Cases:**
+
 - Multi-quality video (480p, 720p, 1080p, 4K)
 - Multi-angle video
 - Different codec variants
 
 **Example:**
+
 ```typescript
 const tracks = player.getVideoTracks();
-const track4K = tracks.find(t => t.height >= 2160);
+const track4K = tracks.find((t) => t.height >= 2160);
 if (track4K) {
   player.selectVideoTrack(track4K.id);
 }
@@ -397,14 +415,16 @@ if (track4K) {
 Switches to a different audio track.
 
 **Use Cases:**
+
 - Multi-language audio
 - Different audio codecs
 - Surround sound vs stereo
 
 **Example:**
+
 ```typescript
 const tracks = player.getAudioTracks();
-const english = tracks.find(t => t.language === 'eng');
+const english = tracks.find((t) => t.language === "eng");
 if (english) {
   player.selectAudioTrack(english.id);
 }
@@ -417,12 +437,14 @@ if (english) {
 Enables a subtitle track or disables subtitles.
 
 **Parameters:**
+
 - `trackId` - Track ID to enable, or `null` to disable
 
 **Example:**
+
 ```typescript
 const tracks = player.getSubtitleTracks();
-const spanish = tracks.find(t => t.language === 'spa');
+const spanish = tracks.find((t) => t.language === "spa");
 if (spanish) {
   player.selectSubtitleTrack(spanish.id);
 }
@@ -440,6 +462,7 @@ player.selectSubtitleTrack(null);
 Generates a thumbnail image at a specific timestamp.
 
 **Parameters:**
+
 - `timestamp` - Time in seconds
 - `width` - Optional width (default: video width / 4)
 - `height` - Optional height (default: video height / 4)
@@ -447,11 +470,13 @@ Generates a thumbnail image at a specific timestamp.
 **Returns:** JPEG image blob
 
 **Features:**
+
 - Uses isolated WASM instance (no interference with playback)
 - Software decoding only (faster for single frames)
 - Automatic cleanup after generation
 
 **Example:**
+
 ```typescript
 const thumbnail = await player.generatePreview(60, 320, 180);
 const url = URL.createObjectURL(thumbnail);
@@ -467,15 +492,15 @@ imgElement.src = url;
 ```typescript
 interface PlayerConfig {
   // Required
-  source: SourceConfig;               // { url: string } or { file: File }
+  source: SourceConfig; // { url: string } or { file: File }
 
   // Optional
-  canvas?: HTMLCanvasElement | OffscreenCanvas;  // Canvas for rendering
-  renderer?: RendererType;            // 'canvas' | 'mse' (default: 'canvas')
-  decoder?: DecoderType;              // 'hardware' | 'software' (default: 'hardware')
-  cache?: CacheConfig;                // { maxSizeMB: number } (default: 100MB)
-  wasmBinary?: Uint8Array;            // Pre-loaded WASM binary
-  enablePreviews?: boolean;           // Enable thumbnail generation (default: false)
+  canvas?: HTMLCanvasElement | OffscreenCanvas; // Canvas for rendering
+  renderer?: RendererType; // 'canvas' | 'mse' (default: 'canvas')
+  decoder?: DecoderType; // 'hardware' | 'software' (default: 'hardware')
+  cache?: CacheConfig; // { maxSizeMB: number } (default: 100MB)
+  wasmBinary?: Uint8Array; // Pre-loaded WASM binary
+  enablePreviews?: boolean; // Enable thumbnail generation (default: false)
 }
 ```
 
@@ -533,6 +558,7 @@ The player runs an internal `requestAnimationFrame` loop:
 **File:** [src/core/TrackManager.ts](../src/core/TrackManager.ts)
 
 **Features:**
+
 - Runtime track switching without rebuffering
 - Automatic selection (first video/audio, no subtitle)
 - Track filtering by type, language, codec
@@ -568,31 +594,31 @@ The player extends `EventEmitter` and fires standard media events:
 ```typescript
 interface PlayerEventMap {
   // Lifecycle
-  'loadstart': void;
-  'loadedmetadata': MediaInfo;
-  'canplay': void;
-  'play': void;
-  'pause': void;
-  'ended': void;
+  loadstart: void;
+  loadedmetadata: MediaInfo;
+  canplay: void;
+  play: void;
+  pause: void;
+  ended: void;
 
   // Time updates
-  'timeupdate': { currentTime: number; duration: number };
-  'seeking': number;
-  'seeked': number;
+  timeupdate: { currentTime: number; duration: number };
+  seeking: number;
+  seeked: number;
 
   // State changes
-  'statechange': PlayerState;
+  statechange: PlayerState;
 
   // Looping
-  'looped': void;
+  looped: void;
 
   // Errors
-  'error': Error;
+  error: Error;
 
   // Rendering (advanced)
-  'frame': VideoFrame;
-  'audio': Float32Array;
-  'subtitle': SubtitleCue;
+  frame: VideoFrame;
+  audio: Float32Array;
+  subtitle: SubtitleCue;
 }
 ```
 
@@ -600,26 +626,26 @@ interface PlayerEventMap {
 
 ```typescript
 // Single event
-player.on('play', () => {
-  console.log('Playback started');
+player.on("play", () => {
+  console.log("Playback started");
 });
 
 // Time updates (fires at ~10Hz during playback)
-player.on('timeupdate', ({ currentTime, duration }) => {
+player.on("timeupdate", ({ currentTime, duration }) => {
   console.log(`${currentTime}s / ${duration}s`);
   updateProgressBar(currentTime / duration);
 });
 
 // Error handling
-player.on('error', (error) => {
-  console.error('Playback error:', error);
+player.on("error", (error) => {
+  console.error("Playback error:", error);
   showErrorMessage(error.message);
 });
 
 // Unsubscribe
-const handler = () => console.log('Paused');
-player.on('pause', handler);
-player.off('pause', handler);
+const handler = () => console.log("Paused");
+player.on("pause", handler);
+player.off("pause", handler);
 ```
 
 ---
@@ -633,6 +659,7 @@ player.off('pause', handler);
 **Principle:** Audio is the master clock, video syncs to audio
 
 **Why Audio-Master?**
+
 - Audio glitches are **very noticeable** (pops, clicks)
 - Video frame drops are **less noticeable** (smooth motion blur)
 - Web Audio API provides high-precision timing
@@ -653,6 +680,7 @@ class Clock {
 ```
 
 **CanvasRenderer Sync:**
+
 ```typescript
 presentFrame() {
   const audioTime = this.getAudioTime();
@@ -686,6 +714,7 @@ presentFrame() {
 **Audio Buffer:** 2 seconds of audio
 
 If buffers drain:
+
 - Player enters buffering state
 - Playback pauses until buffers refill
 - Fires `buffering` event (if implemented)
@@ -697,24 +726,24 @@ If buffers drain:
 ### Basic Playback
 
 ```typescript
-import { MoviPlayer } from 'movi/player';
+import { MoviPlayer } from "movi/player";
 
-const canvas = document.getElementById('myCanvas') as HTMLCanvasElement;
+const canvas = document.getElementById("myCanvas") as HTMLCanvasElement;
 const player = new MoviPlayer({
-  source: { url: 'https://example.com/video.mp4' },
+  source: { url: "https://example.com/video.mp4" },
   canvas: canvas,
-  renderer: 'canvas'
+  renderer: "canvas",
 });
 
 // Load and play
 async function playVideo() {
   try {
-    const info = await player.load({ url: 'https://example.com/video.mp4' });
+    const info = await player.load({ url: "https://example.com/video.mp4" });
     console.log(`Loaded: ${info.duration}s`);
 
     await player.play();
   } catch (error) {
-    console.error('Failed to play:', error);
+    console.error("Failed to play:", error);
   }
 }
 
@@ -726,10 +755,10 @@ playVideo();
 ### Progress Bar
 
 ```typescript
-const progressBar = document.getElementById('progress') as HTMLInputElement;
-const timeDisplay = document.getElementById('time') as HTMLSpanElement;
+const progressBar = document.getElementById("progress") as HTMLInputElement;
+const timeDisplay = document.getElementById("time") as HTMLSpanElement;
 
-player.on('timeupdate', ({ currentTime, duration }) => {
+player.on("timeupdate", ({ currentTime, duration }) => {
   const percent = (currentTime / duration) * 100;
   progressBar.value = percent.toString();
 
@@ -738,7 +767,7 @@ player.on('timeupdate', ({ currentTime, duration }) => {
   timeDisplay.textContent = `${current} / ${total}`;
 });
 
-progressBar.addEventListener('input', () => {
+progressBar.addEventListener("input", () => {
   const percent = parseFloat(progressBar.value);
   const duration = player.getDuration();
   const timestamp = (percent / 100) * duration;
@@ -748,7 +777,7 @@ progressBar.addEventListener('input', () => {
 function formatTime(seconds: number): string {
   const m = Math.floor(seconds / 60);
   const s = Math.floor(seconds % 60);
-  return `${m}:${s.toString().padStart(2, '0')}`;
+  return `${m}:${s.toString().padStart(2, "0")}`;
 }
 ```
 
@@ -761,18 +790,18 @@ async function setupAudioTracks() {
   await player.load({ url });
 
   const audioTracks = player.getAudioTracks();
-  const selector = document.getElementById('audioTrack') as HTMLSelectElement;
+  const selector = document.getElementById("audioTrack") as HTMLSelectElement;
 
   // Populate dropdown
-  audioTracks.forEach(track => {
-    const option = document.createElement('option');
+  audioTracks.forEach((track) => {
+    const option = document.createElement("option");
     option.value = track.id.toString();
-    option.textContent = `${track.language || 'Unknown'} (${track.codec})`;
+    option.textContent = `${track.language || "Unknown"} (${track.codec})`;
     selector.appendChild(option);
   });
 
   // Handle selection
-  selector.addEventListener('change', () => {
+  selector.addEventListener("change", () => {
     const trackId = parseInt(selector.value);
     player.selectAudioTrack(trackId);
   });
@@ -788,14 +817,13 @@ async function checkHDR() {
   await player.load({ url });
 
   const videoTrack = player.getVideoTracks()[0];
-  const isHDR = (
-    videoTrack.colorPrimaries === 'bt2020' &&
-    (videoTrack.colorTransfer === 'smpte2084' ||  // HDR10
-     videoTrack.colorTransfer === 'arib-std-b67')  // HLG
-  );
+  const isHDR =
+    videoTrack.colorPrimaries === "bt2020" &&
+    (videoTrack.colorTransfer === "smpte2084" || // HDR10
+      videoTrack.colorTransfer === "arib-std-b67"); // HLG
 
   if (isHDR) {
-    console.log('HDR content detected!');
+    console.log("HDR content detected!");
     console.log(`Transfer: ${videoTrack.colorTransfer}`);
     console.log(`Primaries: ${videoTrack.colorPrimaries}`);
   }
@@ -826,9 +854,9 @@ async function generateThumbnails(url: string, count: number) {
 }
 
 // Usage
-const thumbs = await generateThumbnails('video.mp4', 10);
+const thumbs = await generateThumbnails("video.mp4", 10);
 thumbs.forEach((blob, i) => {
-  const img = document.createElement('img');
+  const img = document.createElement("img");
   img.src = URL.createObjectURL(blob);
   document.body.appendChild(img);
 });
@@ -843,6 +871,7 @@ thumbs.forEach((blob, i) => {
 **WebCodecs API** provides access to platform hardware decoders:
 
 **Supported Codecs (hardware):**
+
 - H.264/AVC (all platforms)
 - H.265/HEVC (macOS, Windows, Android)
 - VP9 (Chrome, Edge)
@@ -854,12 +883,14 @@ If hardware fails, player automatically switches to software decoding (FFmpeg WA
 ### Memory Usage
 
 **Typical 4K HEVC Playback:**
+
 - WASM heap: ~50MB
 - Video frame queue: ~120 frames × ~12MB = ~1.4GB (YUV 4:2:0)
 - Audio buffer: ~2s × 48kHz × 2ch × 4B = ~384KB
 - **Total: ~1.5GB** (mostly video frames)
 
 **Optimization:**
+
 - Frame queue size adapts to frame rate
 - Decoder buffer limits prevent overflow
 - Back-pressure stops demuxing when buffers full
@@ -867,14 +898,17 @@ If hardware fails, player automatically switches to software decoding (FFmpeg WA
 ### Seeking Performance
 
 **Keyframe Seeking:**
+
 - **Fast:** 100-300ms (index-based)
 - Used for most seeks
 
 **Non-Keyframe Seeking:**
+
 - **Slower:** 500-2000ms (decode from last keyframe)
 - Rare (only when seeking to exact timestamp)
 
 **Post-Seek Throttle:**
+
 - 200ms delay prevents rapid seeks
 - Improves UX on low-end devices
 
@@ -885,16 +919,18 @@ If hardware fails, player automatically switches to software decoding (FFmpeg WA
 ### Video Not Playing
 
 **Check:**
+
 1. Codec support: `await navigator.mediaCapabilities.decodingInfo(...)`
 2. Browser compatibility: WebCodecs requires Chrome 94+, Edge 94+, Safari 16.4+
 3. CORS headers: Cross-origin videos need `Access-Control-Allow-Origin`
 
 **Debug:**
+
 ```typescript
-player.on('error', (error) => {
-  console.error('Error details:', error);
-  console.log('Current state:', player.getState());
-  console.log('Media info:', player.getMediaInfo());
+player.on("error", (error) => {
+  console.error("Error details:", error);
+  console.log("Current state:", player.getState());
+  console.log("Media info:", player.getMediaInfo());
 });
 ```
 
@@ -903,13 +939,15 @@ player.on('error', (error) => {
 ### Audio/Video Out of Sync
 
 **Causes:**
+
 - Decoder lag (software decode of 4K)
 - Buffer underrun
 - Incorrect PTS in source file
 
 **Debug:**
+
 ```typescript
-player.on('frame', (frame) => {
+player.on("frame", (frame) => {
   const audioClock = audioRenderer.getAudioClock();
   const drift = frame.timestamp - audioClock;
   console.log(`A/V drift: ${drift * 1000}ms`);
@@ -917,6 +955,7 @@ player.on('frame', (frame) => {
 ```
 
 **Fix:**
+
 - Enable hardware decoding
 - Reduce quality (lower resolution track)
 - Increase buffer sizes
@@ -926,10 +965,12 @@ player.on('frame', (frame) => {
 ### High Memory Usage
 
 **Causes:**
+
 - Large frame queue for 4K/8K
 - Memory leak (frames not closed)
 
 **Fix:**
+
 ```typescript
 // Reduce frame queue (edit CanvasRenderer)
 private static readonly MAX_FRAME_QUEUE = 60; // Default: 120
@@ -945,17 +986,19 @@ window.addEventListener('beforeunload', () => {
 ### Seeking is Slow
 
 **Causes:**
+
 - Non-seekable stream (no index)
 - Large GOP size (keyframes far apart)
 
 **Workaround:**
+
 ```typescript
 // Show loading indicator during seek
-player.on('seeking', () => {
+player.on("seeking", () => {
   showLoadingSpinner();
 });
 
-player.on('seeked', () => {
+player.on("seeked", () => {
   hideLoadingSpinner();
 });
 ```
@@ -980,15 +1023,15 @@ useEffect(() => {
 ### 2. Handle Errors Gracefully
 
 ```typescript
-player.on('error', async (error) => {
-  console.error('Playback error:', error);
+player.on("error", async (error) => {
+  console.error("Playback error:", error);
 
   // Try recovery
   try {
     await player.seek(0);
     await player.play();
   } catch {
-    showErrorMessage('Playback failed');
+    showErrorMessage("Playback failed");
   }
 });
 ```
@@ -1001,7 +1044,7 @@ const isMobile = /iPhone|iPad|Android/i.test(navigator.userAgent);
 
 if (isMobile) {
   const tracks = player.getVideoTracks();
-  const sdTrack = tracks.find(t => t.height <= 720);
+  const sdTrack = tracks.find((t) => t.height <= 720);
   if (sdTrack) {
     player.selectVideoTrack(sdTrack.id);
   }
