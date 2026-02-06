@@ -46,7 +46,12 @@ export interface ColorSpaceInfo {
 }
 
 export class CodecParser {
-  static getCodecString(codec: string, extradata?: Uint8Array): string | null {
+  static getCodecString(
+    codec: string,
+    extradata?: Uint8Array,
+    width?: number,
+    height?: number,
+  ): string | null {
     Logger.debug(TAG, `Extradata: ${extradata?.length}`);
 
     if (!extradata || extradata.length === 0) {
@@ -62,7 +67,7 @@ export class CodecParser {
       codecLower === "hvc1" ||
       codecLower === "hev1"
     ) {
-      return this.getHevcCodecString(extradata);
+      return this.getHevcCodecString(extradata, width, height);
     }
 
     if (codecLower === "av1" || codecLower === "av01") {
@@ -128,7 +133,11 @@ export class CodecParser {
     return null;
   }
 
-  private static getHevcCodecString(data: Uint8Array): string | null {
+  private static getHevcCodecString(
+    data: Uint8Array,
+    width?: number,
+    height?: number,
+  ): string | null {
     if (data.length < 23) {
       Logger.warn(TAG, `HEVC extradata too small: ${data.length} (needed 23)`);
       return null;
@@ -143,12 +152,21 @@ export class CodecParser {
     );
 
     // Check for Annex B start code (00 00 01 or 00 00 00 01)
-    // This indicates NAL units, NOT mp4-style hvcC configuration record.
-    // We cannot parse this with the simple bit reader below.
     if (
       (data[0] === 0 && data[1] === 0 && data[2] === 1) ||
       (data[0] === 0 && data[1] === 0 && data[2] === 0 && data[3] === 1)
     ) {
+      if (width && height && width >= 3840 && height >= 2160) {
+        // Heuristic: 4K Annex B is likely Main10 HDR
+        // Return a compatible string: Main10 (2), High Tier (4), Level 5.1 (153)
+        // hvc1.2.4.L153.B0
+        Logger.info(
+          TAG,
+          "HEVC Annex B detected for 4K content. Using heuristic HDR codec string.",
+        );
+        return "hvc1.2.4.L153.B0";
+      }
+
       Logger.warn(
         TAG,
         "HEVC extradata appears to be Annex B (NAL units), not hvcC. Skipping parser.",
@@ -349,6 +367,31 @@ export class CodecParser {
     width?: number,
     height?: number,
   ): ColorSpaceInfo | null {
+    // Detect Annex B start codes (00 00 01 or 00 00 00 01)
+    const isAnnexB =
+      (data.length > 3 && data[0] === 0 && data[1] === 0 && data[2] === 1) ||
+      (data.length > 4 &&
+        data[0] === 0 &&
+        data[1] === 0 &&
+        data[2] === 0 &&
+        data[3] === 1);
+
+    if (width && height && width >= 3840 && height >= 2160) {
+      if (isAnnexB) {
+        // Annex B (NAL units) cannot be parsed by our simple BitReader which expects hvcC
+        // Trust the resolution for 4K content
+        Logger.info(
+          TAG,
+          `4K HEVC (Annex B) detected, assuming HDR with BT.2020/PQ`,
+        );
+        return {
+          colorPrimaries: "bt2020",
+          colorTransfer: "smpte2084",
+          colorSpace: "bt2020-ncl",
+        };
+      }
+    }
+
     if (data.length < 23) {
       // Too small to parse, use heuristic for 4K
       if (width && height && width >= 3840 && height >= 2160) {
@@ -356,7 +399,7 @@ export class CodecParser {
         return {
           colorPrimaries: "bt2020",
           colorTransfer: "smpte2084",
-          colorSpace: "bt2020nc",
+          colorSpace: "bt2020-ncl",
         };
       }
       return null;

@@ -194,7 +194,17 @@ void movi_thumbnail_read_keyframe(struct MoviThumbnailContext *ctx,
   AVStream *st = ctx->fmt_ctx->streams[ctx->video_stream_index];
   int64_t target_ts = (int64_t)(timestamp * (double)st->time_base.den /
                                 (double)st->time_base.num);
+  
+  // Adjust for stream start time (MPEG-TS, etc.)
+  if (st->start_time != AV_NOPTS_VALUE) {
+      target_ts += st->start_time;
+  }
+
   int64_t seek_target = (int64_t)(timestamp * AV_TIME_BASE);
+  // Adjust avformat_seek_file target for start_time
+  if (ctx->fmt_ctx->start_time != AV_NOPTS_VALUE) {
+      seek_target += ctx->fmt_ctx->start_time;
+  }
 
   av_log(NULL, AV_LOG_DEBUG, "[THUMB] Seeking to ts=%lld (AV_TIME_BASE=%lld)\n", 
          (long long)target_ts, (long long)seek_target);
@@ -342,63 +352,205 @@ uint8_t *movi_thumbnail_get_packet_data(struct MoviThumbnailContext *ctx) {
   return (ctx && ctx->pkt) ? ctx->pkt->data : NULL;
 }
 
+/**
+ * Get stream info with HDR metadata (like main pipeline)
+ */
+EMSCRIPTEN_KEEPALIVE
+int movi_thumbnail_get_stream_info(struct MoviThumbnailContext *ctx, StreamInfo *info) {
+  if (!ctx || !ctx->fmt_ctx || !info || ctx->video_stream_index < 0)
+    return -1;
+
+  AVStream *stream = ctx->fmt_ctx->streams[ctx->video_stream_index];
+  AVCodecParameters *codecpar = stream->codecpar;
+
+  memset(info, 0, sizeof(StreamInfo));
+  info->index = ctx->video_stream_index;
+  info->codec_id = codecpar->codec_id;
+  info->profile = codecpar->profile;
+  info->level = codecpar->level;
+
+  const AVCodecDescriptor *desc = avcodec_descriptor_get(codecpar->codec_id);
+  if (desc && desc->name)
+    strncpy(info->codec_name, desc->name, sizeof(info->codec_name) - 1);
+
+  info->type = STREAM_TYPE_VIDEO;
+  info->width = codecpar->width;
+  info->height = codecpar->height;
+  if (stream->avg_frame_rate.den > 0)
+    info->frame_rate = av_q2d(stream->avg_frame_rate);
+
+  // HDR Color Metadata
+  const char *prim = av_color_primaries_name(codecpar->color_primaries);
+  if (prim) strncpy(info->color_primaries, prim, sizeof(info->color_primaries) - 1);
+
+  const char *trc = av_color_transfer_name(codecpar->color_trc);
+  if (trc) strncpy(info->color_transfer, trc, sizeof(info->color_transfer) - 1);
+
+  const char *mtx = av_color_space_name(codecpar->color_space);
+  if (mtx) strncpy(info->color_matrix, mtx, sizeof(info->color_matrix) - 1);
+
+  // Pixel Format
+  const char *pix = av_get_pix_fmt_name((enum AVPixelFormat)codecpar->format);
+  if (pix) strncpy(info->pixel_format, pix, sizeof(info->pixel_format) - 1);
+
+  // Color Range
+  const char *range = av_color_range_name(codecpar->color_range);
+  if (range) strncpy(info->color_range, range, sizeof(info->color_range) - 1);
+
+  info->bit_rate = codecpar->bit_rate;
+  info->extradata_size = codecpar->extradata_size;
+
+  if (stream->duration != AV_NOPTS_VALUE)
+    info->duration = stream->duration * av_q2d(stream->time_base);
+  else if (ctx->fmt_ctx->duration != AV_NOPTS_VALUE)
+    info->duration = (double)ctx->fmt_ctx->duration / AV_TIME_BASE;
+
+  return 0;
+}
+
+/**
+ * Get extradata for the video stream (codec configuration)
+ */
+EMSCRIPTEN_KEEPALIVE
+int movi_thumbnail_get_extradata(struct MoviThumbnailContext *ctx, uint8_t *buffer, int buffer_size) {
+  if (!ctx || !ctx->fmt_ctx || !buffer || ctx->video_stream_index < 0)
+    return -1;
+
+  AVCodecParameters *codecpar = ctx->fmt_ctx->streams[ctx->video_stream_index]->codecpar;
+  if (!codecpar->extradata || codecpar->extradata_size <= 0)
+    return 0;
+
+  int copy_size = codecpar->extradata_size;
+  if (copy_size > buffer_size)
+    copy_size = buffer_size;
+
+  memcpy(buffer, codecpar->extradata, copy_size);
+  return copy_size;
+}
+
+/**
+ * Decode frame and keep in YUV format (preserves HDR)
+ * Returns 0 on success, negative on error
+ */
+EMSCRIPTEN_KEEPALIVE
+int movi_thumbnail_decode_frame_yuv(struct MoviThumbnailContext *ctx) {
+    if (!ctx || !ctx->dec_ctx || !ctx->pkt || ctx->pkt->size == 0) return -1;
+
+    // CRITICAL: Flush decoder before sending new random-access packet
+    avcodec_flush_buffers(ctx->dec_ctx);
+
+    // Decode
+    int ret = avcodec_send_packet(ctx->dec_ctx, ctx->pkt);
+    if (ret < 0) {
+        av_log(NULL, AV_LOG_ERROR, "[THUMB] Decode send packet error: %d\n", ret);
+        return ret;
+    }
+
+    ret = avcodec_receive_frame(ctx->dec_ctx, ctx->frame);
+
+    // If decoder needs more data (EAGAIN), flush/drain
+    if (ret == AVERROR(EAGAIN)) {
+         avcodec_send_packet(ctx->dec_ctx, NULL);
+         ret = avcodec_receive_frame(ctx->dec_ctx, ctx->frame);
+    }
+
+    if (ret < 0) {
+         if (ret != AVERROR_EOF)
+            av_log(NULL, AV_LOG_ERROR, "[THUMB] Decode receive frame error: %d\n", ret);
+         return ret;
+    }
+
+    return 0;
+}
+
+/**
+ * Get YUV plane data pointer (after successful decode)
+ */
+EMSCRIPTEN_KEEPALIVE
+uint8_t *movi_thumbnail_get_plane_data(struct MoviThumbnailContext *ctx, int plane) {
+    if (!ctx || !ctx->frame || plane < 0 || plane >= AV_NUM_DATA_POINTERS)
+        return NULL;
+    return ctx->frame->data[plane];
+}
+
+/**
+ * Get YUV plane linesize
+ */
+EMSCRIPTEN_KEEPALIVE
+int movi_thumbnail_get_plane_linesize(struct MoviThumbnailContext *ctx, int plane) {
+    if (!ctx || !ctx->frame || plane < 0 || plane >= AV_NUM_DATA_POINTERS)
+        return 0;
+    return ctx->frame->linesize[plane];
+}
+
+/**
+ * Get decoded frame dimensions
+ */
+EMSCRIPTEN_KEEPALIVE
+int movi_thumbnail_get_frame_width(struct MoviThumbnailContext *ctx) {
+    return (ctx && ctx->frame) ? ctx->frame->width : 0;
+}
+
+EMSCRIPTEN_KEEPALIVE
+int movi_thumbnail_get_frame_height(struct MoviThumbnailContext *ctx) {
+    return (ctx && ctx->frame) ? ctx->frame->height : 0;
+}
+
+/**
+ * Legacy RGBA decode (for fallback)
+ */
 EMSCRIPTEN_KEEPALIVE
 uint8_t *movi_thumbnail_decode_frame(struct MoviThumbnailContext *ctx, int width, int height) {
     if (!ctx || !ctx->dec_ctx || !ctx->pkt || ctx->pkt->size == 0) return NULL;
-    
+
     // Resize buffer if needed (RGBA = 4 bytes per pixel)
-    // Use simple size calc 
     int num_bytes = width * height * 4;
-    
+
     if (ctx->rgb_buffer_size < num_bytes) {
         av_free(ctx->rgb_buffer);
         ctx->rgb_buffer = av_malloc(num_bytes);
         ctx->rgb_buffer_size = num_bytes;
     }
-    
+
     // CRITICAL: Flush decoder before sending new random-access packet
-    // This ensures no previous state interferes and minimizes latency
     avcodec_flush_buffers(ctx->dec_ctx);
-    
+
     // Decode
     int ret = avcodec_send_packet(ctx->dec_ctx, ctx->pkt);
     if (ret < 0) {
         av_log(NULL, AV_LOG_ERROR, "[THUMB] Decode send packet error: %d\n", ret);
         return NULL;
     }
-    
+
     ret = avcodec_receive_frame(ctx->dec_ctx, ctx->frame);
-    
-    // If decoder needs more data (EAGAIN) but we only have one packet,
-    // we must flush/drain to force it out (common with delay/threading)
+
     if (ret == AVERROR(EAGAIN)) {
-         // Send NULL to enter draining mode
          avcodec_send_packet(ctx->dec_ctx, NULL);
          ret = avcodec_receive_frame(ctx->dec_ctx, ctx->frame);
     }
-    
+
     if (ret < 0) {
          if (ret != AVERROR_EOF)
             av_log(NULL, AV_LOG_ERROR, "[THUMB] Decode receive frame error: %d\n", ret);
          return NULL;
     }
-    
+
     // SwsContext
     ctx->sws_ctx = sws_getCachedContext(ctx->sws_ctx,
         ctx->frame->width, ctx->frame->height, ctx->frame->format,
         width, height, AV_PIX_FMT_RGBA,
         SWS_BILINEAR, NULL, NULL, NULL);
-        
+
     if (!ctx->sws_ctx) return NULL;
-    
+
     // Setup wrapper frame for buffer
     av_image_fill_arrays(ctx->rgb_frame->data, ctx->rgb_frame->linesize,
                          ctx->rgb_buffer, AV_PIX_FMT_RGBA, width, height, 1);
-                         
+
     sws_scale(ctx->sws_ctx, (const uint8_t *const *)ctx->frame->data,
               ctx->frame->linesize, 0, ctx->frame->height,
               ctx->rgb_frame->data, ctx->rgb_frame->linesize);
-              
+
     return ctx->rgb_buffer;
 }
 

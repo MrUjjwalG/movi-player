@@ -1178,7 +1178,139 @@ export class ThumbnailBindings {
   }
 
   /**
-   * Decode current packet (software fallback)
+   * Get stream info with HDR metadata (like main pipeline)
+   */
+  getStreamInfo(): StreamInfo | null {
+    if (!this.contextPtr) return null;
+
+    const infoPtr = this.module._malloc(STREAM_INFO_SIZE);
+    try {
+      const ret = (this.module as any)._movi_thumbnail_get_stream_info(
+        this.contextPtr,
+        infoPtr,
+      );
+      if (ret !== 0) {
+        return null;
+      }
+      return parseStreamInfo(this.module, infoPtr);
+    } finally {
+      this.module._free(infoPtr);
+    }
+  }
+
+  /**
+   * Get extradata for the video stream
+   */
+  getExtradata(): Uint8Array | null {
+    if (!this.contextPtr) return null;
+
+    const info = this.getStreamInfo();
+    if (!info || info.extradataSize === 0) return null;
+
+    const bufferPtr = this.module._malloc(info.extradataSize);
+    try {
+      const size = (this.module as any)._movi_thumbnail_get_extradata(
+        this.contextPtr,
+        bufferPtr,
+        info.extradataSize,
+      );
+
+      if (size <= 0) return null;
+
+      // Copy data out of WASM memory
+      const result = new Uint8Array(size);
+      result.set(this.module.HEAPU8.subarray(bufferPtr, bufferPtr + size));
+      return result;
+    } finally {
+      this.module._free(bufferPtr);
+    }
+  }
+
+  /**
+   * Decode current packet to YUV (preserves HDR)
+   */
+  decodeCurrentPacketYUV(): {
+    width: number;
+    height: number;
+    yPlane: Uint8Array;
+    uPlane: Uint8Array;
+    vPlane: Uint8Array;
+    yStride: number;
+    uStride: number;
+    vStride: number;
+  } | null {
+    if (!this.contextPtr) return null;
+
+    const ret = (this.module as any)._movi_thumbnail_decode_frame_yuv(
+      this.contextPtr,
+    );
+    if (ret < 0) return null;
+
+    const width = (this.module as any)._movi_thumbnail_get_frame_width(
+      this.contextPtr,
+    );
+    const height = (this.module as any)._movi_thumbnail_get_frame_height(
+      this.contextPtr,
+    );
+
+    const yPtr = (this.module as any)._movi_thumbnail_get_plane_data(
+      this.contextPtr,
+      0,
+    );
+    const uPtr = (this.module as any)._movi_thumbnail_get_plane_data(
+      this.contextPtr,
+      1,
+    );
+    const vPtr = (this.module as any)._movi_thumbnail_get_plane_data(
+      this.contextPtr,
+      2,
+    );
+
+    const yStride = (this.module as any)._movi_thumbnail_get_plane_linesize(
+      this.contextPtr,
+      0,
+    );
+    const uStride = (this.module as any)._movi_thumbnail_get_plane_linesize(
+      this.contextPtr,
+      1,
+    );
+    const vStride = (this.module as any)._movi_thumbnail_get_plane_linesize(
+      this.contextPtr,
+      2,
+    );
+
+    if (!yPtr || !uPtr || !vPtr) return null;
+
+    // Copy plane data (YUV420 subsampling)
+    const ySize = yStride * height;
+    const uvHeight = Math.ceil(height / 2);
+    const uSize = uStride * uvHeight;
+    const vSize = vStride * uvHeight;
+
+    const yPlane = new Uint8Array(
+      this.module.HEAPU8.subarray(yPtr, yPtr + ySize).slice(),
+    );
+    const uPlane = new Uint8Array(
+      this.module.HEAPU8.subarray(uPtr, uPtr + uSize).slice(),
+    );
+    const vPlane = new Uint8Array(
+      this.module.HEAPU8.subarray(vPtr, vPtr + vSize).slice(),
+    );
+
+    return {
+      width,
+      height,
+      yPlane,
+      uPlane,
+      vPlane,
+      yStride,
+      uStride,
+      vStride,
+    };
+  }
+
+  /**
+   * Decode current packet (software fallback - SDR RGBA)
    */
   decodeCurrentPacket(width: number, height: number): Uint8Array | null {
     if (!this.contextPtr) return null;

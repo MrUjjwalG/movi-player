@@ -100,6 +100,17 @@ export interface MoviWasmModule {
   _movi_thumbnail_read_keyframe: (ctx: number, timestamp: number) => void; // Callback pattern
   _movi_thumbnail_get_packet_data: (ctx: number) => number;
   _movi_thumbnail_get_packet_pts: (ctx: number) => number;
+  _movi_thumbnail_get_stream_info: (ctx: number, infoPtr: number) => number;
+  _movi_thumbnail_get_extradata: (
+    ctx: number,
+    buffer: number,
+    bufferSize: number,
+  ) => number;
+  _movi_thumbnail_decode_frame_yuv: (ctx: number) => number;
+  _movi_thumbnail_get_plane_data: (ctx: number, plane: number) => number;
+  _movi_thumbnail_get_plane_linesize: (ctx: number, plane: number) => number;
+  _movi_thumbnail_get_frame_width: (ctx: number) => number;
+  _movi_thumbnail_get_frame_height: (ctx: number) => number;
   _movi_thumbnail_destroy: (ctx: number) => void;
 
   // Emscripten utilities

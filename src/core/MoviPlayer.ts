@@ -34,6 +34,7 @@ import { AudioRenderer } from "../render/AudioRenderer";
 import { updateAllBindingsLogLevel, ThumbnailBindings } from "../wasm/bindings";
 import { loadWasmModuleNew } from "../wasm/FFmpegLoader";
 import { HLSPlayerWrapper } from "../render/HLSPlayerWrapper";
+import { ThumbnailRenderer } from "../utils/ThumbnailRenderer";
 
 const TAG = "MoviPlayer";
 
@@ -60,17 +61,7 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
   // Preview pipeline (C-based FFmpeg software decoding)
   private thumbnailBindings: ThumbnailBindings | null = null;
   private thumbnailSource: SourceAdapter | null = null;
-  private thumbnailDecoder: MoviVideoDecoder | null = null;
-  private thumbnailCanvas: HTMLCanvasElement | OffscreenCanvas | null = null;
-  private thumbnailContext:
-    | CanvasRenderingContext2D
-    | OffscreenCanvasRenderingContext2D
-    | null = null;
-  // WebGL-based thumbnail rendering
-  private thumbnailGL: WebGL2RenderingContext | null = null;
-  private thumbnailGLProgram: WebGLProgram | null = null;
-  private thumbnailGLTexture: WebGLTexture | null = null;
-  private thumbnailGLVao: WebGLVertexArrayObject | null = null;
+  private thumbnailRenderer: ThumbnailRenderer | null = null;
   private thumbnailHDREnabled: boolean = true; // HDR enabled by default
   private isPreviewGenerating: boolean = false;
   private audioRenderer: AudioRenderer;
@@ -1381,274 +1372,6 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
   /**
    * Initialize WebGL context for thumbnail rendering
    */
-  private initThumbnailWebGL(
-    canvas: HTMLCanvasElement | OffscreenCanvas,
-    colorSpace: string,
-  ): boolean {
-    try {
-      const contextOptions: WebGLContextAttributes = {
-        alpha: false,
-        desynchronized: false,
-        antialias: false,
-        depth: false,
-        preserveDrawingBuffer: true,
-      };
-
-      this.thumbnailGL = canvas.getContext(
-        "webgl2",
-        contextOptions,
-      ) as WebGL2RenderingContext;
-
-      if (!this.thumbnailGL) {
-        Logger.warn(TAG, "WebGL2 not supported for thumbnails, falling back to 2D");
-        return false;
-      }
-
-      const gl = this.thumbnailGL;
-
-      // Set color space
-      try {
-        // @ts-ignore
-        if (colorSpace !== "srgb" && gl.drawingBufferColorSpace !== undefined) {
-          // @ts-ignore
-          gl.drawingBufferColorSpace = colorSpace;
-          // @ts-ignore
-          gl.unpackColorSpace = colorSpace;
-          Logger.debug(TAG, `Thumbnail WebGL color space set to: ${colorSpace}`);
-        }
-      } catch (e) {
-        Logger.warn(TAG, "Failed to set thumbnail drawingBufferColorSpace", e);
-      }
-
-      // Detect browser and HDR source to choose appropriate shader
-      const isChromium = !!(window as any).chrome;
-      const videoTrack = this.mediaInfo?.tracks?.find(
-        (t) => t.type === "video",
-      ) as VideoTrack | undefined;
-
-      let isHDRSource = false;
-      if (videoTrack) {
-        const primaries = (videoTrack.colorPrimaries || "").toLowerCase();
-        const transfer = (videoTrack.colorTransfer || "").toLowerCase();
-
-        const isHDRTransfer =
-          transfer.includes("pq") ||
-          transfer.includes("hlg") ||
-          transfer.includes("smpte2084") ||
-          transfer.includes("arib-std-b67");
-
-        const isBT2020 =
-          primaries.includes("bt2020") || primaries.includes("rec2020");
-
-        isHDRSource = isHDRTransfer || isBT2020;
-      }
-
-      // Choose shader based on browser capability
-      // - Chromium: use simple passthrough (native HDR handling)
-      // - Non-Chromium with HDR: use tone mapping shader
-      const needsShaderToneMapping = !isChromium && isHDRSource;
-
-      Logger.debug(TAG, `Thumbnail shader selection: isChromium=${isChromium}, isHDRSource=${isHDRSource}, needsToneMapping=${needsShaderToneMapping}`);
-
-      // Create shaders
-      const vsSource = `#version 300 es
-        layout(location = 0) in vec2 a_position;
-        layout(location = 1) in vec2 a_texCoord;
-        out vec2 v_texCoord;
-        void main() {
-          gl_Position = vec4(a_position, 0.0, 1.0);
-          v_texCoord = a_texCoord;
-        }`;
-
-      let fsSource: string;
-
-      if (needsShaderToneMapping) {
-        // Tone mapping shader for non-Chromium browsers with HDR content
-        fsSource = `#version 300 es
-        precision highp float;
-        uniform sampler2D u_image;
-        uniform float u_hdrEnabled; // 0.0 = disabled, 1.0 = enabled
-        in vec2 v_texCoord;
-        out vec4 outColor;
-
-        // PQ (SMPTE 2084) EOTF constants
-        const float m1 = 2610.0 / 16384.0;
-        const float m2 = 2523.0 / 4096.0 * 128.0;
-        const float c1 = 3424.0 / 4096.0;
-        const float c2 = 2413.0 / 4096.0 * 32.0;
-        const float c3 = 2392.0 / 4096.0 * 32.0;
-
-        vec3 PQtoLinear(vec3 pq) {
-          vec3 colToPow = pow(pq, vec3(1.0 / m2));
-          vec3 num = max(colToPow - c1, vec3(0.0));
-          vec3 den = c2 - c3 * colToPow;
-          return pow(num / den, vec3(1.0 / m1));
-        }
-
-        vec3 toneMapReinhard(vec3 hdr, float exposure) {
-          vec3 mapped = hdr * exposure;
-          return mapped / (1.0 + mapped);
-        }
-
-        vec3 adjustSaturation(vec3 color, float saturation) {
-          float luminance = dot(color, vec3(0.2126, 0.7152, 0.0722));
-          vec3 gray = vec3(luminance);
-          return mix(gray, color, saturation);
-        }
-
-        void main() {
-          vec4 color = texture(u_image, v_texCoord);
-
-          // Apply PQ EOTF to get linear light
-          vec3 linear = PQtoLinear(color.rgb);
-
-          // Tone map to SDR range
-          // Adjusted to match Chrome native HDR appearance
-          // When HDR disabled: lower exposure (22.0) for better contrast
-          // When HDR enabled: higher exposure (35.0) to match native Chrome vibrance
-          float exposure = mix(22.0, 35.0, u_hdrEnabled);
-          vec3 sdr = toneMapReinhard(linear, exposure);
-
-          // Saturation boost
-          // When HDR disabled: slight boost (1.1) for better colors
-          // When HDR enabled: strong boost (1.5) to match Chrome native HDR vibrancy
-          float saturation = mix(1.1, 1.5, u_hdrEnabled);
-          sdr = adjustSaturation(sdr, saturation);
-
-          // Apply gamma (2.2 for accurate color reproduction)
-          vec3 display = pow(sdr, vec3(1.0/2.2));
-
-          outColor = vec4(display, color.a);
-        }`;
-      } else {
-        // Simple passthrough shader for Chromium (native HDR handling)
-        fsSource = `#version 300 es
-        precision highp float;
-        uniform sampler2D u_image;
-        in vec2 v_texCoord;
-        out vec4 outColor;
-        void main() {
-          outColor = texture(u_image, v_texCoord);
-        }`;
-      }
-
-      const createShader = (type: number, source: string) => {
-        const shader = gl.createShader(type);
-        if (!shader) return null;
-        gl.shaderSource(shader, source);
-        gl.compileShader(shader);
-        if (!gl.getShaderParameter(shader, gl.COMPILE_STATUS)) {
-          Logger.error(TAG, "Thumbnail shader compile error:", gl.getShaderInfoLog(shader));
-          gl.deleteShader(shader);
-          return null;
-        }
-        return shader;
-      };
-
-      const vert = createShader(gl.VERTEX_SHADER, vsSource);
-      const frag = createShader(gl.FRAGMENT_SHADER, fsSource);
-      if (!vert || !frag) return false;
-
-      this.thumbnailGLProgram = gl.createProgram();
-      if (!this.thumbnailGLProgram) return false;
-      gl.attachShader(this.thumbnailGLProgram, vert);
-      gl.attachShader(this.thumbnailGLProgram, frag);
-      gl.linkProgram(this.thumbnailGLProgram);
-
-      if (!gl.getProgramParameter(this.thumbnailGLProgram, gl.LINK_STATUS)) {
-        Logger.error(TAG, "Thumbnail program link error:", gl.getProgramInfoLog(this.thumbnailGLProgram));
-        return false;
-      }
-
-      // Create vertex array and buffer
-      const vertices = new Float32Array([
-        -1.0, 1.0, 0.0, 0.0,
-        -1.0, -1.0, 0.0, 1.0,
-        1.0, 1.0, 1.0, 0.0,
-        1.0, -1.0, 1.0, 1.0,
-      ]);
-
-      this.thumbnailGLVao = gl.createVertexArray();
-      gl.bindVertexArray(this.thumbnailGLVao);
-
-      const vbo = gl.createBuffer();
-      gl.bindBuffer(gl.ARRAY_BUFFER, vbo);
-      gl.bufferData(gl.ARRAY_BUFFER, vertices, gl.STATIC_DRAW);
-
-      gl.enableVertexAttribArray(0);
-      gl.vertexAttribPointer(0, 2, gl.FLOAT, false, 4 * 4, 0);
-
-      gl.enableVertexAttribArray(1);
-      gl.vertexAttribPointer(1, 2, gl.FLOAT, false, 4 * 4, 2 * 4);
-
-      this.thumbnailGLTexture = gl.createTexture();
-      gl.bindTexture(gl.TEXTURE_2D, this.thumbnailGLTexture);
-      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
-      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
-      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
-      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
-
-      gl.useProgram(this.thumbnailGLProgram);
-
-      // Set u_image uniform
-      const uImage = gl.getUniformLocation(this.thumbnailGLProgram, "u_image");
-      if (uImage) {
-        gl.uniform1i(uImage, 0);
-      }
-
-      // Set u_hdrEnabled uniform if using tone mapping shader
-      if (needsShaderToneMapping) {
-        const uHdrEnabled = gl.getUniformLocation(this.thumbnailGLProgram, "u_hdrEnabled");
-        if (uHdrEnabled) {
-          gl.uniform1f(uHdrEnabled, this.thumbnailHDREnabled ? 1.0 : 0.0);
-          Logger.debug(TAG, `Thumbnail u_hdrEnabled uniform set to: ${this.thumbnailHDREnabled ? 1.0 : 0.0}`);
-        }
-      }
-
-      Logger.debug(TAG, "Thumbnail WebGL initialized successfully");
-      return true;
-    } catch (error) {
-      Logger.error(TAG, "Error initializing thumbnail WebGL", error);
-      return false;
-    }
-  }
-
-  /**
-   * Detect HDR color space for thumbnails
-   */
-  private detectThumbnailHDRColorSpace(): string {
-    if (!this.thumbnailHDREnabled) {
-      return "srgb";
-    }
-
-    const videoTrack = this.mediaInfo?.tracks?.find(
-      (t) => t.type === "video",
-    ) as VideoTrack | undefined;
-
-    if (!videoTrack) return "srgb";
-
-    const primaries = (videoTrack.colorPrimaries || "").toLowerCase();
-    const transfer = (videoTrack.colorTransfer || "").toLowerCase();
-
-    const isHDRTransfer =
-      transfer.includes("pq") ||
-      transfer.includes("hlg") ||
-      transfer.includes("smpte2084") ||
-      transfer.includes("arib-std-b67");
-
-    const isBT2020 =
-      primaries.includes("bt2020") || primaries.includes("rec2020");
-
-    if (isHDRTransfer || isBT2020) {
-      return "display-p3";
-    }
-
-    if (primaries.includes("p3") || primaries.includes("display-p3")) {
-      return "display-p3";
-    }
-
-    return "srgb";
-  }
 
   /**
    * Generates a preview frame for the given time using C-based FFmpeg software decoding.
@@ -1676,8 +1399,8 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
         }
       }
 
-      if (!this.thumbnailBindings || !this.thumbnailDecoder) {
-        Logger.warn(TAG, "Thumbnail bindings or decoder not available");
+      if (!this.thumbnailBindings || !this.thumbnailRenderer) {
+        Logger.warn(TAG, "Thumbnail bindings or renderer not available");
         return null;
       }
 
@@ -1719,28 +1442,19 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
         return null;
       }
 
-      // 2. Decode using WebCodecs (MoviVideoDecoder)
-      return new Promise<Blob | null>((resolve) => {
-        let resolved = false;
+      // 1. Try WebCodecs (Hardware) through Renderer
+      let rendered = false;
 
-        const resolveNull = () => {
-          if (!resolved) {
-            resolved = true;
-            Logger.warn(TAG, "Thumbnail decode failed");
-            resolve(null);
-          }
-        };
+      try {
+        rendered = await this.thumbnailRenderer!.decodeAndRender(
+          packetData,
+          timestamp,
+        );
+      } catch (e) {
+        Logger.warn(TAG, "Thumbnail WebCodecs decode failed", e);
+      }
 
-        const timeout = setTimeout(() => {
-          if (!resolved) {
-            Logger.warn(
-              TAG,
-              `Thumbnail decode timeout for ${time.toFixed(2)}s. Attempting software fallback.`,
-            );
-            resolved = true;
-
-            // Software Fallback logic
-            try {
+      /* REMOVED OLD LOGIC START
               const videoTrack = this.mediaInfo?.tracks?.find(
                 (t) => t.type === "video",
               ) as VideoTrack | undefined;
@@ -1854,7 +1568,10 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
 
             // Try to initialize WebGL with HDR support
             const colorSpace = this.detectThumbnailHDRColorSpace();
-            const webglInitialized = this.initThumbnailWebGL(this.thumbnailCanvas, colorSpace);
+            const webglInitialized = this.initThumbnailWebGL(
+              this.thumbnailCanvas,
+              colorSpace,
+            );
 
             // Fallback to 2D if WebGL fails
             if (!webglInitialized) {
@@ -1881,7 +1598,12 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
           }
 
           // Render using WebGL if available, otherwise fall back to 2D
-          if (this.thumbnailGL && this.thumbnailGLProgram && this.thumbnailGLTexture && this.thumbnailGLVao) {
+          if (
+            this.thumbnailGL &&
+            this.thumbnailGLProgram &&
+            this.thumbnailGLTexture &&
+            this.thumbnailGLVao
+          ) {
             try {
               const gl = this.thumbnailGL;
 
@@ -1909,9 +1631,16 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
               // Draw
               gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
 
-              Logger.debug(TAG, `Thumbnail rendered with WebGL (HDR: ${this.thumbnailHDREnabled})`);
+              Logger.debug(
+                TAG,
+                `Thumbnail rendered with WebGL (HDR: ${this.thumbnailHDREnabled})`,
+              );
             } catch (e) {
-              Logger.warn(TAG, "WebGL thumbnail rendering failed, falling back to 2D", e);
+              Logger.warn(
+                TAG,
+                "WebGL thumbnail rendering failed, falling back to 2D",
+                e,
+              );
               // Fallback to 2D rendering
               if (this.thumbnailContext) {
                 if (rotation !== 0) {
@@ -1984,18 +1713,56 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
           }
         });
 
+      REMOVED OLD LOGIC END */
+
+      // 2. Fallback to Software Decoding
+      if (!rendered) {
         try {
-          Logger.debug(TAG, `Decoding thumbnail packet...`);
-          // Decode the keyframe
-          this.thumbnailDecoder?.decode(packetData, timestamp, true);
-          this.thumbnailDecoder?.flush().catch((e) => {
-            Logger.warn(TAG, "Thumbnail flush error", e);
-          });
+          // Get width/height from active video track
+          const videoTrack = this.trackManager.getActiveVideoTrack();
+          let width = 320; // Default small
+          let height = 180;
+
+          if (videoTrack) {
+            width = videoTrack.width;
+            height = videoTrack.height;
+          }
+
+          const rgba = this.thumbnailBindings!.decodeCurrentPacket(
+            width,
+            height,
+          );
+          if (rgba && rgba.length > 0) {
+            this.thumbnailRenderer!.render(rgba, width, height);
+            this.thumbnailBindings!.clearBuffer();
+            rendered = true;
+          } else {
+            Logger.warn(TAG, "Software thumbnail decoder returned no data");
+          }
         } catch (e) {
-          Logger.warn(TAG, "Thumbnail decode error", e);
-          resolveNull();
+          Logger.error(TAG, "Software thumbnail fallback exception", e);
         }
-      });
+      }
+
+      if (rendered) {
+        const canvas = this.thumbnailRenderer!.getCanvas();
+        if ("toBlob" in canvas) {
+          return new Promise<Blob | null>((resolve) => {
+            // @ts-ignore
+            canvas.toBlob((blob) => resolve(blob), "image/jpeg", 0.7);
+          });
+        }
+        // If OffscreenCanvas (unlikely here but possible if strict types used)
+        if ("convertToBlob" in canvas) {
+          // @ts-ignore
+          return await canvas.convertToBlob({
+            type: "image/jpeg",
+            quality: 0.7,
+          });
+        }
+      }
+
+      return null;
     } catch (e) {
       Logger.warn(TAG, "Preview generation failed", e);
       return null;
@@ -2062,8 +1829,9 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
     Logger.debug(TAG, `Thumbnail context open result: ${opened}`);
     if (!opened) throw new Error("Failed to open thumbnail media");
 
-    // Initialize Decoder
-    this.thumbnailDecoder = new MoviVideoDecoder();
+    // Initialize Renderer
+    this.thumbnailRenderer = new ThumbnailRenderer();
+
     let videoTrack = this.trackManager.getActiveVideoTrack();
     if (!videoTrack) {
       const tracks = this.trackManager.getVideoTracks();
@@ -2071,23 +1839,39 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
     }
 
     if (videoTrack) {
-      // Set bindings for software fallback
-      if (this.demuxer) {
-        const demuxerBindings = this.demuxer.getBindings();
-        if (demuxerBindings) {
-          this.thumbnailDecoder.setBindings(demuxerBindings);
-        }
-      }
+      // Initialize renderer dimensions and HDR settings
+      this.thumbnailRenderer.initialize({
+        width: videoTrack.width,
+        height: videoTrack.height,
+        colorPrimaries: videoTrack.colorPrimaries,
+        colorTransfer: videoTrack.colorTransfer,
+        hdrEnabled: this.thumbnailHDREnabled,
+      });
 
-      // Get extradata from main demuxer - required for AV1, H.264, H.265 etc.
-      const extradata = this.demuxer?.getExtradata(videoTrack.id) ?? undefined;
+      // Configure internal VideoDecoder
+      const extradata = this.demuxer?.getExtradata(videoTrack.id) ?? null;
+
       Logger.debug(
         TAG,
-        `Configuring thumbnail decoder with track: ${videoTrack.codec}, extradata: ${extradata?.length ?? 0} bytes`,
+        `Configuring thumbnail decoder with track: ${videoTrack.codec}, extradata: ${extradata ? extradata.length : 0} bytes`,
       );
-      await this.thumbnailDecoder.configure(videoTrack, extradata);
+      const configured = await this.thumbnailRenderer.configureDecoder(
+        videoTrack.codec,
+        extradata, // can be null
+        videoTrack.width,
+        videoTrack.height,
+        videoTrack.profile,
+        videoTrack.level,
+      );
+
+      if (!configured) {
+        Logger.warn(
+          TAG,
+          "Failed to configure thumbnail VideoDecoder, will use software fallback",
+        );
+      }
     } else {
-      Logger.warn(TAG, "No video track found for thumbnail decoder");
+      Logger.warn(TAG, "No video track found for thumbnail renderer");
     }
 
     Logger.debug(TAG, "Thumbnail pipeline initialized successfully");
@@ -2098,31 +1882,13 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
       this.thumbnailBindings.destroy();
       this.thumbnailBindings = null;
     }
-    if (this.thumbnailDecoder) {
-      this.thumbnailDecoder.close();
-      this.thumbnailDecoder = null;
-    }
 
-    // Cleanup WebGL resources
-    if (this.thumbnailGL) {
-      if (this.thumbnailGLTexture) {
-        this.thumbnailGL.deleteTexture(this.thumbnailGLTexture);
-        this.thumbnailGLTexture = null;
-      }
-      if (this.thumbnailGLVao) {
-        this.thumbnailGL.deleteVertexArray(this.thumbnailGLVao);
-        this.thumbnailGLVao = null;
-      }
-      if (this.thumbnailGLProgram) {
-        this.thumbnailGL.deleteProgram(this.thumbnailGLProgram);
-        this.thumbnailGLProgram = null;
-      }
-      this.thumbnailGL = null;
+    if (this.thumbnailRenderer) {
+      this.thumbnailRenderer.destroy();
+      this.thumbnailRenderer = null;
     }
 
     this.thumbnailSource = null;
-    this.thumbnailCanvas = null;
-    this.thumbnailContext = null;
   }
 
   /**
@@ -2373,43 +2139,7 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
 
     // For non-Chromium browsers with tone mapping shader, just update the uniform
     // No need to recreate the entire context
-    const isChromium = !!(window as any).chrome;
-    if (!isChromium && this.thumbnailGL && this.thumbnailGLProgram) {
-      const uHdrEnabled = this.thumbnailGL.getUniformLocation(this.thumbnailGLProgram, "u_hdrEnabled");
-      if (uHdrEnabled) {
-        this.thumbnailGL.useProgram(this.thumbnailGLProgram);
-        this.thumbnailGL.uniform1f(uHdrEnabled, enabled ? 1.0 : 0.0);
-        Logger.debug(TAG, `Updated thumbnail u_hdrEnabled uniform to: ${enabled ? 1.0 : 0.0}`);
-        return; // No need to recreate context
-      }
-    }
-
-    // For Chromium browsers, destroy thumbnail canvas to force recreation with new color space
-    // WebGL contexts can't change color space after creation, so we need to recreate
-    if (this.thumbnailCanvas) {
-      Logger.debug(TAG, `Destroying thumbnail canvas to apply HDR: ${enabled}`);
-
-      // Cleanup WebGL resources
-      if (this.thumbnailGL) {
-        if (this.thumbnailGLTexture) {
-          this.thumbnailGL.deleteTexture(this.thumbnailGLTexture);
-          this.thumbnailGLTexture = null;
-        }
-        if (this.thumbnailGLVao) {
-          this.thumbnailGL.deleteVertexArray(this.thumbnailGLVao);
-          this.thumbnailGLVao = null;
-        }
-        if (this.thumbnailGLProgram) {
-          this.thumbnailGL.deleteProgram(this.thumbnailGLProgram);
-          this.thumbnailGLProgram = null;
-        }
-        this.thumbnailGL = null;
-      }
-
-      // Clear canvas references to force recreation
-      this.thumbnailCanvas = null;
-      this.thumbnailContext = null;
-    }
+    /* Manual WebGL update logic removed */
   }
 
   /**

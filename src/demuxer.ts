@@ -39,6 +39,7 @@ export type {
 // Utilities
 export { Logger, LogLevel } from './utils/Logger';
 export { Time, TIME_BASE } from './utils/Time';
+export { ThumbnailRenderer, type ThumbnailRenderOptions } from './utils/ThumbnailRenderer';
 
 // Events
 export { EventEmitter } from './events/EventEmitter';
