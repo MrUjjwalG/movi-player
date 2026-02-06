@@ -3619,6 +3619,11 @@ export class MoviElement extends HTMLElement {
         background: rgba(255, 255, 255, 0.95) !important;
         border-color: rgba(0, 0, 0, 0.1) !important;
         box-shadow: 0 20px 50px rgba(0, 0, 0, 0.15) !important;
+        color: #11142d !important;
+      }
+
+      :host([theme="light"]) .movi-context-menu-item:hover {
+        background-color: rgba(0, 0, 0, 0.05) !important;
       }
 
       :host([theme="light"]) .movi-context-menu-divider {
@@ -3628,10 +3633,14 @@ export class MoviElement extends HTMLElement {
       :host([theme="light"]) .movi-speed-menu,
       :host([theme="light"]) .movi-audio-track-menu,
       :host([theme="light"]) .movi-subtitle-track-menu,
-      :host([theme="light"]) .movi-quality-menu {
+      :host([theme="light"]) .movi-quality-menu,
+      :host([theme="light"]) .movi-context-menu-submenu,
+      :host([theme="light"]) .movi-context-menu-submenu-audio,
+      :host([theme="light"]) .movi-context-menu-submenu-subtitle {
         background: rgba(255, 255, 255, 0.95) !important;
         border-color: rgba(0, 0, 0, 0.1) !important;
         box-shadow: 0 20px 50px rgba(0, 0, 0, 0.15) !important;
+        color: #11142d !important;
       }
 
       /* Light Theme Menu Items Hover */

@@ -1406,9 +1406,7 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
 
       // Read keyframe from thumbnailer
       // Convert time to media time (PTS) by adding startTime
-      const packetSize = await this.thumbnailBindings.readKeyframe(
-        time + this.startTime,
-      );
+      const packetSize = await this.thumbnailBindings.readKeyframe(time);
       Logger.debug(
         TAG,
         `Thumbnail readKeyframe(${time.toFixed(2)}s): size=${packetSize}`,
