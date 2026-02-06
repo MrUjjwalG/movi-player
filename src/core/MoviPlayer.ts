@@ -1420,6 +1420,36 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
         Logger.warn(TAG, "Failed to set thumbnail drawingBufferColorSpace", e);
       }
 
+      // Detect browser and HDR source to choose appropriate shader
+      const isChromium = !!(window as any).chrome;
+      const videoTrack = this.mediaInfo?.tracks?.find(
+        (t) => t.type === "video",
+      ) as VideoTrack | undefined;
+
+      let isHDRSource = false;
+      if (videoTrack) {
+        const primaries = (videoTrack.colorPrimaries || "").toLowerCase();
+        const transfer = (videoTrack.colorTransfer || "").toLowerCase();
+
+        const isHDRTransfer =
+          transfer.includes("pq") ||
+          transfer.includes("hlg") ||
+          transfer.includes("smpte2084") ||
+          transfer.includes("arib-std-b67");
+
+        const isBT2020 =
+          primaries.includes("bt2020") || primaries.includes("rec2020");
+
+        isHDRSource = isHDRTransfer || isBT2020;
+      }
+
+      // Choose shader based on browser capability
+      // - Chromium: use simple passthrough (native HDR handling)
+      // - Non-Chromium with HDR: use tone mapping shader
+      const needsShaderToneMapping = !isChromium && isHDRSource;
+
+      Logger.debug(TAG, `Thumbnail shader selection: isChromium=${isChromium}, isHDRSource=${isHDRSource}, needsToneMapping=${needsShaderToneMapping}`);
+
       // Create shaders
       const vsSource = `#version 300 es
         layout(location = 0) in vec2 a_position;
@@ -1430,7 +1460,69 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
           v_texCoord = a_texCoord;
         }`;
 
-      const fsSource = `#version 300 es
+      let fsSource: string;
+
+      if (needsShaderToneMapping) {
+        // Tone mapping shader for non-Chromium browsers with HDR content
+        fsSource = `#version 300 es
+        precision highp float;
+        uniform sampler2D u_image;
+        uniform float u_hdrEnabled; // 0.0 = disabled, 1.0 = enabled
+        in vec2 v_texCoord;
+        out vec4 outColor;
+
+        // PQ (SMPTE 2084) EOTF constants
+        const float m1 = 2610.0 / 16384.0;
+        const float m2 = 2523.0 / 4096.0 * 128.0;
+        const float c1 = 3424.0 / 4096.0;
+        const float c2 = 2413.0 / 4096.0 * 32.0;
+        const float c3 = 2392.0 / 4096.0 * 32.0;
+
+        vec3 PQtoLinear(vec3 pq) {
+          vec3 colToPow = pow(pq, vec3(1.0 / m2));
+          vec3 num = max(colToPow - c1, vec3(0.0));
+          vec3 den = c2 - c3 * colToPow;
+          return pow(num / den, vec3(1.0 / m1));
+        }
+
+        vec3 toneMapReinhard(vec3 hdr, float exposure) {
+          vec3 mapped = hdr * exposure;
+          return mapped / (1.0 + mapped);
+        }
+
+        vec3 adjustSaturation(vec3 color, float saturation) {
+          float luminance = dot(color, vec3(0.2126, 0.7152, 0.0722));
+          vec3 gray = vec3(luminance);
+          return mix(gray, color, saturation);
+        }
+
+        void main() {
+          vec4 color = texture(u_image, v_texCoord);
+
+          // Apply PQ EOTF to get linear light
+          vec3 linear = PQtoLinear(color.rgb);
+
+          // Tone map to SDR range
+          // Adjusted to match Chrome native HDR appearance
+          // When HDR disabled: lower exposure (22.0) for better contrast
+          // When HDR enabled: higher exposure (35.0) to match native Chrome vibrance
+          float exposure = mix(22.0, 35.0, u_hdrEnabled);
+          vec3 sdr = toneMapReinhard(linear, exposure);
+
+          // Saturation boost
+          // When HDR disabled: slight boost (1.1) for better colors
+          // When HDR enabled: strong boost (1.5) to match Chrome native HDR vibrancy
+          float saturation = mix(1.1, 1.5, u_hdrEnabled);
+          sdr = adjustSaturation(sdr, saturation);
+
+          // Apply gamma (2.2 for accurate color reproduction)
+          vec3 display = pow(sdr, vec3(1.0/2.2));
+
+          outColor = vec4(display, color.a);
+        }`;
+      } else {
+        // Simple passthrough shader for Chromium (native HDR handling)
+        fsSource = `#version 300 es
         precision highp float;
         uniform sampler2D u_image;
         in vec2 v_texCoord;
@@ -1438,6 +1530,7 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
         void main() {
           outColor = texture(u_image, v_texCoord);
         }`;
+      }
 
       const createShader = (type: number, source: string) => {
         const shader = gl.createShader(type);
@@ -1495,10 +1588,21 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
       gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
       gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
 
+      gl.useProgram(this.thumbnailGLProgram);
+
+      // Set u_image uniform
       const uImage = gl.getUniformLocation(this.thumbnailGLProgram, "u_image");
-      if (uImage && this.thumbnailGLProgram) {
-        gl.useProgram(this.thumbnailGLProgram);
+      if (uImage) {
         gl.uniform1i(uImage, 0);
+      }
+
+      // Set u_hdrEnabled uniform if using tone mapping shader
+      if (needsShaderToneMapping) {
+        const uHdrEnabled = gl.getUniformLocation(this.thumbnailGLProgram, "u_hdrEnabled");
+        if (uHdrEnabled) {
+          gl.uniform1f(uHdrEnabled, this.thumbnailHDREnabled ? 1.0 : 0.0);
+          Logger.debug(TAG, `Thumbnail u_hdrEnabled uniform set to: ${this.thumbnailHDREnabled ? 1.0 : 0.0}`);
+        }
       }
 
       Logger.debug(TAG, "Thumbnail WebGL initialized successfully");
@@ -2267,7 +2371,20 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
       (this.videoRenderer as any).setHDREnabled(enabled);
     }
 
-    // Destroy thumbnail canvas to force recreation with new color space
+    // For non-Chromium browsers with tone mapping shader, just update the uniform
+    // No need to recreate the entire context
+    const isChromium = !!(window as any).chrome;
+    if (!isChromium && this.thumbnailGL && this.thumbnailGLProgram) {
+      const uHdrEnabled = this.thumbnailGL.getUniformLocation(this.thumbnailGLProgram, "u_hdrEnabled");
+      if (uHdrEnabled) {
+        this.thumbnailGL.useProgram(this.thumbnailGLProgram);
+        this.thumbnailGL.uniform1f(uHdrEnabled, enabled ? 1.0 : 0.0);
+        Logger.debug(TAG, `Updated thumbnail u_hdrEnabled uniform to: ${enabled ? 1.0 : 0.0}`);
+        return; // No need to recreate context
+      }
+    }
+
+    // For Chromium browsers, destroy thumbnail canvas to force recreation with new color space
     // WebGL contexts can't change color space after creation, so we need to recreate
     if (this.thumbnailCanvas) {
       Logger.debug(TAG, `Destroying thumbnail canvas to apply HDR: ${enabled}`);
