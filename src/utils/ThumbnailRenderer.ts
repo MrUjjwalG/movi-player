@@ -438,6 +438,61 @@ export class ThumbnailRenderer {
       this.decoder = null;
     }
 
+    // Build codec string first (outside Promise)
+    let codecString: string | null = null;
+
+    if (profile !== undefined) {
+      codecString = this.mapCodecToWebCodecs(
+        codec,
+        width,
+        height,
+        profile,
+        level,
+      );
+    }
+
+    if (!codecString) {
+      codecString = CodecParser.getCodecString(
+        codec,
+        extradata ?? undefined,
+        width,
+        height,
+      );
+    }
+
+    if (!codecString) {
+      codecString = codec;
+      Logger.warn(
+        TAG,
+        "Failed to resolve codec string, using generic:",
+        codecString,
+      );
+    } else {
+      Logger.debug(TAG, "Resolved codec string:", codecString);
+    }
+
+    // Check if codec is supported before creating decoder
+    try {
+      const checkConfig: VideoDecoderConfig = {
+        codec: codecString,
+        codedWidth: width,
+        codedHeight: height,
+        hardwareAcceleration: "prefer-hardware",
+      };
+
+      const support = await VideoDecoder.isConfigSupported(checkConfig);
+      if (!support.supported) {
+        Logger.warn(TAG, `Codec not supported by WebCodecs: ${codecString}`);
+        return false;
+      }
+    } catch (e) {
+      Logger.warn(TAG, `Failed to check codec support: ${codecString}`, e);
+      return false;
+    }
+
+    // Store codecString for use in Promise
+    const finalCodecString = codecString;
+
     return new Promise((resolve) => {
       try {
         this.decoder = new VideoDecoder({
@@ -459,44 +514,8 @@ export class ThumbnailRenderer {
           },
         });
 
-        // Use CodecParser to properly parse extradata binary format
-        let codecString: string | null = null;
-
-        // If profile is available, try manual mapping first as it's more reliable than parsing extradata
-        if (profile !== undefined) {
-          codecString = this.mapCodecToWebCodecs(
-            codec,
-            width,
-            height,
-            profile,
-            level,
-          );
-        }
-
-        // If manual mapping didn't yield a result (or profile wasn't provided), try CodecParser
-        if (!codecString) {
-          codecString = CodecParser.getCodecString(
-            codec,
-            extradata ?? undefined,
-            width,
-            height,
-          );
-        }
-
-        // Final fallback
-        if (!codecString) {
-          codecString = codec;
-          Logger.warn(
-            TAG,
-            "Failed to resolve codec string, using generic:",
-            codecString,
-          );
-        } else {
-          Logger.debug(TAG, "Resolved codec string:", codecString);
-        }
-
         const config: VideoDecoderConfig = {
-          codec: codecString,
+          codec: finalCodecString,
           codedWidth: width,
           codedHeight: height,
           hardwareAcceleration: "prefer-hardware",

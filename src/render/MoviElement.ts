@@ -193,10 +193,27 @@ export class MoviElement extends HTMLElement {
         <div class="movi-broken-text">
           <h3 class="movi-broken-title">Format Unsupported</h3>
           <p class="movi-broken-message">This video codec is not supported by your browser's hardware acceleration.</p>
+          <button class="movi-sw-fallback-btn" style="display: none;">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" width="16" height="16">
+              <path d="M21 12a9 9 0 0 0-9-9 9.75 9.75 0 0 0-6.74 2.74L3 8"/>
+              <path d="M3 3v5h5"/>
+              <path d="M3 12a9 9 0 0 0 9 9 9.75 9.75 0 0 0 6.74-2.74L21 16"/>
+              <path d="M16 16h5v5"/>
+            </svg>
+            Try Software Decoding
+          </button>
         </div>
       </div>
     `;
     shadowRoot.appendChild(this.brokenIndicator);
+
+    // Setup software fallback button handler
+    const swFallbackBtn = this.brokenIndicator.querySelector(
+      ".movi-sw-fallback-btn",
+    );
+    swFallbackBtn?.addEventListener("click", () => {
+      this.enableSoftwareDecoding();
+    });
 
     // Create OSD (On-Screen Display) container
     const osdContainer = document.createElement("div");
@@ -5338,6 +5355,13 @@ export class MoviElement extends HTMLElement {
         background: linear-gradient(to bottom, #fff, #bbb);
         -webkit-background-clip: text;
         -webkit-text-fill-color: transparent;
+        text-align: center;
+      }
+      
+      .movi-broken-text {
+        display: flex;
+        flex-direction: column;
+        align-items: center;
       }
       
       .movi-broken-message {
@@ -5346,6 +5370,34 @@ export class MoviElement extends HTMLElement {
         color: rgba(255, 255, 255, 0.6);
         margin: 0;
         font-weight: 400;
+        text-align: center;
+      }
+      
+      .movi-sw-fallback-btn {
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        gap: 8px;
+        margin-top: 16px;
+        padding: 10px 20px;
+        background: rgba(255, 255, 255, 0.15);
+        border: 1px solid rgba(255, 255, 255, 0.2);
+        border-radius: 8px;
+        color: #fff;
+        font-size: 14px;
+        font-weight: 500;
+        cursor: pointer;
+        transition: all 0.2s ease;
+      }
+      
+      .movi-sw-fallback-btn:hover {
+        background: rgba(255, 255, 255, 0.25);
+        border-color: rgba(255, 255, 255, 0.4);
+        transform: scale(1.02);
+      }
+      
+      .movi-sw-fallback-btn svg {
+        flex-shrink: 0;
       }
       
       /* Mobile Responsiveness for Context Menu - Side Panel Mode */
@@ -6458,6 +6510,23 @@ export class MoviElement extends HTMLElement {
         );
         if (messageEl) messageEl.textContent = message;
       }
+
+      // Show/hide the software fallback button based on parameter
+      const swFallbackBtn = this.brokenIndicator.querySelector(
+        ".movi-sw-fallback-btn",
+      ) as HTMLElement;
+      if (swFallbackBtn) {
+        // Show the button for hardware acceleration or decoder failures (not for network errors)
+        // Don't show if already using software decoding
+        const isDecoderError =
+          title === "Format Unsupported" ||
+          title === "Codec Unsupported" ||
+          title === "Playback Error" ||
+          message?.toLowerCase().includes("decoder") ||
+          message?.toLowerCase().includes("codec");
+        const shouldShowSwButton = isDecoderError && !this._sw;
+        swFallbackBtn.style.display = shouldShowSwButton ? "flex" : "none";
+      }
     }
 
     // Hide loading indicator
@@ -6480,6 +6549,57 @@ export class MoviElement extends HTMLElement {
     this.updateControlsState();
     this.updatePlayPauseIcon();
     this.updateQualityMenu(); // Update quality menu
+  }
+
+  /**
+   * Enable software decoding and reload the video
+   */
+  private async enableSoftwareDecoding(): Promise<void> {
+    Logger.info(TAG, "User requested software decoding fallback");
+
+    // Reset unsupported state
+    this._isUnsupported = false;
+
+    // Hide broken indicator
+    if (this.brokenIndicator) {
+      this.brokenIndicator.style.display = "none";
+    }
+
+    // Set sw attribute to enable software decoding
+    this._sw = true;
+    this.setAttribute("sw", "");
+
+    // Get current source
+    const currentSrc = this._src;
+
+    // Destroy current player if exists
+    if (this.player) {
+      this.player.destroy();
+      this.player = null;
+    }
+
+    // Reset loading state so initializePlayer can run
+    this.isLoading = false;
+
+    // Show loading indicator
+    const loadingIndicator = this.shadowRoot?.querySelector(
+      ".movi-loading-indicator",
+    ) as HTMLElement;
+    if (loadingIndicator) loadingIndicator.style.display = "flex";
+
+    // Re-initialize with software decoding
+    if (currentSrc) {
+      try {
+        // Call initializePlayer directly since src hasn't changed
+        await this.initializePlayer();
+      } catch (e) {
+        Logger.error(TAG, "Failed to initialize with software decoding", e);
+        this.handleUnsupportedVideo(
+          "Playback Error",
+          "Failed to play video even with software decoding.",
+        );
+      }
+    }
   }
 
   private updateControlsState(): void {
