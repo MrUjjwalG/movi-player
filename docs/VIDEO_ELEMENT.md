@@ -312,6 +312,33 @@ Generates thumbnails on demand (used internally for preview).
 
 ---
 
+#### `sw`
+
+Forces software decoding (using FFmpeg WASM) instead of hardware-accelerated WebCodecs.
+
+```html
+<movi-player src="video.mp4" sw></movi-player>
+```
+
+**Note:** Useful if hardware decoding fails or produces visual artifacts for a specific file.
+
+---
+
+#### `fps`
+
+Overrides the video frame rate with a custom value.
+
+**Values:**
+
+- `0` (default) - Use frame rate from video metadata
+- `number` - Fixed frame rate (e.g., `24`, `60`)
+
+```html
+<movi-player src="video.mp4" fps="60"></movi-player>
+```
+
+---
+
 ### Standard HTML Attributes
 
 #### `width` / `height`
@@ -470,6 +497,27 @@ Gets/sets loop mode.
 
 ```typescript
 player.loop = true; // Enable looping
+```
+
+---
+
+#### `sw: boolean`
+
+Gets/sets whether software decoding is forced.
+
+```typescript
+player.sw = true; // Force software decoding
+```
+
+---
+
+#### `fps: number`
+
+Gets/sets custom frame rate override.
+
+```typescript
+player.fps = 24; // Override to 24 FPS
+player.fps = 0; // Auto (from metadata)
 ```
 
 ---

@@ -435,6 +435,8 @@ The `<movi-player>` element supports standard video attributes plus enhancements
   hdr                      <!-- Enable HDR rendering -->
   ambientmode              <!-- Ambient background effects -->
   renderer="canvas"        <!-- canvas | mse -->
+  sw                       <!-- Force software decoding -->
+  fps="0"                  <!-- Custom frame rate override -->
 ></movi-player>
 ```
 
