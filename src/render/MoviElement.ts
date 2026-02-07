@@ -4270,7 +4270,7 @@ export class MoviElement extends HTMLElement {
       }
       
       .movi-hdr-btn {
-        display: flex;
+        display: none; /* Hidden by default, shown when HDR content is detected */
         align-items: center;
         justify-content: center;
         padding: 0 12px !important; /* Force override of .movi-btn padding */
@@ -7155,12 +7155,24 @@ export class MoviElement extends HTMLElement {
       if (hdrMenuItem) hdrMenuItem.style.display = "flex";
       if (hdrDivider) hdrDivider.style.display = "block";
 
+      // Show the HDR button when HDR content is detected
+      const hdrBtn = this.shadowRoot?.querySelector(
+        ".movi-hdr-btn",
+      ) as HTMLElement;
+      if (hdrBtn) hdrBtn.style.display = "flex";
+
       // Ensure UI reflects the active state now that it's visible
       this.updateHDRUI();
     } else {
       if (hdrContainer) hdrContainer.style.display = "none";
       if (hdrMenuItem) hdrMenuItem.style.display = "none";
       if (hdrDivider) hdrDivider.style.display = "none";
+
+      // Hide the HDR button when no HDR content
+      const hdrBtn = this.shadowRoot?.querySelector(
+        ".movi-hdr-btn",
+      ) as HTMLElement;
+      if (hdrBtn) hdrBtn.style.display = "none";
     }
 
     Logger.debug(
