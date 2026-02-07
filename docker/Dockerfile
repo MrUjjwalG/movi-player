@@ -4,14 +4,21 @@ FROM --platform=linux/arm64 emscripten/emsdk:latest
 LABEL maintainer="movi"
 LABEL description="FFmpeg WASM build environment for movi"
 
-# Install build dependencies
+# Install build dependencies (including meson/ninja for dav1d)
 RUN apt-get update && apt-get install -y \
     git \
     make \
     pkg-config \
+    meson \
+    ninja-build \
+    nasm \
     && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /src
+
+# Clone dav1d AV1 decoder (software, works great in WASM)
+ARG DAV1D_VERSION=1.5.0
+RUN git clone --depth 1 --branch ${DAV1D_VERSION} https://code.videolan.org/videolan/dav1d.git /opt/dav1d
 
 # Clone FFmpeg (will be mounted from host for dev, or cloned for CI)
 ARG FFMPEG_VERSION=n7.1.3

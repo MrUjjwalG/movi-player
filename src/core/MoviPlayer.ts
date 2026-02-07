@@ -99,7 +99,7 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
   private justSeeked: boolean = false;
   private seekTime: number = 0;
   private startTime: number = 0; // Media start time (PTS offset)
-  private static readonly POST_SEEK_THROTTLE_MS = 200; // Throttle aggressive buffering for 200ms after seek
+  private static readonly POST_SEEK_THROTTLE_MS = 1000; // Throttle aggressive buffering for 1000ms after seek to stabilize playback
 
   constructor(config: PlayerConfig) {
     super();
@@ -120,10 +120,13 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
 
     // Initialize video renderer with canvas (WebCodecs)
     // Note: MSE mode is handled by MSEPlayerWrapper
+    // Check if software decoding is forced via config
+    const forceSoftware = config.decoder === "software";
+
     if (config.canvas || config.renderer === "canvas") {
       if (config.canvas) {
-        // Use canvas with WebCodecs
-        this.videoDecoder = new MoviVideoDecoder();
+        // Use canvas with WebCodecs (or WASM software if forced)
+        this.videoDecoder = new MoviVideoDecoder(forceSoftware);
         this.videoRenderer = new CanvasRenderer(config.canvas);
 
         // Connect video renderer to audio clock for A/V sync (skip if audio disabled)
@@ -141,17 +144,20 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
           );
         }
 
-        Logger.info(TAG, "Video renderer initialized with canvas");
+        Logger.info(
+          TAG,
+          `Video renderer initialized with canvas (forceSoftware: ${forceSoftware})`,
+        );
       } else {
         Logger.warn(
           TAG,
           "Canvas renderer requested but no canvas element provided",
         );
-        this.videoDecoder = new MoviVideoDecoder();
+        this.videoDecoder = new MoviVideoDecoder(forceSoftware);
       }
     } else {
       // Default to software decoding with WebCodecs (no target element)
-      this.videoDecoder = new MoviVideoDecoder();
+      this.videoDecoder = new MoviVideoDecoder(forceSoftware);
       Logger.info(
         TAG,
         "Video renderer initialized with default (WebCodecs decoder only)",
@@ -466,9 +472,14 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
     if (videoTrack && this.videoDecoder) {
       // Use WebCodecs - configure decoder
       const extradata = this.demuxer.getExtradata(videoTrack.id) ?? undefined;
+
+      // Pass explicit frame rate override if present (for throttling)
+      const targetFps = this.config.frameRate ?? 0;
+
       const configured = await this.videoDecoder.configure(
         videoTrack,
         extradata,
+        targetFps,
       );
       if (configured) {
         Logger.info(
@@ -477,12 +488,15 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
         );
         if (this.videoRenderer) {
           // Pass color space metadata for HDR detection and frame rate for 60fps conversion
+          // Support manual frame rate override (fps parameter)
+          const frameRate = this.config.frameRate || videoTrack.frameRate;
+
           this.videoRenderer.configure(
             videoTrack.width,
             videoTrack.height,
             videoTrack.colorPrimaries,
             videoTrack.colorTransfer,
-            videoTrack.frameRate,
+            frameRate,
             videoTrack.rotation ?? 0,
             videoTrack.isHDR,
           );
@@ -869,8 +883,8 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
     }
 
     // Check backpressure - relax limits for better throughput
-    // But prevent audio buffer bloat
     // After seek, use stricter limits to prevent overwhelming low-end devices
+    const isSoftware = this.isSoftwareDecoding();
     const timeSinceSeek = performance.now() - this.seekTime;
     const isPostSeek =
       this.justSeeked && timeSinceSeek < MoviPlayer.POST_SEEK_THROTTLE_MS;
@@ -882,12 +896,24 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
     // Canvas/WebCodecs path
     const videoBuffered = this.videoRenderer?.getQueueSize() ?? 0;
 
-    // Increased buffering limits to support 4K 60fps content
-    // After seek, use stricter limits to prevent stuttering on low-end devices
-    const maxVideoQueue = isPostSeek ? 15 : 30;
-    const maxAudioQueue = isPostSeek ? 10 : 20;
-    const maxAudioBuffered = isPostSeek ? 1.0 : 2.0;
-    const maxVideoBuffered = isPostSeek ? 50 : 100; // Fewer frames after seek
+    // Adaptive limits for software/hardware modes
+    // During post-seek or while waiting for initial sync, we are more permissive with decoder queues
+    // to ensure they have enough data to output the first few frames.
+    const maxVideoQueue = isSoftware
+      ? 1000
+      : isPostSeek || this.waitingForVideoSync
+        ? 60
+        : 30;
+    const maxAudioQueue = isSoftware
+      ? 500
+      : isPostSeek || this.waitingForVideoSync
+        ? 40
+        : 20;
+
+    // Buffer targets (in seconds)
+    const maxAudioBuffered = isSoftware ? 5.0 : isPostSeek ? 1.5 : 2.0;
+    // Renderer queue limits (in frames)
+    const maxVideoBuffered = isSoftware ? 60 : isPostSeek ? 20 : 100;
 
     if (
       this.videoDecoder.queueSize > maxVideoQueue ||
@@ -895,6 +921,16 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
       (!this.disableAudio && audioBuffered > maxAudioBuffered) ||
       videoBuffered > maxVideoBuffered
     ) {
+      if (
+        this.waitingForVideoSync &&
+        (this.videoDecoder.queueSize > maxVideoQueue ||
+          videoBuffered > maxVideoBuffered)
+      ) {
+        Logger.debug(
+          TAG,
+          `Backpressure during sync: videoDecoder=${this.videoDecoder.queueSize}, videoBuffered=${videoBuffered}`,
+        );
+      }
       return;
     }
 
@@ -910,18 +946,10 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
       this.demuxInFlightStartTime = performance.now();
 
       // Determine burst size based on buffer levels and post-seek state
-      // After seek, use smaller bursts to prevent overwhelming low-end devices
-      let burstSize = 20; // Default burst size
-
-      // Check if we just seeked - throttle for a short period to prevent stuttering
-      const timeSinceSeek = performance.now() - this.seekTime;
-      const isPostSeek =
-        this.justSeeked && timeSinceSeek < MoviPlayer.POST_SEEK_THROTTLE_MS;
+      let burstSize = 20;
 
       if (isPostSeek) {
-        // After seek, use smaller bursts to prevent overwhelming decoders
-        // This helps low-end devices avoid stuttering
-        burstSize = 5; // Small burst after seek
+        burstSize = 5;
         Logger.debug(
           TAG,
           `Post-seek throttling: using burst size ${burstSize}`,
@@ -938,25 +966,20 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
 
         // Normal burst size logic
         const videoQueue = this.videoRenderer?.getQueueSize() ?? 0;
-        const audioBuffered = this.audioRenderer.getBufferedDuration();
+        const currentAudioBuffered = this.audioRenderer.getBufferedDuration();
 
         // If buffers are low, increase burst size to fill faster
-        if (videoQueue < 30 || audioBuffered < 0.5) {
-          burstSize = 40; // Read more aggressively when buffers are low
+        const bufferTarget = isSoftware ? 2.0 : 0.5;
+        if (videoQueue < 30 || currentAudioBuffered < bufferTarget) {
+          burstSize = isSoftware ? 80 : 40; // Read more aggressively when buffers are low
         }
       }
-
-      // Process packets with adaptive throttling for low-end devices
-      // After seek, use smaller bursts and stricter queue limits
-      const maxVideoQueueSize = isPostSeek ? 15 : 30; // Lower queue limit after seek
-      const maxAudioQueueSize = isPostSeek ? 10 : 20; // Lower audio queue limit after seek
 
       for (let i = 0; i < burstSize; i++) {
         // Check both video and audio queues after seek to prevent overwhelming decoders
         if (
-          this.videoDecoder.queueSize > maxVideoQueueSize ||
-          (!this.disableAudio &&
-            this.audioDecoder.queueSize > maxAudioQueueSize)
+          this.videoDecoder.queueSize > maxVideoQueue ||
+          (!this.disableAudio && this.audioDecoder.queueSize > maxAudioQueue)
         ) {
           // Queue getting full, stop to let decoders catch up
           if (isPostSeek) {
@@ -968,11 +991,16 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
           break;
         }
 
-        // After seek, yield periodically to prevent blocking the main thread
-        // This helps low-end devices avoid stuttering
-        if (isPostSeek && i > 0 && i % 3 === 0) {
-          // Yield every 3 packets after seek to let decoders catch up
-          await new Promise((resolve) => setTimeout(resolve, 0));
+        // Yield periodically to prevent blocking the main thread, especially in software mode
+        // This helps maintain audio responsiveness and UI interactivity
+        const yieldInterval = isPostSeek ? 2 : isSoftware ? 3 : 20;
+        if (i > 0 && i % yieldInterval === 0) {
+          // Use MessageChannel for fast yielding (better than setTimeout)
+          const channel = new MessageChannel();
+          await new Promise((resolve) => {
+            channel.port1.onmessage = resolve;
+            channel.port2.postMessage(null);
+          });
 
           // Check if a new seek started during yield
           if (this.seekSessionId !== currentSessionId) {

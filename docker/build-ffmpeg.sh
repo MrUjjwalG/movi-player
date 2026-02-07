@@ -1,6 +1,55 @@
 #!/bin/bash
 set -e
 
+DAV1D_SRC=/opt/dav1d
+DAV1D_PREFIX=/src/dist/dav1d
+
+# Build dav1d for WASM (software AV1 decoder)
+if [ -z "$FORCE_DAV1D" ] && [ -f "${DAV1D_PREFIX}/lib/libdav1d.a" ]; then
+    echo "=== dav1d library found, skipping build (set FORCE_DAV1D=true to rebuild) ==="
+else
+    echo "=== Building dav1d for WASM ==="
+    
+    cd ${DAV1D_SRC}
+    
+    # Clean previous build
+    rm -rf build || true
+    
+    # Create Emscripten cross-file for meson
+    cat > /tmp/emscripten.txt << 'EOF'
+[binaries]
+c = 'emcc'
+cpp = 'em++'
+ar = 'emar'
+strip = 'emstrip'
+[built-in options]
+c_args = ['-Oz', '-flto', '-D_FILE_OFFSET_BITS=64']
+c_link_args = ['-Oz', '-flto']
+[host_machine]
+system = 'emscripten'
+cpu_family = 'wasm32'
+cpu = 'wasm32'
+endian = 'little'
+EOF
+
+    # Configure dav1d for WASM
+    meson setup build \
+        --prefix=${DAV1D_PREFIX} \
+        --cross-file=/tmp/emscripten.txt \
+        --default-library=static \
+        --buildtype=release \
+        -Denable_asm=false \
+        -Denable_tools=false \
+        -Denable_tests=false \
+        -Denable_examples=false
+    
+    echo "=== Compiling dav1d ==="
+    ninja -C build
+    
+    echo "=== Installing dav1d ==="
+    ninja -C build install
+fi
+
 ls -R /src/dist/ffmpeg/lib || echo "Directory not found"
 if [ -z "$FORCE_FFMPEG" ] && [ -f "/src/dist/ffmpeg/lib/libavformat.a" ]; then
     if [ -d "${FFMPEG_SRC}" ]; then
@@ -10,7 +59,7 @@ if [ -z "$FORCE_FFMPEG" ] && [ -f "/src/dist/ffmpeg/lib/libavformat.a" ]; then
     fi
     echo "=== FFmpeg libraries found, skipping build (set FORCE_FFMPEG=true to rebuild) ==="
 else
-    echo "=== Building FFmpeg for WASM ==="
+    echo "=== Building FFmpeg for WASM (with libdav1d) ==="
     
     cd ${FFMPEG_SRC}
     
@@ -18,11 +67,23 @@ else
     make clean 2>/dev/null || true
     make distclean 2>/dev/null || true
 
+    # Set PKG_CONFIG_PATH so FFmpeg can find dav1d
+    export PKG_CONFIG_PATH="${DAV1D_PREFIX}/lib/pkgconfig:${PKG_CONFIG_PATH}"
+    
+    # Debug: verify pkg-config can find dav1d
+    echo "=== Verifying dav1d pkg-config ==="
+    pkg-config --libs --cflags dav1d || echo "WARNING: pkg-config cannot find dav1d"
+    
     # Configure FFmpeg for WASM with size optimizations
+    # Using libdav1d for AV1 - pure software decoder that works in WASM
     # -Oz: Maximum size optimization (instead of -O3 speed)
     # --enable-small: Trade speed for size
     # -flto: Link-time optimization
+    # Note: Using --pkg-config to use native pkg-config, and EM_PKG_CONFIG_PATH for emscripten
+    EM_PKG_CONFIG_PATH="${DAV1D_PREFIX}/lib/pkgconfig" \
+    PKG_CONFIG_PATH="${DAV1D_PREFIX}/lib/pkgconfig" \
     emconfigure ./configure \
+        --pkg-config=pkg-config \
         --prefix=/src/dist/ffmpeg \
         --target-os=none \
         --arch=x86_32 \
@@ -42,14 +103,15 @@ else
         --enable-avutil \
         --enable-swresample \
         --enable-swscale \
+        --enable-libdav1d \
         --enable-protocol=file \
         --enable-demuxer=mov,mp4,m4a,mj2,avi,flv,matroska,webm,asf,mpegts,flac,ogg,wav,srt,ass,ssa,webvtt \
-        --enable-decoder=h264,hevc,vp9,vp8,av1,aac,aac_latm,mp3,opus,vorbis,flac,ac3,eac3,dca,pcm_s16le,pcm_s24le,pcm_f32le,subrip,ass,ssa,mov_text,pgssub,dvb_subtitle,dvdsubtitle,webvtt,srt \
+        --enable-decoder=h264,hevc,vp9,vp8,libdav1d,aac,aac_latm,mp3,opus,vorbis,flac,ac3,eac3,dca,pcm_s16le,pcm_s24le,pcm_f32le,subrip,ass,ssa,mov_text,pgssub,dvb_subtitle,dvdsubtitle,webvtt,srt \
         --enable-parser=h264,hevc,vp8,vp9,av1,aac,mp3,opus,vorbis,flac,hdmv_pgs_subtitle \
         --enable-bsf=aac_adtstoasc,h264_mp4toannexb,hevc_mp4toannexb,iso_media_metadata_manipulator,extract_extradata,vp9_superframe \
-        --extra-cflags="-Oz -flto -s USE_PTHREADS=0 -D_FILE_OFFSET_BITS=64" \
-        --extra-cxxflags="-Oz -flto -D_FILE_OFFSET_BITS=64" \
-        --extra-ldflags="-s WASM=1 -Oz -flto"
+        --extra-cflags="-Oz -flto -s USE_PTHREADS=0 -D_FILE_OFFSET_BITS=64 -I${DAV1D_PREFIX}/include" \
+        --extra-cxxflags="-Oz -flto -D_FILE_OFFSET_BITS=64 -I${DAV1D_PREFIX}/include" \
+        --extra-ldflags="-s WASM=1 -Oz -flto -L${DAV1D_PREFIX}/lib"
 
     echo "=== Compiling FFmpeg ==="
     emmake make -j$(nproc)
@@ -82,8 +144,10 @@ mkdir -p /src/dist/wasm
 #   -s ASYNCIFY_STACK_SIZE=524288: Reduce asyncify stack from 1MB to 512KB
 emcc /src/wasm/*.c \
     -I/src/dist/ffmpeg/include \
+    -I${DAV1D_PREFIX}/include \
     -L/src/dist/ffmpeg/lib \
-    -lavformat -lavcodec -lavutil -lswresample -lswscale \
+    -L${DAV1D_PREFIX}/lib \
+    -lavformat -lavcodec -ldav1d -lavutil -lswresample -lswscale \
     -Oz \
     -flto \
     -D_FILE_OFFSET_BITS=64 \
@@ -100,7 +164,7 @@ emcc /src/wasm/*.c \
     -s "ASYNCIFY_ADD=['movi_open','movi_read_frame','movi_seek_to','movi_thumbnail_open','movi_thumbnail_read_keyframe']" \
     -s "ASYNCIFY_IMPORTS=['js_read_async','js_seek_async','js_thumbnail_packet_ready']" \
     -s EXPORTED_RUNTIME_METHODS='["ccall", "cwrap", "FS", "stringToNewUTF8", "UTF8ToString", "lengthBytesUTF8", "addFunction", "HEAPU8"]' \
-    -s EXPORTED_FUNCTIONS='["_malloc", "_free", "_movi_create", "_movi_destroy", "_movi_open", "_movi_read_frame", "_movi_seek_to", "_movi_get_duration", "_movi_get_start_time", "_movi_get_stream_count", "_movi_get_stream_info", "_movi_get_extradata", "_movi_set_log_level", "_movi_set_file_size", "_movi_enable_decoder", "_movi_send_packet", "_movi_receive_frame", "_movi_decode_subtitle", "_movi_get_subtitle_text", "_movi_get_subtitle_times", "_movi_get_subtitle_image_info", "_movi_get_subtitle_image_data", "_movi_free_subtitle", "_movi_get_frame_width", "_movi_get_frame_height", "_movi_get_frame_format", "_movi_get_frame_linesize", "_movi_get_frame_data", "_movi_get_frame_samples", "_movi_get_frame_channels", "_movi_get_frame_sample_rate", "_movi_enable_audio_downmix", "_movi_thumbnail_create", "_movi_thumbnail_destroy", "_movi_thumbnail_open", "_movi_thumbnail_read_keyframe", "_movi_thumbnail_get_packet_data", "_movi_thumbnail_decode_frame"]' \
+    -s EXPORTED_FUNCTIONS='["_malloc", "_free", "_movi_create", "_movi_destroy", "_movi_open", "_movi_read_frame", "_movi_seek_to", "_movi_get_duration", "_movi_get_start_time", "_movi_get_stream_count", "_movi_get_stream_info", "_movi_get_extradata", "_movi_set_log_level", "_movi_set_file_size", "_movi_enable_decoder", "_movi_send_packet", "_movi_receive_frame", "_movi_decode_subtitle", "_movi_get_subtitle_text", "_movi_get_subtitle_times", "_movi_get_subtitle_image_info", "_movi_get_subtitle_image_data", "_movi_free_subtitle", "_movi_get_frame_width", "_movi_get_frame_height", "_movi_get_frame_format", "_movi_get_frame_linesize", "_movi_get_frame_data", "_movi_get_frame_samples", "_movi_get_frame_channels", "_movi_get_frame_sample_rate", "_movi_enable_audio_downmix", "_movi_thumbnail_create", "_movi_thumbnail_destroy", "_movi_thumbnail_open", "_movi_thumbnail_read_keyframe", "_movi_thumbnail_get_packet_data", "_movi_thumbnail_decode_frame", "_movi_thumbnail_decode_frame_yuv", "_movi_thumbnail_get_plane_data", "_movi_thumbnail_get_plane_linesize", "_movi_thumbnail_get_frame_width", "_movi_thumbnail_get_frame_height", "_movi_thumbnail_clear_buffer", "_movi_thumbnail_get_extradata", "_movi_thumbnail_get_stream_info"]' \
     -s ASSERTIONS=0 \
     -s DISABLE_EXCEPTION_THROWING=1 \
     -s ALLOW_TABLE_GROWTH=1 \

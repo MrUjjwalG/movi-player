@@ -102,6 +102,29 @@ struct MoviThumbnailContext *movi_thumbnail_create(int file_size_low,
   return ctx;
 }
 
+// Force software pixel format callback
+static enum AVPixelFormat get_format(AVCodecContext *s, const enum AVPixelFormat *fmt) {
+    const enum AVPixelFormat *p;
+    for (p = fmt; *p != -1; p++) {
+        const AVPixFmtDescriptor *desc = av_pix_fmt_desc_get(*p);
+        
+        av_log(NULL, AV_LOG_DEBUG, "[THUMB] get_format checking: %s (hwaccel: %d)\n", 
+               desc->name, (desc->flags & AV_PIX_FMT_FLAG_HWACCEL));
+
+        if (!(desc->flags & AV_PIX_FMT_FLAG_HWACCEL)) {
+            // Found a software format
+            av_log(NULL, AV_LOG_DEBUG, "[THUMB] get_format selected: %s\n", desc->name);
+            
+            // EXPERIMENTAL: Force set pix_fmt to bypass potential validation issues
+            if (s->pix_fmt != *p) {
+                 s->pix_fmt = *p;
+            }
+            return *p;
+        }
+    }
+    return AV_PIX_FMT_NONE;
+}
+
 EMSCRIPTEN_KEEPALIVE
 int movi_thumbnail_open(struct MoviThumbnailContext *ctx) {
   if (!ctx || !ctx->pkt)
@@ -136,36 +159,69 @@ int movi_thumbnail_open(struct MoviThumbnailContext *ctx) {
 
   for (unsigned int i = 0; i < ctx->fmt_ctx->nb_streams; i++) {
     if (ctx->fmt_ctx->streams[i]->codecpar->codec_type == AVMEDIA_TYPE_VIDEO) {
-      ctx->video_stream_index = i;
-      break;
+      if (ctx->video_stream_index < 0) ctx->video_stream_index = i;
     }
   }
+
 
   if (ctx->video_stream_index < 0)
     return -7;
 
   // Initialize software decoder for fallback
   AVStream *st = ctx->fmt_ctx->streams[ctx->video_stream_index];
-  const AVCodec *codec = avcodec_find_decoder(st->codecpar->codec_id);
+  const AVCodec *codec = NULL;
+  
+  // For AV1, prefer libdav1d (pure software decoder that works in WASM)
+  // The native av1 decoder has hardware acceleration issues in WASM
+  if (st->codecpar->codec_id == AV_CODEC_ID_AV1) {
+      codec = avcodec_find_decoder_by_name("libdav1d");
+      if (codec) {
+          av_log(NULL, AV_LOG_DEBUG, "[THUMB] Using libdav1d for AV1 decoding\n");
+      } else {
+          av_log(NULL, AV_LOG_WARNING, "[THUMB] libdav1d not found, falling back to native av1\n");
+      }
+  }
+  
+  // Fallback to default decoder if no specific one found
+  if (!codec) {
+      codec = avcodec_find_decoder(st->codecpar->codec_id);
+  }
+  
   if (codec) {
       ctx->dec_ctx = avcodec_alloc_context3(codec);
       if (ctx->dec_ctx) {
           if (avcodec_parameters_to_context(ctx->dec_ctx, st->codecpar) >= 0) {
               ctx->dec_ctx->thread_count = 1; // Single thread for WASM
+              ctx->dec_ctx->strict_std_compliance = FF_COMPLIANCE_EXPERIMENTAL; // Enable experimental features
+              
+              // Force software decoding by disabling HW device types
+              // (Though they shouldn't be present in WASM build anyway)
+              ctx->dec_ctx->get_format = get_format; // Register helper
+
               if (avcodec_open2(ctx->dec_ctx, codec, NULL) < 0) {
-                   av_log(NULL, AV_LOG_WARNING, "[THUMB] Failed to open software decoder\n");
+                   av_log(NULL, AV_LOG_ERROR, "[THUMB] Failed to open software decoder: %s\n", codec->name);
                    avcodec_free_context(&ctx->dec_ctx);
               } else {
-                  av_log(NULL, AV_LOG_DEBUG, "[THUMB] Software decoder initialized\n");
+                  av_log(NULL, AV_LOG_DEBUG, "[THUMB] Software decoder initialized: %s\n", codec->name);
               }
           } else {
+             av_log(NULL, AV_LOG_ERROR, "[THUMB] Failed to copy codec parameters\n");
              avcodec_free_context(&ctx->dec_ctx);
           }
+      } else {
+          av_log(NULL, AV_LOG_ERROR, "[THUMB] Failed to alloc codec context\n");
       }
+  } else {
+      av_log(NULL, AV_LOG_ERROR, "[THUMB] No decoder found for codec_id %d\n", st->codecpar->codec_id);
   }
   
   ctx->frame = av_frame_alloc();
   ctx->rgb_frame = av_frame_alloc();
+  
+  if (!ctx->frame || !ctx->rgb_frame) {
+      av_log(NULL, AV_LOG_ERROR, "[THUMB] Failed to alloc frames\n");
+      return -8;
+  }
 
   return 0;
 }
@@ -437,7 +493,7 @@ int movi_thumbnail_decode_frame_yuv(struct MoviThumbnailContext *ctx) {
     if (!ctx || !ctx->dec_ctx || !ctx->pkt || ctx->pkt->size == 0) return -1;
 
     // CRITICAL: Flush decoder before sending new random-access packet
-    avcodec_flush_buffers(ctx->dec_ctx);
+    // avcodec_flush_buffers(ctx->dec_ctx); // DISABLED: AV1 native decoder reset issue?
 
     // Decode
     int ret = avcodec_send_packet(ctx->dec_ctx, ctx->pkt);
@@ -501,7 +557,12 @@ int movi_thumbnail_get_frame_height(struct MoviThumbnailContext *ctx) {
  */
 EMSCRIPTEN_KEEPALIVE
 uint8_t *movi_thumbnail_decode_frame(struct MoviThumbnailContext *ctx, int width, int height) {
-    if (!ctx || !ctx->dec_ctx || !ctx->pkt || ctx->pkt->size == 0) return NULL;
+    if (!ctx || !ctx->pkt || ctx->pkt->size == 0) return NULL;
+    
+    if (!ctx->dec_ctx) {
+        av_log(NULL, AV_LOG_ERROR, "[THUMB] Cannot decode: decoder not initialized\n");
+        return NULL;
+    }
 
     // Resize buffer if needed (RGBA = 4 bytes per pixel)
     int num_bytes = width * height * 4;
@@ -541,7 +602,11 @@ uint8_t *movi_thumbnail_decode_frame(struct MoviThumbnailContext *ctx, int width
         width, height, AV_PIX_FMT_RGBA,
         SWS_BILINEAR, NULL, NULL, NULL);
 
-    if (!ctx->sws_ctx) return NULL;
+    if (!ctx->sws_ctx) {
+        av_log(NULL, AV_LOG_ERROR, "[THUMB] Failed to create SwsContext for format %d, size %dx%d\n", 
+           ctx->frame->format, ctx->frame->width, ctx->frame->height);
+        return NULL;
+    }
 
     // Setup wrapper frame for buffer
     av_image_fill_arrays(ctx->rgb_frame->data, ctx->rgb_frame->linesize,

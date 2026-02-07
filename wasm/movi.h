@@ -9,6 +9,7 @@
 #include <libavutil/display.h>
 #include <libavutil/pixdesc.h>
 #include <libswresample/swresample.h>
+#include <libswscale/swscale.h>
 #include <stdint.h>
 #include <stdlib.h>
 #include <string.h>
@@ -77,6 +78,12 @@ typedef struct {
   AVSubtitle *subtitle;                 // For subtitle decoding
   double last_subtitle_packet_duration; // Store packet duration for fallback
   int downmix_to_stereo;
+  
+  // RGB conversion support (for 10-bit HDR to 8-bit RGBA)
+  struct SwsContext *sws_ctx;
+  AVFrame *rgb_frame;
+  uint8_t *rgb_buffer;
+  int rgb_buffer_size;
 } MoviContext;
 
 EMSCRIPTEN_KEEPALIVE double movi_get_start_time(MoviContext *ctx);

@@ -64,6 +64,8 @@ export class MoviElement extends HTMLElement {
   private _thumb: boolean = false;
   private _hdr: boolean = true; // HDR enabled by default
   private _theme: "dark" | "light" = "dark"; // Default theme
+  private _sw: boolean = false; // Force software decoding
+  private _fps: number = 0; // Custom frame rate (0 = auto from video)
 
   // Ambient mode state
   private _ambientWrapper: string | null = null; // ID of external wrapper element
@@ -102,6 +104,8 @@ export class MoviElement extends HTMLElement {
       "thumb",
       "hdr",
       "theme",
+      "sw",
+      "fps",
     ];
   }
 
@@ -5750,6 +5754,20 @@ export class MoviElement extends HTMLElement {
           this.updateFitMode();
         }
         break;
+      case "sw":
+        this._sw = newValue !== null;
+        // If sw attribute changes and element is connected with src, reload
+        if (this.isConnected && this._src) {
+          this.load();
+        }
+        break;
+      case "fps":
+        this._fps = newValue ? parseFloat(newValue) : 0;
+        // If fps changes and element is connected with src, reload
+        if (this.isConnected && this._src) {
+          this.load();
+        }
+        break;
     }
   }
 
@@ -5917,9 +5935,10 @@ export class MoviElement extends HTMLElement {
       // Configure MoviPlayer options
       const playerConfig: any = {
         source,
-        decoder: "auto",
+        decoder: this._sw ? "software" : "auto",
         cache: { type: "lru", maxSizeMB: 520 },
         enablePreviews: this._thumb,
+        ...(this._fps > 0 && { frameRate: this._fps }),
       };
 
       // Use canvas mode
@@ -5958,9 +5977,11 @@ export class MoviElement extends HTMLElement {
       }
 
       // Check for software decoding fallback (only for MoviPlayer/Canvas mode)
+      // Don't show broken icon if sw attribute is set (user explicitly wants software decoding)
       if (
         this.player instanceof MoviPlayer &&
-        this.player.isSoftwareDecoding()
+        this.player.isSoftwareDecoding() &&
+        !this._sw // Only show error if software decoding was unintended fallback
       ) {
         Logger.warn(
           TAG,
@@ -6582,6 +6603,15 @@ export class MoviElement extends HTMLElement {
     }
 
     const loop = (timestamp: number) => {
+      // If software decoding is active, pause ambient sampling to save main thread cycles
+      // This is crucial for CPU-heavy 4K software decoding
+      const isSoftware = this.player?.isSoftwareDecoding() ?? false;
+      if (isSoftware) {
+        this._lastAmbientSampleTime = timestamp; // Keep advancing time but skip work
+        this._ambientRafId = requestAnimationFrame(loop);
+        return;
+      }
+
       if (
         timestamp - this._lastAmbientSampleTime >=
         this._ambientSampleInterval
@@ -6918,6 +6948,36 @@ export class MoviElement extends HTMLElement {
       } else {
         // Fallback to canvas for invalid values
         this.setAttribute("renderer", "canvas");
+      }
+    }
+  }
+
+  get sw(): boolean {
+    return this._sw;
+  }
+
+  set sw(value: boolean) {
+    if (this._sw !== value) {
+      this._sw = value;
+      if (value) {
+        this.setAttribute("sw", "");
+      } else {
+        this.removeAttribute("sw");
+      }
+    }
+  }
+
+  get fps(): number {
+    return this._fps;
+  }
+
+  set fps(value: number) {
+    if (this._fps !== value) {
+      this._fps = value;
+      if (value > 0) {
+        this.setAttribute("fps", value.toString());
+      } else {
+        this.removeAttribute("fps");
       }
     }
   }

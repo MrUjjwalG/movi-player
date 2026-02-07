@@ -277,18 +277,28 @@ export class CanvasRenderer {
     // This provides the best quality and color accuracy
     this.hasNativeHDRSupport = isChromium;
 
-    Logger.info(TAG, `Browser detection: isChromium=${isChromium}, drawingBufferColorSpace=${this.gl.drawingBufferColorSpace !== undefined}, hasNativeHDRSupport=${this.hasNativeHDRSupport}, isHDRSource=${this.isHDRSource}`);
+    Logger.info(
+      TAG,
+      `Browser detection: isChromium=${isChromium}, drawingBufferColorSpace=${this.gl.drawingBufferColorSpace !== undefined}, hasNativeHDRSupport=${this.hasNativeHDRSupport}, isHDRSource=${this.isHDRSource}`,
+    );
 
     // Choose initialization based on browser capability:
     // - Chromium browsers: ALWAYS use simple passthrough (native HDR handling via color space)
     // - Non-Chromium with HDR content: use shader-based tone mapping (required for PQ decoding)
-    const needsShaderToneMapping = !this.hasNativeHDRSupport && this.isHDRSource;
+    const needsShaderToneMapping =
+      !this.hasNativeHDRSupport && this.isHDRSource;
 
     if (needsShaderToneMapping) {
-      Logger.info(TAG, `Initializing WebGL with shader-based HDR tone mapping (non-Chromium)`);
+      Logger.info(
+        TAG,
+        `Initializing WebGL with shader-based HDR tone mapping (non-Chromium)`,
+      );
       this.initWebGLWithHDR();
     } else {
-      Logger.info(TAG, `Initializing WebGL with simple passthrough (Chromium native HDR)`);
+      Logger.info(
+        TAG,
+        `Initializing WebGL with simple passthrough (Chromium native HDR)`,
+      );
       this.initWebGLSimple();
     }
   }
@@ -535,7 +545,10 @@ export class CanvasRenderer {
     const uHdrEnabled = gl.getUniformLocation(this.program, "u_hdrEnabled");
     if (uHdrEnabled) {
       gl.uniform1f(uHdrEnabled, this.hdrEnabled ? 1.0 : 0.0);
-      Logger.debug(TAG, `Set u_hdrEnabled uniform to: ${this.hdrEnabled ? 1.0 : 0.0}`);
+      Logger.debug(
+        TAG,
+        `Set u_hdrEnabled uniform to: ${this.hdrEnabled ? 1.0 : 0.0}`,
+      );
     }
   }
 
@@ -573,12 +586,23 @@ export class CanvasRenderer {
     }
 
     // Update u_hdrEnabled uniform for shader-based tone mapping (non-Chromium browsers)
-    if (this.gl && this.program && !this.hasNativeHDRSupport && this.isHDRSource) {
-      const uHdrEnabled = this.gl.getUniformLocation(this.program, "u_hdrEnabled");
+    if (
+      this.gl &&
+      this.program &&
+      !this.hasNativeHDRSupport &&
+      this.isHDRSource
+    ) {
+      const uHdrEnabled = this.gl.getUniformLocation(
+        this.program,
+        "u_hdrEnabled",
+      );
       if (uHdrEnabled) {
         this.gl.useProgram(this.program);
         this.gl.uniform1f(uHdrEnabled, enabled ? 1.0 : 0.0);
-        Logger.debug(TAG, `Updated u_hdrEnabled uniform to: ${enabled ? 1.0 : 0.0}`);
+        Logger.debug(
+          TAG,
+          `Updated u_hdrEnabled uniform to: ${enabled ? 1.0 : 0.0}`,
+        );
       }
     }
 
@@ -1032,7 +1056,7 @@ export class CanvasRenderer {
 
     // First frame special case - present immediately
     if (this.lastPresentedPts < 0 && this.frameQueue.length > 0) {
-      const firstFrame = this.frameQueue[0];
+      const firstFrame = this.frameQueue.shift()!;
       this.lastPresentedPts = firstFrame.timestamp / 1_000_000;
       this.currentTime = this.lastPresentedPts;
 
@@ -1046,6 +1070,34 @@ export class CanvasRenderer {
         `First frame: pts=${this.lastPresentedPts.toFixed(3)}s`,
       );
       return firstFrame;
+    }
+
+    // FPS Throttling & Memory Optimization
+    // If configured FrameRate is low (e.g. < 20fps), we enforce throttling
+    // and aggressively drop intermediate frames to save memory (crucial for 4K software decoding)
+    if (this.videoFrameRate < 20 && this.lastPresentedPts >= 0) {
+      const nextTargetTime = this.lastPresentedPts + frameInterval;
+
+      // If we haven't reached the next target presentation time (with small tolerance)
+      if (currentTime < nextTargetTime - 0.05) {
+        // Prune the queue: Discard frames that are definitely too early to be useful
+        // We only keep frames close to the target time (e.g. within 200ms)
+        // This prevents buffering 1GB+ of 4K frames in memory while waiting for the next second
+        const keepThreshold = nextTargetTime - 0.2;
+
+        while (this.frameQueue.length > 0) {
+          const first = this.frameQueue[0];
+          const firstTime = first.timestamp / 1_000_000;
+
+          if (firstTime >= keepThreshold) break;
+
+          // Drop useless frame
+          this.frameQueue.shift()?.close();
+        }
+
+        // Not time to present yet
+        return null;
+      }
     }
 
     // Timestamp-based frame selection (like YouTube)
@@ -1094,10 +1146,15 @@ export class CanvasRenderer {
     }
 
     // Drop old frames that are too far behind (more than 2 frame intervals)
-    // This prevents accumulating stale frames
-    const maxBehind = frameInterval * 2;
+    // BUT do not drop the best frame we just found!
+    const maxBehind = Math.max(2.0, frameInterval * 2);
     while (this.frameQueue.length > 0) {
-      const oldestFrameTime = this.frameQueue[0].timestamp / 1_000_000;
+      const oldestFrame = this.frameQueue[0];
+      const oldestFrameTime = oldestFrame.timestamp / 1_000_000;
+
+      // If this is the frame we want to present, do not prune it
+      if (oldestFrame === bestFrame) break;
+
       if (currentTime - oldestFrameTime > maxBehind) {
         this.frameQueue.shift()?.close();
       } else {

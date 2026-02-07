@@ -95,6 +95,7 @@ export interface PlayerConfig {
   canvas?: HTMLCanvasElement | OffscreenCanvas;
   wasmBinary?: Uint8Array; // Embedded WASM binary data
   enablePreviews?: boolean; // Enable thumbnail preview pipeline (default: false)
+  frameRate?: number; // Override frame rate (fps) - 0 = auto
 }
 
 // ============================================================================
