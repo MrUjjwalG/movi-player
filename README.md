@@ -111,11 +111,11 @@ console.log(`Color Space: ${videoTrack.colorSpace}`); // bt2020-ncl
 
 Choose the right module for your needs:
 
-| Module                    | Size   | Use Case                                              | Exports                               |
-| ------------------------- | ------ | ----------------------------------------------------- | ------------------------------------- |
-| **`movi-player/demuxer`** | ~45KB  | Metadata extraction, container parsing, HDR detection | `Demuxer`, `HttpSource`, `FileSource` |
-| **`movi-player/player`**  | ~180KB | Programmatic playback control                         | `MoviPlayer`, `Demuxer`, Sources      |
-| **`movi-player`** (full)  | ~410KB | Drop-in video player with UI                          | `MoviElement`, `MoviPlayer`, All APIs |
+| Module                    | Size   | Use Case                                                        | Exports                                                              |
+| ------------------------- | ------ | --------------------------------------------------------------- | -------------------------------------------------------------------- |
+| **`movi-player/demuxer`** | ~50KB  | Metadata extraction, decoding, container parsing, HDR detection | `Demuxer`, `MoviVideoDecoder`, `MoviAudioDecoder`, `CodecParser`,... |
+| **`movi-player/player`**  | ~180KB | Programmatic playback control                                   | `MoviPlayer`, `Demuxer`, Sources                                     |
+| **`movi-player`** (full)  | ~410KB | Drop-in video player with UI                                    | `MoviElement`, `MoviPlayer`, All APIs                                |
 
 ---
 
@@ -123,13 +123,14 @@ Choose the right module for your needs:
 
 Movi-Player's modular design makes it perfect for a wide range of applications:
 
-### Demuxer Module (45KB)
+### Demuxer Module (50KB)
 
 - **Media Asset Management**: Catalog video libraries without playing files
 - **Video Validators**: Check uploaded files against platform requirements
 - **HDR Detection**: Automatically tag HDR content in video pipelines
 - **Format Analysis**: Inspect video metadata before transcoding
 - **Search Engines**: Build searchable video metadata indices
+- **Lightweight Decoding**: Built-in decoders for custom AV processing pipelines
 
 ### Player Module (180KB)
 
@@ -485,24 +486,32 @@ function VideoPlayer({ src }: { src: string }) {
 ### Custom Playback Pipeline
 
 ```typescript
-import { Demuxer, HttpSource } from "movi-player/demuxer";
-import { MoviVideoDecoder, MoviAudioDecoder } from "movi-player/decode";
+import {
+  Demuxer,
+  HttpSource,
+  MoviVideoDecoder,
+  MoviAudioDecoder,
+} from "movi-player/demuxer";
 
 const source = new HttpSource("video.mp4");
 const demuxer = new Demuxer(source);
 await demuxer.open();
 
-const videoDecoder = new MoviVideoDecoder(/* config */);
-const audioDecoder = new MoviAudioDecoder(/* config */);
+const videoDecoder = new MoviVideoDecoder();
+const audioDecoder = new MoviAudioDecoder();
+
+// Configure decoders with track info from demuxer
+await videoDecoder.configure(demuxer.getVideoTracks()[0]);
+await audioDecoder.configure(demuxer.getAudioTracks()[0]);
 
 while (true) {
   const packet = await demuxer.readPacket();
   if (!packet) break;
 
   if (packet.streamIndex === 0) {
-    await videoDecoder.decode(packet);
+    videoDecoder.decode(packet.data, packet.timestamp, packet.keyframe);
   } else {
-    await audioDecoder.decode(packet);
+    audioDecoder.decode(packet.data, packet.timestamp, packet.keyframe);
   }
 }
 ```
