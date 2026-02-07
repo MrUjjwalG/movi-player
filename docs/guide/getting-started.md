@@ -22,7 +22,7 @@ Gives you full control over demuxing, decoding, and rendering.
 
 ---
 
-## 🏎️ Quick Start: Custom Element
+## 🏎️ Quick Start: Custom Element {#quick-start-custom-element}
 
 The fastest way to get Movi-Player running in your browser.
 
@@ -66,7 +66,7 @@ Simply import the library and use the `<movi-player>` tag.
 
 ---
 
-## 🛠️ Quick Start: Programmatic API
+## 🛠️ Quick Start: Programmatic API {#quick-start-programmatic-api}
 
 If you need lower-level control, use the `MoviPlayer` core class.
 
