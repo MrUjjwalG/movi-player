@@ -35,7 +35,7 @@ export default defineConfig({
       { text: "API", link: "/api/player" },
       { text: "Examples", link: "https://movi-player-examples.vercel.app/" },
       {
-        text: "v1.0.0",
+        text: "v0.1.2",
         items: [
           { text: "Changelog", link: "/changelog" },
           { text: "Contributing", link: "/contributing" },
@@ -103,7 +103,7 @@ export default defineConfig({
     ],
 
     footer: {
-      message: "Released under the MIT License.",
+      message: "Released under the Apache-2.0 License.",
       copyright: "Copyright © 2024-present Ujjwal Kashyap",
     },
 
