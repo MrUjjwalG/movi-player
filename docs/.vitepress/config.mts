@@ -31,9 +31,9 @@ export default defineConfig({
 
     nav: [
       { text: "Home", link: "/" },
-      { text: "Guide", link: "/guide/getting-started" },
-      { text: "API", link: "/api/player" },
-      { text: "Examples", link: "https://movi-player-examples.vercel.app/" },
+      { text: "🚀 Getting Started", link: "/guide/getting-started" },
+      { text: "🔌 API", link: "/api/player" },
+      { text: "🎮 Examples", link: "https://movi-player-examples.vercel.app/" },
       {
         text: "v0.1.2",
         items: [

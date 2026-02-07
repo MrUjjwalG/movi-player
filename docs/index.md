@@ -11,14 +11,14 @@ hero:
     alt: Movi-Player
   actions:
     - theme: brand
-      text: Get Started
+      text: Get Started →
       link: /guide/getting-started
-    - theme: alt
-      text: View on GitHub
-      link: https://github.com/MrUjjwalG/movi-player
     - theme: alt
       text: Live Demo
       link: https://movi-player-examples.vercel.app/
+    - theme: alt
+      text: View on GitHub
+      link: https://github.com/MrUjjwalG/movi-player
 
 features:
   - icon: ⚡
@@ -40,6 +40,11 @@ features:
     title: Multi-Track Support
     details: Multiple audio and subtitle tracks without any conversion or processing.
 ---
+
+<div style="margin-top: 60px; display: flex; flex-direction: column; align-items: center;">
+  <h2 style="font-size: 32px; font-weight: 700; margin-bottom: 24px; text-align: center;">Professional UI Out of the Box</h2>
+  <img src="./images/element.gif" style="max-width: 100%; border-radius: 12px; box-shadow: 0 20px 50px rgba(0,0,0,0.3); border: 1px solid rgba(255,255,255,0.1);" alt="Movi Player Element" />
+</div>
 
 <style>
 :root {
