@@ -44,6 +44,7 @@ export class MoviElement extends HTMLElement {
   private lastSeekSide: "left" | "right" | null = null;
   private cumulativeSeekAmount: number = 0;
   private _contextMenuVisible: boolean = false;
+  private _contextMenuJustClosed: boolean = false;
 
   // Internal state
   private _src: string | File | null = null;
@@ -1217,6 +1218,13 @@ export class MoviElement extends HTMLElement {
     // Click on video to play/pause (only on canvas/video area, not controls)
     // Handle clicks on both overlay and canvas
     const handleVideoClick = (e: MouseEvent) => {
+      // If context menu is open or was just closed, don't toggle play/pause
+      if (this._contextMenuVisible || this._contextMenuJustClosed) {
+        // Context menu will be hidden by its own click handler
+        // Just prevent play/pause toggle
+        return;
+      }
+
       // Check if this is a touch-generated click (pointerType or sourceCapabilities)
       const isTouchClick =
         (e as any).pointerType === "touch" ||
@@ -1599,12 +1607,24 @@ export class MoviElement extends HTMLElement {
         if (tapTimer) clearTimeout(tapTimer);
 
         tapTimer = window.setTimeout(() => {
-          // Single tap detected - toggle play/pause
-          const state = this.player?.getState();
-          if (state === "playing") {
-            this.pause();
+          // Single tap detected
+          // On touch devices: First tap shows controls if hidden, only toggle play/pause if already visible
+          const controlsContainer = this.controlsContainer;
+          const controlsHidden = controlsContainer?.classList.contains(
+            "movi-controls-hidden",
+          );
+
+          if (controlsHidden) {
+            // Controls are hidden - just show them, don't toggle playback
+            this.showControls();
           } else {
-            this.play();
+            // Controls are visible - toggle play/pause
+            const state = this.player?.getState();
+            if (state === "playing") {
+              this.pause();
+            } else {
+              this.play();
+            }
           }
           tapCount = 0;
           tapTimer = null;
@@ -2112,6 +2132,12 @@ export class MoviElement extends HTMLElement {
     const hideContextMenu = () => {
       contextMenu.classList.remove("visible");
       this._contextMenuVisible = false;
+
+      // Set just-closed flag to prevent play/pause toggle
+      this._contextMenuJustClosed = true;
+      setTimeout(() => {
+        this._contextMenuJustClosed = false;
+      }, 100);
 
       // Hide backdrop
       const backdrop = shadowRoot.querySelector(
@@ -3375,7 +3401,6 @@ export class MoviElement extends HTMLElement {
 
     if (this._controls) {
       container.style.display = "block";
-      if (centerPlayPause) centerPlayPause.style.display = "flex";
       this.showControls();
     } else {
       container.style.display = "none";
@@ -4757,7 +4782,7 @@ export class MoviElement extends HTMLElement {
         -webkit-backdrop-filter: blur(12px);
         padding: 0;
         border: 2px solid rgba(255, 255, 255, 0.2);
-        display: flex;
+        display: none;
         align-items: center;
         justify-content: center;
         cursor: pointer;
@@ -6326,8 +6351,11 @@ export class MoviElement extends HTMLElement {
       contextMenuPauseIcon?.style.setProperty("display", "block");
       if (contextMenuLabel) contextMenuLabel.textContent = "Pause";
 
-      // Hide center button when playing (with animation)
-      centerPlayPauseBtn?.classList.remove("movi-center-visible");
+      // Hide center button when playing
+      if (centerPlayPauseBtn) {
+        centerPlayPauseBtn.classList.remove("movi-center-visible");
+        centerPlayPauseBtn.style.display = "none";
+      }
     } else {
       playIcon?.style.setProperty("display", "block");
       pauseIcon?.style.setProperty("display", "none");
@@ -6339,9 +6367,18 @@ export class MoviElement extends HTMLElement {
 
       // Show center button when paused/ready, but hide if loading or unsupported state is shown
       if (isLoading || this._isUnsupported) {
-        centerPlayPauseBtn?.classList.remove("movi-center-visible");
+        if (centerPlayPauseBtn) {
+          centerPlayPauseBtn.classList.remove("movi-center-visible");
+          centerPlayPauseBtn.style.display = "none";
+        }
       } else {
-        centerPlayPauseBtn?.classList.add("movi-center-visible");
+        if (centerPlayPauseBtn) {
+          centerPlayPauseBtn.style.setProperty("display", "flex");
+          // Use a small delay for opacity/scale transition to work after display: flex
+          requestAnimationFrame(() => {
+            centerPlayPauseBtn.classList.add("movi-center-visible");
+          });
+        }
       }
     }
   }
