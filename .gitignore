@@ -5,6 +5,8 @@ old/
 *.log
 .vite/
 .claude/
+docs/.vitepress/cache/
+docs/.vitepress/dist/
 *.mp4
 *.webm
 

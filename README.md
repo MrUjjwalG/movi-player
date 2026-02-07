@@ -8,6 +8,7 @@
 [![Browser Support](https://img.shields.io/badge/browsers-Chrome%2094%2B%20%7C%20Safari%2016.4%2B%20%7C%20Edge%2094%2B-brightgreen.svg)](https://caniuse.com/webcodecs)
 
 👉 **Install:** `npm i movi-player`  
+👉 **Docs:** [mrujjwalg.github.io/movi-player](https://mrujjwalg.github.io/movi-player/)  
 👉 **Demo:** [movi-player-examples.vercel.app](https://movi-player-examples.vercel.app/element.html)
 
 ![Movi Player Showcase](docs/images/element.gif)
@@ -35,8 +36,7 @@ Movi-Player helps you build **high-performance video players in browsers** with:
 npm i movi-player
 ```
 
-▶️ Try Demo:
-
+- Full Documentation → https://mrujjwalg.github.io/movi-player/
 - Default Player → https://movi-player-examples.vercel.app/element.html
 - Demuxer → https://movi-player-examples.vercel.app/demuxer.html
 - Custom UI → https://movi-player-examples.vercel.app/youtube.html
@@ -73,12 +73,10 @@ npm i movi-player
 
 ---
 
-## 📖 Documentation & Examples
-
-- **[📚 Full Documentation](docs/)** - Comprehensive guides and API reference
+- **[📚 Documentation](https://mrujjwalg.github.io/movi-player/)** - Comprehensive guides and API reference
 - **[🎮 Live Examples](https://github.com/MrUjjwalG/movi-player-examples)** - Interactive demos and sample code
-- **[🏗️ Architecture Guide](docs/ARCHITECTURE.md)** - System design and internals
-- **[🎬 API Reference](docs/PLAYER.md)** - Complete API documentation
+- **[🏗️ Architecture Guide](https://mrujjwalg.github.io/movi-player/guide/architecture)** - System design and internals
+- **[🎬 API Reference](https://mrujjwalg.github.io/movi-player/api/player)** - Complete API documentation
 
 ---
 
@@ -141,15 +139,29 @@ npm install movi-player
 #### Option 3: Programmatic Player API
 
 ```typescript
-import { MoviPlayer } from "movi-player/player";
+import { MoviPlayer, LogLevel } from "movi-player/player";
+
+// Optional: Set log level
+MoviPlayer.setLogLevel(LogLevel.ERROR);
 
 const canvas = document.getElementById("canvas") as HTMLCanvasElement;
 const player = new MoviPlayer({
-  source: { url: "https://example.com/video.mp4" },
+  source: {
+    type: "url",
+    url: "https://example.com/video.mp4",
+  },
   canvas: canvas,
+  renderer: "canvas",
+  decoder: "auto",
 });
 
-await player.load({ url: "https://example.com/video.mp4" });
+// Event listeners
+player.on("loadEnd", () => console.log("Loaded!"));
+player.on("stateChange", (state) => console.log("State:", state));
+player.on("error", (e) => console.error(e));
+
+// Load and play
+await player.load();
 await player.play();
 ```
 
@@ -168,15 +180,15 @@ fileInput.addEventListener("change", async (e) => {
   const file = (e.target as HTMLInputElement).files?.[0];
   if (!file) return;
 
-  // Create FileSource - processes video entirely in browser
-  const source = new FileSource(file);
-
   const player = new MoviPlayer({
-    source: { file },
+    source: {
+      type: "file",
+      file: file,
+    },
     canvas: canvas,
   });
 
-  await player.load({ file });
+  await player.load();
   await player.play();
 });
 ```
@@ -464,10 +476,10 @@ Comprehensive documentation is available in the [docs/](docs/) directory:
 
 ### Quick Links
 
-- [Getting Started Guide](docs/README.md)
-- [API Reference](docs/PLAYER.md#api-reference)
-- [Event Documentation](docs/PLAYER.md#events)
-- [Color Space & HDR](docs/DEMUXER.md#color-space-handling)
+- [Getting Started Guide](https://mrujjwalg.github.io/movi-player/guide/getting-started)
+- [API Reference](https://mrujjwalg.github.io/movi-player/api/player)
+- [Event Documentation](https://mrujjwalg.github.io/movi-player/api/events)
+- [Color Space & HDR](https://mrujjwalg.github.io/movi-player/guide/hdr-support)
 
 ### Examples
 

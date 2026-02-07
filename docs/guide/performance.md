@@ -1,0 +1,352 @@
+# Performance Guide
+
+Optimize Movi-Player for best performance.
+
+## Bundle Size Optimization
+
+### Use Only What You Need
+
+```typescript
+// ❌ Imports everything (~410KB)
+import "movi-player";
+
+// ✅ Import only demuxer (~45KB)
+import { Demuxer } from "movi-player/demuxer";
+
+// ✅ Import only player (~180KB)
+import { MoviPlayer } from "movi-player/player";
+```
+
+### Dynamic Import
+
+```typescript
+// Load player only when needed
+const playButton = document.getElementById("play");
+
+playButton.onclick = async () => {
+  const { MoviPlayer } = await import("movi-player/player");
+
+  const player = new MoviPlayer({
+    source: { url: "video.mp4" },
+    canvas: document.getElementById("canvas"),
+  });
+
+  await player.load({ url: "video.mp4" });
+  await player.play();
+};
+```
+
+## Memory Optimization
+
+### Cache Configuration
+
+```typescript
+// Reduce cache for memory-constrained environments
+const player = new MoviPlayer({
+  source: { url },
+  canvas,
+  cache: {
+    maxSizeMB: 50, // Default is 100MB
+  },
+});
+```
+
+### Cleanup
+
+```typescript
+// Always destroy players when done
+player.destroy();
+
+// React example
+useEffect(() => {
+  const player = new MoviPlayer({ ... });
+
+  return () => {
+    player.destroy();
+  };
+}, []);
+
+// Vue example
+onUnmounted(() => {
+  player.destroy();
+});
+```
+
+### Single Player Instance
+
+```typescript
+// Avoid multiple concurrent players
+let currentPlayer: MoviPlayer | null = null;
+
+function loadVideo(url: string) {
+  // Destroy previous player
+  if (currentPlayer) {
+    currentPlayer.destroy();
+  }
+
+  currentPlayer = new MoviPlayer({
+    source: { url },
+    canvas,
+  });
+}
+```
+
+## Decoding Optimization
+
+### Hardware Acceleration
+
+```typescript
+// Default: hardware-first with software fallback
+const player = new MoviPlayer({
+  source: { url },
+  canvas,
+  decoder: "hardware", // Uses WebCodecs
+});
+```
+
+### Force Software Decoding
+
+```typescript
+// Use when hardware decode fails
+const player = new MoviPlayer({
+  source: { url },
+  canvas,
+  decoder: "software",
+});
+```
+
+### Decoder Selection Logic
+
+```
+Hardware Decode (WebCodecs)
+├── Faster for supported codecs
+├── Lower CPU usage
+├── Uses GPU
+└── May fail for some formats
+
+Software Decode (FFmpeg WASM)
+├── Universal format support
+├── Higher CPU usage
+├── Always works
+└── Fallback option
+```
+
+## Rendering Optimization
+
+### Canvas Renderer
+
+```typescript
+// Canvas renderer (default) - best for HDR
+const player = new MoviPlayer({
+  source: { url },
+  canvas,
+  renderer: "canvas",
+});
+```
+
+### MSE Renderer
+
+```typescript
+// MSE renderer - lower overhead for standard video
+const player = new MoviPlayer({
+  source: { url },
+  canvas,
+  renderer: "mse",
+});
+```
+
+### Renderer Comparison
+
+| Feature       | Canvas | MSE   |
+| ------------- | ------ | ----- |
+| HDR Support   | ✅     | ❌    |
+| CPU Usage     | Higher | Lower |
+| GPU Usage     | Higher | Lower |
+| Canvas Access | ✅     | ❌    |
+| Screenshots   | ✅     | ❌    |
+
+## Network Optimization
+
+### Preload Metadata
+
+```html
+<!-- Preload only metadata -->
+<movi-player src="video.mp4" preload="metadata"></movi-player>
+```
+
+### Lazy Loading
+
+```typescript
+// Don't load until needed
+const player = new MoviPlayer({
+  source: { url },
+  canvas,
+});
+
+// Load only when user clicks play
+playButton.onclick = async () => {
+  await player.load({ url });
+  await player.play();
+};
+```
+
+### Quality Selection
+
+```typescript
+// Auto-select based on connection
+async function selectOptimalQuality(player: MoviPlayer) {
+  const connection = (navigator as any).connection;
+  const tracks = player.getVideoTracks();
+
+  let targetHeight = 1080; // Default
+
+  if (connection) {
+    const downlink = connection.downlink; // Mbps
+
+    if (downlink < 1) {
+      targetHeight = 360;
+    } else if (downlink < 3) {
+      targetHeight = 480;
+    } else if (downlink < 5) {
+      targetHeight = 720;
+    } else if (downlink < 10) {
+      targetHeight = 1080;
+    } else {
+      targetHeight = 2160; // 4K
+    }
+  }
+
+  const optimal = tracks
+    .filter((t) => t.height <= targetHeight)
+    .sort((a, b) => b.height - a.height)[0];
+
+  if (optimal) {
+    player.selectVideoTrack(optimal.id);
+  }
+}
+```
+
+## Thumbnail Generation
+
+### Efficient Thumbnail Generation
+
+```typescript
+// Generate thumbnails in batch
+async function generateThumbnails(
+  player: MoviPlayer,
+  count: number = 10,
+): Promise<Blob[]> {
+  const duration = player.getDuration();
+  const interval = duration / count;
+  const thumbnails: Blob[] = [];
+
+  // Sequential generation is more efficient
+  for (let i = 0; i < count; i++) {
+    const time = i * interval;
+    const blob = await player.generatePreview(time, 160, 90);
+    thumbnails.push(blob);
+  }
+
+  return thumbnails;
+}
+```
+
+### Thumbnail Caching
+
+```typescript
+const thumbnailCache = new Map<number, string>();
+
+async function getThumbnail(player: MoviPlayer, time: number): Promise<string> {
+  const key = Math.floor(time / 10) * 10; // 10s buckets
+
+  if (thumbnailCache.has(key)) {
+    return thumbnailCache.get(key)!;
+  }
+
+  const blob = await player.generatePreview(key, 160, 90);
+  const url = URL.createObjectURL(blob);
+  thumbnailCache.set(key, url);
+
+  return url;
+}
+```
+
+## Event Throttling
+
+### Throttle Time Updates
+
+```typescript
+let lastUpdate = 0;
+
+player.on("timeupdate", ({ currentTime }) => {
+  const now = Date.now();
+
+  // Limit to 4 updates per second
+  if (now - lastUpdate < 250) return;
+  lastUpdate = now;
+
+  updateUI(currentTime);
+});
+```
+
+### Debounce Seek
+
+```typescript
+let seekTimeout: number;
+
+progressBar.oninput = () => {
+  clearTimeout(seekTimeout);
+
+  seekTimeout = window.setTimeout(() => {
+    const time = parseFloat(progressBar.value);
+    player.seek(time);
+  }, 100);
+};
+```
+
+## Monitoring Performance
+
+### FPS Counter
+
+```typescript
+let frameCount = 0;
+let lastTime = performance.now();
+
+player.on("frame", () => {
+  frameCount++;
+
+  const now = performance.now();
+  if (now - lastTime >= 1000) {
+    console.log("FPS:", frameCount);
+    frameCount = 0;
+    lastTime = now;
+  }
+});
+```
+
+### Memory Monitoring
+
+```typescript
+function logMemoryUsage() {
+  if ((performance as any).memory) {
+    const memory = (performance as any).memory;
+    console.log("Memory:", {
+      usedJSHeapSize: `${(memory.usedJSHeapSize / 1024 / 1024).toFixed(2)} MB`,
+      totalJSHeapSize: `${(memory.totalJSHeapSize / 1024 / 1024).toFixed(2)} MB`,
+    });
+  }
+}
+
+setInterval(logMemoryUsage, 5000);
+```
+
+## Best Practices
+
+1. **Destroy players when done**
+2. **Use appropriate module** (demuxer vs player vs element)
+3. **Match decoder to content** (hardware for common codecs)
+4. **Throttle frequent events**
+5. **Cache thumbnails**
+6. **Select appropriate quality**
+7. **Use lazy loading**
+8. **Monitor memory usage**
