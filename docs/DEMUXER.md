@@ -2,6 +2,8 @@
 
 **Movi Streaming Video Library - Demuxer Component**
 
+![Demuxer Overview](./images/demuxer.webp)
+
 ---
 
 ## Table of Contents

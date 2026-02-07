@@ -8,6 +8,8 @@
 
 Movi-Player is a powerful, modular video playback library that brings native-like video performance to the web. Built on WebCodecs API and FFmpeg WASM, it offers hardware-accelerated decoding, HDR support, and a professional UI—all in a lightweight package.
 
+![Movi Player Showcase](docs/images/element.gif)
+
 ---
 
 ## ✨ Key Features
@@ -83,6 +85,8 @@ await player.play();
 ```
 
 #### Option 3: Demuxer Only (Metadata & HDR Extraction)
+
+![Demuxer Overview](docs/images/demuxer.webp)
 
 ```typescript
 import { Demuxer, HttpSource } from "movi-player/demuxer";

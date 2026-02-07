@@ -2,6 +2,8 @@
 
 **Movi Streaming Video Library - Custom HTML Video Element**
 
+![Movi Element Showcase](./images/element.gif)
+
 ---
 
 ## Table of Contents
