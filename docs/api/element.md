@@ -2,7 +2,7 @@
 
 **Movi Streaming Video Library - Custom HTML Video Element**
 
-![Movi Element Showcase](./images/element.gif)
+![Movi Element Showcase](../images/element.gif)
 
 ---
 
@@ -1267,9 +1267,9 @@ observer.observe(player);
 
 ## See Also
 
-- [Player API Documentation](./PLAYER.md)
-- [Demuxer Documentation](./DEMUXER.md)
-- [ISO Standards Compliance](./ISO_STANDARDS_COMPLIANCE.md)
+- [Player API Documentation](./player.md)
+- [Demuxer Documentation](./demuxer.md)
+- [ISO Standards Compliance](../guide/standards.md)
 
 ---
 

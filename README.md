@@ -279,7 +279,7 @@ Movi-Player's modular design makes it perfect for a wide range of applications:
 - **Real Estate**: Virtual property tours with room navigation
 - **Science**: Time-lapse microscopy and data visualization
 
-**[View Detailed Use Cases & Code Examples →](docs/USE_CASES.md)**
+**[View Detailed Use Cases & Code Examples →](https://mrujjwalg.github.io/movi-player/guide/use-cases)**
 
 ---
 
@@ -465,14 +465,14 @@ Comprehensive documentation is available in the [docs/](docs/) directory:
 
 ### Core Documentation
 
-- **[Architecture](docs/ARCHITECTURE.md)** - System design, data flow, and performance
-- **[Demuxer](docs/DEMUXER.md)** - Container parsing and metadata extraction
-- **[Player](docs/PLAYER.md)** - Playback control, A/V sync, and track management
-- **[Video Element](docs/VIDEO_ELEMENT.md)** - Custom HTML element API and attributes
+- **[Architecture](https://mrujjwalg.github.io/movi-player/guide/architecture)** - System design, data flow, and performance
+- **[Demuxer](https://mrujjwalg.github.io/movi-player/api/demuxer)** - Container parsing and metadata extraction
+- **[Player](https://mrujjwalg.github.io/movi-player/api/player)** - Playback control, A/V sync, and track management
+- **[Video Element](https://mrujjwalg.github.io/movi-player/api/element)** - Custom HTML element API and attributes
 
 ### Standards & Compliance
 
-- **[ISO Standards Compliance](docs/ISO_STANDARDS_COMPLIANCE.md)** - Standards verification report
+- **[ISO Standards Compliance](https://mrujjwalg.github.io/movi-player/guide/standards)** - Standards verification report
 
 ### Quick Links
 
