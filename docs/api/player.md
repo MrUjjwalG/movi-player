@@ -1055,9 +1055,9 @@ if (isMobile) {
 
 ## See Also
 
-- [Demuxer Documentation](./DEMUXER.md)
-- [Video Element Documentation](./VIDEO_ELEMENT.md)
-- [ISO Standards Compliance](./ISO_STANDARDS_COMPLIANCE.md)
+- [Demuxer Documentation](./demuxer.md)
+- [Video Element Documentation](./element.md)
+- [ISO Standards Compliance](../guide/standards.md)
 
 ---
 
