@@ -42,7 +42,10 @@
     "test": "vitest",
     "clean": "rm -rf dist",
     "typecheck": "tsc --noEmit",
-    "prepublishOnly": "npm run build && npm run typecheck"
+    "prepublishOnly": "npm run build && npm run typecheck",
+    "docs:dev": "vitepress dev docs",
+    "docs:build": "vitepress build docs",
+    "docs:preview": "vitepress preview docs"
   },
   "keywords": [
     "video",
@@ -80,6 +83,7 @@
     "typescript": "^5.9.3",
     "vite": "^5.0.0",
     "vite-plugin-dts": "^3.6.0",
+    "vitepress": "^1.6.4",
     "vitest": "^1.0.0"
   },
   "engines": {

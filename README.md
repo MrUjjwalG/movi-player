@@ -1,14 +1,59 @@
-# Movi-Player
+# 🎬 Movi-Player
 
-**Modular streaming video library for browsers with WebAssembly FFmpeg pipeline**
+> Modern, modular video player for the web powered by WebCodecs + FFmpeg WASM  
+> Built for HDR, performance, and professional streaming workflows.
 
 [![npm version](https://img.shields.io/npm/v/movi-player.svg)](https://www.npmjs.com/package/movi-player)
-[![License: Apache 2.0](https://img.shields.io/badge/License-Apache%202.0-blue.svg)](LICENSE)
+[![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 [![Browser Support](https://img.shields.io/badge/browsers-Chrome%2094%2B%20%7C%20Safari%2016.4%2B%20%7C%20Edge%2094%2B-brightgreen.svg)](https://caniuse.com/webcodecs)
 
-Movi-Player is a powerful, modular video playback library that brings native-like video performance to the web. Built on WebCodecs API and FFmpeg WASM, it offers hardware-accelerated decoding, HDR support, and a professional UI—all in a lightweight package.
+👉 **Install:** `npm i movi-player`  
+👉 **Docs:** [mrujjwalg.github.io/movi-player](https://mrujjwalg.github.io/movi-player/)  
+👉 **Demo:** [movi-player-examples.vercel.app](https://movi-player-examples.vercel.app/element.html)
 
 ![Movi Player Showcase](docs/images/element.gif)
+
+> 🚀 **No Server-Side Processing Required!** — All video parsing, demuxing, and decoding happens entirely in the browser using FFmpeg WASM & WebCodecs. Multiple audio/subtitle tracks are supported without any conversion or processing!
+
+---
+
+## ⚡ TL;DR
+
+Movi-Player helps you build **high-performance video players in browsers** with:
+
+✅ WebCodecs + FFmpeg WASM decoding  
+✅ HDR detection & rendering  
+✅ Canvas-based secure rendering  
+✅ Modular size (45KB → 410KB)  
+✅ MP4, MKV, TS, WebM, MOV support  
+✅ **No server-side processing** — All processing happens in the browser!
+
+> If you need serious video playback in web apps — Movi-Player is for you.
+
+📦 Install:
+
+```bash
+npm i movi-player
+```
+
+- Full Documentation → https://mrujjwalg.github.io/movi-player/
+- Default Player → https://movi-player-examples.vercel.app/element.html
+- Demuxer → https://movi-player-examples.vercel.app/demuxer.html
+- Custom UI → https://movi-player-examples.vercel.app/youtube.html
+
+---
+
+## 🤔 Why Movi-Player?
+
+| Feature                   | movi-player | video.js | hls.js |
+| ------------------------- | ----------- | -------- | ------ |
+| WebCodecs                 | ✅          | ❌       | ❌     |
+| HDR Support               | ✅          | ❌       | ❌     |
+| MKV / TS                  | ✅          | ❌       | ❌     |
+| Canvas Renderer           | ✅          | ❌       | ❌     |
+| Modular                   | ✅          | ❌       | ❌     |
+| FFmpeg WASM               | ✅          | ❌       | ❌     |
+| No Server-Side Processing | ✅          | ❌       | ❌     |
 
 ---
 
@@ -28,12 +73,10 @@ Movi-Player is a powerful, modular video playback library that brings native-lik
 
 ---
 
-## 📖 Documentation & Examples
-
-- **[📚 Full Documentation](docs/)** - Comprehensive guides and API reference
+- **[📚 Documentation](https://mrujjwalg.github.io/movi-player/)** - Comprehensive guides and API reference
 - **[🎮 Live Examples](https://github.com/MrUjjwalG/movi-player-examples)** - Interactive demos and sample code
-- **[🏗️ Architecture Guide](docs/ARCHITECTURE.md)** - System design and internals
-- **[🎬 API Reference](docs/PLAYER.md)** - Complete API documentation
+- **[🏗️ Architecture Guide](https://mrujjwalg.github.io/movi-player/guide/architecture)** - System design and internals
+- **[🎬 API Reference](https://mrujjwalg.github.io/movi-player/api/player)** - Complete API documentation
 
 ---
 
@@ -47,7 +90,29 @@ npm install movi-player
 
 ### Basic Usage
 
-#### Option 1: Custom HTML Element (Easiest)
+#### Option 1: CDN (No Install Required)
+
+```html
+<!DOCTYPE html>
+<html>
+  <head>
+    <script type="module">
+      import "https://unpkg.com/movi-player@latest/dist/element.js";
+    </script>
+  </head>
+  <body>
+    <movi-player
+      src="https://example.com/video.mp4"
+      controls
+      autoplay
+      muted
+      style="width: 100%; height: 500px;"
+    ></movi-player>
+  </body>
+</html>
+```
+
+#### Option 2: Custom HTML Element (npm)
 
 ```html
 <!DOCTYPE html>
@@ -69,30 +134,81 @@ npm install movi-player
 </html>
 ```
 
-#### Option 2: Programmatic Player API
+> ⚠️ **CORS Note**: When using HTTP URLs, ensure your server has CORS enabled. For local file playback using `FileSource`, no CORS configuration is needed!
+
+#### Option 3: Programmatic Player API
 
 ```typescript
-import { MoviPlayer } from "movi-player/player";
+import { MoviPlayer, LogLevel } from "movi-player/player";
+
+// Optional: Set log level
+MoviPlayer.setLogLevel(LogLevel.ERROR);
 
 const canvas = document.getElementById("canvas") as HTMLCanvasElement;
 const player = new MoviPlayer({
-  source: { url: "https://example.com/video.mp4" },
+  source: {
+    type: "url",
+    url: "https://example.com/video.mp4",
+  },
   canvas: canvas,
+  renderer: "canvas",
+  decoder: "auto",
 });
 
-await player.load({ url: "https://example.com/video.mp4" });
+// Event listeners
+player.on("loadEnd", () => console.log("Loaded!"));
+player.on("stateChange", (state) => console.log("State:", state));
+player.on("error", (e) => console.error(e));
+
+// Load and play
+await player.load();
 await player.play();
 ```
 
-#### Option 3: Demuxer Only (Metadata & HDR Extraction)
+#### Option 4: Local File Playback (FileSource)
+
+Play local video files directly from user's device — **no upload to server needed!**
+
+```typescript
+import { MoviPlayer, FileSource } from "movi-player/player";
+
+// Get file from input element
+const fileInput = document.getElementById("file") as HTMLInputElement;
+const canvas = document.getElementById("canvas") as HTMLCanvasElement;
+
+fileInput.addEventListener("change", async (e) => {
+  const file = (e.target as HTMLInputElement).files?.[0];
+  if (!file) return;
+
+  const player = new MoviPlayer({
+    source: {
+      type: "file",
+      file: file,
+    },
+    canvas: canvas,
+  });
+
+  await player.load();
+  await player.play();
+});
+```
+
+> 💡 **No server required!** Video parsing, demuxing, and decoding all happen on the client using FFmpeg WASM.
+
+#### Option 5: Demuxer Only (Metadata & HDR Extraction)
 
 ![Demuxer Overview](docs/images/demuxer.webp)
 
 ```typescript
-import { Demuxer, HttpSource } from "movi-player/demuxer";
+import { Demuxer, HttpSource, FileSource } from "movi-player/demuxer";
 
-const source = new HttpSource("video.mp4");
-const demuxer = new Demuxer(source);
+// From URL
+const httpSource = new HttpSource("video.mp4");
+
+// OR from local file (no server upload needed!)
+const fileSource = new FileSource(localFile);
+
+const demuxer = new Demuxer(httpSource); // or fileSource
 
 const info = await demuxer.open();
 console.log(`Duration: ${info.duration}s`);
@@ -360,12 +476,10 @@ Comprehensive documentation is available in the [docs/](docs/) directory:
 
 ### Quick Links
 
-- [Getting Started Guide](docs/README.md)
-- [API Reference](docs/PLAYER.md#api-reference)
-- [Event Documentation](docs/PLAYER.md#events)
-- [Color Space & HDR](docs/DEMUXER.md#color-space-handling)
-
-### Examples
+- [Getting Started Guide](https://mrujjwalg.github.io/movi-player/guide/getting-started)
+- [API Reference](https://mrujjwalg.github.io/movi-player/api/player)
+- [Event Documentation](https://mrujjwalg.github.io/movi-player/api/events)
+- [Color Space & HDR](https://mrujjwalg.github.io/movi-player/guide/hdr-support)
 
 ### Examples
 
@@ -575,7 +689,8 @@ const player = new MoviPlayer({
 - WASM heap: ~50MB
 - Video frame queue: ~1.4GB (120 frames × 12MB)
 - Audio buffer: ~384KB
-- **Total: ~1.5GB**
+- **Typical usage: 200–400MB**
+- **Peak (4K HEVC, max buffer): ~1.5GB**
 
 ### Optimizations
 
@@ -663,13 +778,7 @@ npm run dev
 
 ---
 
-## 📜 License
-
-MIT License - see the [LICENSE](LICENSE) file for details.
-
----
-
-## 🙏 Acknowledgments
+## Acknowledgments
 
 - **FFmpeg**: Universal media framework
 - **Emscripten**: WebAssembly toolchain
@@ -719,8 +828,14 @@ MIT License - see the [LICENSE](LICENSE) file for details.
 
 If you find Movi-Player useful, please consider giving it a star on GitHub!
 
+[![Star History Chart](https://api.star-history.com/svg?repos=MrUjjwalG/movi-player&type=Date)](https://star-history.com/#MrUjjwalG/movi-player&Date)
+
 ---
 
-**Built with ❤️ for the web**
+## 📜 License
 
-Made by [Ujjwal Kashyap](https://github.com/mrujjwalg)
+MIT License
+
+---
+
+Built with ❤️ by [Ujjwal Kashyap](https://github.com/mrujjwalg)
