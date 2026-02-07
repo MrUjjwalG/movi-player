@@ -2,6 +2,8 @@
 
 **Movi Streaming Video Library - Custom HTML Video Element**
 
+![Movi Element Showcase](./images/element.gif)
+
 ---
 
 ## Table of Contents
@@ -38,12 +40,12 @@ The `<movi-player>` custom HTML element provides a native `<video>`-like interfa
 
 ### Browser Compatibility
 
-| Browser | Version | Notes |
-|---------|---------|-------|
-| Chrome | 94+ | Full support (WebCodecs) |
-| Edge | 94+ | Full support |
-| Safari | 16.4+ | Full support |
-| Firefox | ❌ | No WebCodecs yet (Q2 2026 planned) |
+| Browser | Version | Notes                              |
+| ------- | ------- | ---------------------------------- |
+| Chrome  | 94+     | Full support (WebCodecs)           |
+| Edge    | 94+     | Full support                       |
+| Safari  | 16.4+   | Full support                       |
+| Firefox | ❌      | No WebCodecs yet (Q2 2026 planned) |
 
 ---
 
@@ -60,20 +62,20 @@ npm install movi
 ```html
 <!DOCTYPE html>
 <html>
-<head>
-  <script type="module">
-    import 'movi';
-  </script>
-</head>
-<body>
-  <movi-player
-    src="https://example.com/video.mp4"
-    controls
-    autoplay
-    muted
-    style="width: 100%; height: 500px;"
-  ></movi-player>
-</body>
+  <head>
+    <script type="module">
+      import "movi";
+    </script>
+  </head>
+  <body>
+    <movi-player
+      src="https://example.com/video.mp4"
+      controls
+      autoplay
+      muted
+      style="width: 100%; height: 500px;"
+    ></movi-player>
+  </body>
 </html>
 ```
 
@@ -88,7 +90,7 @@ That's it! The element works just like a native `<video>` tag.
 The custom element is automatically registered on import:
 
 ```typescript
-import 'movi'; // Registers <movi-player>
+import "movi"; // Registers <movi-player>
 ```
 
 **Element Name:** `movi-player` (hyphen required per Web Components spec)
@@ -110,15 +112,16 @@ Specifies the video source URL or File object.
 <!-- Local file via JavaScript -->
 <movi-player id="player"></movi-player>
 <script>
-  const player = document.getElementById('player');
-  const fileInput = document.getElementById('file');
-  fileInput.addEventListener('change', (e) => {
+  const player = document.getElementById("player");
+  const fileInput = document.getElementById("file");
+  fileInput.addEventListener("change", (e) => {
     player.src = e.target.files[0];
   });
 </script>
 ```
 
 **Supported Formats:**
+
 - MP4 (`.mp4`, `.m4v`)
 - WebM (`.webm`)
 - Matroska (`.mkv`)
@@ -205,6 +208,7 @@ Displays an image before playback starts.
 Chooses the rendering backend.
 
 **Values:**
+
 - `canvas` (default) - WebGL2 canvas rendering with full features
 - `mse` - Media Source Extensions via HLS.js (for compatibility)
 
@@ -213,6 +217,7 @@ Chooses the rendering backend.
 ```
 
 **When to use MSE:**
+
 - Browser lacks WebCodecs support
 - Need native media controls
 - Simpler integration with existing MSE infrastructure
@@ -224,6 +229,7 @@ Chooses the rendering backend.
 Controls how video fills the canvas.
 
 **Values:**
+
 - `contain` (default) - Fit within bounds, maintain aspect ratio
 - `cover` - Fill bounds, crop if necessary
 - `fill` - Stretch to fill bounds (may distort)
@@ -249,6 +255,7 @@ Enables/disables HDR rendering.
 ```
 
 **Auto-Detection:**
+
 - BT.2020 primaries + PQ/HLG transfer → Display-P3 canvas
 - Otherwise → sRGB canvas
 
@@ -259,6 +266,7 @@ Enables/disables HDR rendering.
 Sets the UI theme.
 
 **Values:**
+
 - `dark` (default)
 - `light`
 
@@ -286,7 +294,11 @@ Specifies external element for ambient effects.
 
 ```html
 <div id="wrapper" style="padding: 20px; transition: background 0.5s;">
-  <movi-player src="video.mp4" ambientmode ambientwrapper="wrapper"></movi-player>
+  <movi-player
+    src="video.mp4"
+    ambientmode
+    ambientwrapper="wrapper"
+  ></movi-player>
 </div>
 ```
 
@@ -298,6 +310,33 @@ Generates thumbnails on demand (used internally for preview).
 
 ```html
 <movi-player src="video.mp4" thumb></movi-player>
+```
+
+---
+
+#### `sw`
+
+Forces software decoding (using FFmpeg WASM) instead of hardware-accelerated WebCodecs.
+
+```html
+<movi-player src="video.mp4" sw></movi-player>
+```
+
+**Note:** Useful if hardware decoding fails or produces visual artifacts for a specific file.
+
+---
+
+#### `fps`
+
+Overrides the video frame rate with a custom value.
+
+**Values:**
+
+- `0` (default) - Use frame rate from video metadata
+- `number` - Fixed frame rate (e.g., `24`, `60`)
+
+```html
+<movi-player src="video.mp4" fps="60"></movi-player>
 ```
 
 ---
@@ -319,6 +358,7 @@ Sets element dimensions (CSS preferred).
 Hints how much data to buffer initially.
 
 **Values:**
+
 - `none` - Don't preload
 - `metadata` (default) - Load metadata only
 - `auto` - Buffer as much as possible
@@ -334,11 +374,15 @@ Hints how much data to buffer initially.
 CORS mode for cross-origin videos.
 
 **Values:**
+
 - `anonymous` - No credentials
 - `use-credentials` - Include credentials
 
 ```html
-<movi-player src="https://cdn.example.com/video.mp4" crossorigin="anonymous"></movi-player>
+<movi-player
+  src="https://cdn.example.com/video.mp4"
+  crossorigin="anonymous"
+></movi-player>
 ```
 
 ---
@@ -352,10 +396,10 @@ CORS mode for cross-origin videos.
 Gets/sets the media source.
 
 ```typescript
-const player = document.querySelector('movi-player');
+const player = document.querySelector("movi-player");
 
 // Set URL
-player.src = 'https://example.com/video.mp4';
+player.src = "https://example.com/video.mp4";
 
 // Set File
 player.src = fileObject;
@@ -396,7 +440,7 @@ True if playback is paused.
 
 ```typescript
 if (player.paused) {
-  console.log('Video is paused');
+  console.log("Video is paused");
 }
 ```
 
@@ -408,7 +452,7 @@ True if playback has reached the end.
 
 ```typescript
 if (player.ended) {
-  console.log('Video finished');
+  console.log("Video finished");
 }
 ```
 
@@ -459,6 +503,27 @@ player.loop = true; // Enable looping
 
 ---
 
+#### `sw: boolean`
+
+Gets/sets whether software decoding is forced.
+
+```typescript
+player.sw = true; // Force software decoding
+```
+
+---
+
+#### `fps: number`
+
+Gets/sets custom frame rate override.
+
+```typescript
+player.fps = 24; // Override to 24 FPS
+player.fps = 0; // Auto (from metadata)
+```
+
+---
+
 ### UI Properties
 
 #### `controls: boolean`
@@ -476,7 +541,7 @@ player.controls = true; // Show controls
 Gets/sets poster image URL.
 
 ```typescript
-player.poster = 'thumbnail.jpg';
+player.poster = "thumbnail.jpg";
 ```
 
 ---
@@ -491,7 +556,7 @@ Starts playback.
 
 ```typescript
 await player.play();
-console.log('Playing');
+console.log("Playing");
 ```
 
 **Returns:** Promise that resolves when playback starts
@@ -513,7 +578,7 @@ player.pause();
 Loads the media source (called automatically when `src` changes).
 
 ```typescript
-player.src = 'video.mp4';
+player.src = "video.mp4";
 await player.load();
 ```
 
@@ -527,7 +592,7 @@ Returns available video tracks.
 
 ```typescript
 const tracks = player.getVideoTracks();
-tracks.forEach(track => {
+tracks.forEach((track) => {
   console.log(`${track.width}x${track.height} @ ${track.frameRate}fps`);
 });
 ```
@@ -540,7 +605,7 @@ Returns available audio tracks.
 
 ```typescript
 const tracks = player.getAudioTracks();
-tracks.forEach(track => {
+tracks.forEach((track) => {
   console.log(`${track.language}: ${track.codec}`);
 });
 ```
@@ -573,7 +638,7 @@ player.selectVideoTrack(tracks[1].id); // Select second track
 Switches to a different audio track.
 
 ```typescript
-const englishTrack = player.getAudioTracks().find(t => t.language === 'eng');
+const englishTrack = player.getAudioTracks().find((t) => t.language === "eng");
 if (englishTrack) {
   player.selectAudioTrack(englishTrack.id);
 }
@@ -637,28 +702,28 @@ The element fires standard HTMLMediaElement events:
 ### Lifecycle Events
 
 ```typescript
-player.addEventListener('loadstart', () => {
-  console.log('Loading started');
+player.addEventListener("loadstart", () => {
+  console.log("Loading started");
 });
 
-player.addEventListener('loadedmetadata', () => {
+player.addEventListener("loadedmetadata", () => {
   console.log(`Duration: ${player.duration}s`);
 });
 
-player.addEventListener('canplay', () => {
-  console.log('Can start playing');
+player.addEventListener("canplay", () => {
+  console.log("Can start playing");
 });
 
-player.addEventListener('play', () => {
-  console.log('Playing');
+player.addEventListener("play", () => {
+  console.log("Playing");
 });
 
-player.addEventListener('pause', () => {
-  console.log('Paused');
+player.addEventListener("pause", () => {
+  console.log("Paused");
 });
 
-player.addEventListener('ended', () => {
-  console.log('Playback finished');
+player.addEventListener("ended", () => {
+  console.log("Playback finished");
 });
 ```
 
@@ -667,16 +732,16 @@ player.addEventListener('ended', () => {
 ### Time Events
 
 ```typescript
-player.addEventListener('timeupdate', () => {
+player.addEventListener("timeupdate", () => {
   console.log(`Time: ${player.currentTime}s`);
 });
 
-player.addEventListener('seeking', () => {
-  console.log('Seeking started');
+player.addEventListener("seeking", () => {
+  console.log("Seeking started");
 });
 
-player.addEventListener('seeked', () => {
-  console.log('Seeking finished');
+player.addEventListener("seeked", () => {
+  console.log("Seeking finished");
 });
 ```
 
@@ -685,8 +750,8 @@ player.addEventListener('seeked', () => {
 ### Error Events
 
 ```typescript
-player.addEventListener('error', (event) => {
-  console.error('Playback error:', event.detail);
+player.addEventListener("error", (event) => {
+  console.error("Playback error:", event.detail);
 });
 ```
 
@@ -715,6 +780,7 @@ The built-in controls provide:
 ### Settings Menu
 
 Accessed via ⚙ icon:
+
 - **Quality:** Video track selection
 - **Speed:** Playback rate (0.25x to 2x)
 - **Audio:** Audio track selection
@@ -728,11 +794,23 @@ Accessed via ⚙ icon:
 ### Center Play Button
 
 Large play/pause button in center:
+
 - Shown when paused
 - Hidden during playback
 - Responds to tap/click
 
 ---
+
+### Context Menu (Right-Click)
+
+Custom right-click menu with quick access to:
+
+- **Aspect Ratio:** Switch between contain, cover, fill, zoom
+- **Playback Speed:** 0.25x to 2.0x
+- **Audio/Subtitle Tracks:** Quick selection
+- **HDR Mode:** Toggle HDR rendering
+- **Snapshot:** Capture current frame
+- **Fullscreen:** Toggle fullscreen mode
 
 ## Gestures
 
@@ -746,6 +824,7 @@ Double tap → (reserved, no action)
 ```
 
 **Behavior:**
+
 - 200ms delay for double-tap detection
 - Works anywhere on video surface
 
@@ -759,6 +838,7 @@ Swipe right → Seek forward  (+10s)
 ```
 
 **Cumulative Seeking:**
+
 - Multiple swipes accumulate
 - Visual indicator shows total seek amount
 - Example: Right swipe × 3 = +30s seek
@@ -775,6 +855,7 @@ Pinch in  → Zoom out (object-fit: contain)
 ```
 
 **Modes:**
+
 - `objectfit="control"` - User can freely adjust zoom
 - Other modes - Pinch gesture disabled
 
@@ -793,6 +874,7 @@ Single click toggles playback (same as tap).
 Controls auto-hide after 3 seconds of inactivity.
 
 **Behavior:**
+
 - Mouse move → Show controls
 - 3s idle → Hide controls
 - Hover over controls → Stay visible
@@ -808,6 +890,7 @@ Controls auto-hide after 3 seconds of inactivity.
 ```
 
 **Colors:**
+
 - Background: `rgba(0, 0, 0, 0.7)`
 - Text: `#ffffff`
 - Accent: `#4CAF50` (green)
@@ -822,6 +905,7 @@ Controls auto-hide after 3 seconds of inactivity.
 ```
 
 **Colors:**
+
 - Background: `rgba(255, 255, 255, 0.9)`
 - Text: `#333333`
 - Accent: `#4CAF50` (green)
@@ -838,7 +922,7 @@ movi-player {
   --control-bg: rgba(0, 0, 0, 0.8);
   --control-text: #fff;
   --accent-color: #ff5722;
-  --progress-color: #4CAF50;
+  --progress-color: #4caf50;
 }
 ```
 
@@ -851,6 +935,7 @@ movi-player {
 Extracts average frame colors and applies to wrapper element.
 
 **Setup:**
+
 ```html
 <div id="ambient-wrapper" style="padding: 50px; transition: background 0.5s;">
   <movi-player
@@ -862,6 +947,7 @@ Extracts average frame colors and applies to wrapper element.
 ```
 
 **Effect:**
+
 - Samples 8×8 center region of frame
 - Calculates average RGB color
 - Updates wrapper background every 100ms
@@ -876,19 +962,24 @@ Extracts average frame colors and applies to wrapper element.
 Automatic HDR detection and rendering:
 
 **Detection:**
+
 ```typescript
-if (videoTrack.colorPrimaries === 'bt2020' &&
-    videoTrack.colorTransfer === 'smpte2084') {
+if (
+  videoTrack.colorPrimaries === "bt2020" &&
+  videoTrack.colorTransfer === "smpte2084"
+) {
   // HDR10 content → Use Display-P3 canvas
 }
 ```
 
 **Rendering:**
+
 - Creates WebGL2 context with `colorSpace: 'display-p3'`
 - Preserves wide color gamut
 - Tone-mapping handled by browser/OS
 
 **Requirements:**
+
 - HDR-capable display
 - Browser support (Chrome 94+, Safari 16.4+)
 - macOS, Windows 10+ with HDR enabled
@@ -909,13 +1000,13 @@ Select video quality at runtime:
 </select>
 
 <script>
-  const player = document.getElementById('player');
-  const quality = document.getElementById('quality');
+  const player = document.getElementById("player");
+  const quality = document.getElementById("quality");
 
-  player.addEventListener('loadedmetadata', () => {
+  player.addEventListener("loadedmetadata", () => {
     const tracks = player.getVideoTracks();
     // Assume tracks are sorted by resolution
-    quality.addEventListener('change', () => {
+    quality.addEventListener("change", () => {
       player.selectVideoTrack(tracks[quality.value].id);
     });
   });
@@ -929,12 +1020,14 @@ Select video quality at runtime:
 Right-click opens custom menu (not browser default):
 
 **Items:**
+
 - Copy video URL
 - Open in new tab
 - Download video
 - About Movi Player
 
 **Disable:**
+
 ```css
 movi-player {
   pointer-events: none; /* Disables context menu */
@@ -983,19 +1076,21 @@ movi-player {
 </ul>
 
 <script>
-  const player = document.getElementById('player');
-  const items = document.querySelectorAll('#playlist li');
+  const player = document.getElementById("player");
+  const items = document.querySelectorAll("#playlist li");
 
-  items.forEach(item => {
-    item.addEventListener('click', () => {
+  items.forEach((item) => {
+    item.addEventListener("click", () => {
       player.src = item.dataset.src;
       player.play();
     });
   });
 
   // Auto-advance to next video
-  player.addEventListener('ended', () => {
-    const current = Array.from(items).findIndex(i => i.dataset.src === player.src);
+  player.addEventListener("ended", () => {
+    const current = Array.from(items).findIndex(
+      (i) => i.dataset.src === player.src,
+    );
     const next = items[current + 1];
     if (next) {
       player.src = next.dataset.src;
@@ -1015,24 +1110,24 @@ movi-player {
 <div class="custom-controls">
   <button id="play">Play</button>
   <button id="pause">Pause</button>
-  <input type="range" id="seek" min="0" max="100" value="0">
+  <input type="range" id="seek" min="0" max="100" value="0" />
   <span id="time">0:00 / 0:00</span>
 </div>
 
 <script>
-  const player = document.getElementById('player');
+  const player = document.getElementById("player");
 
-  document.getElementById('play').onclick = () => player.play();
-  document.getElementById('pause').onclick = () => player.pause();
+  document.getElementById("play").onclick = () => player.play();
+  document.getElementById("pause").onclick = () => player.pause();
 
-  player.addEventListener('timeupdate', () => {
+  player.addEventListener("timeupdate", () => {
     const percent = (player.currentTime / player.duration) * 100;
-    document.getElementById('seek').value = percent;
-    document.getElementById('time').textContent =
+    document.getElementById("seek").value = percent;
+    document.getElementById("time").textContent =
       `${formatTime(player.currentTime)} / ${formatTime(player.duration)}`;
   });
 
-  document.getElementById('seek').oninput = (e) => {
+  document.getElementById("seek").oninput = (e) => {
     const time = (e.target.value / 100) * player.duration;
     player.currentTime = time;
   };
@@ -1040,7 +1135,7 @@ movi-player {
   function formatTime(s) {
     const m = Math.floor(s / 60);
     const sec = Math.floor(s % 60);
-    return `${m}:${sec.toString().padStart(2, '0')}`;
+    return `${m}:${sec.toString().padStart(2, "0")}`;
   }
 </script>
 ```
@@ -1050,14 +1145,18 @@ movi-player {
 ### File Upload
 
 ```html
-<input type="file" id="file" accept="video/*">
-<movi-player id="player" controls style="width: 100%; height: 500px;"></movi-player>
+<input type="file" id="file" accept="video/*" />
+<movi-player
+  id="player"
+  controls
+  style="width: 100%; height: 500px;"
+></movi-player>
 
 <script>
-  const fileInput = document.getElementById('file');
-  const player = document.getElementById('player');
+  const fileInput = document.getElementById("file");
+  const player = document.getElementById("player");
 
-  fileInput.addEventListener('change', (e) => {
+  fileInput.addEventListener("change", (e) => {
     const file = e.target.files[0];
     if (file) {
       player.src = file;
@@ -1084,7 +1183,7 @@ movi-player {
 <movi-player src="video.mp4" controls></movi-player>
 ```
 
-*Note: Shadow parts may not be fully exposed yet. Check component implementation.*
+_Note: Shadow parts may not be fully exposed yet. Check component implementation._
 
 ---
 
@@ -1092,15 +1191,15 @@ movi-player {
 
 ### Feature Support Matrix
 
-| Feature | Chrome 94+ | Safari 16.4+ | Edge 94+ | Firefox |
-|---------|------------|--------------|----------|---------|
-| Basic Playback | ✅ | ✅ | ✅ | ❌* |
-| Hardware Decode | ✅ | ✅ | ✅ | ❌ |
-| HDR (Display-P3) | ✅ | ✅ | ✅ | ❌ |
-| SharedArrayBuffer | ✅ | ✅ | ✅ | ✅ |
-| Picture-in-Picture | ✅ | ✅ | ✅ | ✅ |
+| Feature            | Chrome 94+ | Safari 16.4+ | Edge 94+ | Firefox |
+| ------------------ | ---------- | ------------ | -------- | ------- |
+| Basic Playback     | ✅         | ✅           | ✅       | ❌\*    |
+| Hardware Decode    | ✅         | ✅           | ✅       | ❌      |
+| HDR (Display-P3)   | ✅         | ✅           | ✅       | ❌      |
+| SharedArrayBuffer  | ✅         | ✅           | ✅       | ✅      |
+| Picture-in-Picture | ✅         | ✅           | ✅       | ✅      |
 
-*Firefox: Awaiting WebCodecs implementation (expected Q2 2026)
+\*Firefox: Awaiting WebCodecs implementation (expected Q2 2026)
 
 ---
 
@@ -1110,12 +1209,12 @@ movi-player {
 
 ```typescript
 // Fetch WASM once, reuse for all players
-const wasmBinary = await fetch('/movi.wasm').then(r => r.arrayBuffer());
+const wasmBinary = await fetch("/movi.wasm").then((r) => r.arrayBuffer());
 
-const player1 = document.querySelector('#player1');
+const player1 = document.querySelector("#player1");
 player1.wasmBinary = new Uint8Array(wasmBinary);
 
-const player2 = document.querySelector('#player2');
+const player2 = document.querySelector("#player2");
 player2.wasmBinary = new Uint8Array(wasmBinary);
 ```
 
@@ -1125,15 +1224,24 @@ player2.wasmBinary = new Uint8Array(wasmBinary);
 
 ```html
 <!-- Don't load until user clicks play -->
-<movi-player id="player" data-src="video.mp4" controls poster="thumb.jpg"></movi-player>
+<movi-player
+  id="player"
+  data-src="video.mp4"
+  controls
+  poster="thumb.jpg"
+></movi-player>
 
 <script>
-  const player = document.getElementById('player');
-  player.addEventListener('play', () => {
-    if (!player.src) {
-      player.src = player.dataset.src;
-    }
-  }, { once: true });
+  const player = document.getElementById("player");
+  player.addEventListener(
+    "play",
+    () => {
+      if (!player.src) {
+        player.src = player.dataset.src;
+      }
+    },
+    { once: true },
+  );
 </script>
 ```
 
@@ -1143,7 +1251,7 @@ player2.wasmBinary = new Uint8Array(wasmBinary);
 
 ```typescript
 const observer = new IntersectionObserver((entries) => {
-  entries.forEach(entry => {
+  entries.forEach((entry) => {
     if (!entry.isIntersecting) {
       entry.target.pause();
       // Optional: destroy player to free memory

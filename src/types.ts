@@ -95,6 +95,7 @@ export interface PlayerConfig {
   canvas?: HTMLCanvasElement | OffscreenCanvas;
   wasmBinary?: Uint8Array; // Embedded WASM binary data
   enablePreviews?: boolean; // Enable thumbnail preview pipeline (default: false)
+  frameRate?: number; // Override frame rate (fps) - 0 = auto
 }
 
 // ============================================================================
@@ -143,7 +144,8 @@ export interface AudioDecoderConfig {
 export interface Packet {
   streamIndex: number;
   keyframe: boolean;
-  timestamp: number;
+  timestamp: number; // PTS
+  dts: number; // DTS
   duration: number;
   data: Uint8Array;
 }

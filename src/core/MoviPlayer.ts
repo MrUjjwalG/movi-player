@@ -34,6 +34,7 @@ import { AudioRenderer } from "../render/AudioRenderer";
 import { updateAllBindingsLogLevel, ThumbnailBindings } from "../wasm/bindings";
 import { loadWasmModuleNew } from "../wasm/FFmpegLoader";
 import { HLSPlayerWrapper } from "../render/HLSPlayerWrapper";
+import { ThumbnailRenderer } from "../utils/ThumbnailRenderer";
 
 const TAG = "MoviPlayer";
 
@@ -60,12 +61,8 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
   // Preview pipeline (C-based FFmpeg software decoding)
   private thumbnailBindings: ThumbnailBindings | null = null;
   private thumbnailSource: SourceAdapter | null = null;
-  private thumbnailDecoder: MoviVideoDecoder | null = null;
-  private thumbnailCanvas: HTMLCanvasElement | OffscreenCanvas | null = null;
-  private thumbnailContext:
-    | CanvasRenderingContext2D
-    | OffscreenCanvasRenderingContext2D
-    | null = null;
+  private thumbnailRenderer: ThumbnailRenderer | null = null;
+  private thumbnailHDREnabled: boolean = true; // HDR enabled by default
   private isPreviewGenerating: boolean = false;
   private audioRenderer: AudioRenderer;
   private previewInitPromise: Promise<void> | null = null; // Guard for preview initialization
@@ -102,7 +99,7 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
   private justSeeked: boolean = false;
   private seekTime: number = 0;
   private startTime: number = 0; // Media start time (PTS offset)
-  private static readonly POST_SEEK_THROTTLE_MS = 200; // Throttle aggressive buffering for 200ms after seek
+  private static readonly POST_SEEK_THROTTLE_MS = 1000; // Throttle aggressive buffering for 1000ms after seek to stabilize playback
 
   constructor(config: PlayerConfig) {
     super();
@@ -123,10 +120,13 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
 
     // Initialize video renderer with canvas (WebCodecs)
     // Note: MSE mode is handled by MSEPlayerWrapper
+    // Check if software decoding is forced via config
+    const forceSoftware = config.decoder === "software";
+
     if (config.canvas || config.renderer === "canvas") {
       if (config.canvas) {
-        // Use canvas with WebCodecs
-        this.videoDecoder = new MoviVideoDecoder();
+        // Use canvas with WebCodecs (or WASM software if forced)
+        this.videoDecoder = new MoviVideoDecoder(forceSoftware);
         this.videoRenderer = new CanvasRenderer(config.canvas);
 
         // Connect video renderer to audio clock for A/V sync (skip if audio disabled)
@@ -144,17 +144,20 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
           );
         }
 
-        Logger.info(TAG, "Video renderer initialized with canvas");
+        Logger.info(
+          TAG,
+          `Video renderer initialized with canvas (forceSoftware: ${forceSoftware})`,
+        );
       } else {
         Logger.warn(
           TAG,
           "Canvas renderer requested but no canvas element provided",
         );
-        this.videoDecoder = new MoviVideoDecoder();
+        this.videoDecoder = new MoviVideoDecoder(forceSoftware);
       }
     } else {
       // Default to software decoding with WebCodecs (no target element)
-      this.videoDecoder = new MoviVideoDecoder();
+      this.videoDecoder = new MoviVideoDecoder(forceSoftware);
       Logger.info(
         TAG,
         "Video renderer initialized with default (WebCodecs decoder only)",
@@ -469,9 +472,14 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
     if (videoTrack && this.videoDecoder) {
       // Use WebCodecs - configure decoder
       const extradata = this.demuxer.getExtradata(videoTrack.id) ?? undefined;
+
+      // Pass explicit frame rate override if present (for throttling)
+      const targetFps = this.config.frameRate ?? 0;
+
       const configured = await this.videoDecoder.configure(
         videoTrack,
         extradata,
+        targetFps,
       );
       if (configured) {
         Logger.info(
@@ -480,12 +488,15 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
         );
         if (this.videoRenderer) {
           // Pass color space metadata for HDR detection and frame rate for 60fps conversion
+          // Support manual frame rate override (fps parameter)
+          const frameRate = this.config.frameRate || videoTrack.frameRate;
+
           this.videoRenderer.configure(
             videoTrack.width,
             videoTrack.height,
             videoTrack.colorPrimaries,
             videoTrack.colorTransfer,
-            videoTrack.frameRate,
+            frameRate,
             videoTrack.rotation ?? 0,
             videoTrack.isHDR,
           );
@@ -872,8 +883,8 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
     }
 
     // Check backpressure - relax limits for better throughput
-    // But prevent audio buffer bloat
     // After seek, use stricter limits to prevent overwhelming low-end devices
+    const isSoftware = this.isSoftwareDecoding();
     const timeSinceSeek = performance.now() - this.seekTime;
     const isPostSeek =
       this.justSeeked && timeSinceSeek < MoviPlayer.POST_SEEK_THROTTLE_MS;
@@ -885,12 +896,24 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
     // Canvas/WebCodecs path
     const videoBuffered = this.videoRenderer?.getQueueSize() ?? 0;
 
-    // Increased buffering limits to support 4K 60fps content
-    // After seek, use stricter limits to prevent stuttering on low-end devices
-    const maxVideoQueue = isPostSeek ? 15 : 30;
-    const maxAudioQueue = isPostSeek ? 10 : 20;
-    const maxAudioBuffered = isPostSeek ? 1.0 : 2.0;
-    const maxVideoBuffered = isPostSeek ? 50 : 100; // Fewer frames after seek
+    // Adaptive limits for software/hardware modes
+    // During post-seek or while waiting for initial sync, we are more permissive with decoder queues
+    // to ensure they have enough data to output the first few frames.
+    const maxVideoQueue = isSoftware
+      ? 1000
+      : isPostSeek || this.waitingForVideoSync
+        ? 60
+        : 30;
+    const maxAudioQueue = isSoftware
+      ? 500
+      : isPostSeek || this.waitingForVideoSync
+        ? 40
+        : 20;
+
+    // Buffer targets (in seconds)
+    const maxAudioBuffered = isSoftware ? 5.0 : isPostSeek ? 1.5 : 2.0;
+    // Renderer queue limits (in frames)
+    const maxVideoBuffered = isSoftware ? 60 : isPostSeek ? 20 : 100;
 
     if (
       this.videoDecoder.queueSize > maxVideoQueue ||
@@ -898,6 +921,16 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
       (!this.disableAudio && audioBuffered > maxAudioBuffered) ||
       videoBuffered > maxVideoBuffered
     ) {
+      if (
+        this.waitingForVideoSync &&
+        (this.videoDecoder.queueSize > maxVideoQueue ||
+          videoBuffered > maxVideoBuffered)
+      ) {
+        Logger.debug(
+          TAG,
+          `Backpressure during sync: videoDecoder=${this.videoDecoder.queueSize}, videoBuffered=${videoBuffered}`,
+        );
+      }
       return;
     }
 
@@ -913,18 +946,10 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
       this.demuxInFlightStartTime = performance.now();
 
       // Determine burst size based on buffer levels and post-seek state
-      // After seek, use smaller bursts to prevent overwhelming low-end devices
-      let burstSize = 20; // Default burst size
-
-      // Check if we just seeked - throttle for a short period to prevent stuttering
-      const timeSinceSeek = performance.now() - this.seekTime;
-      const isPostSeek =
-        this.justSeeked && timeSinceSeek < MoviPlayer.POST_SEEK_THROTTLE_MS;
+      let burstSize = 20;
 
       if (isPostSeek) {
-        // After seek, use smaller bursts to prevent overwhelming decoders
-        // This helps low-end devices avoid stuttering
-        burstSize = 5; // Small burst after seek
+        burstSize = 5;
         Logger.debug(
           TAG,
           `Post-seek throttling: using burst size ${burstSize}`,
@@ -941,25 +966,20 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
 
         // Normal burst size logic
         const videoQueue = this.videoRenderer?.getQueueSize() ?? 0;
-        const audioBuffered = this.audioRenderer.getBufferedDuration();
+        const currentAudioBuffered = this.audioRenderer.getBufferedDuration();
 
         // If buffers are low, increase burst size to fill faster
-        if (videoQueue < 30 || audioBuffered < 0.5) {
-          burstSize = 40; // Read more aggressively when buffers are low
+        const bufferTarget = isSoftware ? 2.0 : 0.5;
+        if (videoQueue < 30 || currentAudioBuffered < bufferTarget) {
+          burstSize = isSoftware ? 80 : 40; // Read more aggressively when buffers are low
         }
       }
-
-      // Process packets with adaptive throttling for low-end devices
-      // After seek, use smaller bursts and stricter queue limits
-      const maxVideoQueueSize = isPostSeek ? 15 : 30; // Lower queue limit after seek
-      const maxAudioQueueSize = isPostSeek ? 10 : 20; // Lower audio queue limit after seek
 
       for (let i = 0; i < burstSize; i++) {
         // Check both video and audio queues after seek to prevent overwhelming decoders
         if (
-          this.videoDecoder.queueSize > maxVideoQueueSize ||
-          (!this.disableAudio &&
-            this.audioDecoder.queueSize > maxAudioQueueSize)
+          this.videoDecoder.queueSize > maxVideoQueue ||
+          (!this.disableAudio && this.audioDecoder.queueSize > maxAudioQueue)
         ) {
           // Queue getting full, stop to let decoders catch up
           if (isPostSeek) {
@@ -971,11 +991,16 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
           break;
         }
 
-        // After seek, yield periodically to prevent blocking the main thread
-        // This helps low-end devices avoid stuttering
-        if (isPostSeek && i > 0 && i % 3 === 0) {
-          // Yield every 3 packets after seek to let decoders catch up
-          await new Promise((resolve) => setTimeout(resolve, 0));
+        // Yield periodically to prevent blocking the main thread, especially in software mode
+        // This helps maintain audio responsiveness and UI interactivity
+        const yieldInterval = isPostSeek ? 2 : isSoftware ? 3 : 20;
+        if (i > 0 && i % yieldInterval === 0) {
+          // Use MessageChannel for fast yielding (better than setTimeout)
+          const channel = new MessageChannel();
+          await new Promise((resolve) => {
+            channel.port1.onmessage = resolve;
+            channel.port2.postMessage(null);
+          });
 
           // Check if a new seek started during yield
           if (this.seekSessionId !== currentSessionId) {
@@ -1053,6 +1078,7 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
                 packet.data,
                 packet.timestamp,
                 packet.keyframe,
+                packet.dts,
               );
             }
           } else if (activeAudio && activeAudio.id === packet.streamIndex) {
@@ -1373,6 +1399,10 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
   }
 
   /**
+   * Initialize WebGL context for thumbnail rendering
+   */
+
+  /**
    * Generates a preview frame for the given time using C-based FFmpeg software decoding.
    * Fast and doesn't block main playback.
    */
@@ -1398,16 +1428,14 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
         }
       }
 
-      if (!this.thumbnailBindings || !this.thumbnailDecoder) {
-        Logger.warn(TAG, "Thumbnail bindings or decoder not available");
+      if (!this.thumbnailBindings || !this.thumbnailRenderer) {
+        Logger.warn(TAG, "Thumbnail bindings or renderer not available");
         return null;
       }
 
       // Read keyframe from thumbnailer
       // Convert time to media time (PTS) by adding startTime
-      const packetSize = await this.thumbnailBindings.readKeyframe(
-        time + this.startTime,
-      );
+      const packetSize = await this.thumbnailBindings.readKeyframe(time);
       Logger.debug(
         TAG,
         `Thumbnail readKeyframe(${time.toFixed(2)}s): size=${packetSize}`,
@@ -1441,28 +1469,19 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
         return null;
       }
 
-      // 2. Decode using WebCodecs (MoviVideoDecoder)
-      return new Promise<Blob | null>((resolve) => {
-        let resolved = false;
+      // 1. Try WebCodecs (Hardware) through Renderer
+      let rendered = false;
 
-        const resolveNull = () => {
-          if (!resolved) {
-            resolved = true;
-            Logger.warn(TAG, "Thumbnail decode failed");
-            resolve(null);
-          }
-        };
+      try {
+        rendered = await this.thumbnailRenderer!.decodeAndRender(
+          packetData,
+          timestamp,
+        );
+      } catch (e) {
+        Logger.warn(TAG, "Thumbnail WebCodecs decode failed", e);
+      }
 
-        const timeout = setTimeout(() => {
-          if (!resolved) {
-            Logger.warn(
-              TAG,
-              `Thumbnail decode timeout for ${time.toFixed(2)}s. Attempting software fallback.`,
-            );
-            resolved = true;
-
-            // Software Fallback logic
-            try {
+      /* REMOVED OLD LOGIC START
               const videoTrack = this.mediaInfo?.tracks?.find(
                 (t) => t.type === "video",
               ) as VideoTrack | undefined;
@@ -1551,7 +1570,7 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
             `Thumbnail frame received: ${frame.codedWidth}x${frame.codedHeight}`,
           );
 
-          // 3. Render VideoFrame to Canvas
+          // 3. Render VideoFrame to Canvas using WebGL (with HDR support)
           const videoTrack = this.mediaInfo?.tracks?.find(
             (t) => t.type === "video",
           ) as VideoTrack | undefined;
@@ -1564,6 +1583,7 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
           const canvasW = isRotated ? frameH : frameW;
           const canvasH = isRotated ? frameW : frameH;
 
+          // Create canvas if needed
           if (!this.thumbnailCanvas) {
             if (typeof OffscreenCanvas !== "undefined") {
               this.thumbnailCanvas = new OffscreenCanvas(canvasW, canvasH);
@@ -1572,35 +1592,118 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
               this.thumbnailCanvas.width = canvasW;
               this.thumbnailCanvas.height = canvasH;
             }
-            this.thumbnailContext = this.thumbnailCanvas.getContext("2d", {
-              alpha: false,
-              willReadFrequently: true,
-            }) as any;
+
+            // Try to initialize WebGL with HDR support
+            const colorSpace = this.detectThumbnailHDRColorSpace();
+            const webglInitialized = this.initThumbnailWebGL(
+              this.thumbnailCanvas,
+              colorSpace,
+            );
+
+            // Fallback to 2D if WebGL fails
+            if (!webglInitialized) {
+              this.thumbnailContext = this.thumbnailCanvas.getContext("2d", {
+                alpha: false,
+                willReadFrequently: true,
+              }) as any;
+            }
           }
 
+          // Resize canvas if dimensions changed
           if (
             this.thumbnailCanvas.width !== canvasW ||
             this.thumbnailCanvas.height !== canvasH
           ) {
             this.thumbnailCanvas.width = canvasW;
             this.thumbnailCanvas.height = canvasH;
+
+            // Re-initialize WebGL if it was being used
+            if (this.thumbnailGL) {
+              const colorSpace = this.detectThumbnailHDRColorSpace();
+              this.initThumbnailWebGL(this.thumbnailCanvas, colorSpace);
+            }
           }
 
-          // Draw the VideoFrame with rotation
-          if (rotation !== 0 && this.thumbnailContext) {
-            this.thumbnailContext.save();
-            this.thumbnailContext.translate(canvasW / 2, canvasH / 2);
-            this.thumbnailContext.rotate((rotation * Math.PI) / 180);
-            this.thumbnailContext.drawImage(
-              frame,
-              -frameW / 2,
-              -frameH / 2,
-              frameW,
-              frameH,
-            );
-            this.thumbnailContext.restore();
+          // Render using WebGL if available, otherwise fall back to 2D
+          if (
+            this.thumbnailGL &&
+            this.thumbnailGLProgram &&
+            this.thumbnailGLTexture &&
+            this.thumbnailGLVao
+          ) {
+            try {
+              const gl = this.thumbnailGL;
+
+              // Setup viewport
+              gl.viewport(0, 0, canvasW, canvasH);
+              gl.clearColor(0, 0, 0, 1);
+              gl.clear(gl.COLOR_BUFFER_BIT);
+
+              // Bind program and VAO
+              gl.useProgram(this.thumbnailGLProgram);
+              gl.bindVertexArray(this.thumbnailGLVao);
+
+              // Upload frame to texture
+              gl.activeTexture(gl.TEXTURE0);
+              gl.bindTexture(gl.TEXTURE_2D, this.thumbnailGLTexture);
+              gl.texImage2D(
+                gl.TEXTURE_2D,
+                0,
+                gl.RGBA,
+                gl.RGBA,
+                gl.UNSIGNED_BYTE,
+                frame,
+              );
+
+              // Draw
+              gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
+
+              Logger.debug(
+                TAG,
+                `Thumbnail rendered with WebGL (HDR: ${this.thumbnailHDREnabled})`,
+              );
+            } catch (e) {
+              Logger.warn(
+                TAG,
+                "WebGL thumbnail rendering failed, falling back to 2D",
+                e,
+              );
+              // Fallback to 2D rendering
+              if (this.thumbnailContext) {
+                if (rotation !== 0) {
+                  this.thumbnailContext.save();
+                  this.thumbnailContext.translate(canvasW / 2, canvasH / 2);
+                  this.thumbnailContext.rotate((rotation * Math.PI) / 180);
+                  this.thumbnailContext.drawImage(
+                    frame,
+                    -frameW / 2,
+                    -frameH / 2,
+                    frameW,
+                    frameH,
+                  );
+                  this.thumbnailContext.restore();
+                } else {
+                  this.thumbnailContext.drawImage(frame, 0, 0, frameW, frameH);
+                }
+              }
+            }
           } else {
-            this.thumbnailContext?.drawImage(frame, 0, 0, frameW, frameH);
+            // Use 2D canvas as fallback
+            if (rotation !== 0 && this.thumbnailContext) {
+              this.thumbnailContext.save();
+              this.thumbnailContext.translate(canvasW / 2, canvasH / 2);
+              this.thumbnailContext.rotate((rotation * Math.PI) / 180);
+              this.thumbnailContext.drawImage(
+                frame,
+                -frameW / 2,
+                -frameH / 2,
+                frameW,
+                frameH,
+              );
+              this.thumbnailContext.restore();
+            } else {
+              this.thumbnailContext?.drawImage(frame, 0, 0, frameW, frameH);
+            }
           }
 
           frame.close();
@@ -1637,18 +1740,56 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
           }
         });
 
+      REMOVED OLD LOGIC END */
+
+      // 2. Fallback to Software Decoding
+      if (!rendered) {
         try {
-          Logger.debug(TAG, `Decoding thumbnail packet...`);
-          // Decode the keyframe
-          this.thumbnailDecoder?.decode(packetData, timestamp, true);
-          this.thumbnailDecoder?.flush().catch((e) => {
-            Logger.warn(TAG, "Thumbnail flush error", e);
-          });
+          // Get width/height from active video track
+          const videoTrack = this.trackManager.getActiveVideoTrack();
+          let width = 320; // Default small
+          let height = 180;
+
+          if (videoTrack) {
+            width = videoTrack.width;
+            height = videoTrack.height;
+          }
+
+          const rgba = this.thumbnailBindings!.decodeCurrentPacket(
+            width,
+            height,
+          );
+          if (rgba && rgba.length > 0) {
+            this.thumbnailRenderer!.render(rgba, width, height);
+            this.thumbnailBindings!.clearBuffer();
+            rendered = true;
+          } else {
+            Logger.warn(TAG, "Software thumbnail decoder returned no data");
+          }
         } catch (e) {
-          Logger.warn(TAG, "Thumbnail decode error", e);
-          resolveNull();
+          Logger.error(TAG, "Software thumbnail fallback exception", e);
         }
-      });
+      }
+
+      if (rendered) {
+        const canvas = this.thumbnailRenderer!.getCanvas();
+        if ("toBlob" in canvas) {
+          return new Promise<Blob | null>((resolve) => {
+            // @ts-ignore
+            canvas.toBlob((blob) => resolve(blob), "image/jpeg", 0.7);
+          });
+        }
+        // If OffscreenCanvas (unlikely here but possible if strict types used)
+        if ("convertToBlob" in canvas) {
+          // @ts-ignore
+          return await canvas.convertToBlob({
+            type: "image/jpeg",
+            quality: 0.7,
+          });
+        }
+      }
+
+      return null;
     } catch (e) {
       Logger.warn(TAG, "Preview generation failed", e);
       return null;
@@ -1715,8 +1856,9 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
     Logger.debug(TAG, `Thumbnail context open result: ${opened}`);
     if (!opened) throw new Error("Failed to open thumbnail media");
 
-    // Initialize Decoder
-    this.thumbnailDecoder = new MoviVideoDecoder();
+    // Initialize Renderer
+    this.thumbnailRenderer = new ThumbnailRenderer();
+
     let videoTrack = this.trackManager.getActiveVideoTrack();
     if (!videoTrack) {
       const tracks = this.trackManager.getVideoTracks();
@@ -1724,23 +1866,40 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
     }
 
     if (videoTrack) {
-      // Set bindings for software fallback
-      if (this.demuxer) {
-        const demuxerBindings = this.demuxer.getBindings();
-        if (demuxerBindings) {
-          this.thumbnailDecoder.setBindings(demuxerBindings);
-        }
-      }
+      // Initialize renderer dimensions and HDR settings
+      this.thumbnailRenderer.initialize({
+        width: videoTrack.width,
+        height: videoTrack.height,
+        rotation: videoTrack.rotation || 0,
+        colorPrimaries: videoTrack.colorPrimaries,
+        colorTransfer: videoTrack.colorTransfer,
+        hdrEnabled: this.thumbnailHDREnabled,
+      });
 
-      // Get extradata from main demuxer - required for AV1, H.264, H.265 etc.
-      const extradata = this.demuxer?.getExtradata(videoTrack.id) ?? undefined;
+      // Configure internal VideoDecoder
+      const extradata = this.demuxer?.getExtradata(videoTrack.id) ?? null;
+
       Logger.debug(
         TAG,
-        `Configuring thumbnail decoder with track: ${videoTrack.codec}, extradata: ${extradata?.length ?? 0} bytes`,
+        `Configuring thumbnail decoder with track: ${videoTrack.codec}, extradata: ${extradata ? extradata.length : 0} bytes`,
       );
-      await this.thumbnailDecoder.configure(videoTrack, extradata);
+      const configured = await this.thumbnailRenderer.configureDecoder(
+        videoTrack.codec,
+        extradata, // can be null
+        videoTrack.width,
+        videoTrack.height,
+        videoTrack.profile,
+        videoTrack.level,
+      );
+
+      if (!configured) {
+        Logger.warn(
+          TAG,
+          "Failed to configure thumbnail VideoDecoder, will use software fallback",
+        );
+      }
     } else {
-      Logger.warn(TAG, "No video track found for thumbnail decoder");
+      Logger.warn(TAG, "No video track found for thumbnail renderer");
     }
 
     Logger.debug(TAG, "Thumbnail pipeline initialized successfully");
@@ -1751,13 +1910,13 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
       this.thumbnailBindings.destroy();
       this.thumbnailBindings = null;
     }
-    if (this.thumbnailDecoder) {
-      this.thumbnailDecoder.close();
-      this.thumbnailDecoder = null;
+
+    if (this.thumbnailRenderer) {
+      this.thumbnailRenderer.destroy();
+      this.thumbnailRenderer = null;
     }
+
     this.thumbnailSource = null;
-    this.thumbnailCanvas = null;
-    this.thumbnailContext = null;
   }
 
   /**
@@ -2001,9 +2160,18 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
    * Set HDR enabled state
    */
   setHDREnabled(enabled: boolean): void {
+    this.thumbnailHDREnabled = enabled;
     if (this.videoRenderer && (this.videoRenderer as any).setHDREnabled) {
       (this.videoRenderer as any).setHDREnabled(enabled);
     }
+
+    if (this.thumbnailRenderer) {
+      this.thumbnailRenderer.setHDREnabled(enabled);
+    }
+
+    // For non-Chromium browsers with tone mapping shader, just update the uniform
+    // No need to recreate the entire context
+    /* Manual WebGL update logic removed */
   }
 
   /**

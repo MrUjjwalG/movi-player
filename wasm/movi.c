@@ -202,6 +202,13 @@ void movi_destroy(MoviContext *ctx) {
     av_frame_free(&ctx->frame);
   if (ctx->resampled_frame)
     av_frame_free(&ctx->resampled_frame);
+  // Cleanup RGB conversion resources
+  if (ctx->sws_ctx)
+    sws_freeContext(ctx->sws_ctx);
+  if (ctx->rgb_frame)
+    av_frame_free(&ctx->rgb_frame);
+  if (ctx->rgb_buffer)
+    av_free(ctx->rgb_buffer);
   free(ctx);
 }
 

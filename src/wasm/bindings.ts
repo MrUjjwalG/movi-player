@@ -982,6 +982,50 @@ export class WasmBindings {
   getContextPtr(): number {
     return this.contextPtr;
   }
+
+  getFramePts(streamIndex: number): number {
+    if (!this.contextPtr) return -1;
+    return this.module._movi_get_frame_pts(this.contextPtr, streamIndex);
+  }
+
+  flushDecoder(streamIndex: number): void {
+    if (!this.contextPtr) return;
+    this.module._movi_flush_decoder(this.contextPtr, streamIndex);
+  }
+
+  /**
+   * Get decoded frame as RGBA data (converts any format including 10-bit HDR)
+   * This is useful for software decoding where YUV output is in non-standard formats
+   */
+  getFrameRGBA(
+    targetWidth: number = 0,
+    targetHeight: number = 0,
+  ): Uint8Array | null {
+    if (!this.contextPtr) return null;
+
+    const rgbaPtr = this.module._movi_get_frame_rgba(
+      this.contextPtr,
+      targetWidth,
+      targetHeight,
+    );
+    if (!rgbaPtr) return null;
+
+    const size = this.module._movi_get_frame_rgba_size(this.contextPtr);
+    if (size <= 0) return null;
+
+    // Return a view of the WASM heap (avoids one full-frame copy)
+    // The VideoFrame constructor will copy this data once into its own memory.
+    return this.module.HEAPU8.subarray(rgbaPtr, rgbaPtr + size);
+  }
+
+  /**
+   * Set frames to skip during decoding
+   * 0: None, 1: NonRef, 2: Bidir, 3: NonKey, 4: All
+   */
+  setSkipFrame(trackIndex: number, skip: number): void {
+    if (!this.contextPtr) return;
+    this.module._movi_set_skip_frame(this.contextPtr, trackIndex, skip);
+  }
 }
 
 /**
@@ -1014,10 +1058,25 @@ export class ThumbnailBindings {
 
   constructor(module: MoviWasmModule) {
     this.module = module;
-    // Silent FFmpeg logs for thumbnail demuxing
-    // Enable verbose logs for debugging
-    this.module._movi_set_log_level(AV_LOG_DEBUG);
+    // Default to silent, can be changed via setLogLevel
+    this.module._movi_set_log_level(AV_LOG_QUIET);
     this.setupAsyncHandlers();
+  }
+
+  /**
+   * Set FFmpeg log level
+   * @param level FFmpeg log level constant (e.g. AV_LOG_DEBUG)
+   */
+  setLogLevel(level: number): void {
+    this.module._movi_set_log_level(level);
+  }
+
+  /**
+   * Set log level from MoviPlayer LogLevel enum
+   */
+  setLogLevelFromMovi(level: LogLevel): void {
+    const ffmpegLevel = logLevelToFFmpeg(level);
+    this.setLogLevel(ffmpegLevel);
   }
 
   /**
@@ -1178,7 +1237,139 @@ export class ThumbnailBindings {
   }
 
   /**
-   * Decode current packet (software fallback)
+   * Get stream info with HDR metadata (like main pipeline)
+   */
+  getStreamInfo(): StreamInfo | null {
+    if (!this.contextPtr) return null;
+
+    const infoPtr = this.module._malloc(STREAM_INFO_SIZE);
+    try {
+      const ret = (this.module as any)._movi_thumbnail_get_stream_info(
+        this.contextPtr,
+        infoPtr,
+      );
+      if (ret !== 0) {
+        return null;
+      }
+      return parseStreamInfo(this.module, infoPtr);
+    } finally {
+      this.module._free(infoPtr);
+    }
+  }
+
+  /**
+   * Get extradata for the video stream
+   */
+  getExtradata(): Uint8Array | null {
+    if (!this.contextPtr) return null;
+
+    const info = this.getStreamInfo();
+    if (!info || info.extradataSize === 0) return null;
+
+    const bufferPtr = this.module._malloc(info.extradataSize);
+    try {
+      const size = (this.module as any)._movi_thumbnail_get_extradata(
+        this.contextPtr,
+        bufferPtr,
+        info.extradataSize,
+      );
+
+      if (size <= 0) return null;
+
+      // Copy data out of WASM memory
+      const result = new Uint8Array(size);
+      result.set(this.module.HEAPU8.subarray(bufferPtr, bufferPtr + size));
+      return result;
+    } finally {
+      this.module._free(bufferPtr);
+    }
+  }
+
+  /**
+   * Decode current packet to YUV (preserves HDR)
+   */
+  decodeCurrentPacketYUV(): {
+    width: number;
+    height: number;
+    yPlane: Uint8Array;
+    uPlane: Uint8Array;
+    vPlane: Uint8Array;
+    yStride: number;
+    uStride: number;
+    vStride: number;
+  } | null {
+    if (!this.contextPtr) return null;
+
+    const ret = (this.module as any)._movi_thumbnail_decode_frame_yuv(
+      this.contextPtr,
+    );
+    if (ret < 0) return null;
+
+    const width = (this.module as any)._movi_thumbnail_get_frame_width(
+      this.contextPtr,
+    );
+    const height = (this.module as any)._movi_thumbnail_get_frame_height(
+      this.contextPtr,
+    );
+
+    const yPtr = (this.module as any)._movi_thumbnail_get_plane_data(
+      this.contextPtr,
+      0,
+    );
+    const uPtr = (this.module as any)._movi_thumbnail_get_plane_data(
+      this.contextPtr,
+      1,
+    );
+    const vPtr = (this.module as any)._movi_thumbnail_get_plane_data(
+      this.contextPtr,
+      2,
+    );
+
+    const yStride = (this.module as any)._movi_thumbnail_get_plane_linesize(
+      this.contextPtr,
+      0,
+    );
+    const uStride = (this.module as any)._movi_thumbnail_get_plane_linesize(
+      this.contextPtr,
+      1,
+    );
+    const vStride = (this.module as any)._movi_thumbnail_get_plane_linesize(
+      this.contextPtr,
+      2,
+    );
+
+    if (!yPtr || !uPtr || !vPtr) return null;
+
+    // Copy plane data (YUV420 subsampling)
+    const ySize = yStride * height;
+    const uvHeight = Math.ceil(height / 2);
+    const uSize = uStride * uvHeight;
+    const vSize = vStride * uvHeight;
+
+    const yPlane = new Uint8Array(
+      this.module.HEAPU8.subarray(yPtr, yPtr + ySize).slice(),
+    );
+    const uPlane = new Uint8Array(
+      this.module.HEAPU8.subarray(uPtr, uPtr + uSize).slice(),
+    );
+    const vPlane = new Uint8Array(
+      this.module.HEAPU8.subarray(vPtr, vPtr + vSize).slice(),
+    );
+
+    return {
+      width,
+      height,
+      yPlane,
+      uPlane,
+      vPlane,
+      yStride,
+      uStride,
+      vStride,
+    };
+  }
+
+  /**
+   * Decode current packet (software fallback - SDR RGBA)
    */
   decodeCurrentPacket(width: number, height: number): Uint8Array | null {
     if (!this.contextPtr) return null;

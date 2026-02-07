@@ -44,6 +44,7 @@ export class MoviElement extends HTMLElement {
   private lastSeekSide: "left" | "right" | null = null;
   private cumulativeSeekAmount: number = 0;
   private _contextMenuVisible: boolean = false;
+  private _contextMenuJustClosed: boolean = false;
 
   // Internal state
   private _src: string | File | null = null;
@@ -64,6 +65,8 @@ export class MoviElement extends HTMLElement {
   private _thumb: boolean = false;
   private _hdr: boolean = true; // HDR enabled by default
   private _theme: "dark" | "light" = "dark"; // Default theme
+  private _sw: boolean = false; // Force software decoding
+  private _fps: number = 0; // Custom frame rate (0 = auto from video)
 
   // Ambient mode state
   private _ambientWrapper: string | null = null; // ID of external wrapper element
@@ -102,6 +105,8 @@ export class MoviElement extends HTMLElement {
       "thumb",
       "hdr",
       "theme",
+      "sw",
+      "fps",
     ];
   }
 
@@ -189,10 +194,27 @@ export class MoviElement extends HTMLElement {
         <div class="movi-broken-text">
           <h3 class="movi-broken-title">Format Unsupported</h3>
           <p class="movi-broken-message">This video codec is not supported by your browser's hardware acceleration.</p>
+          <button class="movi-sw-fallback-btn" style="display: none;">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" width="16" height="16">
+              <path d="M21 12a9 9 0 0 0-9-9 9.75 9.75 0 0 0-6.74 2.74L3 8"/>
+              <path d="M3 3v5h5"/>
+              <path d="M3 12a9 9 0 0 0 9 9 9.75 9.75 0 0 0 6.74-2.74L21 16"/>
+              <path d="M16 16h5v5"/>
+            </svg>
+            Try Software Decoding
+          </button>
         </div>
       </div>
     `;
     shadowRoot.appendChild(this.brokenIndicator);
+
+    // Setup software fallback button handler
+    const swFallbackBtn = this.brokenIndicator.querySelector(
+      ".movi-sw-fallback-btn",
+    );
+    swFallbackBtn?.addEventListener("click", () => {
+      this.enableSoftwareDecoding();
+    });
 
     // Create OSD (On-Screen Display) container
     const osdContainer = document.createElement("div");
@@ -1196,6 +1218,13 @@ export class MoviElement extends HTMLElement {
     // Click on video to play/pause (only on canvas/video area, not controls)
     // Handle clicks on both overlay and canvas
     const handleVideoClick = (e: MouseEvent) => {
+      // If context menu is open or was just closed, don't toggle play/pause
+      if (this._contextMenuVisible || this._contextMenuJustClosed) {
+        // Context menu will be hidden by its own click handler
+        // Just prevent play/pause toggle
+        return;
+      }
+
       // Check if this is a touch-generated click (pointerType or sourceCapabilities)
       const isTouchClick =
         (e as any).pointerType === "touch" ||
@@ -1578,12 +1607,24 @@ export class MoviElement extends HTMLElement {
         if (tapTimer) clearTimeout(tapTimer);
 
         tapTimer = window.setTimeout(() => {
-          // Single tap detected - toggle play/pause
-          const state = this.player?.getState();
-          if (state === "playing") {
-            this.pause();
+          // Single tap detected
+          // On touch devices: First tap shows controls if hidden, only toggle play/pause if already visible
+          const controlsContainer = this.controlsContainer;
+          const controlsHidden = controlsContainer?.classList.contains(
+            "movi-controls-hidden",
+          );
+
+          if (controlsHidden) {
+            // Controls are hidden - just show them, don't toggle playback
+            this.showControls();
           } else {
-            this.play();
+            // Controls are visible - toggle play/pause
+            const state = this.player?.getState();
+            if (state === "playing") {
+              this.pause();
+            } else {
+              this.play();
+            }
           }
           tapCount = 0;
           tapTimer = null;
@@ -2091,6 +2132,12 @@ export class MoviElement extends HTMLElement {
     const hideContextMenu = () => {
       contextMenu.classList.remove("visible");
       this._contextMenuVisible = false;
+
+      // Set just-closed flag to prevent play/pause toggle
+      this._contextMenuJustClosed = true;
+      setTimeout(() => {
+        this._contextMenuJustClosed = false;
+      }, 100);
 
       // Hide backdrop
       const backdrop = shadowRoot.querySelector(
@@ -3354,7 +3401,6 @@ export class MoviElement extends HTMLElement {
 
     if (this._controls) {
       container.style.display = "block";
-      if (centerPlayPause) centerPlayPause.style.display = "flex";
       this.showControls();
     } else {
       container.style.display = "none";
@@ -3533,8 +3579,17 @@ export class MoviElement extends HTMLElement {
       :host([theme="light"]) .movi-volume-slider::-webkit-slider-runnable-track {
          background: rgba(0, 0, 0, 0.15);
       }
-      
+
       :host([theme="light"]) .movi-volume-slider::-webkit-slider-thumb {
+         background: #11142d;
+         box-shadow: 0 2px 6px rgba(0, 0, 0, 0.2);
+      }
+
+      :host([theme="light"]) .movi-volume-slider::-moz-range-track {
+         background: rgba(0, 0, 0, 0.15);
+      }
+
+      :host([theme="light"]) .movi-volume-slider::-moz-range-thumb {
          background: #11142d;
          box-shadow: 0 2px 6px rgba(0, 0, 0, 0.2);
       }
@@ -3564,7 +3619,97 @@ export class MoviElement extends HTMLElement {
       :host([theme="light"]) .movi-osd-text {
         color: #11142d !important;
       }
-      
+
+      /* Light Theme Button Hover */
+      :host([theme="light"]) .movi-btn:hover {
+        background: var(--movi-btn-hover-bg) !important;
+      }
+
+      /* Light Theme Controls Overlay */
+      :host([theme="light"]) .movi-controls-overlay {
+        background: linear-gradient(to top, rgba(255, 255, 255, 0.4) 0%, transparent 30%) !important;
+      }
+
+      /* Light Theme Progress Bar */
+      :host([theme="light"]) .movi-progress-bar {
+        background: rgba(0, 0, 0, 0.15) !important;
+      }
+
+      :host([theme="light"]) .movi-progress-bar:hover {
+        background: rgba(0, 0, 0, 0.2) !important;
+      }
+
+      :host([theme="light"]) .movi-progress-buffer {
+        background: rgba(0, 0, 0, 0.1) !important;
+      }
+
+      /* Light Theme Center Play Button */
+      :host([theme="light"]) .movi-center-play-pause {
+        background: rgba(255, 255, 255, 0.8) !important;
+        border-color: rgba(0, 0, 0, 0.1) !important;
+        box-shadow: 0 8px 32px rgba(0, 0, 0, 0.15), inset 0 0 0 1px rgba(0, 0, 0, 0.05) !important;
+      }
+
+      :host([theme="light"]) .movi-center-play-pause:hover {
+        background: rgba(255, 255, 255, 0.95) !important;
+        box-shadow: 0 8px 40px rgba(0, 0, 0, 0.2), inset 0 0 0 1px rgba(0, 0, 0, 0.08) !important;
+      }
+
+      :host([theme="light"]) .movi-center-play-pause svg {
+        color: #11142d !important;
+        filter: none !important;
+      }
+
+      /* Light Theme Context Menu */
+      :host([theme="light"]) .movi-context-menu {
+        background: rgba(255, 255, 255, 0.95) !important;
+        border-color: rgba(0, 0, 0, 0.1) !important;
+        box-shadow: 0 20px 50px rgba(0, 0, 0, 0.15) !important;
+        color: #11142d !important;
+      }
+
+      :host([theme="light"]) .movi-context-menu-item:hover {
+        background-color: rgba(0, 0, 0, 0.05) !important;
+      }
+
+      :host([theme="light"]) .movi-context-menu-divider {
+        background: rgba(0, 0, 0, 0.1) !important;
+      }
+
+      :host([theme="light"]) .movi-speed-menu,
+      :host([theme="light"]) .movi-audio-track-menu,
+      :host([theme="light"]) .movi-subtitle-track-menu,
+      :host([theme="light"]) .movi-quality-menu,
+      :host([theme="light"]) .movi-context-menu-submenu,
+      :host([theme="light"]) .movi-context-menu-submenu-audio,
+      :host([theme="light"]) .movi-context-menu-submenu-subtitle {
+        background: rgba(255, 255, 255, 0.95) !important;
+        border-color: rgba(0, 0, 0, 0.1) !important;
+        box-shadow: 0 20px 50px rgba(0, 0, 0, 0.15) !important;
+        color: #11142d !important;
+      }
+
+      /* Light Theme Menu Items Hover */
+      :host([theme="light"]) .movi-audio-track-item:hover,
+      :host([theme="light"]) .movi-subtitle-track-item:hover,
+      :host([theme="light"]) .movi-speed-item:hover {
+        background: rgba(139, 92, 246, 0.08) !important;
+      }
+
+      :host([theme="light"]) .movi-audio-track-item.movi-audio-track-active,
+      :host([theme="light"]) .movi-subtitle-track-item.movi-subtitle-track-active,
+      :host([theme="light"]) .movi-speed-item.movi-speed-active {
+        background: rgba(139, 92, 246, 0.15) !important;
+      }
+
+      :host([theme="light"]) .movi-quality-item:hover {
+        background: rgba(0, 0, 0, 0.05) !important;
+      }
+
+      :host([theme="light"]) .movi-quality-item.movi-quality-active {
+        background: rgba(139, 92, 246, 0.12) !important;
+      }
+
       :host:focus,
       :host:active,
       :host:focus-visible {
@@ -4167,7 +4312,7 @@ export class MoviElement extends HTMLElement {
       }
       
       .movi-hdr-btn {
-        display: flex;
+        display: none; /* Hidden by default, shown when HDR content is detected */
         align-items: center;
         justify-content: center;
         padding: 0 12px !important; /* Force override of .movi-btn padding */
@@ -4534,7 +4679,12 @@ export class MoviElement extends HTMLElement {
           -webkit-backdrop-filter: none !important;
           background: rgba(10, 10, 18, 0.95) !important; /* Solid dark background fallback */
         }
-        
+
+        /* Light theme mobile controls bar */
+        :host([theme="light"]) .movi-controls-bar {
+          background: rgba(255, 255, 255, 0.95) !important;
+        }
+
         /* Remove the slide-up/down effect */
         .movi-controls-container,
         .movi-controls-container.movi-controls-hidden,
@@ -4632,7 +4782,7 @@ export class MoviElement extends HTMLElement {
         -webkit-backdrop-filter: blur(12px);
         padding: 0;
         border: 2px solid rgba(255, 255, 255, 0.2);
-        display: flex;
+        display: none;
         align-items: center;
         justify-content: center;
         cursor: pointer;
@@ -4804,7 +4954,11 @@ export class MoviElement extends HTMLElement {
           background-color: rgba(255, 255, 255, 0.08);
           transform: scale(1.02);
         }
-        
+
+        :host([theme="light"]) .movi-context-menu-item:hover {
+          background-color: rgba(0, 0, 0, 0.05);
+        }
+
         .movi-context-menu-item:hover .movi-context-menu-arrow {
           transform: translateX(2px);
           color: var(--movi-primary-light);
@@ -5226,6 +5380,13 @@ export class MoviElement extends HTMLElement {
         background: linear-gradient(to bottom, #fff, #bbb);
         -webkit-background-clip: text;
         -webkit-text-fill-color: transparent;
+        text-align: center;
+      }
+      
+      .movi-broken-text {
+        display: flex;
+        flex-direction: column;
+        align-items: center;
       }
       
       .movi-broken-message {
@@ -5234,6 +5395,34 @@ export class MoviElement extends HTMLElement {
         color: rgba(255, 255, 255, 0.6);
         margin: 0;
         font-weight: 400;
+        text-align: center;
+      }
+      
+      .movi-sw-fallback-btn {
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        gap: 8px;
+        margin-top: 16px;
+        padding: 10px 20px;
+        background: rgba(255, 255, 255, 0.15);
+        border: 1px solid rgba(255, 255, 255, 0.2);
+        border-radius: 8px;
+        color: #fff;
+        font-size: 14px;
+        font-weight: 500;
+        cursor: pointer;
+        transition: all 0.2s ease;
+      }
+      
+      .movi-sw-fallback-btn:hover {
+        background: rgba(255, 255, 255, 0.25);
+        border-color: rgba(255, 255, 255, 0.4);
+        transform: scale(1.02);
+      }
+      
+      .movi-sw-fallback-btn svg {
+        flex-shrink: 0;
       }
       
       /* Mobile Responsiveness for Context Menu - Side Panel Mode */
@@ -5260,6 +5449,12 @@ export class MoviElement extends HTMLElement {
           min-width: 0 !important;
           box-sizing: border-box !important;
           z-index: 20000 !important;
+        }
+
+        /* Light theme mobile context menu */
+        :host([theme="light"]) .movi-context-menu.movi-context-menu-mobile {
+          border-left-color: rgba(0, 0, 0, 0.1) !important;
+          box-shadow: -10px 0 50px rgba(0, 0, 0, 0.2) !important;
         }
 
         .movi-context-menu.movi-context-menu-mobile.visible {
@@ -5315,8 +5510,15 @@ export class MoviElement extends HTMLElement {
         .movi-context-menu-shortcut {
           display: none !important; /* Shortcuts don't make sense on mobile */
         }
+
+        /* Light theme mobile submenus */
+        :host([theme="light"]) .movi-context-menu-submenu,
+        :host([theme="light"]) .movi-context-menu-submenu-audio,
+        :host([theme="light"]) .movi-context-menu-submenu-subtitle {
+          background: rgba(255, 255, 255, 0.98) !important;
+        }
       }
-      
+
       /* Mobile Responsiveness for Context Menu */
       @media (max-width: 600px) {
         .movi-context-menu {
@@ -5629,6 +5831,20 @@ export class MoviElement extends HTMLElement {
           this.updateFitMode();
         }
         break;
+      case "sw":
+        this._sw = newValue !== null;
+        // If sw attribute changes and element is connected with src, reload
+        if (this.isConnected && this._src) {
+          this.load();
+        }
+        break;
+      case "fps":
+        this._fps = newValue ? parseFloat(newValue) : 0;
+        // If fps changes and element is connected with src, reload
+        if (this.isConnected && this._src) {
+          this.load();
+        }
+        break;
     }
   }
 
@@ -5796,9 +6012,10 @@ export class MoviElement extends HTMLElement {
       // Configure MoviPlayer options
       const playerConfig: any = {
         source,
-        decoder: "auto",
+        decoder: this._sw ? "software" : "auto",
         cache: { type: "lru", maxSizeMB: 520 },
         enablePreviews: this._thumb,
+        ...(this._fps > 0 && { frameRate: this._fps }),
       };
 
       // Use canvas mode
@@ -5837,9 +6054,11 @@ export class MoviElement extends HTMLElement {
       }
 
       // Check for software decoding fallback (only for MoviPlayer/Canvas mode)
+      // Don't show broken icon if sw attribute is set (user explicitly wants software decoding)
       if (
         this.player instanceof MoviPlayer &&
-        this.player.isSoftwareDecoding()
+        this.player.isSoftwareDecoding() &&
+        !this._sw // Only show error if software decoding was unintended fallback
       ) {
         Logger.warn(
           TAG,
@@ -6132,8 +6351,11 @@ export class MoviElement extends HTMLElement {
       contextMenuPauseIcon?.style.setProperty("display", "block");
       if (contextMenuLabel) contextMenuLabel.textContent = "Pause";
 
-      // Hide center button when playing (with animation)
-      centerPlayPauseBtn?.classList.remove("movi-center-visible");
+      // Hide center button when playing
+      if (centerPlayPauseBtn) {
+        centerPlayPauseBtn.classList.remove("movi-center-visible");
+        centerPlayPauseBtn.style.display = "none";
+      }
     } else {
       playIcon?.style.setProperty("display", "block");
       pauseIcon?.style.setProperty("display", "none");
@@ -6145,9 +6367,18 @@ export class MoviElement extends HTMLElement {
 
       // Show center button when paused/ready, but hide if loading or unsupported state is shown
       if (isLoading || this._isUnsupported) {
-        centerPlayPauseBtn?.classList.remove("movi-center-visible");
+        if (centerPlayPauseBtn) {
+          centerPlayPauseBtn.classList.remove("movi-center-visible");
+          centerPlayPauseBtn.style.display = "none";
+        }
       } else {
-        centerPlayPauseBtn?.classList.add("movi-center-visible");
+        if (centerPlayPauseBtn) {
+          centerPlayPauseBtn.style.setProperty("display", "flex");
+          // Use a small delay for opacity/scale transition to work after display: flex
+          requestAnimationFrame(() => {
+            centerPlayPauseBtn.classList.add("movi-center-visible");
+          });
+        }
       }
     }
   }
@@ -6316,6 +6547,23 @@ export class MoviElement extends HTMLElement {
         );
         if (messageEl) messageEl.textContent = message;
       }
+
+      // Show/hide the software fallback button based on parameter
+      const swFallbackBtn = this.brokenIndicator.querySelector(
+        ".movi-sw-fallback-btn",
+      ) as HTMLElement;
+      if (swFallbackBtn) {
+        // Show the button for hardware acceleration or decoder failures (not for network errors)
+        // Don't show if already using software decoding
+        const isDecoderError =
+          title === "Format Unsupported" ||
+          title === "Codec Unsupported" ||
+          title === "Playback Error" ||
+          message?.toLowerCase().includes("decoder") ||
+          message?.toLowerCase().includes("codec");
+        const shouldShowSwButton = isDecoderError && !this._sw;
+        swFallbackBtn.style.display = shouldShowSwButton ? "flex" : "none";
+      }
     }
 
     // Hide loading indicator
@@ -6338,6 +6586,57 @@ export class MoviElement extends HTMLElement {
     this.updateControlsState();
     this.updatePlayPauseIcon();
     this.updateQualityMenu(); // Update quality menu
+  }
+
+  /**
+   * Enable software decoding and reload the video
+   */
+  private async enableSoftwareDecoding(): Promise<void> {
+    Logger.info(TAG, "User requested software decoding fallback");
+
+    // Reset unsupported state
+    this._isUnsupported = false;
+
+    // Hide broken indicator
+    if (this.brokenIndicator) {
+      this.brokenIndicator.style.display = "none";
+    }
+
+    // Set sw attribute to enable software decoding
+    this._sw = true;
+    this.setAttribute("sw", "");
+
+    // Get current source
+    const currentSrc = this._src;
+
+    // Destroy current player if exists
+    if (this.player) {
+      this.player.destroy();
+      this.player = null;
+    }
+
+    // Reset loading state so initializePlayer can run
+    this.isLoading = false;
+
+    // Show loading indicator
+    const loadingIndicator = this.shadowRoot?.querySelector(
+      ".movi-loading-indicator",
+    ) as HTMLElement;
+    if (loadingIndicator) loadingIndicator.style.display = "flex";
+
+    // Re-initialize with software decoding
+    if (currentSrc) {
+      try {
+        // Call initializePlayer directly since src hasn't changed
+        await this.initializePlayer();
+      } catch (e) {
+        Logger.error(TAG, "Failed to initialize with software decoding", e);
+        this.handleUnsupportedVideo(
+          "Playback Error",
+          "Failed to play video even with software decoding.",
+        );
+      }
+    }
   }
 
   private updateControlsState(): void {
@@ -6461,6 +6760,15 @@ export class MoviElement extends HTMLElement {
     }
 
     const loop = (timestamp: number) => {
+      // If software decoding is active, pause ambient sampling to save main thread cycles
+      // This is crucial for CPU-heavy 4K software decoding
+      const isSoftware = this.player?.isSoftwareDecoding() ?? false;
+      if (isSoftware) {
+        this._lastAmbientSampleTime = timestamp; // Keep advancing time but skip work
+        this._ambientRafId = requestAnimationFrame(loop);
+        return;
+      }
+
       if (
         timestamp - this._lastAmbientSampleTime >=
         this._ambientSampleInterval
@@ -6801,6 +7109,36 @@ export class MoviElement extends HTMLElement {
     }
   }
 
+  get sw(): boolean {
+    return this._sw;
+  }
+
+  set sw(value: boolean) {
+    if (this._sw !== value) {
+      this._sw = value;
+      if (value) {
+        this.setAttribute("sw", "");
+      } else {
+        this.removeAttribute("sw");
+      }
+    }
+  }
+
+  get fps(): number {
+    return this._fps;
+  }
+
+  set fps(value: number) {
+    if (this._fps !== value) {
+      this._fps = value;
+      if (value > 0) {
+        this.setAttribute("fps", value.toString());
+      } else {
+        this.removeAttribute("fps");
+      }
+    }
+  }
+
   get duration(): number {
     return this.player?.getDuration() || 0;
   }
@@ -6974,12 +7312,24 @@ export class MoviElement extends HTMLElement {
       if (hdrMenuItem) hdrMenuItem.style.display = "flex";
       if (hdrDivider) hdrDivider.style.display = "block";
 
+      // Show the HDR button when HDR content is detected
+      const hdrBtn = this.shadowRoot?.querySelector(
+        ".movi-hdr-btn",
+      ) as HTMLElement;
+      if (hdrBtn) hdrBtn.style.display = "flex";
+
       // Ensure UI reflects the active state now that it's visible
       this.updateHDRUI();
     } else {
       if (hdrContainer) hdrContainer.style.display = "none";
       if (hdrMenuItem) hdrMenuItem.style.display = "none";
       if (hdrDivider) hdrDivider.style.display = "none";
+
+      // Hide the HDR button when no HDR content
+      const hdrBtn = this.shadowRoot?.querySelector(
+        ".movi-hdr-btn",
+      ) as HTMLElement;
+      if (hdrBtn) hdrBtn.style.display = "none";
     }
 
     Logger.debug(

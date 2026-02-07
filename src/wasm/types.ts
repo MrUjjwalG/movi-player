@@ -93,6 +93,18 @@ export interface MoviWasmModule {
   _movi_get_frame_channels(ctx: number): number;
   _movi_get_frame_sample_rate(ctx: number): number;
   _movi_enable_audio_downmix(ctx: number, enable: number): void;
+  _movi_get_frame_pts(ctx: number, streamIndex: number): number;
+  _movi_flush_decoder(ctx: number, streamIndex: number): void;
+
+  // RGBA conversion for software decoding
+  _movi_get_frame_rgba(
+    ctx: number,
+    targetWidth: number,
+    targetHeight: number,
+  ): number;
+  _movi_get_frame_rgba_size(ctx: number): number;
+  _movi_get_frame_rgba_linesize(ctx: number): number;
+  _movi_set_skip_frame(ctx: number, streamIndex: number, skip: number): void;
 
   // Thumbnail API (demux only)
   _movi_thumbnail_create: (fileSizeLow: number, fileSizeHigh: number) => number;
@@ -100,6 +112,17 @@ export interface MoviWasmModule {
   _movi_thumbnail_read_keyframe: (ctx: number, timestamp: number) => void; // Callback pattern
   _movi_thumbnail_get_packet_data: (ctx: number) => number;
   _movi_thumbnail_get_packet_pts: (ctx: number) => number;
+  _movi_thumbnail_get_stream_info: (ctx: number, infoPtr: number) => number;
+  _movi_thumbnail_get_extradata: (
+    ctx: number,
+    buffer: number,
+    bufferSize: number,
+  ) => number;
+  _movi_thumbnail_decode_frame_yuv: (ctx: number) => number;
+  _movi_thumbnail_get_plane_data: (ctx: number, plane: number) => number;
+  _movi_thumbnail_get_plane_linesize: (ctx: number, plane: number) => number;
+  _movi_thumbnail_get_frame_width: (ctx: number) => number;
+  _movi_thumbnail_get_frame_height: (ctx: number) => number;
   _movi_thumbnail_destroy: (ctx: number) => void;
 
   // Emscripten utilities

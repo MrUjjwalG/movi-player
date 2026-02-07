@@ -43,22 +43,27 @@ Movi is a **modular streaming video library** for browsers that provides:
 ### 1. Pull-Based Streaming
 
 **Traditional Push Model:**
+
 ```
 Server → [Full File] → Client Memory → Play
 ```
+
 Problems: High memory, slow start, no seeking until fully loaded
 
 **Movi Pull Model:**
+
 ```
 Client → [Request Chunk] → Server
        ← [Chunk Data]    ←
 Client → Demux → Decode → Render
 ```
+
 Benefits: Low memory, instant start, random access
 
 ### 2. Hardware-First Decoding
 
 **Decision Tree:**
+
 ```
 ┌─────────────────┐
 │ Video Packet    │
@@ -84,11 +89,13 @@ Benefits: Low memory, instant start, random access
 ### 3. Audio-Master Synchronization
 
 **Why Audio-Master?**
+
 - Audio glitches are **highly noticeable** (pops/clicks)
 - Video frame drops are **less noticeable** (motion blur)
 - Web Audio API provides **precise timing**
 
 **Implementation:**
+
 ```typescript
 // Audio renderer is the master clock
 const audioTime = audioRenderer.getAudioClock();
@@ -112,42 +119,42 @@ if (videoFrame.timestamp <= audioTime) {
 │                     Movi Library                            │
 ├─────────────────────────────────────────────────────────────┤
 │                                                             │
-│  ┌───────────────────────────────────────────────────────┐ │
-│  │              Export Level 1: Demuxer                  │ │
-│  │                 (movi/demuxer)                        │ │
-│  │                    ~45KB                              │ │
-│  ├───────────────────────────────────────────────────────┤ │
-│  │  • FFmpeg WASM (libavformat)                         │ │
-│  │  • Container parsing (MP4, MKV, WebM, etc.)          │ │
-│  │  • Packet extraction                                 │ │
-│  │  • Metadata reading                                  │ │
-│  └───────────────────────────────────────────────────────┘ │
+│  ┌───────────────────────────────────────────────────────┐  │
+│  │              Export Level 1: Demuxer                  │  │
+│  │                 (movi/demuxer)                        │  │
+│  │                    ~45KB                              │  │
+│  ├───────────────────────────────────────────────────────┤  │
+│  │  • FFmpeg WASM (libavformat)                          │  │
+│  │  • Container parsing (MP4, MKV, WebM, etc.)           │  │
+│  │  • Packet extraction                                  │  │
+│  │  • Metadata reading                                   │  │
+│  └───────────────────────────────────────────────────────┘  │
 │                                                             │
-│  ┌───────────────────────────────────────────────────────┐ │
-│  │              Export Level 2: Player                   │ │
-│  │                 (movi/player)                         │ │
-│  │                   ~180KB                              │ │
-│  ├───────────────────────────────────────────────────────┤ │
-│  │  • Demuxer +                                         │ │
-│  │  • Decoders (Video, Audio, Subtitle)                 │ │
-│  │  • Renderers (Canvas, Audio)                         │ │
-│  │  • State management                                  │ │
-│  │  • A/V synchronization                               │ │
-│  │  • Track management                                  │ │
-│  └───────────────────────────────────────────────────────┘ │
+│  ┌───────────────────────────────────────────────────────┐  │
+│  │              Export Level 2: Player                   │  │
+│  │                 (movi/player)                         │  │
+│  │                   ~180KB                              │  │
+│  ├───────────────────────────────────────────────────────┤  │
+│  │  • Demuxer +                                          │  │
+│  │  • Decoders (Video, Audio, Subtitle)                  │  │
+│  │  • Renderers (Canvas, Audio)                          │  │
+│  │  • State management                                   │  │
+│  │  • A/V synchronization                                │  │
+│  │  • Track management                                   │  │
+│  └───────────────────────────────────────────────────────┘  │
 │                                                             │
-│  ┌───────────────────────────────────────────────────────┐ │
-│  │              Export Level 3: Element                  │ │
-│  │                   (movi)                              │ │
-│  │                   ~410KB                              │ │
-│  ├───────────────────────────────────────────────────────┤ │
-│  │  • Player +                                          │ │
-│  │  • Custom HTML element (<movi-player>)               │ │
-│  │  • UI controls                                       │ │
-│  │  • Gestures (tap, swipe, pinch)                      │ │
-│  │  • Theme system                                      │ │
-│  │  • Ambient mode                                      │ │
-│  └───────────────────────────────────────────────────────┘ │
+│  ┌───────────────────────────────────────────────────────┐  │
+│  │              Export Level 3: Element                  │  │
+│  │                   (movi)                              │  │
+│  │                   ~410KB                              │  │
+│  ├───────────────────────────────────────────────────────┤  │
+│  │  • Player +                                           │  │
+│  │  • Custom HTML element (<movi-player>)                │  │
+│  │  • UI controls                                        │  │
+│  │  • Gestures (tap, swipe, pinch)                       │  │
+│  │  • Theme system                                       │  │
+│  │  • Ambient mode                                       │  │
+│  └───────────────────────────────────────────────────────┘  │
 │                                                             │
 └─────────────────────────────────────────────────────────────┘
 ```
@@ -182,7 +189,7 @@ if (videoFrame.timestamp <= audioTime) {
 ┌──────────────────────────────────────────────────────────────┐
 │ 1. SOURCE LAYER                                              │
 ├──────────────────────────────────────────────────────────────┤
-│  HttpSource (Range Requests) │ FileSource (LRU Cache)       │
+│  HttpSource (Range Requests) │ FileSource (LRU Cache)        │
 │  • SharedArrayBuffer mode     │ • 1MB chunks                 │
 │  • Zero-copy transfer         │ • 64-chunk cache             │
 └────────────────┬─────────────────────────────────────────────┘
@@ -191,7 +198,7 @@ if (videoFrame.timestamp <= audioTime) {
 ┌──────────────────────────────────────────────────────────────┐
 │ 2. DEMUX LAYER                                               │
 ├──────────────────────────────────────────────────────────────┤
-│  Demuxer → WasmBindings → FFmpeg WASM (Asyncify)            │
+│  Demuxer → WasmBindings → FFmpeg WASM (Asyncify)             │
 │  • Container parsing (ISO BMFF, Matroska)                    │
 │  • Track enumeration (codec, resolution, bitrate)            │
 │  • Packet extraction (PTS, DTS, keyframe flag)               │
@@ -235,11 +242,11 @@ if (videoFrame.timestamp <= audioTime) {
 ┌──────────────────────────────────────────────────────────────┐
 │ 6. RENDER LAYER                                              │
 ├──────────────────────────────────────────────────────────────┤
-│  CanvasRenderer (WebGL2)     AudioRenderer (Web Audio API)  │
-│  • Frame queue (120 frames)  • Audio buffer (2 seconds)     │
-│  • 60Hz presentation loop    • Sample scheduling            │
-│  • HDR support (P3 canvas)   • Volume control               │
-│  • Subtitle overlay          • Clock provider               │
+│  CanvasRenderer (WebGL2)     AudioRenderer (Web Audio API)   │
+│  • Frame queue (120 frames)  • Audio buffer (2 seconds)      │
+│  • 60Hz presentation loop    • Sample scheduling             │
+│  • HDR support (P3 canvas)   • Volume control                │
+│  • Subtitle overlay          • Clock provider                │
 └──────────────────────────────────────────────────────────────┘
                  │
                  ▼
@@ -255,20 +262,21 @@ if (videoFrame.timestamp <= audioTime) {
 
 ### Core Technologies
 
-| Layer | Technology | Purpose |
-|-------|------------|---------|
-| **Container Parsing** | FFmpeg WASM | Universal format support |
-| **Video Decoding** | WebCodecs API | Hardware acceleration |
-| **Audio Decoding** | WebCodecs API | Hardware acceleration |
-| **Video Rendering** | WebGL2 | GPU-accelerated, HDR support |
-| **Audio Rendering** | Web Audio API | High-precision timing |
-| **UI** | Web Components | Custom element, Shadow DOM |
-| **Async I/O** | Asyncify (Emscripten) | WASM async operations |
-| **Language** | TypeScript | Type safety, tooling |
+| Layer                 | Technology            | Purpose                      |
+| --------------------- | --------------------- | ---------------------------- |
+| **Container Parsing** | FFmpeg WASM           | Universal format support     |
+| **Video Decoding**    | WebCodecs API         | Hardware acceleration        |
+| **Audio Decoding**    | WebCodecs API         | Hardware acceleration        |
+| **Video Rendering**   | WebGL2                | GPU-accelerated, HDR support |
+| **Audio Rendering**   | Web Audio API         | High-precision timing        |
+| **UI**                | Web Components        | Custom element, Shadow DOM   |
+| **Async I/O**         | Asyncify (Emscripten) | WASM async operations        |
+| **Language**          | TypeScript            | Type safety, tooling         |
 
 ### FFmpeg WASM Configuration
 
 **Compilation Flags:**
+
 ```bash
 -s ASYNCIFY=1              # Enable async/await in WASM
 -s ASYNCIFY_STACK_SIZE=128KB  # Stack for suspended calls
@@ -277,17 +285,20 @@ if (videoFrame.timestamp <= audioTime) {
 ```
 
 **Enabled FFmpeg Components:**
+
 - `libavformat` - Container demuxing
 - `libavcodec` - Software decode (fallback)
 - `libswscale` - Frame scaling (thumbnails)
 - `libswresample` - Audio resampling
 
 **Disabled Components:**
+
 - Filters (not needed, saves 500KB+)
 - Muxers (read-only library)
 - Encoders (playback only)
 
 **Size Optimization:**
+
 - Strip debug symbols: `--strip-all`
 - Dead code elimination: `--gc-sections`
 - LTO (Link-Time Optimization): `-flto`
@@ -301,24 +312,24 @@ if (videoFrame.timestamp <= audioTime) {
 
 ```typescript
 // movi/demuxer (Minimal - 45KB)
-export { Demuxer } from './demux/Demuxer';
-export { HttpSource, FileSource } from './source';
-export type { SourceAdapter, MediaInfo, Track } from './types';
+export { Demuxer } from "./demux/Demuxer";
+export { HttpSource, FileSource } from "./source";
+export type { SourceAdapter, MediaInfo, Track } from "./types";
 
 // movi/player (Core - 180KB)
-export { MoviPlayer } from './core/MoviPlayer';
-export { Demuxer } from './demux/Demuxer';
-export { HttpSource, FileSource } from './source';
-export type { PlayerConfig, PlayerState, PlayerEventMap } from './types';
+export { MoviPlayer } from "./core/MoviPlayer";
+export { Demuxer } from "./demux/Demuxer";
+export { HttpSource, FileSource } from "./source";
+export type { PlayerConfig, PlayerState, PlayerEventMap } from "./types";
 
 // movi (Full - 410KB)
-export { MoviElement } from './render/MoviElement';
-export { MoviPlayer } from './core/MoviPlayer';
-export { Demuxer } from './demux/Demuxer';
-export * from './types';
+export { MoviElement } from "./render/MoviElement";
+export { MoviPlayer } from "./core/MoviPlayer";
+export { Demuxer } from "./demux/Demuxer";
+export * from "./types";
 
 // Auto-register custom element
-customElements.define('movi-player', MoviElement);
+customElements.define("movi-player", MoviElement);
 ```
 
 ### Tree-Shaking
@@ -327,13 +338,13 @@ Modern bundlers can tree-shake unused components:
 
 ```typescript
 // Only imports Demuxer (~45KB)
-import { Demuxer } from 'movi/demuxer';
+import { Demuxer } from "movi/demuxer";
 
 // Only imports Player (~180KB)
-import { MoviPlayer } from 'movi/player';
+import { MoviPlayer } from "movi/player";
 
 // Imports everything (~410KB)
-import { MoviElement } from 'movi';
+import { MoviElement } from "movi";
 ```
 
 ---
@@ -348,24 +359,24 @@ import { MoviElement } from 'movi';
 │                 (Dynamic Growth)                    │
 ├─────────────────────────────────────────────────────┤
 │                                                     │
-│  ┌──────────────────────────────────────────────┐  │
-│  │  FFmpeg Context (~10MB)                      │  │
-│  │  • AVFormatContext (demuxer state)           │  │
-│  │  • AVCodecContext (decoder state)            │  │
-│  │  • I/O buffers                               │  │
-│  └──────────────────────────────────────────────┘  │
+│  ┌──────────────────────────────────────────────┐   │
+│  │  FFmpeg Context (~10MB)                      │   │
+│  │  • AVFormatContext (demuxer state)           │   │
+│  │  • AVCodecContext (decoder state)            │   │
+│  │  • I/O buffers                               │   │
+│  └──────────────────────────────────────────────┘   │
 │                                                     │
-│  ┌──────────────────────────────────────────────┐  │
-│  │  Packet Buffers (~10-20MB)                   │  │
-│  │  • Encoded video/audio packets               │  │
-│  │  • Temporary decode buffers                  │  │
-│  └──────────────────────────────────────────────┘  │
+│  ┌──────────────────────────────────────────────┐   │
+│  │  Packet Buffers (~10-20MB)                   │   │
+│  │  • Encoded video/audio packets               │   │
+│  │  • Temporary decode buffers                  │   │
+│  └──────────────────────────────────────────────┘   │
 │                                                     │
-│  ┌──────────────────────────────────────────────┐  │
-│  │  Frame Buffers (Software Decode)             │  │
-│  │  • Only used for fallback decoding           │  │
-│  │  • ~50MB for 4K YUV frames                   │  │
-│  └──────────────────────────────────────────────┘  │
+│  ┌──────────────────────────────────────────────┐   │
+│  │  Frame Buffers (Software Decode)             │   │
+│  │  • Only used for fallback decoding           │   │
+│  │  • ~50MB for 4K YUV frames                   │   │
+│  └──────────────────────────────────────────────┘   │
 │                                                     │
 └─────────────────────────────────────────────────────┘
 Total WASM: ~50-80MB (varies by video resolution)
@@ -378,24 +389,24 @@ Total WASM: ~50-80MB (varies by video resolution)
 │               JavaScript Heap                       │
 ├─────────────────────────────────────────────────────┤
 │                                                     │
-│  ┌──────────────────────────────────────────────┐  │
-│  │  Video Frame Queue (~1.5GB for 4K)           │  │
-│  │  • 120 VideoFrame objects                    │  │
-│  │  • Each ~12MB (3840×2160 YUV 4:2:0)         │  │
-│  │  • GPU textures (video memory)               │  │
-│  └──────────────────────────────────────────────┘  │
+│  ┌──────────────────────────────────────────────┐   │
+│  │  Video Frame Queue (~1.5GB for 4K)           │   │
+│  │  • 120 VideoFrame objects                    │   │
+│  │  • Each ~12MB (3840×2160 YUV 4:2:0)          │   │
+│  │  • GPU textures (video memory)               │   │
+│  └──────────────────────────────────────────────┘   │
 │                                                     │
-│  ┌──────────────────────────────────────────────┐  │
-│  │  Audio Buffer (~384KB)                       │  │
-│  │  • 2 seconds × 48kHz × 2ch × 4B              │  │
-│  │  • Float32Array buffers                      │  │
-│  └──────────────────────────────────────────────┘  │
+│  ┌──────────────────────────────────────────────┐   │
+│  │  Audio Buffer (~384KB)                       │   │
+│  │  • 2 seconds × 48kHz × 2ch × 4B              │   │
+│  │  • Float32Array buffers                      │   │
+│  └──────────────────────────────────────────────┘   │
 │                                                     │
-│  ┌──────────────────────────────────────────────┐  │
-│  │  HTTP Cache (64MB default)                   │  │
-│  │  • Recently fetched chunks                   │  │
-│  │  • LRU eviction policy                       │  │
-│  └──────────────────────────────────────────────┘  │
+│  ┌──────────────────────────────────────────────┐   │
+│  │  HTTP Cache (64MB default)                   │   │
+│  │  • Recently fetched chunks                   │   │
+│  │  • LRU eviction policy                       │   │
+│  └──────────────────────────────────────────────┘   │
 │                                                     │
 └─────────────────────────────────────────────────────┘
 Total JS: ~1.5-2GB (4K), ~200-400MB (1080p)
@@ -404,6 +415,7 @@ Total JS: ~1.5-2GB (4K), ~200-400MB (1080p)
 ### Memory Optimization Strategies
 
 1. **Frame Queue Adaptive Sizing:**
+
    ```typescript
    const queueSize = frameRate > 40 ? 120 : 60;
    // 60fps → 120 frames (~2s buffer)
@@ -411,6 +423,7 @@ Total JS: ~1.5-2GB (4K), ~200-400MB (1080p)
    ```
 
 2. **VideoFrame Lifecycle:**
+
    ```typescript
    // Create from decoder
    const frame = decodedFrame;
@@ -423,6 +436,7 @@ Total JS: ~1.5-2GB (4K), ~200-400MB (1080p)
    ```
 
 3. **Packet Pooling:**
+
    ```typescript
    // Reuse packet buffers instead of allocating new ones
    const packetPool = new PacketPool(maxSize);
@@ -446,16 +460,19 @@ Total JS: ~1.5-2GB (4K), ~200-400MB (1080p)
 ### Zero-Copy I/O (SharedArrayBuffer Mode)
 
 **Traditional HTTP Streaming:**
+
 ```
 Server → Network → ArrayBuffer (Copy 1) → WASM (Copy 2) → Use
 ```
 
 **Zero-Copy Mode:**
+
 ```
 Server → Network → SharedArrayBuffer → WASM (Direct Access)
 ```
 
 **Implementation:**
+
 ```typescript
 class HttpSource {
   private sharedBuffer: SharedArrayBuffer | null = null;
@@ -468,7 +485,7 @@ class HttpSource {
     } else {
       // Fallback: Copy to ArrayBuffer
       const response = await fetch(url, {
-        headers: { Range: `bytes=${offset}-${offset + size - 1}` }
+        headers: { Range: `bytes=${offset}-${offset + size - 1}` },
       });
       return response.arrayBuffer();
     }
@@ -477,6 +494,7 @@ class HttpSource {
 ```
 
 **Requirements:**
+
 - HTTPS (cross-origin isolation)
 - Headers: `Cross-Origin-Opener-Policy: same-origin`
 - Headers: `Cross-Origin-Embedder-Policy: require-corp`
@@ -493,32 +511,33 @@ class MoviVideoDecoder {
     try {
       // 1. Check if codec supported
       const config = {
-        codec: 'hvc1.2.4.L153.B0',
-        optimizeForLatency: true
+        codec: "hvc1.2.4.L153.B0",
+        optimizeForLatency: true,
       };
 
       const support = await VideoDecoder.isConfigSupported(config);
       if (!support.supported) {
-        throw new Error('Codec not supported');
+        throw new Error("Codec not supported");
       }
 
       // 2. Try decode
       const decoder = new VideoDecoder({
         output: (frame) => this.onFrame(frame),
-        error: (err) => this.onError(err)
+        error: (err) => this.onError(err),
       });
 
       decoder.configure(config);
-      decoder.decode(new EncodedVideoChunk({
-        type: packet.keyframe ? 'key' : 'delta',
-        timestamp: packet.timestamp * 1e6,
-        data: packet.data
-      }));
+      decoder.decode(
+        new EncodedVideoChunk({
+          type: packet.keyframe ? "key" : "delta",
+          timestamp: packet.timestamp * 1e6,
+          data: packet.data,
+        }),
+      );
 
       return true; // Success
-
     } catch (error) {
-      console.warn('Hardware decode failed, trying software:', error);
+      console.warn("Hardware decode failed, trying software:", error);
       return false;
     }
   }
@@ -567,6 +586,7 @@ class MoviPlayer {
 ```
 
 **Benefits:**
+
 - Prevents memory overflow
 - Reduces decode latency
 - Smooth playback even on slow devices
@@ -589,9 +609,9 @@ class CodecParser {
     const version = reader.readBits(8);
 
     // Byte 1:
-    const profileSpace = reader.readBits(2);    // general_profile_space
-    const tierFlag = reader.readBits(1);        // general_tier_flag
-    const profileIdc = reader.readBits(5);      // general_profile_idc
+    const profileSpace = reader.readBits(2); // general_profile_space
+    const tierFlag = reader.readBits(1); // general_tier_flag
+    const profileIdc = reader.readBits(5); // general_profile_idc
 
     // Bytes 2-5: general_profile_compatibility_flags
     const compatFlags = reader.readBits(32);
@@ -606,8 +626,8 @@ class CodecParser {
     const levelIdc = reader.readBits(8);
 
     // Generate codec string per spec
-    const profileSpaceChar = ['', 'A', 'B', 'C'][profileSpace];
-    const tierChar = tierFlag ? 'H' : 'L';
+    const profileSpaceChar = ["", "A", "B", "C"][profileSpace];
+    const tierChar = tierFlag ? "H" : "L";
 
     return `hvc1.${profileSpaceChar}${profileIdc}.${compatFlags.toString(16)}.${tierChar}${levelIdc}`;
   }
@@ -615,6 +635,7 @@ class CodecParser {
 ```
 
 **Standards Reference:**
+
 - ISO/IEC 14496-15:2022 - Carriage of NAL unit structured video in the ISO Base Media File Format
 - Section 8.3.3.1.2: HEVC decoder configuration record
 
@@ -629,49 +650,49 @@ class CodecParser {
 class ColorSpaceMapper {
   // Table 2: Colour primaries
   static readonly COLOR_PRIMARIES = {
-    1: 'bt709',      // Rec. ITU-R BT.709-6
-    2: 'unspecified',
-    4: 'bt470m',     // Rec. ITU-R BT.470-6 System M
-    5: 'bt470bg',    // Rec. ITU-R BT.470-6 System B, G
-    6: 'smpte170m',  // SMPTE 170M (NTSC)
-    7: 'smpte240m',  // SMPTE 240M
-    8: 'film',       // Film
-    9: 'bt2020',     // Rec. ITU-R BT.2020-2
-    10: 'smpte428',  // SMPTE ST 428-1
-    11: 'p3dci',     // DCI-P3
-    12: 'p3d65',     // Display P3
-    22: 'ebu3213',   // EBU Tech. 3213-E
+    1: "bt709", // Rec. ITU-R BT.709-6
+    2: "unspecified",
+    4: "bt470m", // Rec. ITU-R BT.470-6 System M
+    5: "bt470bg", // Rec. ITU-R BT.470-6 System B, G
+    6: "smpte170m", // SMPTE 170M (NTSC)
+    7: "smpte240m", // SMPTE 240M
+    8: "film", // Film
+    9: "bt2020", // Rec. ITU-R BT.2020-2
+    10: "smpte428", // SMPTE ST 428-1
+    11: "p3dci", // DCI-P3
+    12: "p3d65", // Display P3
+    22: "ebu3213", // EBU Tech. 3213-E
   };
 
   // Table 3: Transfer characteristics
   static readonly TRANSFER_CHARACTERISTICS = {
-    1: 'bt709',        // Rec. ITU-R BT.709-6
-    4: 'gamma22',      // Gamma 2.2
-    5: 'gamma28',      // Gamma 2.8
-    6: 'smpte170m',    // SMPTE 170M
-    7: 'smpte240m',    // SMPTE 240M
-    8: 'linear',       // Linear transfer
-    13: 'iec61966-2-4', // IEC 61966-2-4
-    14: 'bt1361',      // Rec. ITU-R BT.1361-0
-    15: 'iec61966-2-1', // IEC 61966-2-1 (sRGB)
-    16: 'bt2020-10',   // Rec. ITU-R BT.2020-2 (10-bit)
-    17: 'bt2020-12',   // Rec. ITU-R BT.2020-2 (12-bit)
-    18: 'pq',          // SMPTE ST 2084 (PQ)
-    19: 'smpte428',    // SMPTE ST 428-1
-    20: 'hlg',         // ARIB STD-B67 (HLG)
+    1: "bt709", // Rec. ITU-R BT.709-6
+    4: "gamma22", // Gamma 2.2
+    5: "gamma28", // Gamma 2.8
+    6: "smpte170m", // SMPTE 170M
+    7: "smpte240m", // SMPTE 240M
+    8: "linear", // Linear transfer
+    13: "iec61966-2-4", // IEC 61966-2-4
+    14: "bt1361", // Rec. ITU-R BT.1361-0
+    15: "iec61966-2-1", // IEC 61966-2-1 (sRGB)
+    16: "bt2020-10", // Rec. ITU-R BT.2020-2 (10-bit)
+    17: "bt2020-12", // Rec. ITU-R BT.2020-2 (12-bit)
+    18: "pq", // SMPTE ST 2084 (PQ)
+    19: "smpte428", // SMPTE ST 428-1
+    20: "hlg", // ARIB STD-B67 (HLG)
   };
 
   // Table 4: Matrix coefficients
   static readonly MATRIX_COEFFICIENTS = {
-    0: 'identity',     // Identity matrix
-    1: 'bt709',        // Rec. ITU-R BT.709-6
-    4: 'fcc',          // FCC
-    5: 'bt470bg',      // Rec. ITU-R BT.470-6 System B, G
-    6: 'smpte170m',    // SMPTE 170M
-    7: 'smpte240m',    // SMPTE 240M
-    8: 'ycocg',        // YCoCg
-    9: 'bt2020-ncl',   // Rec. ITU-R BT.2020-2 (non-constant)
-    10: 'bt2020-cl',   // Rec. ITU-R BT.2020-2 (constant)
+    0: "identity", // Identity matrix
+    1: "bt709", // Rec. ITU-R BT.709-6
+    4: "fcc", // FCC
+    5: "bt470bg", // Rec. ITU-R BT.470-6 System B, G
+    6: "smpte170m", // SMPTE 170M
+    7: "smpte240m", // SMPTE 240M
+    8: "ycocg", // YCoCg
+    9: "bt2020-ncl", // Rec. ITU-R BT.2020-2 (non-constant)
+    10: "bt2020-cl", // Rec. ITU-R BT.2020-2 (constant)
   };
 }
 ```
@@ -722,6 +743,7 @@ Movi's architecture provides:
 ✅ **Reliability:** Error recovery, fallback decoding, robust state management
 
 **Target Use Cases:**
+
 - Video streaming platforms
 - Media players
 - Video editors (web-based)

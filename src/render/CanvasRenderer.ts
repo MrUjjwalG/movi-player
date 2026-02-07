@@ -17,6 +17,7 @@ export class CanvasRenderer {
   private width: number = 0;
   private height: number = 0;
   private colorSpace: string = "srgb"; // Default to sRGB
+  private hasNativeHDRSupport: boolean = false; // Native HDR support detection (Chromium)
 
   // Frame queue for presentation timing
   private frameQueue: VideoFrame[] = [];
@@ -266,6 +267,48 @@ export class CanvasRenderer {
 
   private initWebGL() {
     if (!this.gl) return;
+
+    // Detect if browser supports native HDR (drawingBufferColorSpace)
+    // Only Chromium-based browsers (Chrome, Edge, Opera, Brave) have working native HDR
+    // Use same detection as MoviElement for consistency
+    const isChromium = !!(window as any).chrome;
+
+    // For Chromium browsers, we trust the native HDR handling via drawingBufferColorSpace
+    // This provides the best quality and color accuracy
+    this.hasNativeHDRSupport = isChromium;
+
+    Logger.info(
+      TAG,
+      `Browser detection: isChromium=${isChromium}, drawingBufferColorSpace=${this.gl.drawingBufferColorSpace !== undefined}, hasNativeHDRSupport=${this.hasNativeHDRSupport}, isHDRSource=${this.isHDRSource}`,
+    );
+
+    // Choose initialization based on browser capability:
+    // - Chromium browsers: ALWAYS use simple passthrough (native HDR handling via color space)
+    // - Non-Chromium with HDR content: use shader-based tone mapping (required for PQ decoding)
+    const needsShaderToneMapping =
+      !this.hasNativeHDRSupport && this.isHDRSource;
+
+    if (needsShaderToneMapping) {
+      Logger.info(
+        TAG,
+        `Initializing WebGL with shader-based HDR tone mapping (non-Chromium)`,
+      );
+      this.initWebGLWithHDR();
+    } else {
+      Logger.info(
+        TAG,
+        `Initializing WebGL with simple passthrough (Chromium native HDR)`,
+      );
+      this.initWebGLSimple();
+    }
+  }
+
+  /**
+   * Original simple WebGL initialization for Chromium (native HDR support)
+   * This is the exact original configuration that works best for Chromium browsers
+   */
+  private initWebGLSimple() {
+    if (!this.gl) return;
     const gl = this.gl;
 
     const vsSource = `#version 300 es
@@ -356,6 +399,159 @@ export class CanvasRenderer {
     }
   }
 
+  /**
+   * WebGL initialization with HDR tone mapping shader for non-Chromium browsers
+   * Safari/Firefox need explicit PQ decoding and tone mapping
+   */
+  private initWebGLWithHDR() {
+    if (!this.gl) return;
+    const gl = this.gl;
+
+    const vsSource = `#version 300 es
+    layout(location = 0) in vec2 a_position;
+    layout(location = 1) in vec2 a_texCoord;
+    out vec2 v_texCoord;
+    void main() {
+      gl_Position = vec4(a_position, 0.0, 1.0);
+      v_texCoord = a_texCoord;
+    }`;
+
+    const fsSource = `#version 300 es
+    precision highp float;
+    uniform sampler2D u_image;
+    uniform float u_hdrEnabled; // 0.0 = disabled, 1.0 = enabled
+    in vec2 v_texCoord;
+    out vec4 outColor;
+
+    // PQ (SMPTE 2084) EOTF constants
+    const float m1 = 2610.0 / 16384.0;
+    const float m2 = 2523.0 / 4096.0 * 128.0;
+    const float c1 = 3424.0 / 4096.0;
+    const float c2 = 2413.0 / 4096.0 * 32.0;
+    const float c3 = 2392.0 / 4096.0 * 32.0;
+
+    vec3 PQtoLinear(vec3 pq) {
+      vec3 colToPow = pow(pq, vec3(1.0 / m2));
+      vec3 num = max(colToPow - c1, vec3(0.0));
+      vec3 den = c2 - c3 * colToPow;
+      return pow(num / den, vec3(1.0 / m1));
+    }
+
+    vec3 toneMapReinhard(vec3 hdr, float exposure) {
+      vec3 mapped = hdr * exposure;
+      return mapped / (1.0 + mapped);
+    }
+
+    vec3 adjustSaturation(vec3 color, float saturation) {
+      float luminance = dot(color, vec3(0.2126, 0.7152, 0.0722));
+      vec3 gray = vec3(luminance);
+      return mix(gray, color, saturation);
+    }
+
+    void main() {
+      vec4 color = texture(u_image, v_texCoord);
+
+      // Apply PQ EOTF to get linear light
+      vec3 linear = PQtoLinear(color.rgb);
+
+      // Tone map to SDR range
+      // Adjusted to match Chrome native HDR appearance
+      // When HDR disabled: lower exposure (22.0) for better contrast
+      // When HDR enabled: higher exposure (35.0) to match native Chrome vibrance
+      float exposure = mix(22.0, 35.0, u_hdrEnabled);
+      vec3 sdr = toneMapReinhard(linear, exposure);
+
+      // Saturation boost
+      // When HDR disabled: slight boost (1.1) for better colors
+      // When HDR enabled: strong boost (1.5) to match Chrome native HDR vibrancy
+      float saturation = mix(1.1, 1.5, u_hdrEnabled);
+      sdr = adjustSaturation(sdr, saturation);
+
+      // Apply gamma (2.2 for accurate color reproduction)
+      vec3 display = pow(sdr, vec3(1.0/2.2));
+
+      outColor = vec4(display, color.a);
+    }`;
+
+    // Create Program
+    const createShader = (type: number, source: string) => {
+      const shader = gl.createShader(type);
+      if (!shader) return null;
+      gl.shaderSource(shader, source);
+      gl.compileShader(shader);
+      if (!gl.getShaderParameter(shader, gl.COMPILE_STATUS)) {
+        Logger.error(TAG, "Shader compile error:", gl.getShaderInfoLog(shader));
+        gl.deleteShader(shader);
+        return null;
+      }
+      return shader;
+    };
+
+    const vert = createShader(gl.VERTEX_SHADER, vsSource);
+    const frag = createShader(gl.FRAGMENT_SHADER, fsSource);
+    if (!vert || !frag) return;
+
+    this.program = gl.createProgram();
+    if (!this.program) return;
+    gl.attachShader(this.program, vert);
+    gl.attachShader(this.program, frag);
+    gl.linkProgram(this.program);
+
+    if (!gl.getProgramParameter(this.program, gl.LINK_STATUS)) {
+      Logger.error(
+        TAG,
+        "Program link error:",
+        gl.getProgramInfoLog(this.program),
+      );
+      return;
+    }
+
+    // Quad mapping
+    const vertices = new Float32Array([
+      -1.0, 1.0, 0.0, 0.0, -1.0, -1.0, 0.0, 1.0, 1.0, 1.0, 1.0, 0.0, 1.0, -1.0,
+      1.0, 1.0,
+    ]);
+
+    this.vao = gl.createVertexArray();
+    gl.bindVertexArray(this.vao);
+
+    const vbo = gl.createBuffer();
+    gl.bindBuffer(gl.ARRAY_BUFFER, vbo);
+    gl.bufferData(gl.ARRAY_BUFFER, vertices, gl.STATIC_DRAW);
+
+    gl.enableVertexAttribArray(0);
+    gl.vertexAttribPointer(0, 2, gl.FLOAT, false, 4 * 4, 0);
+
+    gl.enableVertexAttribArray(1);
+    gl.vertexAttribPointer(1, 2, gl.FLOAT, false, 4 * 4, 2 * 4);
+
+    this.texture = gl.createTexture();
+    gl.bindTexture(gl.TEXTURE_2D, this.texture);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
+
+    if (!this.program) return;
+    gl.useProgram(this.program);
+
+    // Set u_image uniform
+    const uImage = gl.getUniformLocation(this.program, "u_image");
+    if (uImage) {
+      gl.uniform1i(uImage, 0);
+    }
+
+    // Set u_hdrEnabled uniform
+    const uHdrEnabled = gl.getUniformLocation(this.program, "u_hdrEnabled");
+    if (uHdrEnabled) {
+      gl.uniform1f(uHdrEnabled, this.hdrEnabled ? 1.0 : 0.0);
+      Logger.debug(
+        TAG,
+        `Set u_hdrEnabled uniform to: ${this.hdrEnabled ? 1.0 : 0.0}`,
+      );
+    }
+  }
+
   private lastPrimaries?: string;
   private lastTransfer?: string;
 
@@ -386,6 +582,27 @@ export class CanvasRenderer {
         );
       } catch (e) {
         Logger.warn(TAG, "Failed to update drawingBufferColorSpace on the fly");
+      }
+    }
+
+    // Update u_hdrEnabled uniform for shader-based tone mapping (non-Chromium browsers)
+    if (
+      this.gl &&
+      this.program &&
+      !this.hasNativeHDRSupport &&
+      this.isHDRSource
+    ) {
+      const uHdrEnabled = this.gl.getUniformLocation(
+        this.program,
+        "u_hdrEnabled",
+      );
+      if (uHdrEnabled) {
+        this.gl.useProgram(this.program);
+        this.gl.uniform1f(uHdrEnabled, enabled ? 1.0 : 0.0);
+        Logger.debug(
+          TAG,
+          `Updated u_hdrEnabled uniform to: ${enabled ? 1.0 : 0.0}`,
+        );
       }
     }
 
@@ -839,7 +1056,7 @@ export class CanvasRenderer {
 
     // First frame special case - present immediately
     if (this.lastPresentedPts < 0 && this.frameQueue.length > 0) {
-      const firstFrame = this.frameQueue[0];
+      const firstFrame = this.frameQueue.shift()!;
       this.lastPresentedPts = firstFrame.timestamp / 1_000_000;
       this.currentTime = this.lastPresentedPts;
 
@@ -853,6 +1070,34 @@ export class CanvasRenderer {
         `First frame: pts=${this.lastPresentedPts.toFixed(3)}s`,
       );
       return firstFrame;
+    }
+
+    // FPS Throttling & Memory Optimization
+    // If configured FrameRate is low (e.g. < 20fps), we enforce throttling
+    // and aggressively drop intermediate frames to save memory (crucial for 4K software decoding)
+    if (this.videoFrameRate < 20 && this.lastPresentedPts >= 0) {
+      const nextTargetTime = this.lastPresentedPts + frameInterval;
+
+      // If we haven't reached the next target presentation time (with small tolerance)
+      if (currentTime < nextTargetTime - 0.05) {
+        // Prune the queue: Discard frames that are definitely too early to be useful
+        // We only keep frames close to the target time (e.g. within 200ms)
+        // This prevents buffering 1GB+ of 4K frames in memory while waiting for the next second
+        const keepThreshold = nextTargetTime - 0.2;
+
+        while (this.frameQueue.length > 0) {
+          const first = this.frameQueue[0];
+          const firstTime = first.timestamp / 1_000_000;
+
+          if (firstTime >= keepThreshold) break;
+
+          // Drop useless frame
+          this.frameQueue.shift()?.close();
+        }
+
+        // Not time to present yet
+        return null;
+      }
     }
 
     // Timestamp-based frame selection (like YouTube)
@@ -901,10 +1146,15 @@ export class CanvasRenderer {
     }
 
     // Drop old frames that are too far behind (more than 2 frame intervals)
-    // This prevents accumulating stale frames
-    const maxBehind = frameInterval * 2;
+    // BUT do not drop the best frame we just found!
+    const maxBehind = Math.max(2.0, frameInterval * 2);
     while (this.frameQueue.length > 0) {
-      const oldestFrameTime = this.frameQueue[0].timestamp / 1_000_000;
+      const oldestFrame = this.frameQueue[0];
+      const oldestFrameTime = oldestFrame.timestamp / 1_000_000;
+
+      // If this is the frame we want to present, do not prune it
+      if (oldestFrame === bestFrame) break;
+
       if (currentTime - oldestFrameTime > maxBehind) {
         this.frameQueue.shift()?.close();
       } else {

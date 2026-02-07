@@ -1,4 +1,5 @@
 #include "movi.h"
+#include <libavutil/imgutils.h>
 
 EMSCRIPTEN_KEEPALIVE
 int movi_enable_decoder(MoviContext *ctx, int stream_index) {
@@ -51,15 +52,34 @@ int movi_send_packet(MoviContext *ctx, int stream_index, uint8_t *data,
     pkt->size = 0;
   }
   AVRational tb = ctx->fmt_ctx->streams[stream_index]->time_base;
-  if (pts != 0)
+  if (pts >= 0)
     pkt->pts = (int64_t)(pts / av_q2d(tb));
-  if (dts != 0)
+  if (dts >= 0)
     pkt->dts = (int64_t)(dts / av_q2d(tb));
   if (keyframe)
     pkt->flags |= AV_PKT_FLAG_KEY;
   int ret = avcodec_send_packet(dec, pkt);
   av_packet_free(&pkt);
   return ret;
+}
+
+EMSCRIPTEN_KEEPALIVE
+void movi_set_skip_frame(MoviContext *ctx, int stream_index, int skip_val) {
+  if (!ctx || stream_index < 0 || stream_index >= ctx->fmt_ctx->nb_streams)
+    return;
+  
+  AVCodecContext *dec = ctx->decoders[stream_index];
+  if (dec) {
+    // strict compliance with AVDiscard enum values
+    // 0: NONE, 1: NONREF, 2: BIDIR, 3: NONKEY, 4: ALL
+    switch (skip_val) {
+      case 1: dec->skip_frame = AVDISCARD_NONREF; break;
+      case 2: dec->skip_frame = AVDISCARD_BIDIR; break;
+      case 3: dec->skip_frame = AVDISCARD_NONKEY; break;
+      case 4: dec->skip_frame = AVDISCARD_ALL; break;
+      default: dec->skip_frame = AVDISCARD_DEFAULT; break;
+    }
+  }
 }
 
 EMSCRIPTEN_KEEPALIVE
@@ -173,6 +193,89 @@ int movi_receive_frame(MoviContext *ctx, int stream_index) {
   }
 
   return 0;
+}
+
+/**
+ * Get decoded video frame as RGBA buffer (converts any format including 10-bit HDR)
+ * Returns pointer to RGBA buffer, or NULL on error
+ */
+EMSCRIPTEN_KEEPALIVE
+uint8_t* movi_get_frame_rgba(MoviContext *ctx, int target_width, int target_height) {
+  if (!ctx || !ctx->frame) return NULL;
+  
+  // For audio frames, return NULL
+  if (ctx->frame->width == 0 || ctx->frame->height == 0) return NULL;
+  
+  int src_width = ctx->frame->width;
+  int src_height = ctx->frame->height;
+  
+  // Use original size if target is 0
+  if (target_width <= 0) target_width = src_width;
+  if (target_height <= 0) target_height = src_height;
+  
+  // Calculate required buffer size
+  int buffer_size = av_image_get_buffer_size(AV_PIX_FMT_RGBA, target_width, target_height, 1);
+  
+  // Allocate or reallocate RGB buffer if needed
+  if (!ctx->rgb_buffer || ctx->rgb_buffer_size < buffer_size) {
+    if (ctx->rgb_buffer) {
+      av_free(ctx->rgb_buffer);
+    }
+    ctx->rgb_buffer = av_malloc(buffer_size);
+    ctx->rgb_buffer_size = buffer_size;
+    if (!ctx->rgb_buffer) {
+      av_log(NULL, AV_LOG_ERROR, "[MOVI-WASM] Failed to allocate RGB buffer\n");
+      return NULL;
+    }
+  }
+  
+  // Allocate rgb_frame if needed
+  if (!ctx->rgb_frame) {
+    ctx->rgb_frame = av_frame_alloc();
+    if (!ctx->rgb_frame) {
+      av_log(NULL, AV_LOG_ERROR, "[MOVI-WASM] Failed to allocate RGB frame\n");
+      return NULL;
+    }
+  }
+  
+  // Create or update sws context
+  ctx->sws_ctx = sws_getCachedContext(ctx->sws_ctx,
+      src_width, src_height, ctx->frame->format,
+      target_width, target_height, AV_PIX_FMT_RGBA,
+      SWS_FAST_BILINEAR, NULL, NULL, NULL);
+  
+  if (!ctx->sws_ctx) {
+    av_log(NULL, AV_LOG_ERROR, "[MOVI-WASM] Failed to create SwsContext for format %d\n", ctx->frame->format);
+    return NULL;
+  }
+  
+  // Setup rgb_frame to point to rgb_buffer
+  av_image_fill_arrays(ctx->rgb_frame->data, ctx->rgb_frame->linesize,
+                       ctx->rgb_buffer, AV_PIX_FMT_RGBA, target_width, target_height, 1);
+  
+  // Convert to RGBA
+  sws_scale(ctx->sws_ctx, (const uint8_t *const *)ctx->frame->data,
+            ctx->frame->linesize, 0, src_height,
+            ctx->rgb_frame->data, ctx->rgb_frame->linesize);
+  
+  return ctx->rgb_buffer;
+}
+
+/**
+ * Get RGBA buffer size for current frame
+ */
+EMSCRIPTEN_KEEPALIVE
+int movi_get_frame_rgba_size(MoviContext *ctx) {
+  return ctx ? ctx->rgb_buffer_size : 0;
+}
+
+/**
+ * Get RGBA buffer linesize
+ */
+EMSCRIPTEN_KEEPALIVE
+int movi_get_frame_rgba_linesize(MoviContext *ctx) {
+  if (!ctx || !ctx->rgb_frame) return 0;
+  return ctx->rgb_frame->linesize[0];
 }
 
 EMSCRIPTEN_KEEPALIVE
@@ -725,5 +828,31 @@ void movi_free_subtitle(MoviContext *ctx) {
   if (ctx && ctx->subtitle) {
     avsubtitle_free(ctx->subtitle);
     av_freep(&ctx->subtitle);
+  }
+}
+
+EMSCRIPTEN_KEEPALIVE
+double movi_get_frame_pts(MoviContext *ctx, int stream_index) {
+  if (!ctx || !ctx->frame) return -1.0;
+  if (stream_index < 0 || stream_index >= ctx->fmt_ctx->nb_streams) return -1.0;
+  
+  AVStream *stream = ctx->fmt_ctx->streams[stream_index];
+  if (ctx->frame->pts == AV_NOPTS_VALUE) {
+    if (ctx->frame->pkt_dts != AV_NOPTS_VALUE) {
+        return ctx->frame->pkt_dts * av_q2d(stream->time_base);
+    }
+    return -1.0;
+  }
+  
+  return ctx->frame->pts * av_q2d(stream->time_base);
+}
+
+EMSCRIPTEN_KEEPALIVE
+void movi_flush_decoder(MoviContext *ctx, int stream_index) {
+  if (!ctx || stream_index < 0 || stream_index >= ctx->fmt_ctx->nb_streams)
+    return;
+  AVCodecContext *dec = ctx->decoders[stream_index];
+  if (dec) {
+    avcodec_flush_buffers(dec);
   }
 }

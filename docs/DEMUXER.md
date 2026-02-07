@@ -2,6 +2,8 @@
 
 **Movi Streaming Video Library - Demuxer Component**
 
+![Demuxer Overview](./images/demuxer.webp)
+
 ---
 
 ## Table of Contents
@@ -25,11 +27,12 @@ The Demuxer is a core component of the Movi library responsible for:
 
 - **Container Parsing:** Extracting audio, video, and subtitle streams from media files
 - **Metadata Extraction:** Reading codec parameters, dimensions, color space, bitrate, etc.
+- **Decoding:** Built-in hardware and software decoders for A/V processing
 - **Packet Delivery:** Providing encoded packets for decoder consumption
 - **Seeking:** Random access to any timestamp in the media
 - **Async I/O:** Non-blocking data reading through pluggable source adapters
 
-**Key File:** [src/demux/Demuxer.ts](../src/demux/Demuxer.ts)
+**Key File:** [src/demuxer.ts](../src/demuxer.ts)
 
 ### Technology Stack
 
@@ -48,23 +51,23 @@ The Demuxer is a core component of the Movi library responsible for:
 │                     Demuxer                             │
 ├─────────────────────────────────────────────────────────┤
 │                                                         │
-│  ┌──────────────┐      ┌──────────────────────┐       │
-│  │ SourceAdapter│─────>│  SourceDataAdapter   │       │
-│  │  Interface   │      │   (Async I/O Bridge) │       │
-│  └──────────────┘      └──────────┬───────────┘       │
+│  ┌──────────────┐      ┌──────────────────────┐         │
+│  │ SourceAdapter│─────>│  SourceDataAdapter   │         │
+│  │  Interface   │      │   (Async I/O Bridge) │         │
+│  └──────────────┘      └──────────┬───────────┘         │
 │                                    │                    │
 │                                    ▼                    │
-│                        ┌───────────────────────┐       │
-│                        │   WasmBindings        │       │
-│                        │  (TypeScript Wrapper) │       │
-│                        └───────────┬───────────┘       │
+│                        ┌───────────────────────┐        │
+│                        │   WasmBindings        │        │
+│                        │  (TypeScript Wrapper) │        │
+│                        └───────────┬───────────┘        │
 │                                    │                    │
 │                                    ▼                    │
-│                        ┌───────────────────────┐       │
-│                        │  FFmpeg WASM Module   │       │
-│                        │  (libavformat +       │       │
-│                        │   libavcodec)         │       │
-│                        └───────────────────────┘       │
+│                        ┌───────────────────────┐        │
+│                        │  FFmpeg WASM Module   │        │
+│                        │  (libavformat +       │        │
+│                        │   libavcodec)         │        │
+│                        └───────────────────────┘        │
 │                                                         │
 └─────────────────────────────────────────────────────────┘
 ```
