@@ -440,7 +440,12 @@ export class MoviVideoDecoder {
   /**
    * Decode an encoded video chunk
    */
-  decode(data: Uint8Array, timestamp: number, keyframe: boolean): void {
+  decode(
+    data: Uint8Array,
+    timestamp: number,
+    keyframe: boolean,
+    dts?: number,
+  ): void {
     this.lastChunkInfo = { timestamp, keyframe, size: data.byteLength };
 
     if (!this.isConfigured) return;
@@ -486,12 +491,7 @@ export class MoviVideoDecoder {
           this.waitingForKeyframe = false;
         }
 
-        const chunk = new EncodedVideoChunk({
-          type: keyframe ? "key" : "delta",
-          timestamp: timestamp * 1_000_000,
-          data: data,
-        });
-        this.swDecoder.decode(chunk);
+        this.swDecoder.decode(data, timestamp, dts ?? timestamp, keyframe);
         return;
       }
     }

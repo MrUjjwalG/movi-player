@@ -983,6 +983,16 @@ export class WasmBindings {
     return this.contextPtr;
   }
 
+  getFramePts(streamIndex: number): number {
+    if (!this.contextPtr) return -1;
+    return this.module._movi_get_frame_pts(this.contextPtr, streamIndex);
+  }
+
+  flushDecoder(streamIndex: number): void {
+    if (!this.contextPtr) return;
+    this.module._movi_flush_decoder(this.contextPtr, streamIndex);
+  }
+
   /**
    * Get decoded frame as RGBA data (converts any format including 10-bit HDR)
    * This is useful for software decoding where YUV output is in non-standard formats

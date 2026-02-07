@@ -52,9 +52,9 @@ int movi_send_packet(MoviContext *ctx, int stream_index, uint8_t *data,
     pkt->size = 0;
   }
   AVRational tb = ctx->fmt_ctx->streams[stream_index]->time_base;
-  if (pts != 0)
+  if (pts >= 0)
     pkt->pts = (int64_t)(pts / av_q2d(tb));
-  if (dts != 0)
+  if (dts >= 0)
     pkt->dts = (int64_t)(dts / av_q2d(tb));
   if (keyframe)
     pkt->flags |= AV_PKT_FLAG_KEY;
@@ -828,5 +828,31 @@ void movi_free_subtitle(MoviContext *ctx) {
   if (ctx && ctx->subtitle) {
     avsubtitle_free(ctx->subtitle);
     av_freep(&ctx->subtitle);
+  }
+}
+
+EMSCRIPTEN_KEEPALIVE
+double movi_get_frame_pts(MoviContext *ctx, int stream_index) {
+  if (!ctx || !ctx->frame) return -1.0;
+  if (stream_index < 0 || stream_index >= ctx->fmt_ctx->nb_streams) return -1.0;
+  
+  AVStream *stream = ctx->fmt_ctx->streams[stream_index];
+  if (ctx->frame->pts == AV_NOPTS_VALUE) {
+    if (ctx->frame->pkt_dts != AV_NOPTS_VALUE) {
+        return ctx->frame->pkt_dts * av_q2d(stream->time_base);
+    }
+    return -1.0;
+  }
+  
+  return ctx->frame->pts * av_q2d(stream->time_base);
+}
+
+EMSCRIPTEN_KEEPALIVE
+void movi_flush_decoder(MoviContext *ctx, int stream_index) {
+  if (!ctx || stream_index < 0 || stream_index >= ctx->fmt_ctx->nb_streams)
+    return;
+  AVCodecContext *dec = ctx->decoders[stream_index];
+  if (dec) {
+    avcodec_flush_buffers(dec);
   }
 }

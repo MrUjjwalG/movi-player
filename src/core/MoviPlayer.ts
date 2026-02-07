@@ -1078,6 +1078,7 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
                 packet.data,
                 packet.timestamp,
                 packet.keyframe,
+                packet.dts,
               );
             }
           } else if (activeAudio && activeAudio.id === packet.streamIndex) {
@@ -1869,6 +1870,7 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
       this.thumbnailRenderer.initialize({
         width: videoTrack.width,
         height: videoTrack.height,
+        rotation: videoTrack.rotation || 0,
         colorPrimaries: videoTrack.colorPrimaries,
         colorTransfer: videoTrack.colorTransfer,
         hdrEnabled: this.thumbnailHDREnabled,
@@ -2161,6 +2163,10 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
     this.thumbnailHDREnabled = enabled;
     if (this.videoRenderer && (this.videoRenderer as any).setHDREnabled) {
       (this.videoRenderer as any).setHDREnabled(enabled);
+    }
+
+    if (this.thumbnailRenderer) {
+      this.thumbnailRenderer.setHDREnabled(enabled);
     }
 
     // For non-Chromium browsers with tone mapping shader, just update the uniform

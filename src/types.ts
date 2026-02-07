@@ -144,7 +144,8 @@ export interface AudioDecoderConfig {
 export interface Packet {
   streamIndex: number;
   keyframe: boolean;
-  timestamp: number;
+  timestamp: number; // PTS
+  dts: number; // DTS
   duration: number;
   data: Uint8Array;
 }

@@ -461,6 +461,7 @@ export class Demuxer {
       streamIndex: result.info.streamIndex,
       keyframe: result.info.keyframe,
       timestamp: result.info.pts,
+      dts: result.info.dts,
       duration: result.info.duration,
       data: result.data,
     };

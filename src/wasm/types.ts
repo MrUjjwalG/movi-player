@@ -93,6 +93,8 @@ export interface MoviWasmModule {
   _movi_get_frame_channels(ctx: number): number;
   _movi_get_frame_sample_rate(ctx: number): number;
   _movi_enable_audio_downmix(ctx: number, enable: number): void;
+  _movi_get_frame_pts(ctx: number, streamIndex: number): number;
+  _movi_flush_decoder(ctx: number, streamIndex: number): void;
 
   // RGBA conversion for software decoding
   _movi_get_frame_rgba(

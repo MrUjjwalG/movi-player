@@ -13,6 +13,7 @@ const TAG = "ThumbnailRenderer";
 export interface ThumbnailRenderOptions {
   width: number;
   height: number;
+  rotation?: number;
   colorPrimaries?: string;
   colorTransfer?: string;
   hdrEnabled?: boolean;
@@ -24,6 +25,7 @@ export class ThumbnailRenderer {
   private program: WebGLProgram | null = null;
   private texture: WebGLTexture | null = null;
   private vao: WebGLVertexArrayObject | null = null;
+  private rotation: number = 0;
 
   // WebCodecs support
   private decoder: VideoDecoder | null = null;
@@ -32,6 +34,8 @@ export class ThumbnailRenderer {
   private hasNativeHDRSupport: boolean = false;
   private isHDRSource: boolean = false;
   private hdrEnabled: boolean = true;
+  private lastColorPrimaries?: string;
+  private lastColorTransfer?: string;
 
   constructor() {
     this.canvas = document.createElement("canvas");
@@ -90,14 +94,20 @@ export class ThumbnailRenderer {
     const {
       width,
       height,
+      rotation = 0,
       colorPrimaries,
       colorTransfer,
       hdrEnabled = true,
     } = options;
 
     this.hdrEnabled = hdrEnabled;
-    this.canvas.width = width;
-    this.canvas.height = height;
+    this.lastColorPrimaries = colorPrimaries;
+    this.lastColorTransfer = colorTransfer;
+    this.rotation = rotation;
+
+    const isRotated = rotation % 180 !== 0;
+    this.canvas.width = isRotated ? height : width;
+    this.canvas.height = isRotated ? width : height;
 
     // Detect if source is HDR
     const primaries = (colorPrimaries || "").toLowerCase();
@@ -350,7 +360,11 @@ export class ThumbnailRenderer {
     if (!this.gl || !this.program) return;
     const gl = this.gl;
 
-    const vertices = new Float32Array([
+    // Standard quad: TL, BL, TR, BR
+    // Mapping Screen Top (Y=1) to UV 0 (Bottom of texture)
+    // because top-down pixel data (ffmpeg) normally puts the top row at index 0,
+    // which WebGL places at the bottom of the texture.
+    let vertices = [
       -1.0,
       1.0,
       0.0,
@@ -367,14 +381,31 @@ export class ThumbnailRenderer {
       -1.0,
       1.0,
       1.0, // BR
-    ]);
+    ];
+
+    // Apply rotation to vertex positions
+    // FFmpeg rotation metadata is clockwise, so we negate it for CCW math
+    if (this.rotation !== 0) {
+      const angle = (-this.rotation * Math.PI) / 180;
+      const cos = Math.cos(angle);
+      const sin = Math.sin(angle);
+
+      for (let i = 0; i < vertices.length; i += 4) {
+        const x = vertices[i];
+        const y = vertices[i + 1];
+        vertices[i] = x * cos - y * sin;
+        vertices[i + 1] = x * sin + y * cos;
+      }
+    }
+
+    const vertexData = new Float32Array(vertices);
 
     this.vao = gl.createVertexArray();
     gl.bindVertexArray(this.vao);
 
     const vbo = gl.createBuffer();
     gl.bindBuffer(gl.ARRAY_BUFFER, vbo);
-    gl.bufferData(gl.ARRAY_BUFFER, vertices, gl.STATIC_DRAW);
+    gl.bufferData(gl.ARRAY_BUFFER, vertexData, gl.STATIC_DRAW);
 
     gl.enableVertexAttribArray(0);
     gl.vertexAttribPointer(0, 2, gl.FLOAT, false, 4 * 4, 0);
@@ -698,6 +729,51 @@ export class ThumbnailRenderer {
     const uImage = gl.getUniformLocation(this.program, "u_image");
     if (uImage) {
       gl.uniform1i(uImage, 0);
+    }
+  }
+
+  /**
+   * Set HDR enabled state
+   */
+  setHDREnabled(enabled: boolean): void {
+    if (this.hdrEnabled === enabled) return;
+    this.hdrEnabled = enabled;
+
+    const detectedColorSpace = this.detectHDRColorSpace(
+      this.lastColorPrimaries,
+      this.lastColorTransfer,
+    );
+
+    if (this.gl && this.gl.drawingBufferColorSpace !== undefined) {
+      try {
+        // @ts-ignore
+        this.gl.drawingBufferColorSpace = detectedColorSpace;
+        // @ts-ignore
+        this.gl.unpackColorSpace = detectedColorSpace;
+        Logger.info(
+          TAG,
+          `Updated WebGL color space to ${detectedColorSpace} following HDR toggle`,
+        );
+      } catch (e) {
+        Logger.warn(TAG, "Failed to update drawingBufferColorSpace on the fly");
+      }
+    }
+
+    // Update u_hdrEnabled uniform for shader-based tone mapping (non-Chromium browsers)
+    if (
+      this.gl &&
+      this.program &&
+      !this.hasNativeHDRSupport &&
+      this.isHDRSource
+    ) {
+      const uHdrEnabled = this.gl.getUniformLocation(
+        this.program,
+        "u_hdrEnabled",
+      );
+      if (uHdrEnabled) {
+        this.gl.useProgram(this.program);
+        this.gl.uniform1f(uHdrEnabled, this.hdrEnabled ? 1.0 : 0.0);
+      }
     }
   }
 

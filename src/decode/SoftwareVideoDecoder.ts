@@ -66,26 +66,37 @@ export class SoftwareVideoDecoder {
   }
 
   async flush(): Promise<void> {
-    // No-op
+    this.packetQueue = [];
+    if (this.isConfigured && this.trackIndex >= 0) {
+      this.bindings.flushDecoder(this.trackIndex);
+    }
   }
 
   reset(): void {
-    // No-op
+    this.packetQueue = [];
+    if (this.isConfigured && this.trackIndex >= 0) {
+      this.bindings.flushDecoder(this.trackIndex);
+    }
+    this.lastProcessedTimestamp = -1;
   }
 
   close(): void {
     this.isConfigured = false;
   }
 
-  private packetQueue: EncodedVideoChunk[] = [];
+  private packetQueue: Array<{
+    data: Uint8Array;
+    pts: number;
+    dts: number;
+    keyframe: boolean;
+  }> = [];
   private isProcessingQueue = false;
 
-  decode(chunk: EncodedVideoChunk): void {
+  decode(data: Uint8Array, pts: number, dts: number, keyframe: boolean): void {
     if (!this.isConfigured) return;
 
-    // Queue the chunk for processing
-    // We clone/keep the chunk valid. EncodedVideoChunk is usually safe to hold.
-    this.packetQueue.push(chunk);
+    // Queue the packet for processing
+    this.packetQueue.push({ data, pts, dts, keyframe });
 
     // Trigger processing if not already running
     this.processQueue();
@@ -110,14 +121,14 @@ export class SoftwareVideoDecoder {
         // Yield to event loop frequently in software mode
         // Audio playback requires the main thread to be responsive
         const now = performance.now();
-        if (now - lastYieldTime > 4) {
+        if (now - lastYieldTime > 8) {
           await yieldPromise();
           lastYieldTime = performance.now();
         }
 
-        const chunk = this.packetQueue.shift();
-        if (chunk) {
-          this.decodeInternal(chunk);
+        const packet = this.packetQueue.shift();
+        if (packet) {
+          this.decodeInternal(packet);
         }
       }
     } catch (e) {
@@ -127,19 +138,20 @@ export class SoftwareVideoDecoder {
     }
   }
 
-  private decodeInternal(chunk: EncodedVideoChunk): void {
+  private decodeInternal(packet: {
+    data: Uint8Array;
+    pts: number;
+    dts: number;
+    keyframe: boolean;
+  }): void {
     if (!this.isConfigured) return;
-
-    const size = chunk.byteLength;
-    const buffer = new Uint8Array(size);
-    chunk.copyTo(buffer);
 
     const ret = this.bindings.sendPacket(
       this.trackIndex,
-      buffer,
-      chunk.timestamp / 1_000_000,
-      chunk.timestamp / 1_000_000,
-      chunk.type === "key",
+      packet.data,
+      packet.pts,
+      packet.dts,
+      packet.keyframe,
     );
 
     if (ret < 0) {
@@ -152,7 +164,14 @@ export class SoftwareVideoDecoder {
       const ret = this.bindings.receiveFrame(this.trackIndex);
       if (ret !== 0) break;
 
-      this.processDecodedFrame(chunk.timestamp);
+      // CRITICAL: Get the actual PTS of the decoded frame from WASM
+      // Using chunk.timestamp (packet timestamp) is incorrect for videos with B-frames
+      // where frames may be output in a different order than strictly sequential.
+      const framePts = this.bindings.getFramePts(this.trackIndex);
+      const actualTimestamp =
+        framePts >= 0 ? framePts * 1_000_000 : packet.pts * 1_000_000;
+
+      this.processDecodedFrame(actualTimestamp);
     }
   }
 
