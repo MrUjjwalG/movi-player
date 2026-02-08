@@ -35,15 +35,15 @@ The `<movi-player>` custom element is a drop-in replacement for the native `<vid
 
 ### Enhanced Attributes
 
-| Attribute     | Type      | Values                             | Description                |
-| ------------- | --------- | ---------------------------------- | -------------------------- |
-| `objectfit`   | `string`  | `contain`, `cover`, `fill`, `zoom` | Video scaling mode         |
-| `theme`       | `string`  | `dark`, `light`                    | UI theme                   |
-| `hdr`         | `boolean` | -                                  | Enable HDR rendering       |
-| `ambientmode` | `boolean` | -                                  | Ambient background effects |
-| `renderer`    | `string`  | `canvas`, `mse`                    | Rendering mode             |
-| `sw`          | `boolean` | -                                  | Force software decoding    |
-| `fps`         | `number`  | -                                  | Custom frame rate override |
+| Attribute     | Type                | Values                             | Description                                       |
+| ------------- | ------------------- | ---------------------------------- | ------------------------------------------------- |
+| `objectfit`   | `string`            | `contain`, `cover`, `fill`, `zoom` | Video scaling mode                                |
+| `theme`       | `string`            | `dark`, `light`                    | UI theme                                          |
+| `hdr`         | `boolean`           | -                                  | Enable HDR rendering                              |
+| `ambientmode` | `boolean`           | -                                  | Ambient background effects                        |
+| `renderer`    | `string`            | `canvas`, `mse`                    | Rendering mode                                    |
+| `sw`          | `boolean`, `string` | `auto`                             | Decoder mode (`auto`, `true`/`software`, `false`) |
+| `fps`         | `number`            | -                                  | Custom frame rate override                        |
 
 ## Examples
 
@@ -98,12 +98,23 @@ To enable this, you must:
 The wrapper element should have enough padding to show the glow and its `overflow` should NOT be `hidden`.
 :::
 
-### Force Software Decoding
+### Software Decoding (SW)
 
-```html
-<!-- Useful for debugging or when hardware decode fails -->
-<movi-player src="video.mp4" controls sw></movi-player>
-```
+By default, Movi-Player uses hardware-accelerated decoding. You can control the fallback behavior using the `sw` attribute:
+
+- `sw="auto"`: **Seamless Fallback (Recommended)**. If hardware fails, the player automatically switches to software and reloads the video without user intervention.
+- Omitted (No attribute): **User-Triggered Fallback**. If hardware fails, a "Try Software Decoding" button appears for the user to manually switch.
+- `sw` or `sw="true"`: **Force Software**. Uses FFmpeg WASM regardless of hardware support.
+- `sw="false"`: **Force Hardware**. Disables software fallback and doesn't show the recovery button.
+
+### Decoder Fallback UX
+
+Depending on the `sw` mode, the recovery process differs:
+
+1. **Automatic (`sw="auto"`)**: If hardware decoding fails (unsupported codec or runtime error), the player shows a brief loading state and resumes playback in software mode.
+2. **Manual (Default)**: If hardware fails, an error overlay appears with a **"Try Software Decoding"** button. Playback only resumes after the user clicks the button.
+
+This ensures a reliable experience even when hardware limits are hit, without forcing inefficient software decoding for everyone.
 
 ## JavaScript API
 
@@ -119,6 +130,7 @@ player.volume = 0.5; // 50% volume
 player.muted = true;
 player.loop = true;
 player.playbackRate = 1.5;
+player.sw = "auto"; // "auto", true (software), false (hardware-first)
 
 // Read-only properties
 console.log(player.duration); // Total duration

@@ -11,7 +11,12 @@
  */
 
 import { MoviPlayer } from "../core/MoviPlayer";
-import type { SourceConfig, RendererType, VideoTrack } from "../types";
+import type {
+  SourceConfig,
+  RendererType,
+  VideoTrack,
+  DecoderType,
+} from "../types";
 import { Logger, LogLevel } from "../utils/Logger";
 
 import { SettingsStorage } from "../utils/SettingsStorage";
@@ -65,7 +70,7 @@ export class MoviElement extends HTMLElement {
   private _thumb: boolean = false;
   private _hdr: boolean = true; // HDR enabled by default
   private _theme: "dark" | "light" = "dark"; // Default theme
-  private _sw: boolean = false; // Force software decoding
+  private _sw: DecoderType = "auto"; // Preferred decoder mode (auto or software)
   private _fps: number = 0; // Custom frame rate (0 = auto from video)
 
   // Ambient mode state
@@ -112,6 +117,9 @@ export class MoviElement extends HTMLElement {
 
   constructor() {
     super();
+
+    // Enable keyboard focus
+    this.tabIndex = 0;
 
     // Set log level to INFO by default (change to DEBUG for troubleshooting)
     Logger.setLevel(LogLevel.DEBUG);
@@ -171,8 +179,11 @@ export class MoviElement extends HTMLElement {
     centerPlayPause.className = "movi-center-play-pause";
     centerPlayPause.setAttribute("aria-label", "Play/Pause");
     centerPlayPause.innerHTML = `
-      <svg class="movi-center-icon-play" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-        <polygon points="5 3 19 12 5 21 5 3"></polygon>
+      <svg class="movi-center-icon-play" viewBox="0 0 24 24" fill="currentColor">
+        <path d="M5 4v16l14-8z"></path>
+      </svg>
+      <svg class="movi-center-icon-pause" viewBox="0 0 24 24" fill="currentColor" style="display: none;">
+        <path d="M6 19h4V5H6v14zm8-14v14h4V5h-4z"></path>
       </svg>
     `;
     shadowRoot.appendChild(centerPlayPause);
@@ -353,6 +364,17 @@ export class MoviElement extends HTMLElement {
         <span class="movi-context-menu-label">Fullscreen</span>
         <span class="movi-context-menu-shortcut">F</span>
       </div>
+      <div class="movi-context-menu-item" data-action="loop-toggle">
+        <svg class="movi-context-menu-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+           <path d="M17 2l4 4-4 4"></path>
+           <path d="M3 11v-1a4 4 0 0 1 4-4h14"></path>
+           <path d="M7 22l-4-4 4-4"></path>
+           <path d="M21 13v1a4 4 0 0 1-4 4H3"></path>
+        </svg>
+        <span class="movi-context-menu-label">Loop</span>
+        <span class="movi-context-menu-status movi-loop-status">Off</span>
+      </div>
+      <div class="movi-context-menu-divider"></div>
       <div class="movi-context-menu-item" data-action="snapshot">
         <svg class="movi-context-menu-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
           <path d="M23 19a2 2 0 0 1-2 2H3a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h4l2-3h6l2 3h4a2 2 0 0 1 2 2z"></path>
@@ -380,38 +402,44 @@ export class MoviElement extends HTMLElement {
     container.innerHTML = `
       <div class="movi-controls-overlay"></div>
       <div class="movi-controls-bar" style="position: relative; z-index: 10;">
-        <div class="movi-controls-left">
-          <button class="movi-btn movi-play-pause" aria-label="Play/Pause">
-            <svg class="movi-icon-play" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-              <polygon points="5 3 19 12 5 21 5 3"></polygon>
-            </svg>
-            <svg class="movi-icon-pause" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="display: none;">
-              <rect x="6" y="4" width="4" height="16"></rect>
-              <rect x="14" y="4" width="4" height="16"></rect>
-            </svg>
-          </button>
-          <div class="movi-time">
-            <span class="movi-current-time">0:00</span>
-            <span class="movi-time-separator"> / </span>
-            <span class="movi-duration">0:00</span>
+        <div class="movi-progress-container">
+          <div class="movi-progress-bar">
+            <div class="movi-progress-filled"></div>
+            <div class="movi-progress-buffer"></div>
+            <div class="movi-progress-handle"></div>
+          </div>
+          <div class="movi-seek-thumbnail" style="display: none;">
+             <div class="movi-thumbnail-placeholder" style="display: none;"></div>
+             <img class="movi-thumbnail-img" style="display: none;">
+             <span class="movi-seek-time">0:00</span>
           </div>
         </div>
-        <div class="movi-controls-center">
-          <div class="movi-progress-container">
-            <div class="movi-progress-bar">
-              <div class="movi-progress-filled"></div>
-              <div class="movi-progress-buffer"></div>
-              <div class="movi-progress-handle"></div>
-            </div>
-            <div class="movi-seek-thumbnail" style="display: none;">
-               <div class="movi-thumbnail-placeholder" style="display: none;"></div>
-               <img class="movi-thumbnail-img" style="display: none;">
-               <span class="movi-seek-time">0:00</span>
-            </div>
-          </div>
-        </div>
-        <div class="movi-controls-right">
-          <div class="movi-mobile-expandable">
+        
+        <div class="movi-buttons-row">
+          <div class="movi-controls-left">
+            <button class="movi-btn movi-play-pause" aria-label="Play/Pause">
+              <svg class="movi-icon-play" viewBox="0 0 24 24" fill="currentColor">
+                <path d="M5 4v16l14-8z"></path>
+              </svg>
+              <svg class="movi-icon-pause" viewBox="0 0 24 24" fill="currentColor" style="display: none;">
+                <path d="M6 19h4V5H6v14zm8-14v14h4V5h-4z"></path>
+              </svg>
+            </button>
+
+            <button class="movi-btn movi-seek-backward" aria-label="Skip Backward 10s">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
+                <path d="M9 4.5a10 10 0 0 0-4.5 8.1 10 10 0 0 0 14.5 8.4M9 4.5l-4 4m4-4V9" />
+                <text x="50%" y="60%" font-size="7" font-weight="bold" fill="currentColor" text-anchor="middle" dominant-baseline="middle" stroke="none">10</text>
+              </svg>
+            </button>
+
+            <button class="movi-btn movi-seek-forward" aria-label="Skip Forward 10s">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
+                <path d="M15 4.5a10 10 0 0 1 4.5 8.1 10 10 0 0 1-14.5 8.4M15 4.5l4 4m-4-4V9" />
+                <text x="50%" y="60%" font-size="7" font-weight="bold" fill="currentColor" text-anchor="middle" dominant-baseline="middle" stroke="none">10</text>
+              </svg>
+            </button>
+
             <div class="movi-volume-container">
               <button class="movi-btn movi-volume-btn" aria-label="Mute/Unmute">
                 <svg class="movi-icon-volume-high" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
@@ -432,95 +460,116 @@ export class MoviElement extends HTMLElement {
                 <input type="range" class="movi-volume-slider" min="0" max="1" step="0.01" value="1" aria-label="Volume">
               </div>
             </div>
-            <div class="movi-audio-track-container">
-              <button class="movi-btn movi-audio-track-btn" aria-label="Audio Track">
-                <svg class="movi-icon-audio-track" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-                  <path d="M9 18V5l12-2v13"></path>
-                  <circle cx="6" cy="18" r="3"></circle>
-                  <circle cx="18" cy="16" r="3"></circle>
-                </svg>
-              </button>
-              <div class="movi-audio-track-menu" style="display: none;">
-                <div class="movi-audio-track-list"></div>
-              </div>
-            </div>
-            <div class="movi-subtitle-track-container">
-              <button class="movi-btn movi-subtitle-track-btn" aria-label="Subtitles/Captions">
-                <svg class="movi-icon-subtitle" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-                  <rect width="18" height="14" x="3" y="5" rx="2" ry="2"></rect>
-                  <path d="M11 9H9a2 2 0 0 0-2 2v2a2 2 0 0 0 2 2h2 M17 9h-2a2 2 0 0 0-2 2v2a2 2 0 0 0 2 2h2"></path>
-                </svg>
-                <svg class="movi-icon-subtitle-filled" viewBox="0 0 24 24" fill="currentColor" style="display: none;">
-                  <path fill-rule="evenodd" clip-rule="evenodd" d="M19 4H5c-1.11 0-2 .9-2 2v12c0 1.1.89 2 2 2h14c1.1 0 2-.9 2-2V6c0-1.1-.9-2-2-2z M11 11 H9.5 V10.5 H7.5 V13.5 H9.5 V13 H11 V14 C11 14.55 10.55 15 10 15 H7 C6.45 15 6 14.55 6 14 V10 C6 9.45 6.45 9 7 9 H10 C10.55 9 11 9.45 11 10 V11 Z M18 11 H16.5 V10.5 H14.5 V13.5 H16.5 V13 H18 V14 C18 14.55 17.55 15 17 15 H14 C13.45 15 13 14.55 13 14 V10 C13 9.45 13.45 9 14 9 H17 C17.55 9 18 9.45 18 10 V11 Z"></path>
-                </svg>
-              </button>
-              <div class="movi-subtitle-track-menu" style="display: none;">
-                <div class="movi-subtitle-track-list"></div>
-              </div>
-            </div>
-            <div class="movi-hdr-container">
-              <button class="movi-btn movi-hdr-btn" aria-label="Toggle HDR">
-                <svg class="movi-icon-hdr" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-                  <path d="M5 7v10M5 12h5M10 7v10M14 7h6a3 3 0 0 1 0 6h-6M17 13l3 4"></path>
-                  <circle cx="17" cy="10" r="1" fill="currentColor"></circle>
-                </svg>
-                <span class="movi-hdr-label">HDR</span>
-              </button>
-            </div>
-            <div class="movi-quality-container" style="display: none;">
-              <button class="movi-btn movi-quality-btn" aria-label="Quality">
-                <svg class="movi-icon-quality" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-                  <path d="M12.22 2h-.44a2 2 0 0 0-2 2v.18a2 2 0 0 1-1 1.73l-.43.25a2 2 0 0 1-2 0l-.15-.08a2 2 0 0 0-2.73.73l-.22.38a2 2 0 0 0 .73 2.73l.15.1a2 2 0 0 1 1 1.72v.51a2 2 0 0 1-1 1.74l-.15.09a2 2 0 0 0-.73 2.73l.22.38a2 2 0 0 0 2.73.73l.15-.08a2 2 0 0 1 2 0l.43.25a2 2 0 0 1 1 1.73V20a2 2 0 0 0 2 2h.44a2 2 0 0 0 2-2v-.18a2 2 0 0 1 1-1.73l.43-.25a2 2 0 0 1 2 0l.15.08a2 2 0 0 0 2.73-.73l.22-.38a2 2 0 0 0-.73-2.73l-.15-.1a2 2 0 0 1-1-1.72v-.51a2 2 0 0 1 1-1.74l.15-.09a2 2 0 0 0 .73-2.73l-.22-.38a2 2 0 0 0-2.73-.73l-.15.08a2 2 0 0 1-2 0l-.43-.25a2 2 0 0 1-1-1.73V4a2 2 0 0 0-2-2z"></path>
-                  <circle cx="12" cy="12" r="3"></circle>
-                </svg>
-              </button>
-              <div class="movi-quality-menu" style="display: none;">
-                <div class="movi-quality-list"></div>
-              </div>
-            </div>
 
-            <div class="movi-speed-container">
-              <button class="movi-btn movi-speed-btn" aria-label="Playback Speed">
-                <svg class="movi-icon-speed" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-                  <path d="M5.64 18.36a9 9 0 1 1 12.72 0"></path>
-                  <path d="m12 12 4-4"></path>
-                </svg>
-              </button>
-              <div class="movi-speed-menu" style="display: none;">
-                <div class="movi-speed-list">
-                  <div class="movi-speed-item" data-speed="0.25">0.25x</div>
-                  <div class="movi-speed-item" data-speed="0.5">0.5x</div>
-                  <div class="movi-speed-item" data-speed="0.75">0.75x</div>
-                  <div class="movi-speed-item movi-speed-active" data-speed="1">Normal</div>
-                  <div class="movi-speed-item" data-speed="1.25">1.25x</div>
-                  <div class="movi-speed-item" data-speed="1.5">1.5x</div>
-                  <div class="movi-speed-item" data-speed="1.75">1.75x</div>
-                  <div class="movi-speed-item" data-speed="2">2x</div>
+            <div class="movi-time">
+              <span class="movi-current-time">0:00</span>
+              <span class="movi-time-separator"> / </span>
+              <span class="movi-duration">0:00</span>
+            </div>
+          </div>
+
+          <div class="movi-controls-right">
+            <div class="movi-mobile-expandable">
+              <div class="movi-audio-track-container">
+                <button class="movi-btn movi-audio-track-btn" aria-label="Audio Track">
+                  <svg class="movi-icon-audio-track" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                    <path d="M9 18V5l12-2v13"></path>
+                    <circle cx="6" cy="18" r="3"></circle>
+                    <circle cx="18" cy="16" r="3"></circle>
+                  </svg>
+                </button>
+                <div class="movi-audio-track-menu" style="display: none;">
+                  <div class="movi-audio-track-list"></div>
                 </div>
               </div>
+              <div class="movi-subtitle-track-container">
+                <button class="movi-btn movi-subtitle-track-btn" aria-label="Subtitles/Captions">
+                  <svg class="movi-icon-subtitle" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                    <rect width="18" height="14" x="3" y="5" rx="2" ry="2"></rect>
+                    <path d="M11 9H9a2 2 0 0 0-2 2v2a2 2 0 0 0 2 2h2 M17 9h-2a2 2 0 0 0-2 2v2a2 2 0 0 0 2 2h2"></path>
+                  </svg>
+                </button>
+                <div class="movi-subtitle-track-menu" style="display: none;">
+                  <div class="movi-subtitle-track-list"></div>
+                </div>
+              </div>
+
+              <div class="movi-quality-container" style="display: none;">
+                <button class="movi-btn movi-quality-btn" aria-label="Quality">
+                  <svg class="movi-icon-quality" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                    <path d="M12.22 2h-.44a2 2 0 0 0-2 2v.18a2 2 0 0 1-1 1.73l-.43.25a2 2 0 0 1-2 0l-.15-.08a2 2 0 0 0-2.73.73l-.22.38a2 2 0 0 0 .73 2.73l.15.1a2 2 0 0 1 1 1.72v.51a2 2 0 0 1-1 1.74l-.15.09a2 2 0 0 0-.73 2.73l.22.38a2 2 0 0 0 2.73.73l.15-.08a2 2 0 0 1 2 0l.43.25a2 2 0 0 1 1 1.73V20a2 2 0 0 0 2 2h.44a2 2 0 0 0 2-2v-.18a2 2 0 0 1 1-1.73l.43-.25a2 2 0 0 1 2 0l.15.08a2 2 0 0 0 2.73-.73l.22-.38a2 2 0 0 0-.73-2.73l-.15-.1a2 2 0 0 1-1-1.72v-.51a2 2 0 0 1 1-1.74l.15-.09a2 2 0 0 0 .73-2.73l-.22-.38a2 2 0 0 0-2.73-.73l-.15.08a2 2 0 0 1-2 0l-.43-.25a2 2 0 0 1-1-1.73V4a2 2 0 0 0-2-2z"></path>
+                    <circle cx="12" cy="12" r="3"></circle>
+                  </svg>
+                </button>
+                <div class="movi-quality-menu" style="display: none;">
+                  <div class="movi-quality-list"></div>
+                </div>
+              </div>
+
+              <div class="movi-hdr-container">
+                <button class="movi-btn movi-hdr-btn" aria-label="Toggle HDR">
+                  <svg class="movi-icon-hdr" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                    <path d="M5 7v10M5 12h5M10 7v10M14 7h6a3 3 0 0 1 0 6h-6M17 13l3 4"></path>
+                  </svg>
+                  <span class="movi-hdr-label">HDR</span>
+                </button>
+              </div>
+
+              <div class="movi-speed-container">
+                <button class="movi-btn movi-speed-btn" aria-label="Playback Speed">
+                  <svg class="movi-icon-speed" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                    <path d="M5.64 18.36a9 9 0 1 1 12.72 0"></path>
+                    <path d="m12 12 4-4"></path>
+                  </svg>
+                </button>
+                <div class="movi-speed-menu" style="display: none;">
+                  <div class="movi-speed-list">
+                    <div class="movi-speed-item" data-speed="0.25">0.25x</div>
+                    <div class="movi-speed-item" data-speed="0.5">0.5x</div>
+                    <div class="movi-speed-item" data-speed="0.75">0.75x</div>
+                    <div class="movi-speed-item movi-speed-active" data-speed="1">Normal</div>
+                    <div class="movi-speed-item" data-speed="1.25">1.25x</div>
+                    <div class="movi-speed-item" data-speed="1.5">1.5x</div>
+                    <div class="movi-speed-item" data-speed="1.75">1.75x</div>
+                    <div class="movi-speed-item" data-speed="2">2x</div>
+                  </div>
+                </div>
+              </div>
+
+              <button class="movi-btn movi-aspect-ratio-btn" aria-label="Aspect Ratio">
+                <svg class="movi-icon-aspect-ratio" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                  <path class="movi-aspect-inner" d="M3 9h18M3 15h18M9 3v18M15 3v18"></path>
+                </svg>
+              </button>
+
+              <button class="movi-btn movi-loop-btn" aria-label="Toggle Loop">
+                <svg class="movi-icon-loop" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                  <path d="M17 2l4 4-4 4"></path>
+                  <path d="M3 11v-1a4 4 0 0 1 4-4h14"></path>
+                  <path d="M7 22l-4-4 4-4"></path>
+                  <path d="M21 13v1a4 4 0 0 1-4 4H3"></path>
+                </svg>
+              </button>
             </div>
-            <button class="movi-btn movi-aspect-ratio-btn" aria-label="Aspect Ratio" style="display: none;">
-              <svg class="movi-icon-aspect-ratio" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-                <path class="movi-aspect-inner" d="M3 9h18M3 15h18M9 3v18M15 3v18"></path>
+            
+            <button class="movi-btn movi-more-btn" aria-label="More Settings">
+              <svg class="movi-icon-more" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                <polyline points="15 18 9 12 15 6"></polyline>
+              </svg>
+              <svg class="movi-icon-close" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="display: none;">
+                <polyline points="9 18 15 12 9 6"></polyline>
+              </svg>
+            </button>
+            
+            <button class="movi-btn movi-fullscreen-btn" aria-label="Fullscreen">
+              <svg class="movi-icon-fullscreen" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                <path d="M8 3H5a2 2 0 0 0-2 2v3m18 0V5a2 2 0 0 0-2-2h-3m0 18h3a2 2 0 0 0 2-2v-3M3 16v3a2 2 0 0 0 2 2h3"></path>
+              </svg>
+              <svg class="movi-icon-fullscreen-exit" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="display: none;">
+                <path d="M4 14h6v6m10-6h-6v6M4 10h6V4m10 6h-6V4"></path>
               </svg>
             </button>
           </div>
-          <button class="movi-btn movi-more-btn" aria-label="More Settings">
-            <svg class="movi-icon-more" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-              <polyline points="15 18 9 12 15 6"></polyline>
-            </svg>
-            <svg class="movi-icon-close" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="display: none;">
-              <polyline points="9 18 15 12 9 6"></polyline>
-            </svg>
-          </button>
-          <button class="movi-btn movi-fullscreen-btn" aria-label="Fullscreen">
-            <svg class="movi-icon-fullscreen" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-              <path d="M8 3H5a2 2 0 0 0-2 2v3m18 0V5a2 2 0 0 0-2-2h-3m0 18h3a2 2 0 0 0 2-2v-3M3 16v3a2 2 0 0 0 2 2h3"></path>
-            </svg>
-            <svg class="movi-icon-fullscreen-exit" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="display: none;">
-              <path d="M4 14h6v6m10-6h-6v6M4 10h6V4m10 6h-6V4"></path>
-            </svg>
-          </button>
         </div>
       </div>
     `;
@@ -538,6 +587,7 @@ export class MoviElement extends HTMLElement {
     const progressBar = shadowRoot.querySelector(
       ".movi-progress-bar",
     ) as HTMLElement;
+    const loopBtn = shadowRoot.querySelector(".movi-loop-btn") as HTMLElement;
     const volumeBtn = shadowRoot.querySelector(
       ".movi-volume-btn",
     ) as HTMLElement;
@@ -550,6 +600,12 @@ export class MoviElement extends HTMLElement {
     ) as HTMLElement;
     const overlay = shadowRoot.querySelector(
       ".movi-controls-overlay",
+    ) as HTMLElement;
+    const seekBackwardBtn = shadowRoot.querySelector(
+      ".movi-seek-backward",
+    ) as HTMLElement;
+    const seekForwardBtn = shadowRoot.querySelector(
+      ".movi-seek-forward",
     ) as HTMLElement;
 
     let ignoreHover = false; // Prevent hover immediately after click from re-showing thumb
@@ -568,10 +624,57 @@ export class MoviElement extends HTMLElement {
       }
     });
 
-    // HDR Toggle
+    // Seek Backward
+    seekBackwardBtn?.addEventListener("click", (e) => {
+      e.stopPropagation();
+      const side = "left";
+      if (this.lastSeekSide === side && Date.now() - this.lastSeekTime < 1000) {
+        this.cumulativeSeekAmount += 10;
+      } else {
+        this.cumulativeSeekAmount = 10;
+        this.lastSeekSide = side;
+      }
+      this.lastSeekTime = Date.now();
+      this.currentTime = Math.max(0, this.currentTime - 10);
+      this.showOSD(
+        `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
+          <path d="M9 4.5a10 10 0 0 0-4.5 8.1 10 10 0 0 0 14.5 8.4M9 4.5l-4 4m4-4V9" />
+          <text x="50%" y="60%" font-size="7" font-weight="bold" fill="currentColor" text-anchor="middle" dominant-baseline="middle" stroke="none">10</text>
+        </svg>`,
+        `- ${this.cumulativeSeekAmount}s`,
+      );
+    });
+
+    // Seek Forward
+    seekForwardBtn?.addEventListener("click", (e) => {
+      e.stopPropagation();
+      const side = "right";
+      if (this.lastSeekSide === side && Date.now() - this.lastSeekTime < 1000) {
+        this.cumulativeSeekAmount += 10;
+      } else {
+        this.cumulativeSeekAmount = 10;
+        this.lastSeekSide = side;
+      }
+      this.lastSeekTime = Date.now();
+      this.currentTime = Math.min(this.duration, this.currentTime + 10);
+      this.showOSD(
+        `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
+          <path d="M15 4.5a10 10 0 0 1 4.5 8.1 10 10 0 0 1-14.5 8.4M15 4.5l4 4m-4-4V9" />
+          <text x="50%" y="60%" font-size="7" font-weight="bold" fill="currentColor" text-anchor="middle" dominant-baseline="middle" stroke="none">10</text>
+        </svg>`,
+        `+ ${this.cumulativeSeekAmount}s`,
+      );
+    });
+
     hdrBtn?.addEventListener("click", (e) => {
       e.stopPropagation();
       this.hdr = !this.hdr;
+    });
+
+    // Loop Toggle
+    loopBtn?.addEventListener("click", (e) => {
+      e.stopPropagation();
+      this.loop = !this.loop;
     });
 
     // Center play/pause button
@@ -1290,6 +1393,7 @@ export class MoviElement extends HTMLElement {
       this.clickTimer = window.setTimeout(() => {
         // If we've passed all the control checks above, toggle play/pause
         // This means the click is on the video area (canvas/overlay), not on controls
+        this.focus(); // Make sure it gets focus for keyboard shortcuts
         const state = this.player?.getState();
         if (state === "playing") {
           this.pause();
@@ -1845,52 +1949,89 @@ export class MoviElement extends HTMLElement {
           this.showControls();
           break;
         case "ArrowLeft":
-          // Left Arrow: Seek backward 5 seconds
+          // Left Arrow: Seek backward 5 seconds or single frame (if Ctrl)
           e.preventDefault();
           {
             const side = "left";
-            // Increase cumulative amount if pressing same direction quickly (or holding key)
-            if (
-              this.lastSeekSide === side &&
-              Date.now() - this.lastSeekTime < 1000
-            ) {
-              this.cumulativeSeekAmount += 5;
+            if (e.ctrlKey || e.metaKey) {
+              // Frame backward - only work if paused (auto-pause if playing)
+              if (this.player?.getState() === "playing") {
+                this.pause();
+              }
+              const vTrack = this.player?.getVideoTracks()?.[0];
+              const fps = vTrack?.frameRate || 24;
+              const frameTime = 1 / fps;
+              this.currentTime = Math.max(0, this.currentTime - frameTime);
+              this.showOSD(
+                `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M11 17l-5-5 5-5M18 17l-5-5 5-5"/></svg>`,
+                `-1 Frame`,
+              );
             } else {
-              this.cumulativeSeekAmount = 5;
-              this.lastSeekSide = side;
-            }
-            this.lastSeekTime = Date.now();
+              // Increase cumulative amount if pressing same direction quickly (or holding key)
+              if (
+                this.lastSeekSide === side &&
+                Date.now() - this.lastSeekTime < 1000
+              ) {
+                this.cumulativeSeekAmount += 10;
+              } else {
+                this.cumulativeSeekAmount = 10;
+                this.lastSeekSide = side;
+              }
+              this.lastSeekTime = Date.now();
 
-            this.currentTime = Math.max(0, this.currentTime - 5);
-            this.showOSD(
-              `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M11 17l-5-5 5-5M18 17l-5-5 5-5"/></svg>`,
-              `- ${this.cumulativeSeekAmount}s`,
-            );
-            this.showControls();
+              this.currentTime = Math.max(0, this.currentTime - 10);
+              this.showOSD(
+                `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
+                  <path d="M9 4.5a10 10 0 0 0-4.5 8.1 10 10 0 0 0 14.5 8.4M9 4.5l-4 4m4-4V9" />
+                  <text x="50%" y="60%" font-size="7" font-weight="bold" fill="currentColor" text-anchor="middle" dominant-baseline="middle" stroke="none">10</text>
+                </svg>`,
+                `- ${this.cumulativeSeekAmount}s`,
+              );
+            }
           }
           break;
         case "ArrowRight":
-          // Right Arrow: Seek forward 5 seconds
+          // Right Arrow: Seek forward 5 seconds or single frame (if Ctrl)
           e.preventDefault();
           {
             const side = "right";
-            if (
-              this.lastSeekSide === side &&
-              Date.now() - this.lastSeekTime < 1000
-            ) {
-              this.cumulativeSeekAmount += 5;
+            if (e.ctrlKey || e.metaKey) {
+              // Frame forward - only work if paused (auto-pause if playing)
+              if (this.player?.getState() === "playing") {
+                this.pause();
+              }
+              const vTrack = this.player?.getVideoTracks()?.[0];
+              const fps = vTrack?.frameRate || 24;
+              const frameTime = 1 / fps;
+              this.currentTime = Math.min(
+                this.duration,
+                this.currentTime + frameTime,
+              );
+              this.showOSD(
+                `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M13 17l5-5-5-5M6 17l5-5-5-5"/></svg>`,
+                `+1 Frame`,
+              );
             } else {
-              this.cumulativeSeekAmount = 5;
-              this.lastSeekSide = side;
-            }
-            this.lastSeekTime = Date.now();
+              if (
+                this.lastSeekSide === side &&
+                Date.now() - this.lastSeekTime < 1000
+              ) {
+                this.cumulativeSeekAmount += 10;
+              } else {
+                this.cumulativeSeekAmount = 10;
+                this.lastSeekSide = side;
+              }
+              this.lastSeekTime = Date.now();
 
-            this.currentTime = Math.min(this.duration, this.currentTime + 5);
-            this.showOSD(
-              `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M13 17l5-5-5-5M6 17l5-5-5-5"/></svg>`,
-              `+ ${this.cumulativeSeekAmount}s`,
-            );
-            this.showControls();
+              this.currentTime = Math.min(this.duration, this.currentTime + 10);
+              this.showOSD(
+                `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
+                  <path d="M15 4.5a10 10 0 0 1 4.5 8.1 10 10 0 0 1-14.5 8.4M15 4.5l4 4m-4-4V9" />
+                  <text x="50%" y="60%" font-size="7" font-weight="bold" fill="currentColor" text-anchor="middle" dominant-baseline="middle" stroke="none">10</text>
+                </svg>`,
+                `+ ${this.cumulativeSeekAmount}s`,
+              );
+            }
           }
           break;
         case "ArrowUp":
@@ -1900,7 +2041,6 @@ export class MoviElement extends HTMLElement {
           if (this.player && this.player.getAudioTracks().length > 0) {
             this.volume = Math.min(1, this.volume + 0.1);
           }
-          this.showControls();
           break;
         case "ArrowDown":
           // Down Arrow: Decrease volume
@@ -1909,14 +2049,12 @@ export class MoviElement extends HTMLElement {
           if (this.player && this.player.getAudioTracks().length > 0) {
             this.volume = Math.max(0, this.volume - 0.1);
           }
-          this.showControls();
           break;
         case "m":
         case "M":
           // M: Mute/Unmute
           e.preventDefault();
           this.muted = !this.muted;
-          this.showControls();
           break;
         case "s":
         case "S":
@@ -2452,6 +2590,9 @@ export class MoviElement extends HTMLElement {
         hideContextMenu();
       } else if (action === "hdr-toggle") {
         this.hdr = !this.hdr;
+        hideContextMenu();
+      } else if (action === "loop-toggle") {
+        this.loop = !this.loop;
         hideContextMenu();
       } else if (action === "fullscreen") {
         this.toggleFullscreen();
@@ -3497,6 +3638,11 @@ export class MoviElement extends HTMLElement {
         --movi-text-secondary: rgba(255, 255, 255, 0.7);
         --movi-text-tertiary: rgba(255, 255, 255, 0.5);
         
+        /* Dynamic Theme Backgrounds */
+        --movi-bar-bg: linear-gradient(to top, rgba(0, 0, 0, 0.9) 0%, rgba(0, 0, 0, 0.4) 100%);
+        --movi-overlay-bg: linear-gradient(to top, rgba(0, 0, 0, 0.4) 0%, transparent 30%);
+        --movi-progress-bg: rgba(255, 255, 255, 0.15);
+        
         /* Sizing */
         --movi-controls-height: 72px;
         --movi-controls-height-mobile: 64px;
@@ -3557,6 +3703,11 @@ export class MoviElement extends HTMLElement {
         --movi-btn-hover-bg: rgba(0, 0, 0, 0.05);
         --movi-btn-hover-bg: rgba(0, 0, 0, 0.05);
         --movi-progress-buffer-color: rgba(0, 0, 0, 0.15);
+
+        /* Light Theme Backgrounds */
+        --movi-bar-bg: linear-gradient(to top, rgba(255, 255, 255, 0.98) 0%, rgba(255, 255, 255, 0.8) 100%);
+        --movi-overlay-bg: linear-gradient(to top, rgba(255, 255, 255, 0.5) 0%, transparent 30%);
+        --movi-progress-bg: rgba(0, 0, 0, 0.1);
       }
       
       /* Explicitly force colors in Light Theme to override any defaults */
@@ -3811,7 +3962,7 @@ export class MoviElement extends HTMLElement {
         pointer-events: all;
         z-index: 1;
         /* Subtle gradient overlay for better control visibility */
-        background: linear-gradient(to top, rgba(0, 0, 0, 0.4) 0%, transparent 30%);
+        background: var(--movi-overlay-bg);
         opacity: 0;
         transition: opacity var(--movi-transition-normal);
       }
@@ -3825,32 +3976,38 @@ export class MoviElement extends HTMLElement {
         pointer-events: auto !important;
         z-index: 10 !important;
         display: flex;
-        align-items: center;
-        gap: 16px;
-        padding: 16px 20px;
-        background: var(--movi-glass-bg);
+        flex-direction: column;
+        padding: 0 20px 10px;
+        background: var(--movi-bar-bg);
         backdrop-filter: blur(var(--movi-glass-blur));
         -webkit-backdrop-filter: blur(var(--movi-glass-blur));
-        border-top: 1px solid var(--movi-glass-border);
         color: var(--movi-controls-color);
-        height: var(--movi-controls-height);
+        height: auto;
+        min-height: var(--movi-controls-height);
+      }
+
+      .movi-progress-container {
+        width: 100%;
+        padding: 10px 0 15px;
+        display: flex;
+        align-items: center;
+        position: relative;
+      }
+
+      .movi-buttons-row {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        width: 100%;
+        gap: 16px;
       }
 
       .movi-controls-left,
       .movi-controls-right {
         display: flex;
         align-items: center;
-        gap: 8px;
+        gap: 12px;
         flex-shrink: 0;
-      }
-
-      .movi-controls-center {
-        flex: 1;
-        min-width: 0;
-        display: flex;
-        align-items: center;
-        height: 100%;
-        padding: 0 8px;
       }
 
       .movi-btn {
@@ -3904,6 +4061,14 @@ export class MoviElement extends HTMLElement {
         height: 22px;
         transition: transform var(--movi-transition-fast);
       }
+
+      .movi-seek-backward:hover svg {
+        transform: translateX(-2px);
+      }
+
+      .movi-seek-forward:hover svg {
+        transform: translateX(2px);
+      }
       
       .movi-btn:hover svg {
         filter: drop-shadow(0 0 4px rgba(139, 92, 246, 0.5));
@@ -3934,10 +4099,9 @@ export class MoviElement extends HTMLElement {
 
       .movi-progress-container {
         width: 100%;
-        padding: 12px 0;
+        padding: 10px 0 15px;
         display: flex;
         align-items: center;
-        min-height: 20px;
         position: relative;
       }
 
@@ -3946,7 +4110,7 @@ export class MoviElement extends HTMLElement {
         width: 100%;
         height: var(--movi-progress-height);
         min-height: 5px;
-        background: rgba(255, 255, 255, 0.15);
+        background: var(--movi-progress-bg);
         border-radius: 100px;
         cursor: pointer;
         pointer-events: auto !important;
@@ -4428,6 +4592,11 @@ export class MoviElement extends HTMLElement {
         color: var(--movi-primary);
       }
 
+      .movi-loop-btn.active svg {
+        color: var(--movi-primary);
+        filter: drop-shadow(0 0 8px var(--movi-primary-glow));
+      }
+
       /* ========================================
          RESPONSIVE STYLES - Mobile First
       ======================================== */
@@ -4439,8 +4608,9 @@ export class MoviElement extends HTMLElement {
           --movi-btn-size: var(--movi-btn-size-mobile);
         }
         
-        .movi-spinner {
-          font-size: 40px; /* Scale down spinner on mobile */
+        .movi-loader-container {
+          width: 64px !important;
+          height: 64px !important;
         }
 
         /* Disable animations on mobile */
@@ -4468,10 +4638,20 @@ export class MoviElement extends HTMLElement {
         /* Restore explicit transforms that are structural, not animated */
         .movi-center-play-pause {
            /* Center button needs transform for centering */
-           transform: translate(-50%, -50%) scale(0.8) !important;
+           transform: translate(-50%, -50%) scale(0.7) !important;
+           width: 68px !important;
+           height: 68px !important;
+           border-width: 1.5px !important;
         }
         .movi-center-play-pause.movi-center-visible {
            transform: translate(-50%, -50%) scale(1) !important;
+        }
+        .movi-center-play-pause svg {
+           width: 32px !important;
+           height: 32px !important;
+        }
+        .movi-center-icon-play {
+           margin-left: 5px !important;
         }
         .movi-progress-handle {
             /* Handle needs transform for centering and positioning */
@@ -4483,8 +4663,8 @@ export class MoviElement extends HTMLElement {
         }
         
         .movi-controls-bar {
-          padding: 12px 16px;
-          gap: 10px;
+          padding: 6px 16px 10px;
+          gap: 4px;
         }
         
         .movi-controls-left,
@@ -4507,7 +4687,7 @@ export class MoviElement extends HTMLElement {
         }
         
         .movi-progress-container {
-          padding: 10px 0;
+          padding: 8px 0 2px;
         }
         
         .movi-progress-bar {
@@ -4521,6 +4701,10 @@ export class MoviElement extends HTMLElement {
         .movi-progress-handle {
           width: 14px;
           height: 14px;
+        }
+
+        .movi-hdr-label {
+          display: none !important;
         }
 
         /* Horizontal Expansion Style */
@@ -4551,6 +4735,8 @@ export class MoviElement extends HTMLElement {
           gap: 4px;
           margin-right: 4px;
           overflow: visible; /* Prevent clipping of hover backgrounds */
+          flex: 1;
+          justify-content: flex-end;
         }
 
         /* Reset margins and restore dimensions */
@@ -4561,10 +4747,10 @@ export class MoviElement extends HTMLElement {
         }
 
         /* Hide individual buttons by default on mobile */
-        .movi-subtitle-track-container,
         .movi-quality-container,
         .movi-speed-container,
-        .movi-aspect-ratio-btn {
+        .movi-aspect-ratio-btn,
+        .movi-loop-btn {
           width: 0;
           height: 0;
           margin: 0;
@@ -4583,10 +4769,21 @@ export class MoviElement extends HTMLElement {
           z-index: 12;
         }
 
-        .movi-controls-right.expanded ~ .movi-controls-center,
-        :host(:has(.movi-controls-right.expanded)) .movi-controls-center {
-          flex: 0.1; /* Shrink progress bar to make room */
-          opacity: 0.3;
+        .movi-controls-right.expanded ~ .movi-controls-left,
+        .movi-controls-left:has(~ .movi-controls-right.expanded),
+        :host([theme]) .movi-controls-right.expanded .movi-controls-left {
+          display: none !important;
+        }
+
+        /* If right is expanded, hide the left group to make space */
+        .movi-buttons-row:has(.movi-controls-right.expanded) .movi-controls-left {
+           display: none !important;
+        }
+        
+        /* Alternative for older browsers: shrink left instead of hiding if :has not supported */
+        .movi-controls-right.expanded {
+           flex: 1;
+           justify-content: flex-end;
         }
         
         /* Allow menus to position relative to the controls bar/player on mobile */
@@ -4698,6 +4895,22 @@ export class MoviElement extends HTMLElement {
         }
         .movi-controls-container.movi-controls-visible {
            opacity: 1 !important;
+        }
+
+        /* Center button focus/hover reset for touch devices */
+        .movi-center-play-pause:hover,
+        .movi-center-play-pause:focus,
+        .movi-center-play-pause:active {
+           background: rgba(0, 0, 0, 0.6) !important;
+           border-color: rgba(255, 255, 255, 0.3) !important;
+           box-shadow: 0 8px 32px rgba(0, 0, 0, 0.5) !important;
+        }
+
+        .movi-center-play-pause:hover svg,
+        .movi-center-play-pause:focus svg,
+        .movi-btn:hover svg,
+        .movi-btn:focus svg {
+           filter: none !important;
         }
 
         /* Center button: Keep structural transform but remove transition */
@@ -4818,8 +5031,8 @@ export class MoviElement extends HTMLElement {
       }
 
       .movi-center-play-pause svg {
-        width: 44px;
-        height: 44px;
+        width: 48px;
+        height: 48px;
         color: #fff;
         transition: all var(--movi-transition-fast);
         filter: drop-shadow(0 2px 4px rgba(0, 0, 0, 0.3));
@@ -4831,7 +5044,7 @@ export class MoviElement extends HTMLElement {
       
       /* Play icon offset for optical centering */
       .movi-center-icon-play {
-        margin-left: 8px;
+        margin-left: 6px;
         display: block;
       }
 
@@ -5735,6 +5948,7 @@ export class MoviElement extends HTMLElement {
         break;
       case "loop":
         this._loop = newValue !== null;
+        this.updateLoopUI();
         // Update loop handler if player exists
         if (this.player) {
           this.setupEventHandlers();
@@ -5832,7 +6046,13 @@ export class MoviElement extends HTMLElement {
         }
         break;
       case "sw":
-        this._sw = newValue !== null;
+        if (newValue === "auto") {
+          this._sw = "auto";
+        } else if (newValue === "false") {
+          this._sw = "auto";
+        } else {
+          this._sw = newValue !== null ? "software" : "auto";
+        }
         // If sw attribute changes and element is connected with src, reload
         if (this.isConnected && this._src) {
           this.load();
@@ -6012,7 +6232,7 @@ export class MoviElement extends HTMLElement {
       // Configure MoviPlayer options
       const playerConfig: any = {
         source,
-        decoder: this._sw ? "software" : "auto",
+        decoder: this._sw,
         cache: { type: "lru", maxSizeMB: 520 },
         enablePreviews: this._thumb,
         ...(this._fps > 0 && { frameRate: this._fps }),
@@ -6058,7 +6278,8 @@ export class MoviElement extends HTMLElement {
       if (
         this.player instanceof MoviPlayer &&
         this.player.isSoftwareDecoding() &&
-        !this._sw // Only show error if software decoding was unintended fallback
+        this._sw !== "software" &&
+        this.getAttribute("sw") !== "auto" // Silent fallback for explicit "auto"
       ) {
         Logger.warn(
           TAG,
@@ -6147,8 +6368,7 @@ export class MoviElement extends HTMLElement {
     // Handle loop
     if (this._loop) {
       const loopHandler = () => {
-        this.player?.seek(0);
-        this.player?.play();
+        this.play();
       };
       this.player.on("ended", loopHandler);
       this.eventHandlers.set("ended", () =>
@@ -6342,6 +6562,13 @@ export class MoviElement extends HTMLElement {
       '.movi-context-menu-item[data-action="play-pause"] .movi-context-menu-label',
     ) as HTMLElement;
 
+    const centerPlayIcon = centerPlayPauseBtn?.querySelector(
+      ".movi-center-icon-play",
+    ) as HTMLElement;
+    const centerPauseIcon = centerPlayPauseBtn?.querySelector(
+      ".movi-center-icon-pause",
+    ) as HTMLElement;
+
     if (isPlaying) {
       playIcon?.style.setProperty("display", "none");
       pauseIcon?.style.setProperty("display", "block");
@@ -6351,10 +6578,29 @@ export class MoviElement extends HTMLElement {
       contextMenuPauseIcon?.style.setProperty("display", "block");
       if (contextMenuLabel) contextMenuLabel.textContent = "Pause";
 
-      // Hide center button when playing
-      if (centerPlayPauseBtn) {
-        centerPlayPauseBtn.classList.remove("movi-center-visible");
-        centerPlayPauseBtn.style.display = "none";
+      // Show center pause icon when playing (if not loading/unsupported)
+      if (isLoading || this._isUnsupported) {
+        if (centerPlayPauseBtn) {
+          centerPlayPauseBtn.classList.remove("movi-center-visible");
+          centerPlayPauseBtn.style.display = "none";
+        }
+      } else if (centerPlayPauseBtn) {
+        centerPlayIcon?.style.setProperty("display", "none");
+        centerPauseIcon?.style.setProperty("display", "block");
+
+        // Only show if controls are visible
+        const controlsHidden = this.controlsContainer?.classList.contains(
+          "movi-controls-hidden",
+        );
+        if (!controlsHidden) {
+          centerPlayPauseBtn.style.setProperty("display", "flex");
+          requestAnimationFrame(() => {
+            centerPlayPauseBtn.classList.add("movi-center-visible");
+          });
+        } else {
+          centerPlayPauseBtn.classList.remove("movi-center-visible");
+          centerPlayPauseBtn.style.display = "none";
+        }
       }
     } else {
       playIcon?.style.setProperty("display", "block");
@@ -6365,7 +6611,7 @@ export class MoviElement extends HTMLElement {
       contextMenuPauseIcon?.style.setProperty("display", "none");
       if (contextMenuLabel) contextMenuLabel.textContent = "Play";
 
-      // Show center button when paused/ready, but hide if loading or unsupported state is shown
+      // Show center play icon when paused/ready, but hide if loading or unsupported state is shown
       if (isLoading || this._isUnsupported) {
         if (centerPlayPauseBtn) {
           centerPlayPauseBtn.classList.remove("movi-center-visible");
@@ -6373,6 +6619,9 @@ export class MoviElement extends HTMLElement {
         }
       } else {
         if (centerPlayPauseBtn) {
+          centerPlayIcon?.style.setProperty("display", "block");
+          centerPauseIcon?.style.setProperty("display", "none");
+
           centerPlayPauseBtn.style.setProperty("display", "flex");
           // Use a small delay for opacity/scale transition to work after display: flex
           requestAnimationFrame(() => {
@@ -6519,6 +6768,27 @@ export class MoviElement extends HTMLElement {
   }
 
   private handleUnsupportedVideo(title?: string, message?: string): void {
+    const isDecoderError =
+      title === "Format Unsupported" ||
+      title === "Codec Unsupported" ||
+      title === "Playback Error" ||
+      message?.toLowerCase().includes("decoder") ||
+      message?.toLowerCase().includes("codec");
+
+    // Silent fallback if sw="auto" is set
+    if (
+      isDecoderError &&
+      this.getAttribute("sw") === "auto" &&
+      this._sw !== "software"
+    ) {
+      Logger.info(
+        TAG,
+        'Decoder error detected with sw="auto", triggering silent software fallback',
+      );
+      this.enableSoftwareDecoding();
+      return;
+    }
+
     this._isUnsupported = true;
 
     // Stop player
@@ -6555,13 +6825,10 @@ export class MoviElement extends HTMLElement {
       if (swFallbackBtn) {
         // Show the button for hardware acceleration or decoder failures (not for network errors)
         // Don't show if already using software decoding
-        const isDecoderError =
-          title === "Format Unsupported" ||
-          title === "Codec Unsupported" ||
-          title === "Playback Error" ||
-          message?.toLowerCase().includes("decoder") ||
-          message?.toLowerCase().includes("codec");
-        const shouldShowSwButton = isDecoderError && !this._sw;
+        const shouldShowSwButton =
+          isDecoderError &&
+          this._sw !== "software" &&
+          this.getAttribute("sw") !== "false";
         swFallbackBtn.style.display = shouldShowSwButton ? "flex" : "none";
       }
     }
@@ -6603,7 +6870,7 @@ export class MoviElement extends HTMLElement {
     }
 
     // Set sw attribute to enable software decoding
-    this._sw = true;
+    this._sw = "software";
     this.setAttribute("sw", "");
 
     // Get current source
@@ -6650,7 +6917,7 @@ export class MoviElement extends HTMLElement {
 
     // Controls to disable (everything except volume)
     const controlsToDisableSelector =
-      ".movi-play-pause, .movi-progress-container, .movi-audio-track-btn, .movi-subtitle-track-btn, .movi-hdr-btn, .movi-speed-btn, .movi-aspect-ratio-btn, .movi-fullscreen-btn, .movi-more-btn, .movi-center-play-pause";
+      ".movi-play-pause, .movi-progress-container, .movi-audio-track-btn, .movi-subtitle-track-btn, .movi-hdr-btn, .movi-speed-btn, .movi-aspect-ratio-btn, .movi-loop-btn, .movi-fullscreen-btn, .movi-more-btn, .movi-center-play-pause";
     const controlsToDisable = shadowRoot.querySelectorAll(
       controlsToDisableSelector,
     );
@@ -6987,10 +7254,33 @@ export class MoviElement extends HTMLElement {
   }
 
   set loop(value: boolean) {
-    if (value) {
+    this._loop = !!value;
+    if (this._loop) {
       this.setAttribute("loop", "");
     } else {
       this.removeAttribute("loop");
+    }
+    this.updateLoopUI();
+  }
+
+  private updateLoopUI(): void {
+    const shadowRoot = this.shadowRoot;
+    if (!shadowRoot) return;
+
+    const loopBtn = shadowRoot.querySelector(".movi-loop-btn");
+    const loopMenuItem = shadowRoot.querySelector(
+      '.movi-context-menu-item[data-action="loop-toggle"]',
+    );
+    const loopStatus = shadowRoot.querySelector(".movi-loop-status");
+
+    if (this._loop) {
+      loopBtn?.classList.add("active");
+      loopMenuItem?.classList.add("movi-context-menu-active");
+      if (loopStatus) loopStatus.textContent = "On";
+    } else {
+      loopBtn?.classList.remove("active");
+      loopMenuItem?.classList.remove("movi-context-menu-active");
+      if (loopStatus) loopStatus.textContent = "Off";
     }
   }
 
@@ -7077,7 +7367,7 @@ export class MoviElement extends HTMLElement {
   }
 
   set currentTime(value: number) {
-    if (this.player && !this.isSeeking) {
+    if (this.player) {
       // Only allow seeking if player is ready, playing, or paused
       const state = this.player.getState();
       if (state === "ready" || state === "playing" || state === "paused") {
@@ -7088,6 +7378,8 @@ export class MoviElement extends HTMLElement {
             Logger.error(TAG, "Seek error", error);
           })
           .finally(() => {
+            // Note: In rapid seeking (frame-by-frame), we don't clear isSeeking immediately
+            // if we want to avoid progress bar jumps, but we must allow next seek to proceed.
             this.isSeeking = false;
           });
       }
@@ -7109,15 +7401,20 @@ export class MoviElement extends HTMLElement {
     }
   }
 
-  get sw(): boolean {
-    return this._sw;
+  get sw(): boolean | "auto" {
+    if (this.getAttribute("sw") === "auto") return "auto";
+    return this._sw === "software";
   }
 
-  set sw(value: boolean) {
-    if (this._sw !== value) {
-      this._sw = value;
-      if (value) {
+  set sw(value: boolean | "auto") {
+    const newValue: DecoderType =
+      value === "auto" ? "auto" : value ? "software" : "auto";
+    if (this._sw !== newValue) {
+      this._sw = newValue;
+      if (newValue === "software") {
         this.setAttribute("sw", "");
+      } else if (value === "auto") {
+        this.setAttribute("sw", "auto");
       } else {
         this.removeAttribute("sw");
       }

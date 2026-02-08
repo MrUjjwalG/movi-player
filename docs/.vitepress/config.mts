@@ -35,7 +35,7 @@ export default defineConfig({
       { text: "🔌 API", link: "/api/player" },
       { text: "🎮 Examples", link: "https://movi-player-examples.vercel.app/" },
       {
-        text: "v0.1.2",
+        text: "v0.1.3",
         items: [
           { text: "Changelog", link: "/changelog" },
           { text: "Contributing", link: "/contributing" },
