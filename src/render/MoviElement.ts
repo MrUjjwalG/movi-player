@@ -179,6 +179,10 @@ export class MoviElement extends HTMLElement {
       <svg class="movi-center-icon-play" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
         <polygon points="5 3 19 12 5 21 5 3"></polygon>
       </svg>
+      <svg class="movi-center-icon-pause" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="display: none;">
+        <rect x="6" y="4" width="4" height="16"></rect>
+        <rect x="14" y="4" width="4" height="16"></rect>
+      </svg>
     `;
     shadowRoot.appendChild(centerPlayPause);
 
@@ -1871,7 +1875,6 @@ export class MoviElement extends HTMLElement {
               `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M11 17l-5-5 5-5M18 17l-5-5 5-5"/></svg>`,
               `- ${this.cumulativeSeekAmount}s`,
             );
-            this.showControls();
           }
           break;
         case "ArrowRight":
@@ -1895,7 +1898,6 @@ export class MoviElement extends HTMLElement {
               `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M13 17l5-5-5-5M6 17l5-5-5-5"/></svg>`,
               `+ ${this.cumulativeSeekAmount}s`,
             );
-            this.showControls();
           }
           break;
         case "ArrowUp":
@@ -1905,7 +1907,6 @@ export class MoviElement extends HTMLElement {
           if (this.player && this.player.getAudioTracks().length > 0) {
             this.volume = Math.min(1, this.volume + 0.1);
           }
-          this.showControls();
           break;
         case "ArrowDown":
           // Down Arrow: Decrease volume
@@ -1914,14 +1915,12 @@ export class MoviElement extends HTMLElement {
           if (this.player && this.player.getAudioTracks().length > 0) {
             this.volume = Math.max(0, this.volume - 0.1);
           }
-          this.showControls();
           break;
         case "m":
         case "M":
           // M: Mute/Unmute
           e.preventDefault();
           this.muted = !this.muted;
-          this.showControls();
           break;
         case "s":
         case "S":
@@ -4444,8 +4443,9 @@ export class MoviElement extends HTMLElement {
           --movi-btn-size: var(--movi-btn-size-mobile);
         }
         
-        .movi-spinner {
-          font-size: 40px; /* Scale down spinner on mobile */
+        .movi-loader-container {
+          width: 64px !important;
+          height: 64px !important;
         }
 
         /* Disable animations on mobile */
@@ -4473,10 +4473,20 @@ export class MoviElement extends HTMLElement {
         /* Restore explicit transforms that are structural, not animated */
         .movi-center-play-pause {
            /* Center button needs transform for centering */
-           transform: translate(-50%, -50%) scale(0.8) !important;
+           transform: translate(-50%, -50%) scale(0.7) !important;
+           width: 68px !important;
+           height: 68px !important;
+           border-width: 1.5px !important;
         }
         .movi-center-play-pause.movi-center-visible {
            transform: translate(-50%, -50%) scale(1) !important;
+        }
+        .movi-center-play-pause svg {
+           width: 32px !important;
+           height: 32px !important;
+        }
+        .movi-center-icon-play {
+           margin-left: 6px !important;
         }
         .movi-progress-handle {
             /* Handle needs transform for centering and positioning */
@@ -6354,6 +6364,13 @@ export class MoviElement extends HTMLElement {
       '.movi-context-menu-item[data-action="play-pause"] .movi-context-menu-label',
     ) as HTMLElement;
 
+    const centerPlayIcon = centerPlayPauseBtn?.querySelector(
+      ".movi-center-icon-play",
+    ) as HTMLElement;
+    const centerPauseIcon = centerPlayPauseBtn?.querySelector(
+      ".movi-center-icon-pause",
+    ) as HTMLElement;
+
     if (isPlaying) {
       playIcon?.style.setProperty("display", "none");
       pauseIcon?.style.setProperty("display", "block");
@@ -6363,10 +6380,29 @@ export class MoviElement extends HTMLElement {
       contextMenuPauseIcon?.style.setProperty("display", "block");
       if (contextMenuLabel) contextMenuLabel.textContent = "Pause";
 
-      // Hide center button when playing
-      if (centerPlayPauseBtn) {
-        centerPlayPauseBtn.classList.remove("movi-center-visible");
-        centerPlayPauseBtn.style.display = "none";
+      // Show center pause icon when playing (if not loading/unsupported)
+      if (isLoading || this._isUnsupported) {
+        if (centerPlayPauseBtn) {
+          centerPlayPauseBtn.classList.remove("movi-center-visible");
+          centerPlayPauseBtn.style.display = "none";
+        }
+      } else if (centerPlayPauseBtn) {
+        centerPlayIcon?.style.setProperty("display", "none");
+        centerPauseIcon?.style.setProperty("display", "block");
+
+        // Only show if controls are visible
+        const controlsHidden = this.controlsContainer?.classList.contains(
+          "movi-controls-hidden",
+        );
+        if (!controlsHidden) {
+          centerPlayPauseBtn.style.setProperty("display", "flex");
+          requestAnimationFrame(() => {
+            centerPlayPauseBtn.classList.add("movi-center-visible");
+          });
+        } else {
+          centerPlayPauseBtn.classList.remove("movi-center-visible");
+          centerPlayPauseBtn.style.display = "none";
+        }
       }
     } else {
       playIcon?.style.setProperty("display", "block");
@@ -6377,7 +6413,7 @@ export class MoviElement extends HTMLElement {
       contextMenuPauseIcon?.style.setProperty("display", "none");
       if (contextMenuLabel) contextMenuLabel.textContent = "Play";
 
-      // Show center button when paused/ready, but hide if loading or unsupported state is shown
+      // Show center play icon when paused/ready, but hide if loading or unsupported state is shown
       if (isLoading || this._isUnsupported) {
         if (centerPlayPauseBtn) {
           centerPlayPauseBtn.classList.remove("movi-center-visible");
@@ -6385,6 +6421,9 @@ export class MoviElement extends HTMLElement {
         }
       } else {
         if (centerPlayPauseBtn) {
+          centerPlayIcon?.style.setProperty("display", "block");
+          centerPauseIcon?.style.setProperty("display", "none");
+
           centerPlayPauseBtn.style.setProperty("display", "flex");
           // Use a small delay for opacity/scale transition to work after display: flex
           requestAnimationFrame(() => {
