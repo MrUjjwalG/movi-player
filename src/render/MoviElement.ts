@@ -11,7 +11,12 @@
  */
 
 import { MoviPlayer } from "../core/MoviPlayer";
-import type { SourceConfig, RendererType, VideoTrack } from "../types";
+import type {
+  SourceConfig,
+  RendererType,
+  VideoTrack,
+  DecoderType,
+} from "../types";
 import { Logger, LogLevel } from "../utils/Logger";
 
 import { SettingsStorage } from "../utils/SettingsStorage";
@@ -65,7 +70,7 @@ export class MoviElement extends HTMLElement {
   private _thumb: boolean = false;
   private _hdr: boolean = true; // HDR enabled by default
   private _theme: "dark" | "light" = "dark"; // Default theme
-  private _sw: boolean = false; // Force software decoding
+  private _sw: DecoderType = "auto"; // Preferred decoder mode (auto or software)
   private _fps: number = 0; // Custom frame rate (0 = auto from video)
 
   // Ambient mode state
@@ -5832,7 +5837,13 @@ export class MoviElement extends HTMLElement {
         }
         break;
       case "sw":
-        this._sw = newValue !== null;
+        if (newValue === "auto") {
+          this._sw = "auto";
+        } else if (newValue === "false") {
+          this._sw = "auto";
+        } else {
+          this._sw = newValue !== null ? "software" : "auto";
+        }
         // If sw attribute changes and element is connected with src, reload
         if (this.isConnected && this._src) {
           this.load();
@@ -6012,7 +6023,7 @@ export class MoviElement extends HTMLElement {
       // Configure MoviPlayer options
       const playerConfig: any = {
         source,
-        decoder: this._sw ? "software" : "auto",
+        decoder: this._sw,
         cache: { type: "lru", maxSizeMB: 520 },
         enablePreviews: this._thumb,
         ...(this._fps > 0 && { frameRate: this._fps }),
@@ -6058,7 +6069,8 @@ export class MoviElement extends HTMLElement {
       if (
         this.player instanceof MoviPlayer &&
         this.player.isSoftwareDecoding() &&
-        !this._sw // Only show error if software decoding was unintended fallback
+        this._sw !== "software" &&
+        this.getAttribute("sw") !== "auto" // Silent fallback for explicit "auto"
       ) {
         Logger.warn(
           TAG,
@@ -6519,6 +6531,27 @@ export class MoviElement extends HTMLElement {
   }
 
   private handleUnsupportedVideo(title?: string, message?: string): void {
+    const isDecoderError =
+      title === "Format Unsupported" ||
+      title === "Codec Unsupported" ||
+      title === "Playback Error" ||
+      message?.toLowerCase().includes("decoder") ||
+      message?.toLowerCase().includes("codec");
+
+    // Silent fallback if sw="auto" is set
+    if (
+      isDecoderError &&
+      this.getAttribute("sw") === "auto" &&
+      this._sw !== "software"
+    ) {
+      Logger.info(
+        TAG,
+        'Decoder error detected with sw="auto", triggering silent software fallback',
+      );
+      this.enableSoftwareDecoding();
+      return;
+    }
+
     this._isUnsupported = true;
 
     // Stop player
@@ -6555,13 +6588,10 @@ export class MoviElement extends HTMLElement {
       if (swFallbackBtn) {
         // Show the button for hardware acceleration or decoder failures (not for network errors)
         // Don't show if already using software decoding
-        const isDecoderError =
-          title === "Format Unsupported" ||
-          title === "Codec Unsupported" ||
-          title === "Playback Error" ||
-          message?.toLowerCase().includes("decoder") ||
-          message?.toLowerCase().includes("codec");
-        const shouldShowSwButton = isDecoderError && !this._sw;
+        const shouldShowSwButton =
+          isDecoderError &&
+          this._sw !== "software" &&
+          this.getAttribute("sw") !== "false";
         swFallbackBtn.style.display = shouldShowSwButton ? "flex" : "none";
       }
     }
@@ -6603,7 +6633,7 @@ export class MoviElement extends HTMLElement {
     }
 
     // Set sw attribute to enable software decoding
-    this._sw = true;
+    this._sw = "software";
     this.setAttribute("sw", "");
 
     // Get current source
@@ -7109,15 +7139,20 @@ export class MoviElement extends HTMLElement {
     }
   }
 
-  get sw(): boolean {
-    return this._sw;
+  get sw(): boolean | "auto" {
+    if (this.getAttribute("sw") === "auto") return "auto";
+    return this._sw === "software";
   }
 
-  set sw(value: boolean) {
-    if (this._sw !== value) {
-      this._sw = value;
-      if (value) {
+  set sw(value: boolean | "auto") {
+    const newValue: DecoderType =
+      value === "auto" ? "auto" : value ? "software" : "auto";
+    if (this._sw !== newValue) {
+      this._sw = newValue;
+      if (newValue === "software") {
         this.setAttribute("sw", "");
+      } else if (value === "auto") {
+        this.setAttribute("sw", "auto");
       } else {
         this.removeAttribute("sw");
       }
