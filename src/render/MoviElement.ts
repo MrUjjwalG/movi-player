@@ -71,7 +71,10 @@ export class MoviElement extends HTMLElement {
   private _hdr: boolean = true; // HDR enabled by default
   private _theme: "dark" | "light" = "dark"; // Default theme
   private _sw: DecoderType = "auto"; // Preferred decoder mode (auto or software)
+
   private _fps: number = 0; // Custom frame rate (0 = auto from video)
+  private _gesturefs: boolean = false; // Gestures only in fullscreen if true
+  private _disableKeyboard: boolean = false; // Disable keyboard shortcuts if true
 
   // Ambient mode state
   private _ambientWrapper: string | null = null; // ID of external wrapper element
@@ -86,6 +89,10 @@ export class MoviElement extends HTMLElement {
     g: 0,
     b: 0,
   };
+
+  // Context handling state
+  private _contextLostTime: number = 0;
+  private _contextLostPlaying: boolean = false;
 
   // Observed attributes (native video element attributes)
   static get observedAttributes() {
@@ -111,7 +118,10 @@ export class MoviElement extends HTMLElement {
       "hdr",
       "theme",
       "sw",
+
       "fps",
+      "gesturefs",
+      "disablekeyboard",
     ];
   }
 
@@ -487,6 +497,9 @@ export class MoviElement extends HTMLElement {
                   <svg class="movi-icon-subtitle" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
                     <rect width="18" height="14" x="3" y="5" rx="2" ry="2"></rect>
                     <path d="M11 9H9a2 2 0 0 0-2 2v2a2 2 0 0 0 2 2h2 M17 9h-2a2 2 0 0 0-2 2v2a2 2 0 0 0 2 2h2"></path>
+                  </svg>
+                  <svg class="movi-icon-subtitle-filled" viewBox="0 0 24 24" fill="currentColor" style="display: none;">
+                    <path fill-rule="evenodd" clip-rule="evenodd" d="M19 4H5c-1.11 0-2 .9-2 2v12c0 1.1.89 2 2 2h14c1.1 0 2-.9 2-2V6c0-1.1-.9-2-2-2z M11 11 H9.5 V10.5 H7.5 V13.5 H9.5 V13 H11 V14 C11 14.55 10.55 15 10 15 H7 C6.45 15 6 14.55 6 14 V10 C6 9.45 6.45 9 7 9 H10 C10.55 9 11 9.45 11 10 V11 Z M18 11 H16.5 V10.5 H14.5 V13.5 H16.5 V13 H18 V14 C18 14.55 17.55 15 17 15 H14 C13.45 15 13 14.55 13 14 V10 C13 9.45 13.45 9 14 9 H17 C17.55 9 18 9.45 18 10 V11 Z"></path>
                   </svg>
                 </button>
                 <div class="movi-subtitle-track-menu" style="display: none;">
@@ -1499,8 +1512,13 @@ export class MoviElement extends HTMLElement {
       return;
 
     const state = this.player.getState();
-    // Only allow seeking if player is ready, playing, or paused
-    if (state !== "ready" && state !== "playing" && state !== "paused") {
+    // Only allow seeking if player is ready, playing, paused, or ended
+    if (
+      state !== "ready" &&
+      state !== "playing" &&
+      state !== "paused" &&
+      state !== "ended"
+    ) {
       return;
     }
 
@@ -1560,8 +1578,13 @@ export class MoviElement extends HTMLElement {
     if (!touch) return;
 
     const state = this.player.getState();
-    // Only allow seeking if player is ready, playing, or paused
-    if (state !== "ready" && state !== "playing" && state !== "paused") {
+    // Only allow seeking if player is ready, playing, paused, or ended
+    if (
+      state !== "ready" &&
+      state !== "playing" &&
+      state !== "paused" &&
+      state !== "ended"
+    ) {
       return;
     }
 
@@ -1740,6 +1763,7 @@ export class MoviElement extends HTMLElement {
     let initialSeekTime = 0;
     let isVerticalGesture = false;
     let isHorizontalGesture = false;
+    let isEdgeStart = false;
 
     // Attach listeners to all possible interaction targets
     gestureTargets.forEach((target) => {
@@ -1751,6 +1775,18 @@ export class MoviElement extends HTMLElement {
             this.gesturePerformed = false;
             this.touchStartX = e.touches[0].clientX;
             this.touchStartY = e.touches[0].clientY;
+
+            // Check for edge start to prevent conflict with system gestures
+            // Safe area: 40px from edges
+            const edgeThreshold = 40;
+            const winWidth = window.innerWidth;
+            const winHeight = window.innerHeight;
+            isEdgeStart =
+              this.touchStartX < edgeThreshold ||
+              this.touchStartX > winWidth - edgeThreshold ||
+              this.touchStartY < edgeThreshold ||
+              this.touchStartY > winHeight - edgeThreshold;
+
             this.touchStartTime = Date.now();
             initialVolume = this._volume;
             initialSeekTime = this.currentTime;
@@ -1764,12 +1800,18 @@ export class MoviElement extends HTMLElement {
       target.addEventListener(
         "touchmove",
         (e: TouchEvent) => {
+          if (isEdgeStart) return;
           if (e.touches.length === 1) {
             const touch = e.touches[0];
             const deltaX = touch.clientX - this.touchStartX;
             const deltaY = touch.clientY - this.touchStartY;
 
             // Determine gesture type early
+            // If gesturefs is enabled, ONLY allow gestures if in fullscreen
+            if (this._gesturefs && !document.fullscreenElement) {
+              return;
+            }
+
             if (
               !isVerticalGesture &&
               !isHorizontalGesture &&
@@ -1931,6 +1973,9 @@ export class MoviElement extends HTMLElement {
 
   private setupKeyboardShortcuts(): void {
     this.addEventListener("keydown", (e) => {
+      // Check if keyboard controls are disabled
+      if (this._disableKeyboard) return;
+
       // Only handle if player exists (content loaded)
       if (!this.player) return;
 
@@ -5757,6 +5802,40 @@ export class MoviElement extends HTMLElement {
     shadowRoot.appendChild(style);
   }
 
+  private handleContextLost = (e: Event) => {
+    e.preventDefault();
+    Logger.warn(TAG, "WebGL context lost - suspending playback");
+
+    if (this.player) {
+      try {
+        this._contextLostTime = this.player.getCurrentTime();
+        this._contextLostPlaying = this.player.getState() === "playing";
+        this.player.destroy();
+      } catch (err) {
+        // Ignore error during destroy context loss
+      }
+      this.player = null;
+    }
+
+    this.isLoading = true;
+    this.updateControlsState();
+    this.updateLoadingIndicator("loading");
+  };
+
+  private handleContextRestored = () => {
+    Logger.info(TAG, "WebGL context restored - recovering playback");
+    this.initializePlayer().then(() => {
+      if (this.player) {
+        if (this._contextLostTime > 0) {
+          this.player.seek(this._contextLostTime).catch(() => {});
+        }
+        if (this._contextLostPlaying) {
+          this.player.play().catch(() => {});
+        }
+      }
+    });
+  };
+
   connectedCallback() {
     // Read initial attributes
     const srcAttr = this.getAttribute("src");
@@ -5806,6 +5885,9 @@ export class MoviElement extends HTMLElement {
       this._theme = themeAttr;
     }
 
+    this._gesturefs = this.hasAttribute("gesturefs");
+    this._disableKeyboard = this.hasAttribute("disablekeyboard");
+
     // Update controls visibility based on initial attributes
     this.updateControlsVisibility();
 
@@ -5820,6 +5902,13 @@ export class MoviElement extends HTMLElement {
 
     // Update canvas size when element is connected
     this.updateCanvasSize();
+
+    // Listen for WebGL context loss (e.g. minimizing on mobile)
+    this.canvas.addEventListener("webglcontextlost", this.handleContextLost);
+    this.canvas.addEventListener(
+      "webglcontextrestored",
+      this.handleContextRestored,
+    );
 
     // Initial state: disable controls except volume
     this.updateControlsState();
@@ -5889,6 +5978,12 @@ export class MoviElement extends HTMLElement {
   }
 
   disconnectedCallback() {
+    // Remove WebGL context listeners
+    this.canvas.removeEventListener("webglcontextlost", this.handleContextLost);
+    this.canvas.removeEventListener(
+      "webglcontextrestored",
+      this.handleContextRestored,
+    );
     // Cleanup event handlers
     this.eventHandlers.forEach((unsubscribe) => unsubscribe());
     this.eventHandlers.clear();
@@ -5927,6 +6022,12 @@ export class MoviElement extends HTMLElement {
         break;
       case "theme":
         this.theme = (newValue as "light" | "dark") || "dark";
+        break;
+      case "gesturefs":
+        this._gesturefs = newValue !== null;
+        break;
+      case "disablekeyboard":
+        this._disableKeyboard = newValue !== null;
         break;
       case "src":
         // Only handle string src attributes, File objects are handled via setter
@@ -6917,7 +7018,7 @@ export class MoviElement extends HTMLElement {
 
     // Controls to disable (everything except volume)
     const controlsToDisableSelector =
-      ".movi-play-pause, .movi-progress-container, .movi-audio-track-btn, .movi-subtitle-track-btn, .movi-hdr-btn, .movi-speed-btn, .movi-aspect-ratio-btn, .movi-loop-btn, .movi-fullscreen-btn, .movi-more-btn, .movi-center-play-pause";
+      ".movi-play-pause, .movi-progress-container, .movi-audio-track-btn, .movi-subtitle-track-btn, .movi-hdr-btn, .movi-speed-btn, .movi-aspect-ratio-btn, .movi-loop-btn, .movi-fullscreen-btn, .movi-more-btn, .movi-center-play-pause, .movi-seek-backward, .movi-seek-forward";
     const controlsToDisable = shadowRoot.querySelectorAll(
       controlsToDisableSelector,
     );
@@ -7370,7 +7471,12 @@ export class MoviElement extends HTMLElement {
     if (this.player) {
       // Only allow seeking if player is ready, playing, or paused
       const state = this.player.getState();
-      if (state === "ready" || state === "playing" || state === "paused") {
+      if (
+        state === "ready" ||
+        state === "playing" ||
+        state === "paused" ||
+        state === "ended"
+      ) {
         this.isSeeking = true;
         this.player
           .seek(value)
@@ -7432,6 +7538,36 @@ export class MoviElement extends HTMLElement {
         this.setAttribute("fps", value.toString());
       } else {
         this.removeAttribute("fps");
+      }
+    }
+  }
+
+  get gesturefs(): boolean {
+    return this._gesturefs;
+  }
+
+  set gesturefs(value: boolean) {
+    if (this._gesturefs !== value) {
+      this._gesturefs = value;
+      if (value) {
+        this.setAttribute("gesturefs", "");
+      } else {
+        this.removeAttribute("gesturefs");
+      }
+    }
+  }
+
+  get disablekeyboard(): boolean {
+    return this._disableKeyboard;
+  }
+
+  set disablekeyboard(value: boolean) {
+    if (this._disableKeyboard !== value) {
+      this._disableKeyboard = value;
+      if (value) {
+        this.setAttribute("disablekeyboard", "");
+      } else {
+        this.removeAttribute("disablekeyboard");
       }
     }
   }
