@@ -441,8 +441,8 @@ export class MoviElement extends HTMLElement {
       <div class="movi-controls-bar" style="position: relative; z-index: 10;">
         <div class="movi-progress-container">
           <div class="movi-progress-bar">
-            <div class="movi-progress-filled"></div>
             <div class="movi-progress-buffer"></div>
+            <div class="movi-progress-filled"></div>
             <div class="movi-progress-handle"></div>
           </div>
           <div class="movi-seek-thumbnail" style="display: none;">
@@ -4259,6 +4259,7 @@ export class MoviElement extends HTMLElement {
         background: rgba(255, 255, 255, 0.25);
         border-radius: 100px;
         width: 0%;
+        transition: width 0.1s linear, left 0.1s linear;
       }
 
       .movi-progress-handle {
@@ -6909,12 +6910,20 @@ export class MoviElement extends HTMLElement {
         progressHandle.style.left = `${percent}%`;
       }
 
-      // Update buffer (if available)
+      // Update buffer (if available) - Visualize the sliding window
       if (this.player && progressBuffer) {
+        const bufferStart = this.player.getBufferStartTime();
         const bufferEnd = this.player.getBufferEndTime();
+
         if (bufferEnd > 0) {
-          const bufferPercent = (bufferEnd / this.duration) * 100;
-          progressBuffer.style.width = `${bufferPercent}%`;
+          const startPercent = (bufferStart / this.duration) * 100;
+          const endPercent = (bufferEnd / this.duration) * 100;
+          const widthPercent = Math.max(0, endPercent - startPercent);
+
+          progressBuffer.style.left = `${startPercent}%`;
+          progressBuffer.style.width = `${widthPercent}%`;
+        } else {
+          progressBuffer.style.width = "0%";
         }
       }
     }

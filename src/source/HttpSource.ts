@@ -281,10 +281,9 @@ export class HttpSource implements SourceAdapter {
     }
 
     // Reset buffer state atomically
-    // Reset buffer state atomically
-    // We start with a 0-filled window to ensure we don't present an optimistic
-    // buffer window before we have actual data (prevents confusion in offline scenarios).
-    this.atomicSetBufferStart(0);
+    // We start with the requested offset to show a correct (though empty)
+    // buffer window at the seek target (prevents bar jumping to 0).
+    this.atomicSetBufferStart(fromOffset);
     this.atomicSetWritePos(0);
     this.atomicSetStreaming(true);
     this.atomicIncrementVersion();

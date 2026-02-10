@@ -193,9 +193,9 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
             return;
           }
 
-          // Video reached target! Clear the flag to ensure sync
+          // Video reached target! Clear the flag to ensure sync and transition to final state
           if (this.seekTargetTime >= 0) {
-            this.handleVideoSeekCompletion(frameTime);
+            this.notifySeekCompletion(frameTime);
           }
 
           this.videoRenderer.queueFrame(frame);
@@ -766,42 +766,66 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
   private eofReached = false;
 
   /**
-   * Dedicated handler for video seek completion.
-   * Clears the seek flag, synchronizes the clock if the video jumped ahead,
-   * and flushes any buffered audio packets to start playback in sync.
+   * Internal handler for seek completion when first target frame is found.
+   * Clears the seek flag, synchronizes clock, and transitions to final state.
    */
-  private handleVideoSeekCompletion(videoTime: number): void {
+  private notifySeekCompletion(time: number): void {
+    if (!this.waitingForVideoSync) return;
+
     const seekTarget = this.seekTargetTime;
     this.seekTargetTime = -1;
+    this.waitingForVideoSync = false;
+    this.seekingToKeyframe = false; // Also clear keyframe skip flag
 
-    // If we were waiting for video sync, flush buffered audio
-    if (this.waitingForVideoSync) {
-      this.waitingForVideoSync = false;
+    Logger.debug(
+      TAG,
+      `Seek completion at ${time.toFixed(3)}s (target: ${seekTarget.toFixed(3)}s)`,
+    );
 
-      // Sync correction: Match clock to actual video start time
-      // If we are just seeking (waitingForVideoSync was true), allow smaller tolerance (0.01) to ensure the frame is displayed (clock >= frameTime)
-      if (videoTime > seekTarget + 0.01) {
-        Logger.debug(
-          TAG,
-          `Video jumped ahead (${seekTarget.toFixed(3)}s -> ${videoTime.toFixed(3)}s). Syncing clock.`,
-        );
-        this.clock.seek(videoTime);
-        this.pendingAudioPackets = this.pendingAudioPackets.filter(
-          (p) => p.timestamp >= videoTime - 0.05,
-        );
-      }
+    // Sync correction: Match clock to actual video/audio start time
+    // Allow small tolerance (0.01) to ensure the frame is displayed (clock >= frameTime)
+    if (time > seekTarget + 0.01) {
+      Logger.debug(
+        TAG,
+        `Stream jumped ahead. Syncing clock to ${time.toFixed(3)}s.`,
+      );
+      this.clock.seek(time);
 
-      if (this.pendingAudioPackets.length > 0) {
-        Logger.debug(
-          TAG,
-          `Flushing ${this.pendingAudioPackets.length} buffered audio packets after video sync`,
-        );
-        for (const pkt of this.pendingAudioPackets) {
-          this.audioDecoder.decode(pkt.data, pkt.timestamp, pkt.keyframe);
-        }
-        this.pendingAudioPackets = [];
-      }
+      // Filter pending audio packets that are now too old
+      this.pendingAudioPackets = this.pendingAudioPackets.filter(
+        (p) => p.timestamp >= time - 0.05,
+      );
     }
+
+    // Flush any buffered audio packets
+    if (this.pendingAudioPackets.length > 0) {
+      Logger.debug(
+        TAG,
+        `Flushing ${this.pendingAudioPackets.length} buffered audio packets after seek sync`,
+      );
+      for (const pkt of this.pendingAudioPackets) {
+        this.audioDecoder.decode(pkt.data, pkt.timestamp, pkt.keyframe);
+      }
+      this.pendingAudioPackets = [];
+    }
+
+    // Transition to final state
+    if (this.wasPlayingBeforeSeek) {
+      Logger.info(TAG, "Resuming playback after seek");
+      this.stateManager.setState("playing");
+      this.clock.start();
+      if (!this.disableAudio && !this.audioRenderer.isAudioPlaying()) {
+        this.audioRenderer.play();
+      }
+    } else {
+      Logger.info(TAG, "Seek completed in paused state");
+      this.stateManager.setState("ready");
+      // Don't start clock or audio
+    }
+
+    // Emit seeked event now that we are actually ready
+    // Convert back from media time to UI time
+    this.emit("seeked", Math.max(0, time - this.startTime));
   }
 
   /**
@@ -1035,6 +1059,16 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
             this.seekingToKeyframe = false;
             Logger.warn(TAG, "EOF reached before finding keyframe after seek");
           }
+
+          // If we were waiting for sync, trigger it now so player doesn't hang in loading state
+          if (this.waitingForVideoSync) {
+            Logger.warn(
+              TAG,
+              "EOF reached while waiting for seek sync, forcing completion",
+            );
+            this.notifySeekCompletion(this.seekTargetTime);
+          }
+
           Logger.debug(TAG, "EOF reached");
           break;
         }
@@ -1118,10 +1152,9 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
                   TAG,
                   `Audio reached seek target: ${packet.timestamp.toFixed(3)}s (target: ${this.seekTargetTime.toFixed(3)}s)`,
                 );
-                // Only clear seek target if there is no video track to trigger it
-                // If video exists, we wait for a valid frame in onFrame()
+                // If there is no video track, audio completion triggers state transition
                 if (!this.trackManager.getActiveVideoTrack()) {
-                  this.seekTargetTime = -1;
+                  this.notifySeekCompletion(packet.timestamp);
                 }
               }
 
@@ -1254,6 +1287,9 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
       this.wasPlayingBeforeSeek = currentState === "playing";
     }
 
+    // Pause clock so UI time doesn't advance during seek while in loading state
+    this.clock.pause();
+
     const mySessionId = ++this.seekSessionId;
     this.stateManager.setState("seeking");
     this.emit("seeking", seconds);
@@ -1325,67 +1361,16 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
 
       if (this.seekSessionId !== mySessionId) return; // Superceded
 
-      // Restore state based on original intent
-      if (this.wasPlayingBeforeSeek) {
-        // After seek, we're in 'seeking' state, which can transition to 'playing'
-        const currentState = this.stateManager.getState();
-        if (currentState === "seeking") {
-          // seeking -> playing is valid
-          if (!this.stateManager.setState("playing")) {
-            Logger.warn(
-              TAG,
-              "Failed to transition to playing after seek, transitioning to ready first",
-            );
-            // Fallback: try through ready
-            if (this.stateManager.setState("ready")) {
-              this.stateManager.setState("playing");
-            }
-          }
-        } else if (currentState === "ready") {
-          // ready -> playing is valid
-          this.stateManager.setState("playing");
-        } else {
-          Logger.warn(
-            TAG,
-            `Cannot transition to playing from state: ${currentState} after seek`,
-          );
-        }
+      // Start processing loop to find and decode the target frame/packet.
+      // notifySeekCompletion will be called once the first valid frame is received.
+      this.processLoop();
 
-        // Ensure clock is running (restores isRunning=true)
-        this.clock.start();
-
-        // Ensure audio engine is ready (reset() might have stopped it or cleared clock)
-        if (!this.disableAudio && !this.audioRenderer.isAudioPlaying()) {
-          await this.audioRenderer.play();
-        }
-
-        // IMPORTANT: Restart video presentation loop explicitly
-        if (this.videoRenderer) {
-          this.videoRenderer.startPresentationLoop();
-        }
-
-        if (this.animationFrameId !== null) {
-          cancelAnimationFrame(this.animationFrameId);
-          this.animationFrameId = null;
-        }
-        this.processLoop();
-      } else {
-        // PAUSED SEEK LOGIC
-        // We still need to fetch and decode the frame at the new position
-        this.stateManager.setState("ready");
-
-        // Temporarily start processLoop to fetch the target frame
-        // It will stop automatically once waitingForVideoSync becomes false (see processLoop check)
-        this.processLoop();
-
-        // Ensure the video renderer loop is running to actually draw the frame
-        if (this.videoRenderer) {
-          this.videoRenderer.startPresentationLoop();
-        }
+      // Ensure the video renderer loop is running to actually draw frames as they arrive
+      if (this.videoRenderer) {
+        this.videoRenderer.startPresentationLoop();
       }
 
-      this.emit("seeked", seconds);
-      Logger.info(TAG, `Seeked to ${seconds}s`);
+      Logger.info(TAG, `Seek initiated to ${seconds}s, waiting for sync...`);
     } catch (error) {
       // Reset seeking flag on error
       this.seekingToKeyframe = false;
@@ -2371,54 +2356,11 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
       return 0;
     }
 
-    // For HttpSource, convert buffered bytes to time
+    // For HttpSource, convert buffered bytes to time using stable linear estimation.
+    // Transient bitrate-based estimation is unstable during seeks.
     if (this.source instanceof HttpSource && this.fileSize > 0) {
       const bufferedBytes = this.source.getBufferedEnd();
       if (bufferedBytes > 0) {
-        // Use current read position as reference for more accurate conversion
-        const currentReadPos = this.source.getPosition();
-        const currentTime = this.clock.getTime();
-
-        // Require minimum thresholds to ensure accurate bitrate calculation
-        const MIN_READ_POS = 1024 * 1024; // At least 1MB read
-        const MIN_TIME = 1.0; // At least 1 second of playback
-
-        // If we have a valid read position and current time, use them as a reference point
-        if (
-          currentReadPos >= MIN_READ_POS &&
-          currentTime >= MIN_TIME &&
-          currentReadPos < this.fileSize
-        ) {
-          // Calculate effective bitrate from current position and time
-          const normalizedTime = Math.max(0.1, currentTime - this.startTime);
-          const effectiveBitrate = currentReadPos / normalizedTime; // bytes per second
-
-          if (effectiveBitrate > 0) {
-            // Estimate time for buffered end based on effective bitrate
-            const estimatedTime = bufferedBytes / effectiveBitrate;
-
-            // Clamp to valid range
-            return Math.max(0, Math.min(duration, estimatedTime));
-          }
-        }
-
-        // Fallback: Account for metadata overhead (first 1-2% is often metadata)
-        const metadataOverhead = Math.min(
-          this.fileSize * 0.02,
-          2 * 1024 * 1024,
-        );
-        const effectiveFileSize = this.fileSize - metadataOverhead;
-        const effectiveBufferedBytes = Math.max(
-          0,
-          bufferedBytes - metadataOverhead,
-        );
-
-        if (effectiveFileSize > 0 && effectiveBufferedBytes >= 0) {
-          const ratio = Math.min(1, effectiveBufferedBytes / effectiveFileSize);
-          return ratio * duration;
-        }
-
-        // Last resort: simple linear
         const ratio = Math.min(1, bufferedBytes / this.fileSize);
         return ratio * duration;
       }
@@ -2476,60 +2418,13 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
     }
 
     const duration = this.mediaInfo.duration;
-    if (duration <= 0) {
-      return 0;
-    }
-
-    const bufferStartBytes = this.source.getBufferStart();
-    if (bufferStartBytes < 0) {
-      return 0;
-    }
-
-    // Use current read position as reference for more accurate conversion
-    // This accounts for metadata at the beginning (moov atom) which takes bytes but no playback time
-    const currentReadPos = this.source.getPosition();
-    const currentTime = this.clock.getTime();
-
-    // If we have a valid read position and current time, use them as a reference point
-    // Require minimum thresholds to ensure accurate bitrate calculation
-    const MIN_READ_POS = 1024 * 1024; // At least 1MB read
-    const MIN_TIME = 1.0; // At least 1 second of playback
-
-    if (
-      currentReadPos >= MIN_READ_POS &&
-      currentTime >= MIN_TIME &&
-      currentReadPos < this.fileSize
-    ) {
-      // Calculate effective bitrate from current position and time
-      const effectiveBitrate = currentReadPos / currentTime; // bytes per second
-
-      if (effectiveBitrate > 0) {
-        // Estimate time for buffer start based on effective bitrate
-        // This is more accurate than linear file ratio
-        const estimatedTime = bufferStartBytes / effectiveBitrate;
-
-        // Clamp to valid range
-        return Math.max(0, Math.min(duration, estimatedTime));
-      }
-    }
-
-    // Fallback to linear estimation if we don't have a good reference point
-    // Account for typical metadata overhead (first 1-2% of file is often metadata)
-    const metadataOverhead = Math.min(this.fileSize * 0.02, 2 * 1024 * 1024); // Max 2MB or 2%
-    const effectiveFileSize = this.fileSize - metadataOverhead;
-    const effectiveStartBytes = Math.max(
-      0,
-      bufferStartBytes - metadataOverhead,
-    );
-
-    if (effectiveFileSize > 0 && effectiveStartBytes >= 0) {
-      const ratio = Math.min(1, effectiveStartBytes / effectiveFileSize);
+    // For HttpSource, convert buffer start bytes to time using stable linear estimation
+    if (this.source instanceof HttpSource && this.fileSize > 0) {
+      const bufferStartBytes = this.source.getBufferStart();
+      const ratio = Math.min(1, bufferStartBytes / this.fileSize);
       return ratio * duration;
     }
-
-    // Last resort: simple linear
-    const ratio = Math.min(1, bufferStartBytes / this.fileSize);
-    return ratio * duration;
+    return 0;
   }
 
   /**
