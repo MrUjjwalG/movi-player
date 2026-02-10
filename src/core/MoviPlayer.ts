@@ -2362,7 +2362,11 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
       const bufferedBytes = this.source.getBufferedEnd();
       if (bufferedBytes > 0) {
         const ratio = Math.min(1, bufferedBytes / this.fileSize);
-        return ratio * duration;
+        const bufferedTime = ratio * duration;
+
+        // Ensure buffer appears at least as far as current playback position
+        // This prevents buffer bar from appearing behind progress bar
+        return Math.max(bufferedTime, this.getCurrentTime());
       }
     }
 
