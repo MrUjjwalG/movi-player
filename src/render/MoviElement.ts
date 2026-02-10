@@ -670,48 +670,56 @@ export class MoviElement extends HTMLElement {
     seekBackwardBtn?.addEventListener("click", (e) => {
       e.stopPropagation();
       const side = "left";
-      if (this.lastSeekSide === side && Date.now() - this.lastSeekTime < 1000) {
-        this.cumulativeSeekAmount += 10;
-      } else {
-        this.cumulativeSeekAmount = 10;
-        this.lastSeekSide = side;
-      }
-      this.lastSeekTime = Date.now();
       const currentTime = this.currentTime;
       const newTime = Math.max(0, currentTime - 10);
       Logger.debug(TAG, `Seek backward: ${currentTime}s -> ${newTime}s`);
-      this.currentTime = newTime;
-      this.showOSD(
-        `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
-          <path d="M9 4.5a10 10 0 0 0-4.5 8.1 10 10 0 0 0 14.5 8.4M9 4.5l-4 4m4-4V9" />
-          <text x="50%" y="60%" font-size="7" font-weight="bold" fill="currentColor" text-anchor="middle" dominant-baseline="middle" stroke="none">10</text>
-        </svg>`,
-        `- ${this.cumulativeSeekAmount}s`,
-      );
+
+      // Only increment counter if seek actually changes position
+      if (newTime !== currentTime) {
+        if (this.lastSeekSide === side && Date.now() - this.lastSeekTime < 1000) {
+          this.cumulativeSeekAmount += 10;
+        } else {
+          this.cumulativeSeekAmount = 10;
+          this.lastSeekSide = side;
+        }
+        this.lastSeekTime = Date.now();
+        this.currentTime = newTime;
+        this.showOSD(
+          `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M9 4.5a10 10 0 0 0-4.5 8.1 10 10 0 0 0 14.5 8.4M9 4.5l-4 4m4-4V9" />
+            <text x="50%" y="60%" font-size="7" font-weight="bold" fill="currentColor" text-anchor="middle" dominant-baseline="middle" stroke="none">10</text>
+          </svg>`,
+          `- ${this.cumulativeSeekAmount}s`,
+        );
+      }
     });
 
     // Seek Forward
     seekForwardBtn?.addEventListener("click", (e) => {
       e.stopPropagation();
       const side = "right";
-      if (this.lastSeekSide === side && Date.now() - this.lastSeekTime < 1000) {
-        this.cumulativeSeekAmount += 10;
-      } else {
-        this.cumulativeSeekAmount = 10;
-        this.lastSeekSide = side;
-      }
-      this.lastSeekTime = Date.now();
       const currentTime = this.currentTime;
       const newTime = Math.min(this.duration, currentTime + 10);
       Logger.debug(TAG, `Seek forward: ${currentTime}s -> ${newTime}s (duration: ${this.duration}s)`);
-      this.currentTime = newTime;
-      this.showOSD(
-        `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
-          <path d="M15 4.5a10 10 0 0 1 4.5 8.1 10 10 0 0 1-14.5 8.4M15 4.5l4 4m-4-4V9" />
-          <text x="50%" y="60%" font-size="7" font-weight="bold" fill="currentColor" text-anchor="middle" dominant-baseline="middle" stroke="none">10</text>
-        </svg>`,
-        `+ ${this.cumulativeSeekAmount}s`,
-      );
+
+      // Only increment counter if seek actually changes position
+      if (newTime !== currentTime) {
+        if (this.lastSeekSide === side && Date.now() - this.lastSeekTime < 1000) {
+          this.cumulativeSeekAmount += 10;
+        } else {
+          this.cumulativeSeekAmount = 10;
+          this.lastSeekSide = side;
+        }
+        this.lastSeekTime = Date.now();
+        this.currentTime = newTime;
+        this.showOSD(
+          `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M15 4.5a10 10 0 0 1 4.5 8.1 10 10 0 0 1-14.5 8.4M15 4.5l4 4m-4-4V9" />
+            <text x="50%" y="60%" font-size="7" font-weight="bold" fill="currentColor" text-anchor="middle" dominant-baseline="middle" stroke="none">10</text>
+          </svg>`,
+          `+ ${this.cumulativeSeekAmount}s`,
+        );
+      }
     });
 
     hdrBtn?.addEventListener("click", (e) => {
@@ -2076,27 +2084,33 @@ export class MoviElement extends HTMLElement {
                 `-1 Frame`,
               );
             } else {
-              // Increase cumulative amount if pressing same direction quickly (or holding key)
-              if (
-                this.lastSeekSide === side &&
-                Date.now() - this.lastSeekTime < 1000
-              ) {
-                this.cumulativeSeekAmount += 10;
-              } else {
-                this.cumulativeSeekAmount = 10;
-                this.lastSeekSide = side;
-              }
-              this.lastSeekTime = Date.now();
+              const currentTime = this.currentTime;
+              const newTime = Math.max(0, currentTime - 10);
 
-              this.currentTime = Math.max(0, this.currentTime - 10);
-              this.showOSD(
-                `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-                  <path d="M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8" />
-                  <path d="M3 3v5h5" />
-                  <text x="50%" y="54%" font-size="7" font-family="sans-serif" font-weight="bold" fill="currentColor" text-anchor="middle" dominant-baseline="middle" stroke="none">10</text>
-                </svg>`,
-                `- ${this.cumulativeSeekAmount}s`,
-              );
+              // Only increment counter if seek actually changes position
+              if (newTime !== currentTime) {
+                // Increase cumulative amount if pressing same direction quickly (or holding key)
+                if (
+                  this.lastSeekSide === side &&
+                  Date.now() - this.lastSeekTime < 1000
+                ) {
+                  this.cumulativeSeekAmount += 10;
+                } else {
+                  this.cumulativeSeekAmount = 10;
+                  this.lastSeekSide = side;
+                }
+                this.lastSeekTime = Date.now();
+
+                this.currentTime = newTime;
+                this.showOSD(
+                  `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                    <path d="M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8" />
+                    <path d="M3 3v5h5" />
+                    <text x="50%" y="54%" font-size="7" font-family="sans-serif" font-weight="bold" fill="currentColor" text-anchor="middle" dominant-baseline="middle" stroke="none">10</text>
+                  </svg>`,
+                  `- ${this.cumulativeSeekAmount}s`,
+                );
+              }
             }
           }
           break;
@@ -2125,26 +2139,32 @@ export class MoviElement extends HTMLElement {
                 `+1 Frame`,
               );
             } else {
-              if (
-                this.lastSeekSide === side &&
-                Date.now() - this.lastSeekTime < 1000
-              ) {
-                this.cumulativeSeekAmount += 10;
-              } else {
-                this.cumulativeSeekAmount = 10;
-                this.lastSeekSide = side;
-              }
-              this.lastSeekTime = Date.now();
+              const currentTime = this.currentTime;
+              const newTime = Math.min(this.duration, currentTime + 10);
 
-              this.currentTime = Math.min(this.duration, this.currentTime + 10);
-              this.showOSD(
-                `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-                  <path d="M21 12a9 9 0 1 1-9-9 9.75 9.75 0 0 1 6.74 2.74L21 8" />
-                  <path d="M21 3v5h-5" />
-                  <text x="50%" y="54%" font-size="7" font-family="sans-serif" font-weight="bold" fill="currentColor" text-anchor="middle" dominant-baseline="middle" stroke="none">10</text>
-                </svg>`,
-                `+ ${this.cumulativeSeekAmount}s`,
-              );
+              // Only increment counter if seek actually changes position
+              if (newTime !== currentTime) {
+                if (
+                  this.lastSeekSide === side &&
+                  Date.now() - this.lastSeekTime < 1000
+                ) {
+                  this.cumulativeSeekAmount += 10;
+                } else {
+                  this.cumulativeSeekAmount = 10;
+                  this.lastSeekSide = side;
+                }
+                this.lastSeekTime = Date.now();
+
+                this.currentTime = newTime;
+                this.showOSD(
+                  `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                    <path d="M21 12a9 9 0 1 1-9-9 9.75 9.75 0 0 1 6.74 2.74L21 8" />
+                    <path d="M21 3v5h-5" />
+                    <text x="50%" y="54%" font-size="7" font-family="sans-serif" font-weight="bold" fill="currentColor" text-anchor="middle" dominant-baseline="middle" stroke="none">10</text>
+                  </svg>`,
+                  `+ ${this.cumulativeSeekAmount}s`,
+                );
+              }
             }
           }
           break;
