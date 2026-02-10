@@ -2,6 +2,8 @@
 
 Use the MoviPlayer class directly for full control over video playback.
 
+![Custom Player UI Example](../images/custom.gif)
+
 ## Basic Setup
 
 ```typescript

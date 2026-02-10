@@ -7,11 +7,21 @@
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 [![Browser Support](https://img.shields.io/badge/browsers-Chrome%2094%2B%20%7C%20Safari%2016.4%2B%20%7C%20Edge%2094%2B-brightgreen.svg)](https://caniuse.com/webcodecs)
 
-👉 **Install:** `npm i movi-player`  
-👉 **Docs:** [mrujjwalg.github.io/movi-player](https://mrujjwalg.github.io/movi-player/)  
+👉 **Install:** `npm i movi-player`
+👉 **Docs:** [mrujjwalg.github.io/movi-player](https://mrujjwalg.github.io/movi-player/)
 👉 **Demo:** [movi-player-examples.vercel.app](https://movi-player-examples.vercel.app/element.html)
 
-![Movi Player Showcase](docs/images/element.gif)
+### Element Module (Full UI)
+
+![Movi Player Element](docs/images/element.gif)
+
+👉 [View Live Demo](https://movi-player-examples.vercel.app/element.html) | [See Code Example](https://github.com/mrujjwalg/movi-player-examples/blob/main/element.html)
+
+### Player Module (Custom UI)
+
+![Custom Player](docs/images/custom.gif)
+
+👉 [View Live Demo](https://movi-player-examples.vercel.app/youtube.html) | [See Code Example](https://github.com/mrujjwalg/movi-player-examples/blob/main/youtube.html)
 
 > 🚀 **No Server-Side Processing Required!** — All video parsing, demuxing, and decoding happens entirely in the browser using FFmpeg WASM & WebCodecs. Multiple audio/subtitle tracks are supported without any conversion or processing!
 
@@ -234,6 +244,8 @@ fileInput.addEventListener("change", async (e) => {
 
 ![Demuxer Overview](docs/images/demuxer.webp)
 
+👉 [View Live Demo](https://movi-player-examples.vercel.app/demuxer.html) | [See Code Example](https://github.com/mrujjwalg/movi-player-examples/blob/main/demuxer.html)
+
 ```typescript
 import { Demuxer, HttpSource, FileSource } from "movi-player/demuxer";
 
@@ -280,6 +292,8 @@ Movi-Player's modular design makes it perfect for a wide range of applications:
 
 ### Demuxer Module (50KB)
 
+👉 [View Live Demo](https://movi-player-examples.vercel.app/demuxer.html) | [See Code Example](https://github.com/mrujjwalg/movi-player-examples/blob/main/demuxer.html)
+
 - **Media Asset Management**: Catalog video libraries without playing files
 - **Video Validators**: Check uploaded files against platform requirements
 - **HDR Detection**: Automatically tag HDR content in video pipelines
@@ -288,6 +302,10 @@ Movi-Player's modular design makes it perfect for a wide range of applications:
 - **Lightweight Decoding**: Built-in decoders for custom AV processing pipelines
 
 ### Player Module (180KB)
+
+![Custom Player UI](docs/images/custom.gif)
+
+👉 [View Live Demo](https://movi-player-examples.vercel.app/youtube.html) | [See Code Example](https://github.com/mrujjwalg/movi-player-examples/blob/main/youtube.html)
 
 - **Custom Video Players**: Build branded players with custom UI
 - **Educational Platforms**: Interactive learning videos with quiz overlays
