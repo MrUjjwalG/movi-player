@@ -672,10 +672,11 @@ export class MoviElement extends HTMLElement {
       const side = "left";
       const currentTime = this.currentTime;
       const newTime = Math.max(0, currentTime - 10);
-      Logger.debug(TAG, `Seek backward: ${currentTime}s -> ${newTime}s`);
+      const canSeek = newTime !== currentTime;
+      Logger.debug(TAG, `Seek backward: ${currentTime}s -> ${newTime}s (canSeek: ${canSeek})`);
 
       // Only increment counter if seek actually changes position
-      if (newTime !== currentTime) {
+      if (canSeek) {
         if (this.lastSeekSide === side && Date.now() - this.lastSeekTime < 1000) {
           this.cumulativeSeekAmount += 10;
         } else {
@@ -684,6 +685,7 @@ export class MoviElement extends HTMLElement {
         }
         this.lastSeekTime = Date.now();
         this.currentTime = newTime;
+        Logger.debug(TAG, `Counter updated: ${this.cumulativeSeekAmount}s`);
         this.showOSD(
           `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
             <path d="M9 4.5a10 10 0 0 0-4.5 8.1 10 10 0 0 0 14.5 8.4M9 4.5l-4 4m4-4V9" />
@@ -691,6 +693,8 @@ export class MoviElement extends HTMLElement {
           </svg>`,
           `- ${this.cumulativeSeekAmount}s`,
         );
+      } else {
+        Logger.debug(TAG, `At boundary, skipping counter update`);
       }
     });
 
@@ -700,10 +704,11 @@ export class MoviElement extends HTMLElement {
       const side = "right";
       const currentTime = this.currentTime;
       const newTime = Math.min(this.duration, currentTime + 10);
-      Logger.debug(TAG, `Seek forward: ${currentTime}s -> ${newTime}s (duration: ${this.duration}s)`);
+      const canSeek = newTime !== currentTime;
+      Logger.debug(TAG, `Seek forward: ${currentTime}s -> ${newTime}s (duration: ${this.duration}s, canSeek: ${canSeek})`);
 
       // Only increment counter if seek actually changes position
-      if (newTime !== currentTime) {
+      if (canSeek) {
         if (this.lastSeekSide === side && Date.now() - this.lastSeekTime < 1000) {
           this.cumulativeSeekAmount += 10;
         } else {
@@ -712,6 +717,7 @@ export class MoviElement extends HTMLElement {
         }
         this.lastSeekTime = Date.now();
         this.currentTime = newTime;
+        Logger.debug(TAG, `Counter updated: ${this.cumulativeSeekAmount}s`);
         this.showOSD(
           `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
             <path d="M15 4.5a10 10 0 0 1 4.5 8.1 10 10 0 0 1-14.5 8.4M15 4.5l4 4m-4-4V9" />
@@ -719,6 +725,8 @@ export class MoviElement extends HTMLElement {
           </svg>`,
           `+ ${this.cumulativeSeekAmount}s`,
         );
+      } else {
+        Logger.debug(TAG, `At boundary, skipping counter update`);
       }
     });
 
