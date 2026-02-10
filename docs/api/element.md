@@ -341,6 +341,112 @@ Overrides the video frame rate with a custom value.
 
 ---
 
+#### `gesturefs`
+
+Restricts touch gestures to fullscreen mode only. When enabled, tap/swipe/pinch gestures will only work when the player is in fullscreen.
+
+```html
+<movi-player src="video.mp4" gesturefs></movi-player>
+```
+
+**Use Case:** Prevent accidental gesture triggers when player is embedded in scrollable content or near system gesture edges on mobile devices.
+
+---
+
+#### `nohotkeys`
+
+Disables all keyboard shortcuts for playback control.
+
+```html
+<movi-player src="video.mp4" nohotkeys></movi-player>
+```
+
+**Use Case:** Useful when embedding player in forms or pages where keyboard shortcuts might conflict with other page functionality.
+
+**Disabled Shortcuts:**
+- Space/K - Play/Pause
+- Arrow Left/Right - Seek ±10s
+- Arrow Up/Down - Volume ±10%
+- F - Fullscreen
+- M - Mute/Unmute
+
+---
+
+#### `startat`
+
+Specifies the time (in seconds) where playback should start.
+
+```html
+<movi-player src="video.mp4" startat="30"></movi-player>
+```
+
+**Use Case:** Start video at a specific timestamp, useful for sharing video links with timestamps or auto-skipping intros.
+
+---
+
+#### `fastseek`
+
+Enables fast seek controls for quick ±10s navigation.
+
+```html
+<movi-player src="video.mp4" fastseek></movi-player>
+```
+
+**Enables:**
+- Skip forward/backward buttons in control bar
+- Double-tap on left/right sides to seek
+- Arrow Left/Right keyboard shortcuts (±10s)
+
+**Use Case:** Better navigation experience for longer videos (podcasts, lectures, movies).
+
+---
+
+#### `doubletap`
+
+Enables/disables double-tap to seek gesture.
+
+```html
+<!-- Enable (default) -->
+<movi-player src="video.mp4" doubletap="true"></movi-player>
+
+<!-- Disable -->
+<movi-player src="video.mp4" doubletap="false"></movi-player>
+```
+
+**Behavior:** Double-tap left side seeks -10s, double-tap right side seeks +10s.
+
+---
+
+#### `themecolor`
+
+Sets a custom primary color for the player UI (progress bar, buttons, accents).
+
+```html
+<movi-player src="video.mp4" themecolor="#ff5722"></movi-player>
+```
+
+**Value:** Any valid CSS color (hex, rgb, color name).
+
+**Use Case:** Match player theme to your brand colors.
+
+---
+
+#### `buffersize`
+
+Sets custom buffer size in seconds.
+
+```html
+<movi-player src="video.mp4" buffersize="30"></movi-player>
+```
+
+**Value:** Number of seconds to buffer ahead.
+
+**Default:** Auto (based on connection quality).
+
+**Use Case:** Increase for unstable connections, decrease to reduce memory usage.
+
+---
+
 ### Standard HTML Attributes
 
 #### `width` / `height`
@@ -520,6 +626,82 @@ Gets/sets custom frame rate override.
 ```typescript
 player.fps = 24; // Override to 24 FPS
 player.fps = 0; // Auto (from metadata)
+```
+
+---
+
+#### `gesturefs: boolean`
+
+Gets/sets whether touch gestures are restricted to fullscreen mode only.
+
+```typescript
+player.gesturefs = true; // Gestures only work in fullscreen
+player.gesturefs = false; // Gestures always enabled
+```
+
+---
+
+#### `nohotkeys: boolean`
+
+Gets/sets whether keyboard shortcuts are disabled.
+
+```typescript
+player.nohotkeys = true; // Disable keyboard shortcuts
+player.nohotkeys = false; // Enable keyboard shortcuts
+```
+
+---
+
+#### `startat: number`
+
+Gets/sets the starting playback time in seconds.
+
+```typescript
+player.startat = 30; // Start at 30 seconds
+```
+
+---
+
+#### `fastseek: boolean`
+
+Gets/sets whether fast seek controls are enabled.
+
+```typescript
+player.fastseek = true; // Enable ±10s skip buttons
+player.fastseek = false; // Disable fast seek
+```
+
+---
+
+#### `doubletap: boolean`
+
+Gets/sets whether double-tap to seek is enabled.
+
+```typescript
+player.doubletap = true; // Enable double-tap seek
+player.doubletap = false; // Disable double-tap seek
+```
+
+---
+
+#### `themecolor: string | null`
+
+Gets/sets custom theme color for the player UI.
+
+```typescript
+player.themecolor = "#ff5722"; // Set custom color
+player.themecolor = null; // Reset to default
+```
+
+---
+
+#### `buffersize: number`
+
+Gets/sets custom buffer size in seconds.
+
+```typescript
+player.buffersize = 30; // Buffer 30 seconds ahead
+player.buffersize = 0; // Auto buffer size
 ```
 
 ---

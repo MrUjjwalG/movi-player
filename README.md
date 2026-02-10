@@ -592,6 +592,13 @@ The `<movi-player>` element supports standard video attributes plus enhancements
   renderer="canvas"        <!-- canvas | mse -->
   sw="auto"               <!-- auto (default) | true | false -->
   fps="0"                  <!-- Custom frame rate override -->
+  gesturefs                <!-- Gestures only in fullscreen -->
+  nohotkeys                <!-- Disable keyboard shortcuts -->
+  startat="0"              <!-- Start playback at time (seconds) -->
+  fastseek                 <!-- Enable ±10s skip controls -->
+  doubletap="true"         <!-- Enable double-tap to seek -->
+  themecolor="#4CAF50"     <!-- Custom theme color -->
+  buffersize="0"           <!-- Buffer size in seconds (0=auto) -->
 ></movi-player>
 ```
 
