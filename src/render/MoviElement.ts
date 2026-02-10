@@ -6960,18 +6960,16 @@ export class MoviElement extends HTMLElement {
         progressHandle.style.left = `${percent}%`;
       }
 
-      // Update buffer (if available) - Visualize the sliding window
+      // Update buffer (if available) - Show continuous buffered range from start
       if (this.player && progressBuffer) {
-        const bufferStart = this.player.getBufferStartTime();
         const bufferEnd = this.player.getBufferEndTime();
 
         if (bufferEnd > 0) {
-          const startPercent = (bufferStart / this.duration) * 100;
+          // Show buffer from 0 to bufferEnd (continuous appearance, no gaps)
           const endPercent = (bufferEnd / this.duration) * 100;
-          const widthPercent = Math.max(0, endPercent - startPercent);
 
-          progressBuffer.style.left = `${startPercent}%`;
-          progressBuffer.style.width = `${widthPercent}%`;
+          progressBuffer.style.left = "0%";
+          progressBuffer.style.width = `${endPercent}%`;
         } else {
           progressBuffer.style.width = "0%";
         }
