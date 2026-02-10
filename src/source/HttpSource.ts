@@ -288,10 +288,11 @@ export class HttpSource implements SourceAdapter {
     this.atomicSetStreaming(true);
     this.atomicIncrementVersion();
 
-    // Cap maxBufferedEnd to not exceed what's actually available
-    const currentBufferEnd = fromOffset; // New stream starts here
-    if (this.maxBufferedEnd > currentBufferEnd + this.bufferSize) {
-      // If maxBufferedEnd is way beyond the new window, it's likely stale
+    // Reset maxBufferedEnd when seeking to new position
+    // If the old maxBufferedEnd is outside the new buffer window, it's stale
+    if (this.maxBufferedEnd < fromOffset || this.maxBufferedEnd > fromOffset + this.bufferSize) {
+      // Old buffered data is outside new window, reset to current position
+      this.maxBufferedEnd = fromOffset;
     }
 
     this.abortController = new AbortController();
@@ -712,6 +713,12 @@ export class HttpSource implements SourceAdapter {
       this.maxBufferedEnd <= maxReasonable
     ) {
       result = this.maxBufferedEnd;
+    }
+
+    // Ensure buffered end is at least as far as current read position
+    // This prevents buffer bar from appearing behind playback position
+    if (result < this.position) {
+      result = this.position;
     }
 
     // Never exceed file size

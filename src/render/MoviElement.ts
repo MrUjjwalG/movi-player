@@ -83,6 +83,10 @@ export class MoviElement extends HTMLElement {
   private _themeColor: string | null = null; // Custom theme color
   private _bufferSize: number = 0; // Custom buffer size in seconds
   private _watermark: string | null = null; // Watermark image URL
+  private _title: string | null = null; // Video title to display
+  private _showTitle: boolean = false; // Show title at top if true
+  private _titleAutoLoaded: boolean = false; // Track if title was auto-loaded from metadata
+  private _lastDuration: number = 0; // Track duration changes for title auto-load
   private posterElement!: HTMLImageElement; // Poster image element
 
   // Ambient mode state
@@ -136,6 +140,8 @@ export class MoviElement extends HTMLElement {
       "themecolor",
       "buffersize",
       "watermark",
+      "title",
+      "showtitle",
     ];
   }
 
@@ -465,7 +471,7 @@ export class MoviElement extends HTMLElement {
 
             <button class="movi-btn movi-seek-backward" aria-label="Skip Backward 10s">
               <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-                <path d="M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0" transform="rotate(300 12 12)"/>
+                <path d="M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8" />
                 <path d="M3 3v5h5" />
                 <text x="50%" y="54%" font-size="7" font-family="sans-serif" font-weight="bold" fill="currentColor" text-anchor="middle" dominant-baseline="middle" stroke="none">10</text>
               </svg>
@@ -473,7 +479,7 @@ export class MoviElement extends HTMLElement {
 
             <button class="movi-btn movi-seek-forward" aria-label="Skip Forward 10s">
               <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-                <path d="M21 12a9 9 0 1 1-9-9 9.75 9.75 0 0" transform="rotate(60 12 12)"/>
+                <path d="M21 12a9 9 0 1 1-9-9 9.75 9.75 0 0 1 6.74 2.74L21 8" />
                 <path d="M21 3v5h-5" />
                 <text x="50%" y="54%" font-size="7" font-family="sans-serif" font-weight="bold" fill="currentColor" text-anchor="middle" dominant-baseline="middle" stroke="none">10</text>
               </svg>
@@ -618,6 +624,13 @@ export class MoviElement extends HTMLElement {
     shadowRoot.appendChild(container);
     this.controlsContainer = container;
 
+    // Create title bar as a separate element outside controls container
+    const titleBar = document.createElement("div");
+    titleBar.className = "movi-title-bar";
+    titleBar.style.display = "none";
+    titleBar.innerHTML = `<span class="movi-title-text"></span>`;
+    shadowRoot.appendChild(titleBar);
+
     // Setup control handlers
     this.setupControlHandlers(shadowRoot);
   }
@@ -670,42 +683,72 @@ export class MoviElement extends HTMLElement {
     seekBackwardBtn?.addEventListener("click", (e) => {
       e.stopPropagation();
       const side = "left";
-      if (this.lastSeekSide === side && Date.now() - this.lastSeekTime < 1000) {
-        this.cumulativeSeekAmount += 10;
+      const currentTime = this.currentTime;
+      const newTime = Math.max(0, currentTime - 10);
+      // Can seek if currently more than 0.5s away from start
+      const canSeek = currentTime > 0.5;
+      Logger.debug(TAG, `Seek backward: ${currentTime}s -> ${newTime}s (canSeek: ${canSeek})`);
+
+      // Always perform the seek
+      this.currentTime = newTime;
+
+      // Only increment counter and show OSD if not at boundary
+      if (canSeek) {
+        if (this.lastSeekSide === side && Date.now() - this.lastSeekTime < 1000) {
+          this.cumulativeSeekAmount += 10;
+        } else {
+          this.cumulativeSeekAmount = 10;
+          this.lastSeekSide = side;
+        }
+        this.lastSeekTime = Date.now();
+        Logger.debug(TAG, `Counter updated: ${this.cumulativeSeekAmount}s`);
+        this.showOSD(
+          `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8" />
+            <path d="M3 3v5h5" />
+            <text x="50%" y="54%" font-size="7" font-family="sans-serif" font-weight="bold" fill="currentColor" text-anchor="middle" dominant-baseline="middle" stroke="none">10</text>
+          </svg>`,
+          `- ${this.cumulativeSeekAmount}s`,
+        );
       } else {
-        this.cumulativeSeekAmount = 10;
-        this.lastSeekSide = side;
+        Logger.debug(TAG, `At boundary, skipping counter update`);
       }
-      this.lastSeekTime = Date.now();
-      this.currentTime = Math.max(0, this.currentTime - 10);
-      this.showOSD(
-        `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
-          <path d="M9 4.5a10 10 0 0 0-4.5 8.1 10 10 0 0 0 14.5 8.4M9 4.5l-4 4m4-4V9" />
-          <text x="50%" y="60%" font-size="7" font-weight="bold" fill="currentColor" text-anchor="middle" dominant-baseline="middle" stroke="none">10</text>
-        </svg>`,
-        `- ${this.cumulativeSeekAmount}s`,
-      );
     });
 
     // Seek Forward
     seekForwardBtn?.addEventListener("click", (e) => {
       e.stopPropagation();
       const side = "right";
-      if (this.lastSeekSide === side && Date.now() - this.lastSeekTime < 1000) {
-        this.cumulativeSeekAmount += 10;
+      const currentTime = this.currentTime;
+      const newTime = Math.min(this.duration, currentTime + 10);
+      // Can seek if currently more than 0.5s away from end
+      const canSeek = currentTime < this.duration - 0.5;
+      Logger.debug(TAG, `Seek forward: ${currentTime}s -> ${newTime}s (duration: ${this.duration}s, canSeek: ${canSeek})`);
+
+      // Always perform the seek
+      this.currentTime = newTime;
+
+      // Only increment counter and show OSD if not at boundary
+      if (canSeek) {
+        if (this.lastSeekSide === side && Date.now() - this.lastSeekTime < 1000) {
+          this.cumulativeSeekAmount += 10;
+        } else {
+          this.cumulativeSeekAmount = 10;
+          this.lastSeekSide = side;
+        }
+        this.lastSeekTime = Date.now();
+        Logger.debug(TAG, `Counter updated: ${this.cumulativeSeekAmount}s`);
+        this.showOSD(
+          `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M21 12a9 9 0 1 1-9-9 9.75 9.75 0 0 1 6.74 2.74L21 8" />
+            <path d="M21 3v5h-5" />
+            <text x="50%" y="54%" font-size="7" font-family="sans-serif" font-weight="bold" fill="currentColor" text-anchor="middle" dominant-baseline="middle" stroke="none">10</text>
+          </svg>`,
+          `+ ${this.cumulativeSeekAmount}s`,
+        );
       } else {
-        this.cumulativeSeekAmount = 10;
-        this.lastSeekSide = side;
+        Logger.debug(TAG, `At boundary, skipping counter update`);
       }
-      this.lastSeekTime = Date.now();
-      this.currentTime = Math.min(this.duration, this.currentTime + 10);
-      this.showOSD(
-        `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
-          <path d="M15 4.5a10 10 0 0 1 4.5 8.1 10 10 0 0 1-14.5 8.4M15 4.5l4 4m-4-4V9" />
-          <text x="50%" y="60%" font-size="7" font-weight="bold" fill="currentColor" text-anchor="middle" dominant-baseline="middle" stroke="none">10</text>
-        </svg>`,
-        `+ ${this.cumulativeSeekAmount}s`,
-      );
     });
 
     hdrBtn?.addEventListener("click", (e) => {
@@ -2070,27 +2113,37 @@ export class MoviElement extends HTMLElement {
                 `-1 Frame`,
               );
             } else {
-              // Increase cumulative amount if pressing same direction quickly (or holding key)
-              if (
-                this.lastSeekSide === side &&
-                Date.now() - this.lastSeekTime < 1000
-              ) {
-                this.cumulativeSeekAmount += 10;
-              } else {
-                this.cumulativeSeekAmount = 10;
-                this.lastSeekSide = side;
-              }
-              this.lastSeekTime = Date.now();
+              const currentTime = this.currentTime;
+              const newTime = Math.max(0, currentTime - 10);
+              // Can seek if currently more than 0.5s away from start
+              const canSeek = currentTime > 0.5;
 
-              this.currentTime = Math.max(0, this.currentTime - 10);
-              this.showOSD(
-                `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-                  <path d="M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8" />
-                  <path d="M3 3v5h5" />
-                  <text x="50%" y="54%" font-size="7" font-family="sans-serif" font-weight="bold" fill="currentColor" text-anchor="middle" dominant-baseline="middle" stroke="none">10</text>
-                </svg>`,
-                `- ${this.cumulativeSeekAmount}s`,
-              );
+              // Always perform the seek
+              this.currentTime = newTime;
+
+              // Only increment counter and show OSD if not at boundary
+              if (canSeek) {
+                // Increase cumulative amount if pressing same direction quickly (or holding key)
+                if (
+                  this.lastSeekSide === side &&
+                  Date.now() - this.lastSeekTime < 1000
+                ) {
+                  this.cumulativeSeekAmount += 10;
+                } else {
+                  this.cumulativeSeekAmount = 10;
+                  this.lastSeekSide = side;
+                }
+                this.lastSeekTime = Date.now();
+
+                this.showOSD(
+                  `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                    <path d="M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8" />
+                    <path d="M3 3v5h5" />
+                    <text x="50%" y="54%" font-size="7" font-family="sans-serif" font-weight="bold" fill="currentColor" text-anchor="middle" dominant-baseline="middle" stroke="none">10</text>
+                  </svg>`,
+                  `- ${this.cumulativeSeekAmount}s`,
+                );
+              }
             }
           }
           break;
@@ -2119,26 +2172,36 @@ export class MoviElement extends HTMLElement {
                 `+1 Frame`,
               );
             } else {
-              if (
-                this.lastSeekSide === side &&
-                Date.now() - this.lastSeekTime < 1000
-              ) {
-                this.cumulativeSeekAmount += 10;
-              } else {
-                this.cumulativeSeekAmount = 10;
-                this.lastSeekSide = side;
-              }
-              this.lastSeekTime = Date.now();
+              const currentTime = this.currentTime;
+              const newTime = Math.min(this.duration, currentTime + 10);
+              // Can seek if currently more than 0.5s away from end
+              const canSeek = currentTime < this.duration - 0.5;
 
-              this.currentTime = Math.min(this.duration, this.currentTime + 10);
-              this.showOSD(
-                `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-                  <path d="M21 12a9 9 0 1 1-9-9 9.75 9.75 0 0 1 6.74 2.74L21 8" />
-                  <path d="M21 3v5h-5" />
-                  <text x="50%" y="54%" font-size="7" font-family="sans-serif" font-weight="bold" fill="currentColor" text-anchor="middle" dominant-baseline="middle" stroke="none">10</text>
-                </svg>`,
-                `+ ${this.cumulativeSeekAmount}s`,
-              );
+              // Always perform the seek
+              this.currentTime = newTime;
+
+              // Only increment counter and show OSD if not at boundary
+              if (canSeek) {
+                if (
+                  this.lastSeekSide === side &&
+                  Date.now() - this.lastSeekTime < 1000
+                ) {
+                  this.cumulativeSeekAmount += 10;
+                } else {
+                  this.cumulativeSeekAmount = 10;
+                  this.lastSeekSide = side;
+                }
+                this.lastSeekTime = Date.now();
+
+                this.showOSD(
+                  `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                    <path d="M21 12a9 9 0 1 1-9-9 9.75 9.75 0 0 1 6.74 2.74L21 8" />
+                    <path d="M21 3v5h-5" />
+                    <text x="50%" y="54%" font-size="7" font-family="sans-serif" font-weight="bold" fill="currentColor" text-anchor="middle" dominant-baseline="middle" stroke="none">10</text>
+                  </svg>`,
+                  `+ ${this.cumulativeSeekAmount}s`,
+                );
+              }
             }
           }
           break;
@@ -3592,6 +3655,14 @@ export class MoviElement extends HTMLElement {
       if (this.video) this.video.style.cursor = "default";
     }
 
+    // Show title bar if showtitle is enabled
+    if (this._showTitle && this.shadowRoot) {
+      const titleBar = this.shadowRoot.querySelector(".movi-title-bar") as HTMLElement;
+      if (titleBar && titleBar.style.display !== "none") {
+        titleBar.classList.add("movi-title-visible");
+      }
+    }
+
     // Clear existing timeout
     if (this.controlsTimeout) {
       clearTimeout(this.controlsTimeout);
@@ -3638,6 +3709,14 @@ export class MoviElement extends HTMLElement {
       if (this.canvas) this.canvas.style.cursor = "none";
       if (this.video) this.video.style.cursor = "none";
     }
+
+    // Hide title bar when controls are hidden
+    if (this.shadowRoot) {
+      const titleBar = this.shadowRoot.querySelector(".movi-title-bar") as HTMLElement;
+      if (titleBar) {
+        titleBar.classList.remove("movi-title-visible");
+      }
+    }
   }
 
   private updateControlsVisibility(): void {
@@ -3667,6 +3746,7 @@ export class MoviElement extends HTMLElement {
       this.updateProgressBar();
       this.updateVolumeIcon();
       this.updateLoadingIndicator(); // Check buffer fill percentage
+      this.updateTitle(); // Auto-load title from metadata if needed
 
       requestAnimationFrame(updateUI);
     };
@@ -3889,6 +3969,11 @@ export class MoviElement extends HTMLElement {
         background: linear-gradient(to top, rgba(255, 255, 255, 0.4) 0%, transparent 30%) !important;
       }
 
+      /* Light Theme Title Bar */
+      :host([theme="light"]) .movi-title-bar {
+        background: linear-gradient(to bottom, rgba(255, 255, 255, 0.7) 0%, transparent 100%) !important;
+      }
+
       /* Light Theme Progress Bar */
       :host([theme="light"]) .movi-progress-bar {
         background: rgba(0, 0, 0, 0.15) !important;
@@ -4077,6 +4162,37 @@ export class MoviElement extends HTMLElement {
       
       .movi-controls-container.movi-controls-visible .movi-controls-overlay {
         opacity: 1;
+      }
+
+      .movi-title-bar {
+        position: absolute;
+        top: 0;
+        left: 0;
+        right: 0;
+        padding: 16px 20px;
+        background: linear-gradient(to bottom, rgba(0, 0, 0, 0.7) 0%, transparent 100%);
+        z-index: 11;
+        opacity: 0;
+        transform: translateY(-10px);
+        transition: opacity 0.3s ease, transform 0.3s ease;
+        pointer-events: none;
+      }
+
+      .movi-title-bar.movi-title-visible {
+        opacity: 1;
+        transform: translateY(0);
+      }
+
+      .movi-title-text {
+        color: var(--movi-controls-color);
+        font-size: clamp(16px, 4vw, 20px);
+        font-weight: 500;
+        display: block;
+        text-shadow: 0 1px 3px rgba(0, 0, 0, 0.8);
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+        line-height: 1.4;
       }
 
       .movi-controls-bar {
@@ -6151,6 +6267,14 @@ export class MoviElement extends HTMLElement {
         this._watermark = newValue;
         this.updateWatermark();
         break;
+      case "title":
+        this._title = newValue;
+        this.updateTitle();
+        break;
+      case "showtitle":
+        this._showTitle = newValue !== null;
+        this.updateTitle();
+        break;
       case "src":
         // Only handle string src attributes, File objects are handled via setter
         if (!(this._src instanceof File)) {
@@ -6723,6 +6847,10 @@ export class MoviElement extends HTMLElement {
    * Load the video source (automatic when src is set)
    */
   async load(): Promise<void> {
+    // Reset auto-loaded title flag and duration tracker for new video
+    this._titleAutoLoaded = false;
+    this._lastDuration = 0;
+
     if (this.player) {
       // If player exists, destroy and recreate
       this.player.destroy();
@@ -6885,6 +7013,13 @@ export class MoviElement extends HTMLElement {
     if (durationEl) {
       durationEl.textContent = this.formatTime(this.duration);
     }
+
+    // Trigger title auto-load when duration first becomes available
+    if (this._lastDuration === 0 && this.duration > 0) {
+      this._lastDuration = this.duration;
+      // Call updateTitle to check if we need to auto-load from metadata
+      this.updateTitle();
+    }
   }
 
   private updateProgressBar(): void {
@@ -6910,18 +7045,16 @@ export class MoviElement extends HTMLElement {
         progressHandle.style.left = `${percent}%`;
       }
 
-      // Update buffer (if available) - Visualize the sliding window
+      // Update buffer (if available) - Show continuous buffered range from start
       if (this.player && progressBuffer) {
-        const bufferStart = this.player.getBufferStartTime();
         const bufferEnd = this.player.getBufferEndTime();
 
         if (bufferEnd > 0) {
-          const startPercent = (bufferStart / this.duration) * 100;
+          // Show buffer from 0 to bufferEnd (continuous appearance, no gaps)
           const endPercent = (bufferEnd / this.duration) * 100;
-          const widthPercent = Math.max(0, endPercent - startPercent);
 
-          progressBuffer.style.left = `${startPercent}%`;
-          progressBuffer.style.width = `${widthPercent}%`;
+          progressBuffer.style.left = "0%";
+          progressBuffer.style.width = `${endPercent}%`;
         } else {
           progressBuffer.style.width = "0%";
         }
@@ -7437,6 +7570,14 @@ export class MoviElement extends HTMLElement {
   }
 
   set src(value: string | File | null) {
+    // Reset title-related flags when src changes
+    if (this._titleAutoLoaded) {
+      // If title was auto-loaded (not explicitly set by user), reset it
+      this._title = null;
+    }
+    this._titleAutoLoaded = false;
+    this._lastDuration = 0;
+
     if (value instanceof File) {
       // For File objects, store in memory (can't store in attributes)
       this._src = value;
@@ -7797,6 +7938,34 @@ export class MoviElement extends HTMLElement {
     this.updateWatermark();
   }
 
+  get title(): string {
+    return this._title || "";
+  }
+  set title(value: string) {
+    this._title = value || null;
+    // Reset auto-load flag when user explicitly sets title
+    this._titleAutoLoaded = false;
+    if (value) {
+      this.setAttribute("title", value);
+    } else {
+      this.removeAttribute("title");
+    }
+    this.updateTitle();
+  }
+
+  get showtitle(): boolean {
+    return this._showTitle;
+  }
+  set showtitle(value: boolean) {
+    this._showTitle = value;
+    if (value) {
+      this.setAttribute("showtitle", "");
+    } else {
+      this.removeAttribute("showtitle");
+    }
+    this.updateTitle();
+  }
+
   private updateWatermark() {
     const shadowRoot = this.shadowRoot;
     if (!shadowRoot) return;
@@ -7830,6 +7999,80 @@ export class MoviElement extends HTMLElement {
 
     watermarkEl.src = this._watermark;
     watermarkEl.style.display = "block";
+  }
+
+  private updateTitle() {
+    const shadowRoot = this.shadowRoot;
+    if (!shadowRoot) return;
+
+    const titleBar = shadowRoot.querySelector(".movi-title-bar") as HTMLElement;
+    const titleText = shadowRoot.querySelector(
+      ".movi-title-text",
+    ) as HTMLElement;
+
+    if (!titleBar || !titleText) return;
+
+    // Auto-load title from media metadata if not explicitly set
+    if (
+      this._showTitle &&
+      !this._title &&
+      !this._titleAutoLoaded &&
+      this.player &&
+      this.duration > 0
+    ) {
+      const mediaInfo = this.player.getMediaInfo();
+      if (mediaInfo?.metadata?.title) {
+        this._title = mediaInfo.metadata.title;
+        this._titleAutoLoaded = true;
+      } else if (this._src) {
+        // Fallback to filename if no metadata title
+        let filename = "";
+        if (this._src instanceof File) {
+          // For File objects, use the file name
+          filename = this._src.name;
+        } else if (typeof this._src === "string") {
+          // For URL strings, extract filename from path
+          try {
+            const url = new URL(this._src, window.location.href);
+            const pathname = url.pathname;
+            filename = pathname.substring(pathname.lastIndexOf("/") + 1);
+            if (filename) {
+              // Decode URI component and remove query params
+              filename = decodeURIComponent(filename.split("?")[0]);
+            }
+          } catch {
+            // If URL parsing fails, just use the string as-is
+            filename = this._src;
+          }
+        }
+
+        // Remove file extension from filename
+        if (filename) {
+          const lastDotIndex = filename.lastIndexOf(".");
+          if (lastDotIndex > 0) {
+            // Only remove extension if dot is not at the start (hidden files)
+            this._title = filename.substring(0, lastDotIndex);
+          } else {
+            this._title = filename;
+          }
+        }
+        this._titleAutoLoaded = true;
+      }
+    }
+
+    if (this._showTitle && this._title) {
+      titleText.textContent = this._title;
+      titleBar.style.display = "block";
+
+      // Show title if controls are currently visible
+      const container = this.controlsContainer;
+      if (container?.classList.contains("movi-controls-visible")) {
+        titleBar.classList.add("movi-title-visible");
+      }
+    } else {
+      titleBar.style.display = "none";
+      titleBar.classList.remove("movi-title-visible");
+    }
   }
 
   get duration(): number {

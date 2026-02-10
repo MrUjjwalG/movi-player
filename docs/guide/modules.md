@@ -87,6 +87,8 @@ async function getVideoInfo(url: string) {
 
 Use when you need full playback control without the built-in UI.
 
+![Custom Player UI Example](../images/custom.gif)
+
 ```typescript
 import { MoviPlayer, LogLevel } from "movi-player/player";
 ```

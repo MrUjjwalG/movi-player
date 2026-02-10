@@ -26,6 +26,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Fixed
 - WebGL context loss handling on mobile minimize/restore
 - Touch control edges secured to prevent conflict with system gestures
+- Fast seek counter now correctly stops incrementing at video boundaries (0s and duration)
+- Seek OSD icons now consistent between buttons and keyboard shortcuts
+- Object fit changes now apply immediately when video is paused
+- Buffer visualization no longer shows gaps when seeking in HTTP sources
+- Buffer bar now displays continuous range from start instead of sliding window
+- Buffer bar never appears behind playback progress indicator
 
 ## [0.1.3] - 2025-01-XX
 
