@@ -51,6 +51,7 @@ export class MoviElement extends HTMLElement {
   private cumulativeSeekAmount: number = 0;
   private _contextMenuVisible: boolean = false;
   private _contextMenuJustClosed: boolean = false;
+  private lastTouchTime: number = 0;
 
   // Internal state
   private _src: string | File | null = null;
@@ -1482,12 +1483,42 @@ export class MoviElement extends HTMLElement {
       this.showControls();
     });
 
+    controlsContainer?.addEventListener(
+      "touchstart",
+      () => {
+        this.lastTouchTime = Date.now();
+        this.isOverControls = true;
+        this.showControls();
+      },
+      { passive: true },
+    );
+
+    controlsContainer?.addEventListener(
+      "touchend",
+      () => {
+        setTimeout(() => {
+          this.isOverControls = false;
+          // Restart hide timer if playing
+          if (this.player?.getState() === "playing") {
+            this.showControls();
+          }
+        }, 1000);
+      },
+      { passive: true },
+    );
+
     controlsContainer?.addEventListener("mouseleave", (e) => {
       // Check if mouse is moving to another part of controls
       const relatedTarget = e.relatedTarget as Element;
       if (relatedTarget && controlsContainer?.contains(relatedTarget)) {
         return; // Still over controls
       }
+
+      // Ignore mouseleave if it's a touch interaction (within 1000ms of last touch)
+      if (Date.now() - this.lastTouchTime < 1000) {
+        return;
+      }
+
       this.isOverControls = false;
       // Only hide if not dragging
       if (!this.isDragging) {
