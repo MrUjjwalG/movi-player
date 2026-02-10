@@ -715,6 +715,12 @@ export class HttpSource implements SourceAdapter {
       result = this.maxBufferedEnd;
     }
 
+    // Ensure buffered end is at least as far as current read position
+    // This prevents buffer bar from appearing behind playback position
+    if (result < this.position) {
+      result = this.position;
+    }
+
     // Never exceed file size
     if (this.size > 0 && result > this.size) {
       return this.size;
