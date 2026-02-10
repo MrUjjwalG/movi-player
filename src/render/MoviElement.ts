@@ -672,10 +672,14 @@ export class MoviElement extends HTMLElement {
       const side = "left";
       const currentTime = this.currentTime;
       const newTime = Math.max(0, currentTime - 10);
-      const canSeek = newTime !== currentTime;
+      // Can seek if currently more than 0.5s away from start
+      const canSeek = currentTime > 0.5;
       Logger.debug(TAG, `Seek backward: ${currentTime}s -> ${newTime}s (canSeek: ${canSeek})`);
 
-      // Only increment counter if seek actually changes position
+      // Always perform the seek
+      this.currentTime = newTime;
+
+      // Only increment counter and show OSD if not at boundary
       if (canSeek) {
         if (this.lastSeekSide === side && Date.now() - this.lastSeekTime < 1000) {
           this.cumulativeSeekAmount += 10;
@@ -684,7 +688,6 @@ export class MoviElement extends HTMLElement {
           this.lastSeekSide = side;
         }
         this.lastSeekTime = Date.now();
-        this.currentTime = newTime;
         Logger.debug(TAG, `Counter updated: ${this.cumulativeSeekAmount}s`);
         this.showOSD(
           `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
@@ -704,10 +707,14 @@ export class MoviElement extends HTMLElement {
       const side = "right";
       const currentTime = this.currentTime;
       const newTime = Math.min(this.duration, currentTime + 10);
-      const canSeek = newTime !== currentTime;
+      // Can seek if currently more than 0.5s away from end
+      const canSeek = currentTime < this.duration - 0.5;
       Logger.debug(TAG, `Seek forward: ${currentTime}s -> ${newTime}s (duration: ${this.duration}s, canSeek: ${canSeek})`);
 
-      // Only increment counter if seek actually changes position
+      // Always perform the seek
+      this.currentTime = newTime;
+
+      // Only increment counter and show OSD if not at boundary
       if (canSeek) {
         if (this.lastSeekSide === side && Date.now() - this.lastSeekTime < 1000) {
           this.cumulativeSeekAmount += 10;
@@ -716,7 +723,6 @@ export class MoviElement extends HTMLElement {
           this.lastSeekSide = side;
         }
         this.lastSeekTime = Date.now();
-        this.currentTime = newTime;
         Logger.debug(TAG, `Counter updated: ${this.cumulativeSeekAmount}s`);
         this.showOSD(
           `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
@@ -2094,9 +2100,14 @@ export class MoviElement extends HTMLElement {
             } else {
               const currentTime = this.currentTime;
               const newTime = Math.max(0, currentTime - 10);
+              // Can seek if currently more than 0.5s away from start
+              const canSeek = currentTime > 0.5;
 
-              // Only increment counter if seek actually changes position
-              if (newTime !== currentTime) {
+              // Always perform the seek
+              this.currentTime = newTime;
+
+              // Only increment counter and show OSD if not at boundary
+              if (canSeek) {
                 // Increase cumulative amount if pressing same direction quickly (or holding key)
                 if (
                   this.lastSeekSide === side &&
@@ -2109,7 +2120,6 @@ export class MoviElement extends HTMLElement {
                 }
                 this.lastSeekTime = Date.now();
 
-                this.currentTime = newTime;
                 this.showOSD(
                   `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
                     <path d="M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8" />
@@ -2149,9 +2159,14 @@ export class MoviElement extends HTMLElement {
             } else {
               const currentTime = this.currentTime;
               const newTime = Math.min(this.duration, currentTime + 10);
+              // Can seek if currently more than 0.5s away from end
+              const canSeek = currentTime < this.duration - 0.5;
 
-              // Only increment counter if seek actually changes position
-              if (newTime !== currentTime) {
+              // Always perform the seek
+              this.currentTime = newTime;
+
+              // Only increment counter and show OSD if not at boundary
+              if (canSeek) {
                 if (
                   this.lastSeekSide === side &&
                   Date.now() - this.lastSeekTime < 1000
@@ -2163,7 +2178,6 @@ export class MoviElement extends HTMLElement {
                 }
                 this.lastSeekTime = Date.now();
 
-                this.currentTime = newTime;
                 this.showOSD(
                   `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
                     <path d="M21 12a9 9 0 1 1-9-9 9.75 9.75 0 0 1 6.74 2.74L21 8" />
