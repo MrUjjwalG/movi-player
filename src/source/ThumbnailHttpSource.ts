@@ -93,60 +93,112 @@ export class ThumbnailHttpSource implements SourceAdapter {
       `Fetching: range=${fetchStart}-${fetchEnd} (${((fetchEnd - fetchStart + 1) / 1024).toFixed(1)} KB)`,
     );
 
-    // Use a local controller for this request + timeout
-    const controller = new AbortController();
-    const timeoutId = setTimeout(() => controller.abort(), 10000); // 10s timeout
+    // Retry loop
+    const MAX_RETRIES = 5;
+    const BASE_DELAY = 1000;
 
-    try {
-      const response = await fetch(this.url, {
-        headers: {
-          ...this.headers,
-          Range: `bytes=${fetchStart}-${fetchEnd}`,
-        },
-        signal: controller.signal,
-      });
-      clearTimeout(timeoutId);
+    for (let attempt = 0; attempt <= MAX_RETRIES; attempt++) {
+      // Check for offline state
+      if (
+        typeof self !== "undefined" &&
+        self.navigator &&
+        !self.navigator.onLine
+      ) {
+        Logger.warn(TAG, "Network offline, waiting for connection...");
+        await new Promise<void>((resolve) => {
+          const onOnline = () => {
+            self.removeEventListener("online", onOnline);
+            resolve();
+          };
+          self.addEventListener("online", onOnline);
+        });
+        Logger.info(TAG, "Network online, resuming...");
+        attempt = 0; // Reset retries
+      }
 
-      if (!response.ok) {
-        if (response.status === 416) {
-          Logger.warn(
-            TAG,
-            `HTTP 416 (Range Not Satisfiable) at ${fetchStart}-${fetchEnd} (Size: ${this.size}). Treating as EOF.`,
-          );
-          // If we get 416, we are likely past the end of the file or the file size changed
-          // Return empty buffer to signal EOF
-          return new ArrayBuffer(0);
-        } else if (response.status !== 206) {
-          throw new Error(`HTTP ${response.status} ${response.statusText}`);
+      const controller = new AbortController();
+      const timeoutId = setTimeout(() => controller.abort(), 10000); // 10s timeout
+
+      try {
+        const response = await fetch(this.url, {
+          headers: {
+            ...this.headers,
+            Range: `bytes=${fetchStart}-${fetchEnd}`,
+          },
+          signal: controller.signal,
+        });
+        clearTimeout(timeoutId);
+
+        if (!response.ok) {
+          if (response.status === 416) {
+            Logger.warn(
+              TAG,
+              `HTTP 416 (Range Not Satisfiable) at ${fetchStart}-${fetchEnd}. Treating as EOF.`,
+            );
+            return new ArrayBuffer(0);
+          } else if (response.status >= 500 || response.status === 429) {
+            // Retry server errors
+            throw new Error(`HTTP ${response.status}`);
+          } else {
+            // Fatal client error
+            throw new Error(`HTTP ${response.status} (Fatal)`);
+          }
         }
+
+        const arrayBuffer = await response.arrayBuffer();
+
+        // Store in buffer
+        this.buffer = new Uint8Array(arrayBuffer);
+        this.bufferStart = fetchStart;
+        this.bufferEnd = fetchStart + arrayBuffer.byteLength;
+
+        Logger.debug(
+          TAG,
+          `Buffered: ${this.bufferStart}-${this.bufferEnd} (${(arrayBuffer.byteLength / 1024).toFixed(1)} KB)`,
+        );
+
+        // Return requested portion
+        const resultLength = Math.min(length, arrayBuffer.byteLength);
+        const result = new Uint8Array(resultLength);
+        result.set(this.buffer.subarray(0, resultLength));
+        this.position = offset + resultLength;
+
+        return result.buffer;
+      } catch (error) {
+        clearTimeout(timeoutId);
+
+        if ((error as any).name === "AbortError") {
+          Logger.debug(TAG, `Read aborted at offset ${offset}`);
+          return new ArrayBuffer(0); // Cancelled
+        }
+
+        // Check if fatal error
+        if (
+          (error as any).message &&
+          (error as any).message.includes("(Fatal)")
+        ) {
+          throw error;
+        }
+
+        if (attempt === MAX_RETRIES) {
+          Logger.error(
+            TAG,
+            `Max retries (${MAX_RETRIES}) reached for thumbnail fetch, giving up.`,
+          );
+          throw error;
+        }
+
+        Logger.warn(
+          TAG,
+          `Fetch error (attempt ${attempt + 1}/${MAX_RETRIES}), retrying...`,
+          error,
+        );
+        const delay = Math.min(BASE_DELAY * Math.pow(1.5, attempt), 5000);
+        await new Promise((r) => setTimeout(r, delay));
       }
-
-      const arrayBuffer = await response.arrayBuffer();
-
-      // Store in buffer
-      this.buffer = new Uint8Array(arrayBuffer);
-      this.bufferStart = fetchStart;
-      this.bufferEnd = fetchStart + arrayBuffer.byteLength;
-
-      Logger.debug(
-        TAG,
-        `Buffered: ${this.bufferStart}-${this.bufferEnd} (${(arrayBuffer.byteLength / 1024).toFixed(1)} KB)`,
-      );
-
-      // Return requested portion
-      const resultLength = Math.min(length, arrayBuffer.byteLength);
-      const result = new Uint8Array(resultLength);
-      result.set(this.buffer.subarray(0, resultLength));
-      this.position = offset + resultLength;
-
-      return result.buffer;
-    } catch (error) {
-      if ((error as any).name === "AbortError") {
-        Logger.debug(TAG, `Read aborted at offset ${offset}`);
-        return new ArrayBuffer(0);
-      }
-      throw error;
     }
+
+    return new ArrayBuffer(0); // Should not reach here
   }
 
   seek(offset: number): number {

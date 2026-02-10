@@ -15,6 +15,41 @@
 
 > 🚀 **No Server-Side Processing Required!** — All video parsing, demuxing, and decoding happens entirely in the browser using FFmpeg WASM & WebCodecs. Multiple audio/subtitle tracks are supported without any conversion or processing!
 
+## ⚠️ Important: CORS & Headers
+
+Because Movi-Player uses **WebAssembly** and **SharedArrayBuffer** for high-performance streaming, your server needs to support:
+
+1.  **Range Requests:** Required for seeking in large files.
+2.  **CORS Headers:** If your video is on a different domain.
+3.  **COI Headers (Optional):** For maximum performance (Zero-copy), set:
+    - `Cross-Origin-Opener-Policy: same-origin`
+    - `Cross-Origin-Embedder-Policy: require-corp`
+
+**Can't modify server headers?** Use a **Service Worker** to inject COI headers client-side:
+
+```javascript
+// sw.js
+self.addEventListener('fetch', (event) => {
+  event.respondWith(
+    fetch(event.request).then((response) => {
+      const newHeaders = new Headers(response.headers);
+      newHeaders.set('Cross-Origin-Embedder-Policy', 'require-corp');
+      newHeaders.set('Cross-Origin-Opener-Policy', 'same-origin');
+      return new Response(response.body, {
+        status: response.status,
+        statusText: response.statusText,
+        headers: newHeaders,
+      });
+    })
+  );
+});
+
+// Register in your app
+if ('serviceWorker' in navigator) {
+  navigator.serviceWorker.register('/sw.js');
+}
+```
+
 ---
 
 ## ⚡ TL;DR
@@ -557,6 +592,13 @@ The `<movi-player>` element supports standard video attributes plus enhancements
   renderer="canvas"        <!-- canvas | mse -->
   sw="auto"               <!-- auto (default) | true | false -->
   fps="0"                  <!-- Custom frame rate override -->
+  gesturefs                <!-- Gestures only in fullscreen -->
+  nohotkeys                <!-- Disable keyboard shortcuts -->
+  startat="0"              <!-- Start playback at time (seconds) -->
+  fastseek                 <!-- Enable ±10s skip controls -->
+  doubletap="true"         <!-- Enable double-tap to seek -->
+  themecolor="#4CAF50"     <!-- Custom theme color -->
+  buffersize="0"           <!-- Buffer size in seconds (0=auto) -->
 ></movi-player>
 ```
 

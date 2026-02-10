@@ -113,6 +113,31 @@ Because Movi-Player uses **WebAssembly** and **SharedArrayBuffer** for high-perf
     - `Cross-Origin-Opener-Policy: same-origin`
     - `Cross-Origin-Embedder-Policy: require-corp`
 
+**Can't modify server headers?** Use a **Service Worker** to inject COI headers client-side:
+
+```javascript
+// sw.js
+self.addEventListener('fetch', (event) => {
+  event.respondWith(
+    fetch(event.request).then((response) => {
+      const newHeaders = new Headers(response.headers);
+      newHeaders.set('Cross-Origin-Embedder-Policy', 'require-corp');
+      newHeaders.set('Cross-Origin-Opener-Policy', 'same-origin');
+      return new Response(response.body, {
+        status: response.status,
+        statusText: response.statusText,
+        headers: newHeaders,
+      });
+    })
+  );
+});
+
+// Register in your app
+if ('serviceWorker' in navigator) {
+  navigator.serviceWorker.register('/sw.js');
+}
+```
+
 ::: tip Local Files
 If you are playing local files using `FileSource` (drag & drop), you do **not** need to worry about CORS!
 :::

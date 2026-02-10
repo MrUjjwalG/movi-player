@@ -16,6 +16,7 @@ import type {
   RendererType,
   VideoTrack,
   DecoderType,
+  PlayerState,
 } from "../types";
 import { Logger, LogLevel } from "../utils/Logger";
 
@@ -50,6 +51,7 @@ export class MoviElement extends HTMLElement {
   private cumulativeSeekAmount: number = 0;
   private _contextMenuVisible: boolean = false;
   private _contextMenuJustClosed: boolean = false;
+  private lastTouchTime: number = 0;
 
   // Internal state
   private _src: string | File | null = null;
@@ -71,7 +73,17 @@ export class MoviElement extends HTMLElement {
   private _hdr: boolean = true; // HDR enabled by default
   private _theme: "dark" | "light" = "dark"; // Default theme
   private _sw: DecoderType = "auto"; // Preferred decoder mode (auto or software)
+
   private _fps: number = 0; // Custom frame rate (0 = auto from video)
+  private _gesturefs: boolean = false; // Gestures only in fullscreen if true
+  private _noHotkeys: boolean = false; // Disable keyboard shortcuts if true
+  private _startAt: number = 0; // Start time in seconds
+  private _fastSeek: boolean = false; // Enable skip controls (buttons, keys, gestures) if true
+  private _doubleTap: boolean = true; // Enable/disable double tap to seek
+  private _themeColor: string | null = null; // Custom theme color
+  private _bufferSize: number = 0; // Custom buffer size in seconds
+  private _watermark: string | null = null; // Watermark image URL
+  private posterElement!: HTMLImageElement; // Poster image element
 
   // Ambient mode state
   private _ambientWrapper: string | null = null; // ID of external wrapper element
@@ -86,6 +98,10 @@ export class MoviElement extends HTMLElement {
     g: 0,
     b: 0,
   };
+
+  // Context handling state
+  private _contextLostTime: number = 0;
+  private _contextLostPlaying: boolean = false;
 
   // Observed attributes (native video element attributes)
   static get observedAttributes() {
@@ -112,6 +128,14 @@ export class MoviElement extends HTMLElement {
       "theme",
       "sw",
       "fps",
+      "gesturefs",
+      "nohotkeys",
+      "startat",
+      "fastseek",
+      "doubletap",
+      "themecolor",
+      "buffersize",
+      "watermark",
     ];
   }
 
@@ -157,6 +181,19 @@ export class MoviElement extends HTMLElement {
 
     // Add video to shadow DOM
     shadowRoot.appendChild(this.video);
+
+    // Create poster image element (overlay on video/canvas)
+    this.posterElement = document.createElement("img");
+    this.posterElement.className = "movi-poster-overlay";
+    this.posterElement.style.position = "absolute";
+    this.posterElement.style.top = "0";
+    this.posterElement.style.left = "0";
+    this.posterElement.style.width = "100%";
+    this.posterElement.style.height = "100%";
+    this.posterElement.style.objectFit = "contain";
+    this.posterElement.style.display = "none";
+    this.posterElement.style.zIndex = "1";
+    shadowRoot.appendChild(this.posterElement);
 
     // Create subtitle overlay element
     this.subtitleOverlay = document.createElement("div");
@@ -404,8 +441,8 @@ export class MoviElement extends HTMLElement {
       <div class="movi-controls-bar" style="position: relative; z-index: 10;">
         <div class="movi-progress-container">
           <div class="movi-progress-bar">
-            <div class="movi-progress-filled"></div>
             <div class="movi-progress-buffer"></div>
+            <div class="movi-progress-filled"></div>
             <div class="movi-progress-handle"></div>
           </div>
           <div class="movi-seek-thumbnail" style="display: none;">
@@ -427,16 +464,18 @@ export class MoviElement extends HTMLElement {
             </button>
 
             <button class="movi-btn movi-seek-backward" aria-label="Skip Backward 10s">
-              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
-                <path d="M9 4.5a10 10 0 0 0-4.5 8.1 10 10 0 0 0 14.5 8.4M9 4.5l-4 4m4-4V9" />
-                <text x="50%" y="60%" font-size="7" font-weight="bold" fill="currentColor" text-anchor="middle" dominant-baseline="middle" stroke="none">10</text>
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                <path d="M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0" transform="rotate(300 12 12)"/>
+                <path d="M3 3v5h5" />
+                <text x="50%" y="54%" font-size="7" font-family="sans-serif" font-weight="bold" fill="currentColor" text-anchor="middle" dominant-baseline="middle" stroke="none">10</text>
               </svg>
             </button>
 
             <button class="movi-btn movi-seek-forward" aria-label="Skip Forward 10s">
-              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
-                <path d="M15 4.5a10 10 0 0 1 4.5 8.1 10 10 0 0 1-14.5 8.4M15 4.5l4 4m-4-4V9" />
-                <text x="50%" y="60%" font-size="7" font-weight="bold" fill="currentColor" text-anchor="middle" dominant-baseline="middle" stroke="none">10</text>
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                <path d="M21 12a9 9 0 1 1-9-9 9.75 9.75 0 0" transform="rotate(60 12 12)"/>
+                <path d="M21 3v5h-5" />
+                <text x="50%" y="54%" font-size="7" font-family="sans-serif" font-weight="bold" fill="currentColor" text-anchor="middle" dominant-baseline="middle" stroke="none">10</text>
               </svg>
             </button>
 
@@ -487,6 +526,9 @@ export class MoviElement extends HTMLElement {
                   <svg class="movi-icon-subtitle" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
                     <rect width="18" height="14" x="3" y="5" rx="2" ry="2"></rect>
                     <path d="M11 9H9a2 2 0 0 0-2 2v2a2 2 0 0 0 2 2h2 M17 9h-2a2 2 0 0 0-2 2v2a2 2 0 0 0 2 2h2"></path>
+                  </svg>
+                  <svg class="movi-icon-subtitle-filled" viewBox="0 0 24 24" fill="currentColor" style="display: none;">
+                    <path fill-rule="evenodd" clip-rule="evenodd" d="M19 4H5c-1.11 0-2 .9-2 2v12c0 1.1.89 2 2 2h14c1.1 0 2-.9 2-2V6c0-1.1-.9-2-2-2z M11 11 H9.5 V10.5 H7.5 V13.5 H9.5 V13 H11 V14 C11 14.55 10.55 15 10 15 H7 C6.45 15 6 14.55 6 14 V10 C6 9.45 6.45 9 7 9 H10 C10.55 9 11 9.45 11 10 V11 Z M18 11 H16.5 V10.5 H14.5 V13.5 H16.5 V13 H18 V14 C18 14.55 17.55 15 17 15 H14 C13.45 15 13 14.55 13 14 V10 C13 9.45 13.45 9 14 9 H17 C17.55 9 18 9.45 18 10 V11 Z"></path>
                   </svg>
                 </button>
                 <div class="movi-subtitle-track-menu" style="display: none;">
@@ -1441,12 +1483,42 @@ export class MoviElement extends HTMLElement {
       this.showControls();
     });
 
+    controlsContainer?.addEventListener(
+      "touchstart",
+      () => {
+        this.lastTouchTime = Date.now();
+        this.isOverControls = true;
+        this.showControls();
+      },
+      { passive: true },
+    );
+
+    controlsContainer?.addEventListener(
+      "touchend",
+      () => {
+        setTimeout(() => {
+          this.isOverControls = false;
+          // Restart hide timer if playing
+          if (this.player?.getState() === "playing") {
+            this.showControls();
+          }
+        }, 1000);
+      },
+      { passive: true },
+    );
+
     controlsContainer?.addEventListener("mouseleave", (e) => {
       // Check if mouse is moving to another part of controls
       const relatedTarget = e.relatedTarget as Element;
       if (relatedTarget && controlsContainer?.contains(relatedTarget)) {
         return; // Still over controls
       }
+
+      // Ignore mouseleave if it's a touch interaction (within 1000ms of last touch)
+      if (Date.now() - this.lastTouchTime < 1000) {
+        return;
+      }
+
       this.isOverControls = false;
       // Only hide if not dragging
       if (!this.isDragging) {
@@ -1499,8 +1571,13 @@ export class MoviElement extends HTMLElement {
       return;
 
     const state = this.player.getState();
-    // Only allow seeking if player is ready, playing, or paused
-    if (state !== "ready" && state !== "playing" && state !== "paused") {
+    // Only allow seeking if player is ready, playing, paused, or ended
+    if (
+      state !== "ready" &&
+      state !== "playing" &&
+      state !== "paused" &&
+      state !== "ended"
+    ) {
       return;
     }
 
@@ -1560,8 +1637,13 @@ export class MoviElement extends HTMLElement {
     if (!touch) return;
 
     const state = this.player.getState();
-    // Only allow seeking if player is ready, playing, or paused
-    if (state !== "ready" && state !== "playing" && state !== "paused") {
+    // Only allow seeking if player is ready, playing, paused, or ended
+    if (
+      state !== "ready" &&
+      state !== "playing" &&
+      state !== "paused" &&
+      state !== "ended"
+    ) {
       return;
     }
 
@@ -1616,9 +1698,8 @@ export class MoviElement extends HTMLElement {
     ) as HTMLElement[];
 
     // Single tap for play/pause, double tap for fullscreen/seek (touch)
-    let tapCount = 0;
+    let lastTap = 0;
     let tapTimer: number | null = null;
-    let lastTapTimestamp = 0;
 
     const handleTap = (e: TouchEvent) => {
       const target = e.target as Element;
@@ -1633,96 +1714,90 @@ export class MoviElement extends HTMLElement {
         return;
       }
 
+      // If double tap is disabled, handle as single tap immediately (simple toggle)
+      if (!this._doubleTap) {
+        if (tapTimer) clearTimeout(tapTimer);
+        tapTimer = null;
+
+        const controlsContainer = this.controlsContainer;
+        const controlsHidden = controlsContainer?.classList.contains(
+          "movi-controls-hidden",
+        );
+
+        if (controlsHidden) {
+          this.showControls();
+        } else {
+          const state = this.player?.getState();
+          if (state === "playing") {
+            this.pause();
+          } else {
+            this.play();
+          }
+        }
+        return;
+      }
+
       const now = Date.now();
+      const tapLength = now - lastTap;
+
       const touch = e.changedTouches?.[0];
       if (!touch) return;
 
       const rect = this.getBoundingClientRect();
-      const x = touch.clientX - rect.left;
+      const xPos = touch.clientX - rect.left;
       const width = rect.width;
-      const clickPosPercent = x / width;
 
-      // Check if this tap is within the rapid sequence window
-      const isRapidTap = now - lastTapTimestamp < 350;
-      lastTapTimestamp = now;
+      if (tapLength < 400 && tapLength > 0) {
+        // Double tap detected
+        if (tapTimer) clearTimeout(tapTimer);
+        tapTimer = null;
 
-      if (tapCount > 0 && isRapidTap) {
-        // Multi-tap detected (Double, Triple, etc.)
-        if (tapTimer) {
-          clearTimeout(tapTimer);
-          tapTimer = null;
-        }
-
-        tapCount++;
-
-        if (!this.player || !this._src) {
-          // If no content, just toggle fullscreen on first double tap
-          if (tapCount === 2) this.toggleFullscreen();
-          tapCount = 1; // Reset to allow next sequence
-          return;
-        }
-
-        if (clickPosPercent < 0.25) {
-          // Seek LEFT
-          const side = "left";
-          if (this.lastSeekSide === side && now - this.lastSeekTime < 600) {
-            this.cumulativeSeekAmount += 10;
+        // Check if fast seek is enabled
+        if (this._fastSeek) {
+          if (xPos < width * 0.3) {
+            // Rewind
+            this.currentTime = Math.max(0, this.currentTime - 10);
+            this.showOSD(
+              `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                <path d="M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8" />
+                <path d="M3 3v5h5" />
+                <text x="50%" y="54%" font-size="7" font-family="sans-serif" font-weight="bold" fill="currentColor" text-anchor="middle" dominant-baseline="middle" stroke="none">10</text>
+              </svg>`,
+              "- 10s",
+            );
+          } else if (xPos > width * 0.7) {
+            // Forward
+            this.currentTime = Math.min(this.duration, this.currentTime + 10);
+            this.showOSD(
+              `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                <path d="M21 12a9 9 0 1 1-9-9 9.75 9.75 0 0 1 6.74 2.74L21 8" />
+                <path d="M21 3v5h-5" />
+                <text x="50%" y="54%" font-size="7" font-family="sans-serif" font-weight="bold" fill="currentColor" text-anchor="middle" dominant-baseline="middle" stroke="none">10</text>
+              </svg>`,
+              "+ 10s",
+            );
           } else {
-            this.cumulativeSeekAmount = 10;
-            this.lastSeekSide = side;
+            this.toggleFullscreen();
           }
-          this.lastSeekTime = now;
-
-          this.currentTime = Math.max(0, this.currentTime - 10);
-          this.showOSD(
-            `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M11 17l-5-5 5-5M18 17l-5-5 5-5"/></svg>`,
-            `- ${this.cumulativeSeekAmount}s`,
-          );
-        } else if (clickPosPercent > 0.75) {
-          // Seek RIGHT
-          const side = "right";
-          if (this.lastSeekSide === side && now - this.lastSeekTime < 600) {
-            this.cumulativeSeekAmount += 10;
-          } else {
-            this.cumulativeSeekAmount = 10;
-            this.lastSeekSide = side;
-          }
-          this.lastSeekTime = now;
-
-          this.currentTime = Math.min(this.duration, this.currentTime + 10);
-          this.showOSD(
-            `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M13 17l5-5-5-5M6 17l5-5-5-5"/></svg>`,
-            `+ ${this.cumulativeSeekAmount}s`,
-          );
-        } else if (tapCount === 2) {
-          // CENTER CENTER: Fullscreen toggle (only on exact double tap)
+        } else {
+          // If seek disabled, always treat double tap as fullscreen toggle
           this.toggleFullscreen();
         }
-
-        // Refresh the single tap lockout
-        tapTimer = window.setTimeout(() => {
-          tapCount = 0;
-          tapTimer = null;
-        }, 500); // 500ms timeout for next tap in sequence
+        lastTap = 0;
       } else {
-        // First tap or sequence reset
-        tapCount = 1;
-
-        if (tapTimer) clearTimeout(tapTimer);
+        // First tap
+        lastTap = now;
 
         tapTimer = window.setTimeout(() => {
-          // Single tap detected
-          // On touch devices: First tap shows controls if hidden, only toggle play/pause if already visible
+          // Single tap action (show controls or toggle play)
           const controlsContainer = this.controlsContainer;
           const controlsHidden = controlsContainer?.classList.contains(
             "movi-controls-hidden",
           );
 
           if (controlsHidden) {
-            // Controls are hidden - just show them, don't toggle playback
             this.showControls();
           } else {
-            // Controls are visible - toggle play/pause
             const state = this.player?.getState();
             if (state === "playing") {
               this.pause();
@@ -1730,8 +1805,7 @@ export class MoviElement extends HTMLElement {
               this.play();
             }
           }
-          tapCount = 0;
-          tapTimer = null;
+          lastTap = 0;
         }, 300);
       }
     };
@@ -1740,6 +1814,7 @@ export class MoviElement extends HTMLElement {
     let initialSeekTime = 0;
     let isVerticalGesture = false;
     let isHorizontalGesture = false;
+    let isEdgeStart = false;
 
     // Attach listeners to all possible interaction targets
     gestureTargets.forEach((target) => {
@@ -1751,6 +1826,18 @@ export class MoviElement extends HTMLElement {
             this.gesturePerformed = false;
             this.touchStartX = e.touches[0].clientX;
             this.touchStartY = e.touches[0].clientY;
+
+            // Check for edge start to prevent conflict with system gestures
+            // Safe area: 40px from edges
+            const edgeThreshold = 40;
+            const winWidth = window.innerWidth;
+            const winHeight = window.innerHeight;
+            isEdgeStart =
+              this.touchStartX < edgeThreshold ||
+              this.touchStartX > winWidth - edgeThreshold ||
+              this.touchStartY < edgeThreshold ||
+              this.touchStartY > winHeight - edgeThreshold;
+
             this.touchStartTime = Date.now();
             initialVolume = this._volume;
             initialSeekTime = this.currentTime;
@@ -1764,12 +1851,18 @@ export class MoviElement extends HTMLElement {
       target.addEventListener(
         "touchmove",
         (e: TouchEvent) => {
+          if (isEdgeStart) return;
           if (e.touches.length === 1) {
             const touch = e.touches[0];
             const deltaX = touch.clientX - this.touchStartX;
             const deltaY = touch.clientY - this.touchStartY;
 
             // Determine gesture type early
+            // If gesturefs is enabled, ONLY allow gestures if in fullscreen
+            if (this._gesturefs && !document.fullscreenElement) {
+              return;
+            }
+
             if (
               !isVerticalGesture &&
               !isHorizontalGesture &&
@@ -1800,6 +1893,9 @@ export class MoviElement extends HTMLElement {
                 this.volume = newVolume;
               }
             } else if (isHorizontalGesture) {
+              // Only enabled if fastseek is true
+              if (!this._fastSeek) return;
+
               if (e.cancelable) e.preventDefault();
 
               const rect = this.getBoundingClientRect();
@@ -1931,13 +2027,16 @@ export class MoviElement extends HTMLElement {
 
   private setupKeyboardShortcuts(): void {
     this.addEventListener("keydown", (e) => {
+      // Check if keyboard controls are disabled
+      if (this._noHotkeys) return;
+
       // Only handle if player exists (content loaded)
       if (!this.player) return;
 
       switch (e.key) {
         case " ":
         case "k":
-        case "K":
+        case "K": {
           // Space or K: Play/Pause
           e.preventDefault();
           const state = this.player?.getState();
@@ -1948,8 +2047,12 @@ export class MoviElement extends HTMLElement {
           }
           this.showControls();
           break;
+        }
         case "ArrowLeft":
           // Left Arrow: Seek backward 5 seconds or single frame (if Ctrl)
+          // Only enabled if fastseek is true
+          if (!this._fastSeek) break;
+
           e.preventDefault();
           {
             const side = "left";
@@ -1981,9 +2084,10 @@ export class MoviElement extends HTMLElement {
 
               this.currentTime = Math.max(0, this.currentTime - 10);
               this.showOSD(
-                `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
-                  <path d="M9 4.5a10 10 0 0 0-4.5 8.1 10 10 0 0 0 14.5 8.4M9 4.5l-4 4m4-4V9" />
-                  <text x="50%" y="60%" font-size="7" font-weight="bold" fill="currentColor" text-anchor="middle" dominant-baseline="middle" stroke="none">10</text>
+                `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                  <path d="M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8" />
+                  <path d="M3 3v5h5" />
+                  <text x="50%" y="54%" font-size="7" font-family="sans-serif" font-weight="bold" fill="currentColor" text-anchor="middle" dominant-baseline="middle" stroke="none">10</text>
                 </svg>`,
                 `- ${this.cumulativeSeekAmount}s`,
               );
@@ -1992,6 +2096,9 @@ export class MoviElement extends HTMLElement {
           break;
         case "ArrowRight":
           // Right Arrow: Seek forward 5 seconds or single frame (if Ctrl)
+          // Only enabled if fastseek is true
+          if (!this._fastSeek) break;
+
           e.preventDefault();
           {
             const side = "right";
@@ -2025,9 +2132,10 @@ export class MoviElement extends HTMLElement {
 
               this.currentTime = Math.min(this.duration, this.currentTime + 10);
               this.showOSD(
-                `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
-                  <path d="M15 4.5a10 10 0 0 1 4.5 8.1 10 10 0 0 1-14.5 8.4M15 4.5l4 4m-4-4V9" />
-                  <text x="50%" y="60%" font-size="7" font-weight="bold" fill="currentColor" text-anchor="middle" dominant-baseline="middle" stroke="none">10</text>
+                `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                  <path d="M21 12a9 9 0 1 1-9-9 9.75 9.75 0 0 1 6.74 2.74L21 8" />
+                  <path d="M21 3v5h-5" />
+                  <text x="50%" y="54%" font-size="7" font-family="sans-serif" font-weight="bold" fill="currentColor" text-anchor="middle" dominant-baseline="middle" stroke="none">10</text>
                 </svg>`,
                 `+ ${this.cumulativeSeekAmount}s`,
               );
@@ -4061,14 +4169,6 @@ export class MoviElement extends HTMLElement {
         height: 22px;
         transition: transform var(--movi-transition-fast);
       }
-
-      .movi-seek-backward:hover svg {
-        transform: translateX(-2px);
-      }
-
-      .movi-seek-forward:hover svg {
-        transform: translateX(2px);
-      }
       
       .movi-btn:hover svg {
         filter: drop-shadow(0 0 4px rgba(139, 92, 246, 0.5));
@@ -4159,6 +4259,7 @@ export class MoviElement extends HTMLElement {
         background: rgba(255, 255, 255, 0.25);
         border-radius: 100px;
         width: 0%;
+        transition: width 0.1s linear, left 0.1s linear;
       }
 
       .movi-progress-handle {
@@ -5752,10 +5853,48 @@ export class MoviElement extends HTMLElement {
             transform: translateX(-50%) scale(0.85);
             bottom: 40px;
         }
+        
+        .movi-osd-container {
+            top: 20px; 
+        }
       }
     `;
     shadowRoot.appendChild(style);
   }
+
+  private handleContextLost = (e: Event) => {
+    e.preventDefault();
+    Logger.warn(TAG, "WebGL context lost - suspending playback");
+
+    if (this.player) {
+      try {
+        this._contextLostTime = this.player.getCurrentTime();
+        this._contextLostPlaying = this.player.getState() === "playing";
+        this.player.destroy();
+      } catch (err) {
+        // Ignore error during destroy context loss
+      }
+      this.player = null;
+    }
+
+    this.isLoading = true;
+    this.updateControlsState();
+    this.updateLoadingIndicator("loading");
+  };
+
+  private handleContextRestored = () => {
+    Logger.info(TAG, "WebGL context restored - recovering playback");
+    this.initializePlayer().then(() => {
+      if (this.player) {
+        if (this._contextLostTime > 0) {
+          this.player.seek(this._contextLostTime).catch(() => {});
+        }
+        if (this._contextLostPlaying) {
+          this.player.play().catch(() => {});
+        }
+      }
+    });
+  };
 
   connectedCallback() {
     // Read initial attributes
@@ -5806,6 +5945,31 @@ export class MoviElement extends HTMLElement {
       this._theme = themeAttr;
     }
 
+    this._gesturefs = this.hasAttribute("gesturefs");
+    this._noHotkeys = this.hasAttribute("nohotkeys");
+    this._fastSeek = this.hasAttribute("fastseek");
+    this._doubleTap =
+      !this.hasAttribute("doubletap") ||
+      this.getAttribute("doubletap") !== "false"; // Default true unless explicitly false
+
+    const startAtAttr = this.getAttribute("startat");
+    if (startAtAttr) {
+      this._startAt = parseFloat(startAtAttr);
+    }
+
+    const bufferSizeAttr = this.getAttribute("buffersize");
+    if (bufferSizeAttr) {
+      this._bufferSize = parseFloat(bufferSizeAttr);
+    }
+
+    this._themeColor = this.getAttribute("themecolor");
+    if (this._themeColor) {
+      this.style.setProperty("--movi-primary", this._themeColor);
+    }
+
+    this._watermark = this.getAttribute("watermark");
+    this.updateWatermark();
+
     // Update controls visibility based on initial attributes
     this.updateControlsVisibility();
 
@@ -5821,9 +5985,18 @@ export class MoviElement extends HTMLElement {
     // Update canvas size when element is connected
     this.updateCanvasSize();
 
+    // Listen for WebGL context loss (e.g. minimizing on mobile)
+    this.canvas.addEventListener("webglcontextlost", this.handleContextLost);
+    this.canvas.addEventListener(
+      "webglcontextrestored",
+      this.handleContextRestored,
+    );
+
     // Initial state: disable controls except volume
     this.updateControlsState();
     this.updatePlayPauseIcon();
+    this.updateFastSeek();
+    this.updatePoster();
 
     // Listen for resize events
     if (typeof ResizeObserver !== "undefined") {
@@ -5889,6 +6062,12 @@ export class MoviElement extends HTMLElement {
   }
 
   disconnectedCallback() {
+    // Remove WebGL context listeners
+    this.canvas.removeEventListener("webglcontextlost", this.handleContextLost);
+    this.canvas.removeEventListener(
+      "webglcontextrestored",
+      this.handleContextRestored,
+    );
     // Cleanup event handlers
     this.eventHandlers.forEach((unsubscribe) => unsubscribe());
     this.eventHandlers.clear();
@@ -5928,6 +6107,50 @@ export class MoviElement extends HTMLElement {
       case "theme":
         this.theme = (newValue as "light" | "dark") || "dark";
         break;
+      case "gesturefs":
+        this._gesturefs = newValue !== null;
+        break;
+      case "nohotkeys":
+        this._noHotkeys = newValue !== null;
+        break;
+      case "startat":
+        this._startAt = newValue ? parseFloat(newValue) : 0;
+        break;
+      case "fastseek":
+        this._fastSeek = newValue !== null;
+        this.updateFastSeek();
+        break;
+      case "doubletap":
+        // usage: doubletap="false" to disable. Check existence? Or value?
+        // Standard boolean attribute: presence = true.
+        // But user might want to disable it.
+        // Let's assume standard boolean: present = enabled? No, default is enabled.
+        // Let's say attribute 'nodoubletap' or 'doubletap="false"'.
+        // Re-reading user request: "doubletap (Boolean)"
+        // Usually boolean attributes are false if missing, true if present.
+        // If default is true, we should probably use 'disable-doubletap' or check for string "false".
+        // Let's stick to: if attribute is present and not "false", it's true.
+        // Wait, the request says property doubletap.
+        // Let's assume if the attribute is present it sets the boolean value.
+        // Since I made default true, logic is:
+        this._doubleTap = newValue !== "false";
+        break;
+      case "themecolor":
+        this._themeColor = newValue;
+        if (newValue) {
+          this.style.setProperty("--movi-primary", newValue);
+        } else {
+          this.style.removeProperty("--movi-primary");
+        }
+        break;
+      case "buffersize":
+        this._bufferSize = newValue ? parseFloat(newValue) : 0;
+        // Propagate to player if possible
+        break;
+      case "watermark":
+        this._watermark = newValue;
+        this.updateWatermark();
+        break;
       case "src":
         // Only handle string src attributes, File objects are handled via setter
         if (!(this._src instanceof File)) {
@@ -5959,8 +6182,11 @@ export class MoviElement extends HTMLElement {
         if (this.video) {
           this.video.muted = this._muted;
         }
-        if (this.player) {
-          this.updateMuted();
+        if (this._autoplay) {
+          this.play();
+        } else if (this._startAt > 0 && this.player) {
+          // Seek to start time if set
+          this.player.seek(this._startAt);
         }
         break;
       case "playsinline":
@@ -5974,6 +6200,7 @@ export class MoviElement extends HTMLElement {
         break;
       case "poster":
         this._poster = newValue || "";
+        this.updatePoster();
         break;
       case "width":
       case "height":
@@ -6309,14 +6536,21 @@ export class MoviElement extends HTMLElement {
       this.updateLoadingIndicator();
 
       // Auto-play if requested
+      // Seek to initial position if set
+      if (this._startAt > 0 && this.player) {
+        await this.player.seek(this._startAt).catch((e: unknown) => {
+          Logger.warn(TAG, "Failed to seek to start time", e);
+        });
+      }
+
+      // Auto-play if requested
       if (this._autoplay && this.player) {
         await this.player.play().catch(() => {
           // Autoplay may fail due to browser policies
         });
       } else {
-        // Render first frame (poster) if not autoplaying
-        // Render first frame (poster) if not autoplaying
-        if (this.player) {
+        // Render first frame (poster) if not autoplaying and no custom start time
+        if (this._startAt === 0 && this.player) {
           this.player.seek(0).catch(() => {});
         }
       }
@@ -6418,7 +6652,12 @@ export class MoviElement extends HTMLElement {
     );
 
     // Forward player events to element
-    const stateChangeHandler = (state: string) => {
+    const stateChangeHandler = (state: PlayerState) => {
+      // Hide poster on state change to playing
+      if (state === "playing" && this.posterElement) {
+        this.posterElement.style.display = "none";
+      }
+
       this.dispatchEvent(new CustomEvent("statechange", { detail: state }));
       this.updateLoadingIndicator(state);
       this.updateControlsState();
@@ -6671,12 +6910,20 @@ export class MoviElement extends HTMLElement {
         progressHandle.style.left = `${percent}%`;
       }
 
-      // Update buffer (if available)
+      // Update buffer (if available) - Visualize the sliding window
       if (this.player && progressBuffer) {
+        const bufferStart = this.player.getBufferStartTime();
         const bufferEnd = this.player.getBufferEndTime();
+
         if (bufferEnd > 0) {
-          const bufferPercent = (bufferEnd / this.duration) * 100;
-          progressBuffer.style.width = `${bufferPercent}%`;
+          const startPercent = (bufferStart / this.duration) * 100;
+          const endPercent = (bufferEnd / this.duration) * 100;
+          const widthPercent = Math.max(0, endPercent - startPercent);
+
+          progressBuffer.style.left = `${startPercent}%`;
+          progressBuffer.style.width = `${widthPercent}%`;
+        } else {
+          progressBuffer.style.width = "0%";
         }
       }
     }
@@ -6917,7 +7164,7 @@ export class MoviElement extends HTMLElement {
 
     // Controls to disable (everything except volume)
     const controlsToDisableSelector =
-      ".movi-play-pause, .movi-progress-container, .movi-audio-track-btn, .movi-subtitle-track-btn, .movi-hdr-btn, .movi-speed-btn, .movi-aspect-ratio-btn, .movi-loop-btn, .movi-fullscreen-btn, .movi-more-btn, .movi-center-play-pause";
+      ".movi-play-pause, .movi-progress-container, .movi-audio-track-btn, .movi-subtitle-track-btn, .movi-hdr-btn, .movi-speed-btn, .movi-aspect-ratio-btn, .movi-loop-btn, .movi-fullscreen-btn, .movi-more-btn, .movi-center-play-pause, .movi-seek-backward, .movi-seek-forward";
     const controlsToDisable = shadowRoot.querySelectorAll(
       controlsToDisableSelector,
     );
@@ -7370,7 +7617,12 @@ export class MoviElement extends HTMLElement {
     if (this.player) {
       // Only allow seeking if player is ready, playing, or paused
       const state = this.player.getState();
-      if (state === "ready" || state === "playing" || state === "paused") {
+      if (
+        state === "ready" ||
+        state === "playing" ||
+        state === "paused" ||
+        state === "ended"
+      ) {
         this.isSeeking = true;
         this.player
           .seek(value)
@@ -7434,6 +7686,150 @@ export class MoviElement extends HTMLElement {
         this.removeAttribute("fps");
       }
     }
+  }
+
+  get gesturefs(): boolean {
+    return this._gesturefs;
+  }
+
+  set gesturefs(value: boolean) {
+    if (this._gesturefs !== value) {
+      this._gesturefs = value;
+      if (value) {
+        this.setAttribute("gesturefs", "");
+      } else {
+        this.removeAttribute("gesturefs");
+      }
+    }
+  }
+
+  get nohotkeys(): boolean {
+    return this._noHotkeys;
+  }
+
+  set nohotkeys(value: boolean) {
+    if (this._noHotkeys !== value) {
+      this._noHotkeys = value;
+      if (value) {
+        this.setAttribute("nohotkeys", "");
+      } else {
+        this.removeAttribute("nohotkeys");
+      }
+    }
+  }
+
+  get startat(): number {
+    return this._startAt;
+  }
+  set startat(value: number) {
+    this._startAt = value;
+    this.setAttribute("startat", value.toString());
+  }
+
+  get fastseek(): boolean {
+    return this._fastSeek;
+  }
+  set fastseek(value: boolean) {
+    this._fastSeek = value;
+    if (value) {
+      this.setAttribute("fastseek", "");
+    } else {
+      this.removeAttribute("fastseek");
+    }
+    this.updateFastSeek();
+    this.updatePoster();
+  }
+
+  private updatePoster() {
+    if (this._poster) {
+      this.posterElement.src = this._poster;
+      this.posterElement.style.display = "block";
+      this.posterElement.style.objectFit = this._objectFit || "contain";
+    } else {
+      this.posterElement.style.display = "none";
+    }
+  }
+
+  get doubletap(): boolean {
+    return this._doubleTap;
+  }
+  set doubletap(value: boolean) {
+    this._doubleTap = value;
+    if (value) {
+      this.setAttribute("doubletap", "true");
+    } else {
+      this.setAttribute("doubletap", "false");
+    }
+  }
+
+  get themecolor(): string | null {
+    return this._themeColor;
+  }
+  set themecolor(value: string | null) {
+    this._themeColor = value;
+    if (value) {
+      this.setAttribute("themecolor", value);
+      this.style.setProperty("--movi-primary", value);
+    } else {
+      this.removeAttribute("themecolor");
+      this.style.removeProperty("--movi-primary");
+    }
+  }
+
+  get buffersize(): number {
+    return this._bufferSize;
+  }
+  set buffersize(value: number) {
+    this._bufferSize = value;
+    this.setAttribute("buffersize", value.toString());
+  }
+
+  get watermark(): string | null {
+    return this._watermark;
+  }
+  set watermark(value: string | null) {
+    this._watermark = value;
+    if (value) {
+      this.setAttribute("watermark", value);
+    } else {
+      this.removeAttribute("watermark");
+    }
+    this.updateWatermark();
+  }
+
+  private updateWatermark() {
+    const shadowRoot = this.shadowRoot;
+    if (!shadowRoot) return;
+
+    let watermarkEl = shadowRoot.querySelector(
+      ".movi-watermark",
+    ) as HTMLImageElement;
+
+    if (!this._watermark) {
+      if (watermarkEl) watermarkEl.style.display = "none";
+      return;
+    }
+
+    if (!watermarkEl) {
+      watermarkEl = document.createElement("img");
+      watermarkEl.className = "movi-watermark";
+      // Basic styling for watermark
+      watermarkEl.style.position = "absolute";
+      watermarkEl.style.top = "20px";
+      watermarkEl.style.right = "20px";
+      watermarkEl.style.height = "30px"; // Default height
+      watermarkEl.style.opacity = "0.8";
+      watermarkEl.style.pointerEvents = "none";
+      watermarkEl.style.zIndex = "10";
+
+      const container = shadowRoot.querySelector(".movi-player-container");
+      if (container) {
+        container.appendChild(watermarkEl);
+      }
+    }
+
+    watermarkEl.src = this._watermark;
+    watermarkEl.style.display = "block";
   }
 
   get duration(): number {
@@ -7633,6 +8029,18 @@ export class MoviElement extends HTMLElement {
       TAG,
       `HDR Visibility updated. Show: ${shouldShow} (Content HDR: ${isContentHDR}, Chromium: ${isChromium}, Renderer: ${this._renderer})`,
     );
+  }
+
+  private updateFastSeek() {
+    const shadowRoot = this.shadowRoot;
+    if (!shadowRoot) return;
+
+    const seekButtons = shadowRoot.querySelectorAll(
+      ".movi-seek-backward, .movi-seek-forward",
+    );
+    seekButtons.forEach((btn) => {
+      (btn as HTMLElement).style.display = this._fastSeek ? "" : "none";
+    });
   }
 }
 
