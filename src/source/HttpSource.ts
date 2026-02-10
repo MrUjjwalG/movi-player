@@ -281,7 +281,10 @@ export class HttpSource implements SourceAdapter {
     }
 
     // Reset buffer state atomically
-    this.atomicSetBufferStart(fromOffset);
+    // Reset buffer state atomically
+    // We start with a 0-filled window to ensure we don't present an optimistic
+    // buffer window before we have actual data (prevents confusion in offline scenarios).
+    this.atomicSetBufferStart(0);
     this.atomicSetWritePos(0);
     this.atomicSetStreaming(true);
     this.atomicIncrementVersion();
@@ -295,23 +298,30 @@ export class HttpSource implements SourceAdapter {
     this.abortController = new AbortController();
 
     // Delegate fetch to background loop
-    this.readStreamBackground().catch((err) => {
+    this.readStreamBackground(fromOffset).catch((err) => {
       Logger.error(TAG, "Background stream failed fatally", err);
       this.atomicSetStreaming(false);
     });
   }
 
-  private async readStreamBackground(): Promise<void> {
+  private async readStreamBackground(startOffset: number): Promise<void> {
     let retryCount = 0;
+    // Track if we have committed the new buffer window to atomics
+    let windowInitialized = false;
     const MAX_RETRIES = 10;
     const BASE_DELAY = 1000;
 
     while (this.atomicIsStreaming()) {
       try {
         const buffer = this.getBuffer();
-        const currentBufferStart = this.atomicGetBufferStart();
-        const writePos = this.atomicGetWritePos();
-        const resumeOffset = currentBufferStart + writePos;
+
+        let resumeOffset: number;
+        if (windowInitialized) {
+          resumeOffset = this.atomicGetBufferStart() + this.atomicGetWritePos();
+        } else {
+          // If not initialized, we try to start from the requested offset
+          resumeOffset = startOffset;
+        }
 
         // Check EOF
         if (this.size > 0 && resumeOffset >= this.size) {
@@ -343,6 +353,13 @@ export class HttpSource implements SourceAdapter {
 
         this.reader = response.body!.getReader();
         retryCount = 0; // Reset retry on success
+
+        // Initialize buffer window if this is the first successful connection
+        if (!windowInitialized) {
+          this.atomicSetBufferStart(startOffset);
+          this.atomicSetWritePos(0);
+          windowInitialized = true;
+        }
 
         let downloadedBytes = 0;
         let lastLogBytes = 0;
