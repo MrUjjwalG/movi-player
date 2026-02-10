@@ -465,7 +465,7 @@ export class MoviElement extends HTMLElement {
 
             <button class="movi-btn movi-seek-backward" aria-label="Skip Backward 10s">
               <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-                <path d="M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0" transform="rotate(300 12 12)"/>
+                <path d="M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8" transform="rotate(300 12 12)"/>
                 <path d="M3 3v5h5" />
                 <text x="50%" y="54%" font-size="7" font-family="sans-serif" font-weight="bold" fill="currentColor" text-anchor="middle" dominant-baseline="middle" stroke="none">10</text>
               </svg>
@@ -473,7 +473,7 @@ export class MoviElement extends HTMLElement {
 
             <button class="movi-btn movi-seek-forward" aria-label="Skip Forward 10s">
               <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-                <path d="M21 12a9 9 0 1 1-9-9 9.75 9.75 0 0" transform="rotate(60 12 12)"/>
+                <path d="M21 12a9 9 0 1 1-9-9 9.75 9.75 0 0 1 6.74 2.74L21 8" transform="rotate(60 12 12)"/>
                 <path d="M21 3v5h-5" />
                 <text x="50%" y="54%" font-size="7" font-family="sans-serif" font-weight="bold" fill="currentColor" text-anchor="middle" dominant-baseline="middle" stroke="none">10</text>
               </svg>
