@@ -772,6 +772,11 @@ export class CanvasRenderer {
         this.canvas.style.setProperty("max-height", "none", "important");
       }
     }
+
+    // Re-render last frame if paused to show fit mode change immediately
+    if (!this.isPlaying && this.lastRenderedFrame) {
+      this.drawFrame(this.lastRenderedFrame, true);
+    }
   }
 
   /**
