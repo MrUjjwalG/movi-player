@@ -7721,6 +7721,17 @@ export class MoviElement extends HTMLElement {
   set volume(value: number) {
     this._volume = Math.max(0, Math.min(1, value));
     this.setAttribute("volume", this._volume.toString());
+
+    // If user increases volume while muted, automatically unmute (like YouTube)
+    if (this._muted && this._volume > 0) {
+      this._muted = false;
+      this.removeAttribute("muted");
+      // Update player muted state immediately
+      if (this.player) {
+        this.player.setMuted(false);
+      }
+    }
+
     this.updateVolume();
     SettingsStorage.getInstance().save({ volume: this._volume });
   }
