@@ -4176,7 +4176,7 @@ export class MoviElement extends HTMLElement {
         right: 0;
         padding: 16px 20px;
         background: linear-gradient(to bottom, rgba(0, 0, 0, 0.7) 0%, transparent 100%);
-        z-index: 11;
+        z-index: 5;
         opacity: 0;
         transform: translateY(-10px);
         transition: opacity 0.3s ease, transform 0.3s ease;
