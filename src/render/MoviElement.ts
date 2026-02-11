@@ -7682,7 +7682,7 @@ export class MoviElement extends HTMLElement {
     } else {
       this.removeAttribute("muted");
     }
-    this.updateVolume();
+    this.updateMuted();
     SettingsStorage.getInstance().save({ muted: this._muted });
   }
 
