@@ -211,9 +211,7 @@ export class MoviElement extends HTMLElement {
     loadingIndicator.className = "movi-loading-indicator";
     loadingIndicator.style.display = "none";
     loadingIndicator.innerHTML = `
-      <div class="movi-loader-container">
-        <div class="movi-loader-ring"></div>
-      </div>
+      <div class="movi-loader-container"></div>
     `;
     shadowRoot.appendChild(loadingIndicator);
 
@@ -3673,6 +3671,7 @@ export class MoviElement extends HTMLElement {
     // 1. Player is playing (as requested)
     // 2. Not dragging
     // 3. Mouse is NOT over the controls bar (traditional behavior to keep it visible if manually hovering)
+    // 4. No menu is currently open
     const state = this.player?.getState();
     const isPlaying = state === "playing";
 
@@ -3680,7 +3679,8 @@ export class MoviElement extends HTMLElement {
       isPlaying &&
       !this.isOverControls &&
       !this.isDragging &&
-      !this.isTouchDragging
+      !this.isTouchDragging &&
+      !this.isAnyMenuOpen()
     ) {
       this.controlsTimeout = window.setTimeout(() => {
         // Double check state before hiding
@@ -3689,13 +3689,32 @@ export class MoviElement extends HTMLElement {
           currentState === "playing" &&
           !this.isOverControls &&
           !this.isDragging &&
-          !this.isTouchDragging
+          !this.isTouchDragging &&
+          !this.isAnyMenuOpen()
         ) {
           this.hideControls();
         }
         this.controlsTimeout = null;
       }, 3000); // 3 seconds of inactivity
     }
+  }
+
+  private isAnyMenuOpen(): boolean {
+    if (!this.shadowRoot) return false;
+
+    const speedMenu = this.shadowRoot.querySelector(".movi-speed-menu") as HTMLElement;
+    const audioMenu = this.shadowRoot.querySelector(".movi-audio-track-menu") as HTMLElement;
+    const subtitleMenu = this.shadowRoot.querySelector(".movi-subtitle-track-menu") as HTMLElement;
+    const qualityMenu = this.shadowRoot.querySelector(".movi-quality-menu") as HTMLElement;
+    const contextMenu = this.shadowRoot.querySelector(".movi-context-menu") as HTMLElement;
+
+    return (
+      (speedMenu && speedMenu.style.display === "block") ||
+      (audioMenu && audioMenu.style.display === "block") ||
+      (subtitleMenu && subtitleMenu.style.display === "block") ||
+      (qualityMenu && qualityMenu.style.display === "block") ||
+      (contextMenu && (contextMenu.style.display === "block" || contextMenu.style.display === "flex"))
+    );
   }
 
   private hideControls(): void {
@@ -3732,7 +3751,7 @@ export class MoviElement extends HTMLElement {
       this.showControls();
     } else {
       container.style.display = "none";
-      if (centerPlayPause) centerPlayPause.style.display = "none";
+      if (centerPlayPause) centerPlayPause.classList.remove("movi-center-visible");
     }
   }
 
@@ -3843,7 +3862,7 @@ export class MoviElement extends HTMLElement {
         --movi-shadow-sm: 0 2px 8px rgba(0, 0, 0, 0.3);
         --movi-shadow-md: 0 8px 32px rgba(0, 0, 0, 0.4);
         --movi-shadow-lg: 0 16px 64px rgba(0, 0, 0, 0.5);
-        --movi-shadow-glow: 0 0 20px rgba(139, 92, 246, 0.3);
+        --movi-shadow-glow: 0 0 20px color-mix(in srgb, var(--movi-primary) 0.3);
         
         /* Transitions */
         --movi-transition-fast: 0.15s cubic-bezier(0.4, 0, 0.2, 1);
@@ -3886,7 +3905,7 @@ export class MoviElement extends HTMLElement {
         --movi-shadow-sm: 0 2px 8px rgba(0, 0, 0, 0.05);
         --movi-shadow-md: 0 8px 32px rgba(0, 0, 0, 0.1);
         --movi-shadow-lg: 0 16px 64px rgba(0, 0, 0, 0.15);
-        --movi-shadow-glow: 0 0 20px rgba(139, 92, 246, 0.15);
+        --movi-shadow-glow: 0 0 20px color-mix(in srgb, var(--movi-primary) 0.15);
         
         --movi-btn-hover-bg: rgba(0, 0, 0, 0.05);
         --movi-btn-hover-bg: rgba(0, 0, 0, 0.05);
@@ -3989,24 +4008,23 @@ export class MoviElement extends HTMLElement {
 
       /* Light Theme Center Play Button */
       :host([theme="light"]) .movi-center-play-pause {
-        background: rgba(139, 92, 246, 0.15) !important;
-        border-color: rgba(139, 92, 246, 0.3) !important;
-        box-shadow: 0 8px 32px rgba(139, 92, 246, 0.2), inset 0 0 0 1px rgba(139, 92, 246, 0.1) !important;
+        background: color-mix(in srgb, var(--movi-primary) 15%, transparent) !important;
+        border-color: color-mix(in srgb, var(--movi-primary) 30%, transparent) !important;
+        box-shadow: 0 8px 32px color-mix(in srgb, var(--movi-primary) 20%, transparent), inset 0 0 0 1px color-mix(in srgb, var(--movi-primary) 10%, transparent) !important;
       }
 
       :host([theme="light"]) .movi-center-play-pause:hover {
-        background: rgba(139, 92, 246, 0.25) !important;
-        border-color: rgba(139, 92, 246, 0.5) !important;
-        box-shadow: 0 8px 40px rgba(139, 92, 246, 0.3), inset 0 0 0 1px rgba(139, 92, 246, 0.15) !important;
+        background: color-mix(in srgb, var(--movi-primary) 25%, transparent) !important;
+        border-color: color-mix(in srgb, var(--movi-primary) 50%, transparent) !important;
+        box-shadow: 0 8px 40px color-mix(in srgb, var(--movi-primary) 30%, transparent), inset 0 0 0 1px color-mix(in srgb, var(--movi-primary) 15%, transparent) !important;
       }
 
       :host([theme="light"]) .movi-center-play-pause svg {
-        color: #6c5dd3 !important;
-        filter: drop-shadow(0 0 4px rgba(139, 92, 246, 0.3)) !important;
+        filter: drop-shadow(0 0 4px color-mix(in srgb, var(--movi-primary) 30%, transparent)) !important;
       }
 
       :host([theme="light"]) .movi-center-play-pause:hover svg {
-        filter: drop-shadow(0 0 8px rgba(139, 92, 246, 0.5)) !important;
+        filter: drop-shadow(0 0 8px color-mix(in srgb, var(--movi-primary) 50%, transparent)) !important;
       }
 
       /* Light Theme Context Menu */
@@ -4042,13 +4060,13 @@ export class MoviElement extends HTMLElement {
       :host([theme="light"]) .movi-audio-track-item:hover,
       :host([theme="light"]) .movi-subtitle-track-item:hover,
       :host([theme="light"]) .movi-speed-item:hover {
-        background: rgba(139, 92, 246, 0.08) !important;
+        background: color-mix(in srgb, var(--movi-primary) 0.08) !important;
       }
 
       :host([theme="light"]) .movi-audio-track-item.movi-audio-track-active,
       :host([theme="light"]) .movi-subtitle-track-item.movi-subtitle-track-active,
       :host([theme="light"]) .movi-speed-item.movi-speed-active {
-        background: rgba(139, 92, 246, 0.15) !important;
+        background: color-mix(in srgb, var(--movi-primary) 0.15) !important;
       }
 
       :host([theme="light"]) .movi-quality-item:hover {
@@ -4056,7 +4074,7 @@ export class MoviElement extends HTMLElement {
       }
 
       :host([theme="light"]) .movi-quality-item.movi-quality-active {
-        background: rgba(139, 92, 246, 0.12) !important;
+        background: color-mix(in srgb, var(--movi-primary) 0.12) !important;
       }
 
       :host:focus,
@@ -4257,7 +4275,7 @@ export class MoviElement extends HTMLElement {
       }
 
       .movi-btn:hover {
-        background: rgba(139, 92, 246, 0.15); /* Purplish hover */
+        background: color-mix(in srgb, var(--movi-primary) 0.15); /* Purplish hover */
         transform: scale(1.1);
       }
       
@@ -4292,7 +4310,7 @@ export class MoviElement extends HTMLElement {
       }
       
       .movi-btn:hover svg {
-        filter: drop-shadow(0 0 4px rgba(139, 92, 246, 0.5));
+        filter: drop-shadow(0 0 4px color-mix(in srgb, var(--movi-primary) 0.5));
       }
       
       .movi-icon-play {
@@ -4390,11 +4408,11 @@ export class MoviElement extends HTMLElement {
         transform: translate(-50%, -50%) scale(0);
         width: 16px;
         height: 16px;
-        background: #fff;
+        background: var(--movi-controls-color);
         border-radius: 50%;
         opacity: 0;
         transition: all var(--movi-transition-fast);
-        box-shadow: 0 2px 8px rgba(0, 0, 0, 0.3), 0 0 0 3px rgba(139, 92, 246, 0.3);
+        box-shadow: 0 2px 8px rgba(0, 0, 0, 0.3), 0 0 0 3px color-mix(in srgb, var(--movi-primary) 30%, transparent);
         z-index: 5;
       }
 
@@ -4402,10 +4420,10 @@ export class MoviElement extends HTMLElement {
         opacity: 1;
         transform: translate(-50%, -50%) scale(1);
       }
-      
+
       .movi-progress-handle:active {
         transform: translate(-50%, -50%) scale(1.2);
-        box-shadow: 0 2px 12px rgba(0, 0, 0, 0.4), 0 0 0 5px rgba(139, 92, 246, 0.4);
+        box-shadow: 0 2px 12px rgba(0, 0, 0, 0.4), 0 0 0 5px color-mix(in srgb, var(--movi-primary) 40%, transparent);
       }
 
       /* Always show progress handle on touch devices */
@@ -4504,14 +4522,14 @@ export class MoviElement extends HTMLElement {
       
       .movi-volume-slider::-webkit-slider-thumb:hover {
         transform: scale(1.15);
-        box-shadow: 0 2px 8px rgba(0, 0, 0, 0.4), 0 0 0 3px rgba(139, 92, 246, 0.3);
+        box-shadow: 0 2px 8px rgba(0, 0, 0, 0.4), 0 0 0 3px color-mix(in srgb, var(--movi-primary) 0.3);
       }
       
       .movi-volume-slider::-webkit-slider-thumb:focus,
       .movi-volume-slider::-webkit-slider-thumb:active {
         outline: none !important;
         border: none !important;
-        box-shadow: 0 2px 8px rgba(0, 0, 0, 0.4), 0 0 0 3px rgba(139, 92, 246, 0.3);
+        box-shadow: 0 2px 8px rgba(0, 0, 0, 0.4), 0 0 0 3px color-mix(in srgb, var(--movi-primary) 0.3);
       }
 
       .movi-volume-slider::-moz-range-thumb {
@@ -4529,7 +4547,7 @@ export class MoviElement extends HTMLElement {
       .movi-volume-slider::-moz-range-thumb:active {
         outline: none !important;
         border: none !important;
-        box-shadow: 0 2px 8px rgba(0, 0, 0, 0.4), 0 0 0 3px rgba(139, 92, 246, 0.3);
+        box-shadow: 0 2px 8px rgba(0, 0, 0, 0.4), 0 0 0 3px color-mix(in srgb, var(--movi-primary) 0.3);
       }
       
       .movi-volume-slider::-moz-range-track {
@@ -4584,11 +4602,11 @@ export class MoviElement extends HTMLElement {
       }
 
       .movi-audio-track-item:hover {
-        background: rgba(139, 92, 246, 0.15);
+        background: color-mix(in srgb, var(--movi-primary) 0.15);
       }
 
       .movi-audio-track-item.movi-audio-track-active {
-        background: rgba(139, 92, 246, 0.25);
+        background: color-mix(in srgb, var(--movi-primary) 0.25);
         font-weight: 600;
       }
 
@@ -4660,11 +4678,11 @@ export class MoviElement extends HTMLElement {
       }
 
       .movi-subtitle-track-item:hover {
-        background: rgba(139, 92, 246, 0.15);
+        background: color-mix(in srgb, var(--movi-primary) 0.15);
       }
 
       .movi-subtitle-track-item.movi-subtitle-track-active {
-        background: rgba(139, 92, 246, 0.25);
+        background: color-mix(in srgb, var(--movi-primary) 0.25);
         font-weight: 600;
       }
 
@@ -4800,11 +4818,11 @@ export class MoviElement extends HTMLElement {
       }
 
       .movi-speed-item:hover {
-        background: rgba(139, 92, 246, 0.15);
+        background: color-mix(in srgb, var(--movi-primary) 0.15);
       }
 
       .movi-speed-item.movi-speed-active {
-        background: rgba(139, 92, 246, 0.25);
+        background: color-mix(in srgb, var(--movi-primary) 0.25);
         font-weight: 600;
       }
       
@@ -4871,6 +4889,9 @@ export class MoviElement extends HTMLElement {
         .movi-center-play-pause svg {
            width: 32px !important;
            height: 32px !important;
+           color: var(--movi-controls-color) !important;
+           fill: var(--movi-controls-color) !important;
+           filter: drop-shadow(0 2px 4px rgba(0, 0, 0, 0.3)) !important;
         }
         .movi-center-icon-play {
            margin-left: 5px !important;
@@ -5123,14 +5144,22 @@ export class MoviElement extends HTMLElement {
         .movi-center-play-pause:hover,
         .movi-center-play-pause:focus,
         .movi-center-play-pause:active {
-           background: rgba(139, 92, 246, 0.4) !important;
-           border-color: rgba(139, 92, 246, 0.6) !important;
-           box-shadow: 0 8px 32px rgba(139, 92, 246, 0.4) !important;
+           background: color-mix(in srgb, var(--movi-primary) 40%, transparent) !important;
+           border-color: color-mix(in srgb, var(--movi-primary) 60%, transparent) !important;
+           box-shadow: 0 8px 32px color-mix(in srgb, var(--movi-primary) 40%, transparent) !important;
+        }
+
+        .movi-center-play-pause svg {
+           color: var(--movi-controls-color) !important;
+           fill: var(--movi-controls-color) !important;
+           filter: drop-shadow(0 2px 4px rgba(0, 0, 0, 0.3)) !important;
         }
 
         .movi-center-play-pause:hover svg,
         .movi-center-play-pause:focus svg {
-           filter: drop-shadow(0 0 8px rgba(139, 92, 246, 0.6)) !important;
+           color: var(--movi-controls-color) !important;
+           fill: var(--movi-controls-color) !important;
+           filter: drop-shadow(0 0 8px color-mix(in srgb, var(--movi-primary) 60%, transparent)) !important;
         }
 
         .movi-btn:hover svg,
@@ -5142,8 +5171,6 @@ export class MoviElement extends HTMLElement {
         .movi-center-play-pause {
            transform: translate(-50%, -50%) !important;
            transition: none !important;
-           backdrop-filter: none !important;
-           -webkit-backdrop-filter: none !important;
         }
 
         /* Override button states to prevent white background flash */
@@ -5182,27 +5209,34 @@ export class MoviElement extends HTMLElement {
       }
 
       .movi-loader-container {
-        position: relative;
-        width: 80px;
-        height: 80px;
-        display: flex;
-        align-items: center;
-        justify-content: center;
+        width: 64px;
+        height: 64px;
+        border-radius: 50%;
+        display: inline-block;
+        border-top: 4px solid var(--movi-controls-color);
+        border-right: 4px solid transparent;
+        box-sizing: border-box;
+        animation: movi-loader-spin 1s linear infinite;
+        filter: drop-shadow(0 0 8px rgba(0, 0, 0, 0.3));
       }
 
-      .movi-loader-ring {
-        position: absolute;
-        width: 100%;
-        height: 100%;
-        border-radius: 50%;
-        border: 2px solid rgba(255, 255, 255, 0.1);
-        border-top-color: #fff;
-        animation: movi-loader-spin 1s linear infinite;
+      /* Mobile loader - smaller size */
+      @media (max-width: 640px) {
+        .movi-loader-container {
+          width: 48px;
+          height: 48px;
+          border-top-width: 3px;
+          border-right-width: 3px;
+        }
       }
 
       @keyframes movi-loader-spin {
-        from { transform: rotate(0deg); }
-        to { transform: rotate(360deg); }
+        0% {
+          transform: rotate(0deg);
+        }
+        100% {
+          transform: rotate(360deg);
+        }
       }
 
       /* Center play/pause button */
@@ -5215,32 +5249,34 @@ export class MoviElement extends HTMLElement {
         width: 88px;
         height: 88px;
         border-radius: 50%;
-        background: rgba(139, 92, 246, 0.25);
+        background: color-mix(in srgb, var(--movi-primary) 25%, transparent);
         backdrop-filter: blur(12px);
         -webkit-backdrop-filter: blur(12px);
         padding: 0;
-        border: 2px solid rgba(139, 92, 246, 0.4);
-        display: none;
+        border: 2px solid color-mix(in srgb, var(--movi-primary) 40%, transparent);
+        display: flex;
         align-items: center;
         justify-content: center;
         cursor: pointer;
         opacity: 0;
+        visibility: hidden;
         pointer-events: none;
-        transition: all var(--movi-transition-bounce);
-        box-shadow: 0 8px 32px rgba(139, 92, 246, 0.25), inset 0 0 0 1px rgba(255, 255, 255, 0.1);
+        transition: opacity var(--movi-transition-bounce), transform var(--movi-transition-bounce), visibility 0s linear 0.3s;
+        box-shadow: 0 8px 32px color-mix(in srgb, var(--movi-primary) 25%, transparent), inset 0 0 0 1px rgba(255, 255, 255, 0.1);
       }
 
       .movi-center-play-pause.movi-center-visible {
-        display: flex;
         opacity: 1;
+        visibility: visible;
         transform: translate(-50%, -50%) scale(1);
         pointer-events: auto;
+        transition-delay: 0s;
       }
 
       .movi-center-play-pause:hover {
-        background: rgba(139, 92, 246, 0.4);
-        border-color: rgba(139, 92, 246, 0.6);
-        box-shadow: 0 8px 40px rgba(139, 92, 246, 0.4), inset 0 0 0 1px rgba(255, 255, 255, 0.15);
+        background: color-mix(in srgb, var(--movi-primary) 40%, transparent);
+        border-color: color-mix(in srgb, var(--movi-primary) 60%, transparent);
+        box-shadow: 0 8px 40px color-mix(in srgb, var(--movi-primary) 40%, transparent), inset 0 0 0 1px rgba(255, 255, 255, 0.15);
       }
 
       .movi-center-play-pause.movi-center-visible:hover {
@@ -5258,15 +5294,16 @@ export class MoviElement extends HTMLElement {
       .movi-center-play-pause svg {
         width: 48px;
         height: 48px;
-        color: #fff;
+        color: var(--movi-controls-color);
+        fill: var(--movi-controls-color);
         transition: all var(--movi-transition-fast);
-        filter: drop-shadow(0 0 6px rgba(139, 92, 246, 0.5));
+        filter: drop-shadow(0 2px 4px rgba(0, 0, 0, 0.3));
       }
 
       .movi-center-play-pause:hover svg {
-        filter: drop-shadow(0 0 12px rgba(139, 92, 246, 0.8));
+        filter: drop-shadow(0 0 8px color-mix(in srgb, var(--movi-primary) 60%, transparent));
       }
-      
+
       /* Play icon offset for optical centering */
       .movi-center-icon-play {
         margin-left: 6px;
@@ -5275,8 +5312,8 @@ export class MoviElement extends HTMLElement {
 
       .movi-center-play-pause:focus {
         outline: none !important;
-        border-color: rgba(139, 92, 246, 0.5);
-        box-shadow: 0 0 0 3px rgba(139, 92, 246, 0.3), 0 8px 32px rgba(0, 0, 0, 0.4);
+        border-color: color-mix(in srgb, var(--movi-primary) 50%, transparent);
+        box-shadow: 0 0 0 3px color-mix(in srgb, var(--movi-primary) 30%, transparent), 0 8px 32px rgba(0, 0, 0, 0.4);
       }
       
       /* Mobile center button sizing */
@@ -5410,7 +5447,7 @@ export class MoviElement extends HTMLElement {
       }
 
       .movi-context-menu-item.movi-context-menu-active {
-        background-color: rgba(139, 92, 246, 0.12);
+        background-color: color-mix(in srgb, var(--movi-primary) 0.12);
         color: var(--movi-primary-light);
         font-weight: 600;
       }
@@ -5581,7 +5618,7 @@ export class MoviElement extends HTMLElement {
       .movi-quality-item.movi-quality-active {
         color: var(--movi-primary);
         font-weight: 600;
-        background: rgba(139, 92, 246, 0.1);
+        background: color-mix(in srgb, var(--movi-primary) 0.1);
       }
 
       .movi-quality-check {
@@ -6957,7 +6994,6 @@ export class MoviElement extends HTMLElement {
       if (isLoading || this._isUnsupported) {
         if (centerPlayPauseBtn) {
           centerPlayPauseBtn.classList.remove("movi-center-visible");
-          centerPlayPauseBtn.style.display = "none";
         }
       } else if (centerPlayPauseBtn) {
         centerPlayIcon?.style.setProperty("display", "none");
@@ -6968,13 +7004,11 @@ export class MoviElement extends HTMLElement {
           "movi-controls-hidden",
         );
         if (!controlsHidden) {
-          centerPlayPauseBtn.style.setProperty("display", "flex");
           requestAnimationFrame(() => {
             centerPlayPauseBtn.classList.add("movi-center-visible");
           });
         } else {
           centerPlayPauseBtn.classList.remove("movi-center-visible");
-          centerPlayPauseBtn.style.display = "none";
         }
       }
     } else {
@@ -6990,15 +7024,13 @@ export class MoviElement extends HTMLElement {
       if (isLoading || this._isUnsupported) {
         if (centerPlayPauseBtn) {
           centerPlayPauseBtn.classList.remove("movi-center-visible");
-          centerPlayPauseBtn.style.display = "none";
         }
       } else {
         if (centerPlayPauseBtn) {
           centerPlayIcon?.style.setProperty("display", "block");
           centerPauseIcon?.style.setProperty("display", "none");
 
-          centerPlayPauseBtn.style.setProperty("display", "flex");
-          // Use a small delay for opacity/scale transition to work after display: flex
+          // Use a small delay for smooth transition
           requestAnimationFrame(() => {
             centerPlayPauseBtn.classList.add("movi-center-visible");
           });
@@ -7233,7 +7265,6 @@ export class MoviElement extends HTMLElement {
     ) as HTMLElement;
     if (centerPlayPauseBtn) {
       centerPlayPauseBtn.classList.remove("movi-center-visible");
-      centerPlayPauseBtn.style.display = "none";
     }
 
     // Update controls
