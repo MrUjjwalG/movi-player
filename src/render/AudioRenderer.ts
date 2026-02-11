@@ -372,11 +372,13 @@ export class AudioRenderer {
     this._playbackRate = newRate;
 
     // Update all scheduled sources
+    // Use setValueAtTime for immediate effect
+    const now = this.audioContext?.currentTime ?? 0;
     for (const source of this.activeSources) {
       try {
-        source.playbackRate.value = this._playbackRate;
-      } catch {
-        // Ignore
+        source.playbackRate.setValueAtTime(this._playbackRate, now);
+      } catch (err) {
+        Logger.warn(TAG, "Failed to set playback rate on source:", err);
       }
     }
   }
