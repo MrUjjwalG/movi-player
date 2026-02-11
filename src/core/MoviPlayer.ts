@@ -70,6 +70,7 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
   // Debug flag to disable audio processing
   private disableAudio: boolean = false; // Set to true to disable audio for debugging
   private muted: boolean = false; // Mute state
+  private wasPlayingBeforeRebuffer: boolean = false; // Track if we were playing before entering rebuffering state
 
   // Playback Loop
   private animationFrameId: number | null = null;
@@ -832,8 +833,9 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
    * Main Playback Loop
    */
   private processLoop = async () => {
-    // Run if playing OR if we are resolving a seek (fetching target frame)
-    if (this.stateManager.getState() !== "playing" && !this.waitingForVideoSync)
+    const currentState = this.stateManager.getState();
+    // Run if playing OR buffering (for rebuffering) OR if we are resolving a seek (fetching target frame)
+    if (currentState !== "playing" && currentState !== "buffering" && !this.waitingForVideoSync)
       return;
 
     // Capture session ID at start of loop - if a new seek starts, this loop should abort
@@ -847,6 +849,30 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
     if (this.seekSessionId !== currentSessionId) {
       Logger.debug(TAG, "ProcessLoop aborted: new seek started");
       return;
+    }
+
+    // Check if audio is rebuffering due to playback rate change
+    if (!this.disableAudio && this.audioRenderer.isRebuffering()) {
+      // Enter buffering state and pause clock until rebuffering completes
+      const currentState = this.stateManager.getState();
+      if (currentState === "playing") {
+        this.wasPlayingBeforeRebuffer = true;
+        this.stateManager.setState("buffering");
+        this.clock.pause();
+        Logger.debug(TAG, "Entered buffering state for playback rate change");
+      }
+      // Continue processing to allow new audio to be decoded and scheduled
+    } else if (this.stateManager.getState() === "buffering" && this.wasPlayingBeforeRebuffer) {
+      // Rebuffering complete, resume playback only if we were playing before
+      // Transition to paused first, then let play() method handle the transition to playing
+      this.stateManager.setState("paused");
+      this.wasPlayingBeforeRebuffer = false;
+      Logger.debug(TAG, "Exited buffering state, resuming playback");
+
+      // Resume playback by calling play() method (proper state machine transition)
+      this.play().catch((err) => {
+        Logger.error(TAG, "Failed to resume playback after rebuffering:", err);
+      });
     }
 
     // Update FileSource preload position based on current time

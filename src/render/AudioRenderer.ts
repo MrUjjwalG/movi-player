@@ -28,6 +28,9 @@ export class AudioRenderer {
   private lastDecodeTime: number = 0;
   private scheduledCount: number = 0;
 
+  // Playback rate change rebuffering flag
+  private isRebufferingForRateChange: boolean = false;
+
   constructor() {
     Logger.debug(TAG, "Created");
   }
@@ -174,9 +177,15 @@ export class AudioRenderer {
       this.currentMediaTime = audioTime;
       this.scheduledCount++;
 
+      // Clear rebuffering flag once we successfully schedule new audio
+      if (this.isRebufferingForRateChange) {
+        this.isRebufferingForRateChange = false;
+        Logger.debug(TAG, "Rebuffering complete after playback rate change");
+      }
+
       // Track the maximum media time we've scheduled
-      const endMediaTime =
-        audioTime + audioBuffer.duration * this._playbackRate;
+      // audioBuffer.duration is already in media seconds, no need to multiply by playbackRate
+      const endMediaTime = audioTime + audioBuffer.duration;
       if (endMediaTime > this.maxScheduledMediaTime) {
         this.maxScheduledMediaTime = endMediaTime;
       }
@@ -371,12 +380,37 @@ export class AudioRenderer {
 
     this._playbackRate = newRate;
 
-    // Update all scheduled sources
-    for (const source of this.activeSources) {
-      try {
-        source.playbackRate.value = this._playbackRate;
-      } catch {
-        // Ignore
+    // Stop all currently playing sources to force immediate re-buffering with new rate
+    // This causes a brief gap (~50-100ms) but ensures correct playback rate immediately
+    if (this.audioContext) {
+      const now = this.audioContext.currentTime;
+
+      // Set rebuffering flag to signal MoviPlayer to show loading and pause clock
+      // Set this flag even if no active sources, to ensure proper clock sync on resume
+      if (this.isPlaying || this.activeSources.length > 0) {
+        this.isRebufferingForRateChange = true;
+      }
+
+      // Stop all active sources
+      if (this.activeSources.length > 0) {
+        for (const source of this.activeSources) {
+          try {
+            source.stop(now);
+            source.disconnect();
+          } catch {
+            // Source may already be stopped
+          }
+        }
+
+        // Clear active sources array
+        this.activeSources = [];
+
+        // Reset scheduled time to force immediate re-buffering
+        this.scheduledTime = now;
+      } else if (this.isPlaying) {
+        // No active sources but playing (e.g., underrun or just started)
+        // Still need to reset scheduled time to ensure new audio uses new rate immediately
+        this.scheduledTime = now;
       }
     }
   }
@@ -386,6 +420,13 @@ export class AudioRenderer {
    */
   getPlaybackRate(): number {
     return this._playbackRate;
+  }
+
+  /**
+   * Check if audio is rebuffering due to playback rate change
+   */
+  isRebuffering(): boolean {
+    return this.isRebufferingForRateChange;
   }
 
   /**
@@ -472,6 +513,8 @@ export class AudioRenderer {
         0;
       if (latency > 0) {
         computedTime -= latency * this._playbackRate;
+        // Prevent time from going below the first buffer time (Bluetooth high latency fix)
+        computedTime = Math.max(computedTime, this.firstBufferMediaTime);
       }
 
       return computedTime;
@@ -496,7 +539,7 @@ export class AudioRenderer {
       let computedTime =
         this.firstBufferMediaTime + Math.max(0, elapsed * this._playbackRate);
 
-      // Adjust for output latency if available (Critical for Android sync)
+      // Adjust for output latency if available (Critical for Android/Bluetooth sync)
       // outputLatency represents the delay between the audio hardware and the speakers
       // Subtracting this ensures the video syncs to what is actually HEARD, not just scheduled
       const latency =
@@ -505,6 +548,10 @@ export class AudioRenderer {
         0;
       if (latency > 0) {
         computedTime -= latency * this._playbackRate;
+        // Prevent audio clock from going below the first buffer time
+        // This is critical for Bluetooth devices with high latency (100-300ms)
+        // to prevent video stalling at playback start
+        computedTime = Math.max(computedTime, this.firstBufferMediaTime);
       }
 
       // Clamp to the maximum scheduled media time to prevent clock runaway
@@ -535,7 +582,11 @@ export class AudioRenderer {
     const hasScheduledAudio =
       this.activeSources.length > 0 || realBufferAhead > 0;
 
-    return hasScheduledAudio && realBufferAhead > 0.02;
+    // For initial sync stability (especially with Bluetooth), require more buffer
+    // First few chunks need larger buffer to ensure stable clock
+    const minBufferThreshold = this.scheduledCount < 5 ? 0.1 : 0.02;
+
+    return hasScheduledAudio && realBufferAhead > minBufferThreshold;
   }
 
   /**

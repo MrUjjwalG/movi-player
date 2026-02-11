@@ -43,6 +43,7 @@ export class CanvasRenderer {
   private syncedToAudio: boolean = false;
   private playbackRate: number = 1.0;
   private justSeeked: boolean = false; // Track if we just seeked (for post-seek frame handling)
+  private framesPresented: number = 0; // Track number of frames presented (for initial sync)
 
   // Current time tracking
   private currentTime: number = 0;
@@ -861,6 +862,9 @@ export class CanvasRenderer {
     // If we have queue, we are resuming, so keep last known PTS to avoid jumps
     if (this.frameQueue.length === 0) {
       this.lastPresentedPts = -1;
+      this.framesPresented = 0; // Reset frame counter for fresh start
+      // Keep presentationStartPts as-is when frameQueue is empty
+      // It will sync to audio or first frame time when available
       this.syncedToAudio = false;
     } else {
       // Resuming with frames: reset anchor to last presented time to prevent restart from 0
@@ -962,6 +966,7 @@ export class CanvasRenderer {
         this.frameQueue.shift();
         this.lastPresentedPts = frameTime;
         this.currentTime = frameTime;
+        this.framesPresented++;
         return;
       }
     }
@@ -1017,21 +1022,40 @@ export class CanvasRenderer {
       if (audioTime >= 0 && isHealthy) {
         // First sync - initialize wall clock to match audio
         if (!this.syncedToAudio) {
-          this.presentationStartTime = performance.now();
-          this.presentationStartPts = audioTime;
-          this.syncedToAudio = true;
-          return audioTime;
+          const drift = videoTime >= 0 ? Math.abs(videoTime - audioTime) : 0;
+          const isVeryEarlyPlayback = this.framesPresented <= 3;
+
+          // Reset presentation anchors if:
+          // 1. Video hasn't started yet (videoTime < 0), OR
+          // 2. Very early playback (≤3 frames) AND drift is significant (>30ms)
+          //    This gives Bluetooth audio time to stabilize before hard sync
+          // 3. Drift is very large (> 400ms) - critical desync recovery
+          if (videoTime < 0 || (isVeryEarlyPlayback && drift > 0.03) || drift > 0.4) {
+            this.presentationStartTime = performance.now();
+            this.presentationStartPts = audioTime;
+            this.syncedToAudio = true;
+            Logger.debug(TAG, `Initial A/V sync: audioTime=${audioTime.toFixed(3)}s, framesPresented=${this.framesPresented}, drift=${(drift * 1000).toFixed(0)}ms, early=${isVeryEarlyPlayback}`);
+            return audioTime;
+          } else {
+            // We're already playing, just mark as synced without resetting
+            // This prevents stuttering when Bluetooth latency causes audio clock fluctuations
+            this.syncedToAudio = true;
+            Logger.debug(TAG, `Soft A/V sync (no reset): videoTime=${videoTime.toFixed(3)}s, audioTime=${audioTime.toFixed(3)}s, framesPresented=${this.framesPresented}, drift=${(drift * 1000).toFixed(0)}ms`);
+          }
         }
 
-        // Loose sync: only correct if video has drifted more than 100ms from audio
+        // Loose sync: only correct if video has drifted from audio
         // This prevents audio jitter from affecting smooth video playback
-        if (videoTime >= 0) {
+        // Only apply drift correction after we've presented many frames to avoid initial stutter
+        // Especially important for Bluetooth where latency can fluctuate in first few seconds
+        if (videoTime >= 0 && this.framesPresented > 30) {
           const drift = videoTime - audioTime;
 
-          // If video is more than 100ms ahead or behind audio, gently correct
-          if (Math.abs(drift) > 0.1) {
-            // Apply gradual correction (50% per check) to avoid jarring jumps
-            const correction = drift * 0.5;
+          // If video is more than 150ms ahead or behind audio, gently correct
+          // Higher threshold for Bluetooth compatibility (latency can vary)
+          if (Math.abs(drift) > 0.15) {
+            // Apply very gradual correction (25% per check) to avoid jarring jumps
+            const correction = drift * 0.25;
             this.presentationStartPts -= correction;
             // Logger.debug(TAG, `A/V drift correction: ${(drift * 1000).toFixed(1)}ms`);
           }
@@ -1064,6 +1088,7 @@ export class CanvasRenderer {
       const firstFrame = this.frameQueue.shift()!;
       this.lastPresentedPts = firstFrame.timestamp / 1_000_000;
       this.currentTime = this.lastPresentedPts;
+      this.framesPresented = 1; // First frame presented
 
       // Initialize presentation timing
       this.presentationStartTime = performance.now();
@@ -1180,6 +1205,7 @@ export class CanvasRenderer {
       // Update tracking
       this.lastPresentedPts = bestFrame.timestamp / 1_000_000;
       this.currentTime = this.lastPresentedPts;
+      this.framesPresented++;
 
       return bestFrame;
     }
@@ -1815,10 +1841,15 @@ export class CanvasRenderer {
     const currentTime = this.getCurrentPlaybackTime();
     this.playbackRate = Math.max(0.25, Math.min(4, rate));
 
-    if (this.presentationStartTime > 0 && !this.syncedToAudio) {
+    // Always update presentation anchors when playback rate changes
+    // This ensures video timing is recalculated with the new rate
+    if (this.presentationStartTime > 0) {
       this.presentationStartTime = performance.now();
       this.presentationStartPts = currentTime;
     }
+
+    // Mark as not synced so we can re-sync to audio with new rate
+    this.syncedToAudio = false;
   }
 
   /**
@@ -1853,6 +1884,7 @@ export class CanvasRenderer {
     this.frameQueue = [];
     this.lastPresentedPts = -1;
     this.syncedToAudio = false;
+    this.framesPresented = 0; // Reset frame counter
 
     // Reset presentation timing to prevent stuttering after seek
     // This ensures the next frame after seek starts with fresh timing

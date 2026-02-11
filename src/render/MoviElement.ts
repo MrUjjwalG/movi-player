@@ -3989,19 +3989,24 @@ export class MoviElement extends HTMLElement {
 
       /* Light Theme Center Play Button */
       :host([theme="light"]) .movi-center-play-pause {
-        background: rgba(255, 255, 255, 0.8) !important;
-        border-color: rgba(0, 0, 0, 0.1) !important;
-        box-shadow: 0 8px 32px rgba(0, 0, 0, 0.15), inset 0 0 0 1px rgba(0, 0, 0, 0.05) !important;
+        background: rgba(139, 92, 246, 0.15) !important;
+        border-color: rgba(139, 92, 246, 0.3) !important;
+        box-shadow: 0 8px 32px rgba(139, 92, 246, 0.2), inset 0 0 0 1px rgba(139, 92, 246, 0.1) !important;
       }
 
       :host([theme="light"]) .movi-center-play-pause:hover {
-        background: rgba(255, 255, 255, 0.95) !important;
-        box-shadow: 0 8px 40px rgba(0, 0, 0, 0.2), inset 0 0 0 1px rgba(0, 0, 0, 0.08) !important;
+        background: rgba(139, 92, 246, 0.25) !important;
+        border-color: rgba(139, 92, 246, 0.5) !important;
+        box-shadow: 0 8px 40px rgba(139, 92, 246, 0.3), inset 0 0 0 1px rgba(139, 92, 246, 0.15) !important;
       }
 
       :host([theme="light"]) .movi-center-play-pause svg {
-        color: #11142d !important;
-        filter: none !important;
+        color: #6c5dd3 !important;
+        filter: drop-shadow(0 0 4px rgba(139, 92, 246, 0.3)) !important;
+      }
+
+      :host([theme="light"]) .movi-center-play-pause:hover svg {
+        filter: drop-shadow(0 0 8px rgba(139, 92, 246, 0.5)) !important;
       }
 
       /* Light Theme Context Menu */
@@ -5118,13 +5123,16 @@ export class MoviElement extends HTMLElement {
         .movi-center-play-pause:hover,
         .movi-center-play-pause:focus,
         .movi-center-play-pause:active {
-           background: rgba(0, 0, 0, 0.6) !important;
-           border-color: rgba(255, 255, 255, 0.3) !important;
-           box-shadow: 0 8px 32px rgba(0, 0, 0, 0.5) !important;
+           background: rgba(139, 92, 246, 0.4) !important;
+           border-color: rgba(139, 92, 246, 0.6) !important;
+           box-shadow: 0 8px 32px rgba(139, 92, 246, 0.4) !important;
         }
 
         .movi-center-play-pause:hover svg,
-        .movi-center-play-pause:focus svg,
+        .movi-center-play-pause:focus svg {
+           filter: drop-shadow(0 0 8px rgba(139, 92, 246, 0.6)) !important;
+        }
+
         .movi-btn:hover svg,
         .movi-btn:focus svg {
            filter: none !important;
@@ -5207,11 +5215,11 @@ export class MoviElement extends HTMLElement {
         width: 88px;
         height: 88px;
         border-radius: 50%;
-        background: rgba(0, 0, 0, 0.5);
+        background: rgba(139, 92, 246, 0.25);
         backdrop-filter: blur(12px);
         -webkit-backdrop-filter: blur(12px);
         padding: 0;
-        border: 2px solid rgba(255, 255, 255, 0.2);
+        border: 2px solid rgba(139, 92, 246, 0.4);
         display: none;
         align-items: center;
         justify-content: center;
@@ -5219,7 +5227,7 @@ export class MoviElement extends HTMLElement {
         opacity: 0;
         pointer-events: none;
         transition: all var(--movi-transition-bounce);
-        box-shadow: 0 8px 32px rgba(0, 0, 0, 0.4), inset 0 0 0 1px rgba(255, 255, 255, 0.1);
+        box-shadow: 0 8px 32px rgba(139, 92, 246, 0.25), inset 0 0 0 1px rgba(255, 255, 255, 0.1);
       }
 
       .movi-center-play-pause.movi-center-visible {
@@ -5230,9 +5238,9 @@ export class MoviElement extends HTMLElement {
       }
 
       .movi-center-play-pause:hover {
-        background: rgba(139, 92, 246, 0.3);
-        border-color: rgba(139, 92, 246, 0.5);
-        box-shadow: 0 8px 40px rgba(139, 92, 246, 0.3), inset 0 0 0 1px rgba(255, 255, 255, 0.15);
+        background: rgba(139, 92, 246, 0.4);
+        border-color: rgba(139, 92, 246, 0.6);
+        box-shadow: 0 8px 40px rgba(139, 92, 246, 0.4), inset 0 0 0 1px rgba(255, 255, 255, 0.15);
       }
 
       .movi-center-play-pause.movi-center-visible:hover {
@@ -5252,11 +5260,11 @@ export class MoviElement extends HTMLElement {
         height: 48px;
         color: #fff;
         transition: all var(--movi-transition-fast);
-        filter: drop-shadow(0 2px 4px rgba(0, 0, 0, 0.3));
+        filter: drop-shadow(0 0 6px rgba(139, 92, 246, 0.5));
       }
-      
+
       .movi-center-play-pause:hover svg {
-        filter: drop-shadow(0 0 8px rgba(139, 92, 246, 0.6));
+        filter: drop-shadow(0 0 12px rgba(139, 92, 246, 0.8));
       }
       
       /* Play icon offset for optical centering */
@@ -7682,7 +7690,7 @@ export class MoviElement extends HTMLElement {
     } else {
       this.removeAttribute("muted");
     }
-    this.updateVolume();
+    this.updateMuted();
     SettingsStorage.getInstance().save({ muted: this._muted });
   }
 
@@ -7721,6 +7729,17 @@ export class MoviElement extends HTMLElement {
   set volume(value: number) {
     this._volume = Math.max(0, Math.min(1, value));
     this.setAttribute("volume", this._volume.toString());
+
+    // If user increases volume while muted, automatically unmute (like YouTube)
+    if (this._muted && this._volume > 0) {
+      this._muted = false;
+      this.removeAttribute("muted");
+      // Update player muted state immediately
+      if (this.player) {
+        this.player.setMuted(false);
+      }
+    }
+
     this.updateVolume();
     SettingsStorage.getInstance().save({ volume: this._volume });
   }
