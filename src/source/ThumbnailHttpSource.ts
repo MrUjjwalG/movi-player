@@ -192,6 +192,23 @@ export class ThumbnailHttpSource implements SourceAdapter {
           return new ArrayBuffer(0); // Cancelled
         }
 
+        // Check for CORS errors (TypeError: Failed to fetch)
+        // CORS errors are fatal and should not be retried
+        const errorMessage = (error as any).message || "";
+        const isCorsError =
+          (error as any).name === "TypeError" &&
+          errorMessage.includes("Failed to fetch");
+
+        if (isCorsError) {
+          Logger.error(
+            TAG,
+            `CORS error: Cannot access ${this.url}. The server may not allow cross-origin requests, or CORS headers are not properly configured.`
+          );
+          throw new Error(
+            "CORS error: Server does not allow cross-origin requests. Thumbnails disabled."
+          );
+        }
+
         // Check if fatal error
         if (
           (error as any).message &&

@@ -481,6 +481,24 @@ export class HttpSource implements SourceAdapter {
           break;
         }
 
+        // Check for CORS errors (TypeError: Failed to fetch)
+        // CORS errors cannot be retried as they're a configuration issue
+        const errorMessage = (error as any).message || "";
+        const isCorsError =
+          (error as any).name === "TypeError" &&
+          errorMessage.includes("Failed to fetch");
+
+        if (isCorsError) {
+          Logger.error(
+            TAG,
+            `CORS error: Cannot access ${this.url}. The server may not allow cross-origin requests, or CORS headers are not properly configured.`
+          );
+          this.atomicSetStreaming(false);
+          throw new Error(
+            "CORS error: Server does not allow cross-origin requests. Check server CORS configuration."
+          );
+        }
+
         Logger.warn(TAG, `Stream error, retrying...`, error);
 
         try {

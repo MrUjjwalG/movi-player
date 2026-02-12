@@ -173,6 +173,7 @@ export class WasmBindings {
 
   private dataSource: DataSource | null = null;
   private fileSize: number = 0;
+  private lastError: string | null = null; // Store last I/O error for better error messages
 
   constructor(module: MoviWasmModule) {
     this.module = module;
@@ -222,6 +223,8 @@ export class WasmBindings {
         const data = await self.dataSource.read(offsetNum, size);
         self.fulfillRead(data, data.byteLength);
       } catch (error) {
+        // Store error message for better error reporting
+        self.lastError = (error as any).message || String(error);
         Logger.error(TAG, "Read request failed", error);
         self.fulfillRead(new Uint8Array(0), -1);
       }
@@ -399,6 +402,9 @@ export class WasmBindings {
 
     // Open (this will trigger async reads via AVIO callbacks)
     // IMPORTANT: Use ccall with async:true for Asyncify to work correctly
+    // Clear any previous error
+    this.lastError = null;
+
     const ret = (await this.module.ccall(
       "movi_open",
       "number",
@@ -408,7 +414,11 @@ export class WasmBindings {
     )) as number;
 
     if (ret < 0) {
-      throw new Error(`Failed to open media: error ${ret}`);
+      // Include last I/O error if available (e.g., CORS, network errors)
+      const errorDetail = this.lastError
+        ? `: ${this.lastError}`
+        : ` (FFmpeg error code: ${ret})`;
+      throw new Error(`Failed to open media${errorDetail}`);
     }
 
     Logger.debug(TAG, `Media opened with ${ret} streams`);
