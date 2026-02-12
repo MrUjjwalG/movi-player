@@ -6175,6 +6175,9 @@ export class MoviElement extends HTMLElement {
     // Initial visibility check
     this.updateControlsVisibility();
 
+    // Check for required security headers
+    this.checkSecurityHeaders();
+
     // Automatically initialize player if src is set
     if (this._src) {
       this.initializePlayer();
@@ -6592,7 +6595,7 @@ export class MoviElement extends HTMLElement {
    * Automatically create and initialize MoviPlayer
    */
   private async initializePlayer(): Promise<void> {
-    if (!this._src || this.isLoading || this.player) {
+    if (!this._src || this.isLoading || this.player || this._isUnsupported) {
       return;
     }
 
@@ -7272,6 +7275,48 @@ export class MoviElement extends HTMLElement {
     this.updateControlsState();
     this.updatePlayPauseIcon();
     this.updateQualityMenu(); // Update quality menu
+  }
+
+  /**
+   * Check if required security headers (COOP/COEP) are present
+   * These headers are required for SharedArrayBuffer support (needed by FFmpeg)
+   */
+  private checkSecurityHeaders(): void {
+    // Check if Cross-Origin-Isolated context is available
+    if (!window.crossOriginIsolated) {
+      Logger.warn(
+        TAG,
+        "Security headers missing: Cross-Origin-Opener-Policy and Cross-Origin-Embedder-Policy are required",
+      );
+
+      // Show error message
+      if (this.brokenIndicator) {
+        this.brokenIndicator.style.display = "flex";
+
+        const titleEl =
+          this.brokenIndicator.querySelector(".movi-broken-title");
+        if (titleEl) titleEl.textContent = "Security Headers Missing";
+
+        const messageEl = this.brokenIndicator.querySelector(
+          ".movi-broken-message",
+        );
+        if (messageEl) {
+          messageEl.textContent =
+            "This player requires Cross-Origin-Opener-Policy: same-origin and Cross-Origin-Embedder-Policy: require-corp headers to be set on the server.";
+        }
+
+        // Hide the software fallback button (not applicable for header issues)
+        const swFallbackBtn = this.brokenIndicator.querySelector(
+          ".movi-sw-fallback-btn",
+        ) as HTMLElement;
+        if (swFallbackBtn) {
+          swFallbackBtn.style.display = "none";
+        }
+      }
+
+      // Prevent player initialization
+      this._isUnsupported = true;
+    }
   }
 
   /**
