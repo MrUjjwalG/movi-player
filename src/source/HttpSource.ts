@@ -355,17 +355,14 @@ export class HttpSource implements SourceAdapter {
         // CRITICAL: Check for 206 Partial Content response
         // If server returns 200, it's sending entire file instead of range!
         if (response.status === 200) {
-          const sizeStr = this.size > 0
-            ? `${(this.size / 1024 / 1024 / 1024).toFixed(2)}GB`
-            : "unknown size";
           Logger.error(
             TAG,
-            `Server does not support range requests! Returned 200 instead of 206. Would download entire file (${sizeStr}). Cannot stream from this source.`
+            `Server returned 200 instead of 206. Range requests not supported.`
           );
           // Abort the response to prevent downloading
           this.abortController?.abort();
           this.atomicSetStreaming(false);
-          throw new Error("Server does not support HTTP range requests (required for video streaming)");
+          throw new Error("Server does not support range requests.");
         }
 
         if (!response.ok && response.status !== 206) {
@@ -494,12 +491,9 @@ export class HttpSource implements SourceAdapter {
 
         if (isCorsError) {
           const corsError = new Error(
-            "CORS error: Server does not allow cross-origin requests. Check server CORS configuration."
+            "Failed to fetch video resource. Check your connection or CORS settings."
           );
-          Logger.error(
-            TAG,
-            `CORS error: Cannot access ${this.url}. The server may not allow cross-origin requests, or CORS headers are not properly configured.`
-          );
+          Logger.error(TAG, `CORS error accessing ${this.url}`);
           this.atomicSetStreaming(false);
           this.streamError = corsError; // Store for read() to pick up
           throw corsError;

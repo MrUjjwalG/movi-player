@@ -137,16 +137,13 @@ export class ThumbnailHttpSource implements SourceAdapter {
         // CRITICAL: Check for 206 Partial Content response
         // If server returns 200 instead of 206, it's sending the ENTIRE file!
         if (response.status === 200) {
-          const sizeStr = this.size > 0
-            ? `${(this.size / 1024 / 1024).toFixed(1)}MB`
-            : "unknown size";
           Logger.error(
             TAG,
-            `Server does not support range requests! Returned 200 instead of 206. Would download entire file (${sizeStr}). Thumbnails disabled for this source.`
+            `Server returned 200 instead of 206. Range requests not supported.`
           );
           // Abort the response to prevent downloading
           controller.abort();
-          throw new Error("Server does not support HTTP range requests (required for thumbnails)");
+          throw new Error("Server does not support range requests.");
         }
 
         if (!response.ok && response.status !== 206) {
@@ -200,12 +197,9 @@ export class ThumbnailHttpSource implements SourceAdapter {
           errorMessage.includes("Failed to fetch");
 
         if (isCorsError) {
-          Logger.error(
-            TAG,
-            `CORS error: Cannot access ${this.url}. The server may not allow cross-origin requests, or CORS headers are not properly configured.`
-          );
+          Logger.error(TAG, `CORS error accessing ${this.url}`);
           throw new Error(
-            "CORS error: Server does not allow cross-origin requests. Thumbnails disabled."
+            "Failed to fetch video resource. Check your connection or CORS settings."
           );
         }
 
