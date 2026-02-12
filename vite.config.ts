@@ -2,11 +2,9 @@ import { defineConfig } from 'vite';
 import dts from 'vite-plugin-dts';
 import { resolve } from 'path';
 import terser from '@rollup/plugin-terser';
-import mkcert from 'vite-plugin-mkcert';
 
 export default defineConfig({
   plugins: [
-    mkcert(), // Enable HTTPS with auto-generated certificates
     dts({
       insertTypesEntry: true,
       entryRoot: 'src', // Generate types for each entry point

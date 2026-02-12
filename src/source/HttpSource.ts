@@ -367,10 +367,10 @@ export class HttpSource implements SourceAdapter {
 
         // Calculate bounded range end: download at most MAX_STREAM_BUFFER_SIZE
         // This prevents downloading too much data on seeks in large files
-        const maxDownload = Math.min(
+        const maxDownload = Math.floor(Math.min(
           MAX_STREAM_BUFFER_SIZE,
           this.bufferSize * 0.9 // Don't exceed 90% of allocated buffer
-        );
+        ));
         const rangeEnd = this.size > 0
           ? Math.min(resumeOffset + maxDownload - 1, this.size - 1)
           : resumeOffset + maxDownload - 1;
@@ -378,13 +378,18 @@ export class HttpSource implements SourceAdapter {
         // Fetch with bounded range
         Logger.debug(TAG, `Fetching range: ${resumeOffset}-${rangeEnd} (max ${(maxDownload / 1024 / 1024).toFixed(1)}MB)`);
         const response = await fetch(this.url, {
-          headers: { ...this.headers, Range: `bytes=${resumeOffset}-${rangeEnd}` },
+          headers: {
+            ...this.headers,
+            Range: `bytes=${resumeOffset}-${rangeEnd}`,
+          },
+          cache: 'no-store', // Prevent cached 200 responses
           signal: this.abortController!.signal,
         });
 
         // CRITICAL: Check for 206 Partial Content response
         // If server returns 200, it's sending entire file instead of range!
         if (response.status === 200) {
+          const rangeError = new Error("Server does not support range requests.");
           Logger.error(
             TAG,
             `Server returned 200 instead of 206. Range requests not supported.`
@@ -392,7 +397,8 @@ export class HttpSource implements SourceAdapter {
           // Abort the response to prevent downloading
           this.abortController?.abort();
           this.atomicSetStreaming(false);
-          throw new Error("Server does not support range requests.");
+          this.streamError = rangeError; // Store for read() to pick up immediately
+          throw rangeError;
         }
 
         if (!response.ok && response.status !== 206) {
@@ -472,10 +478,10 @@ export class HttpSource implements SourceAdapter {
 
                 // Stop if we've downloaded the bounded amount (prevents excessive downloading on seeks)
                 const downloadedBytes = currentEnd - startOffset;
-                const maxDownload = Math.min(
+                const maxDownload = Math.floor(Math.min(
                   MAX_STREAM_BUFFER_SIZE,
                   this.bufferSize * 0.9
-                );
+                ));
                 if (downloadedBytes >= maxDownload) {
                   Logger.debug(TAG, `Downloaded ${(downloadedBytes / 1024 / 1024).toFixed(1)}MB (limit reached), stopping stream`);
                   this.atomicSetStreaming(false);
@@ -527,6 +533,18 @@ export class HttpSource implements SourceAdapter {
           this.atomicSetStreaming(false);
           this.streamError = corsError; // Store for read() to pick up
           throw corsError;
+        }
+
+        // Check for range request error - don't retry, it's a fatal server limitation
+        const isRangeError =
+          (error as any).message &&
+          (error as any).message.includes("does not support range requests");
+
+        if (isRangeError) {
+          Logger.error(TAG, `Range requests not supported, cannot stream this URL`);
+          this.atomicSetStreaming(false);
+          // streamError already set above
+          throw error;
         }
 
         Logger.warn(TAG, `Stream error, retrying...`, error);

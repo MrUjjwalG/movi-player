@@ -130,6 +130,7 @@ export class ThumbnailHttpSource implements SourceAdapter {
             ...this.headers,
             Range: `bytes=${fetchStart}-${fetchEnd}`,
           },
+          cache: 'no-store', // Prevent cached 200 responses
           signal: controller.signal,
         });
         clearTimeout(timeoutId);
