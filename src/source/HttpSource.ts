@@ -225,30 +225,60 @@ export class HttpSource implements SourceAdapter {
   async getSize(): Promise<number> {
     if (this.size >= 0) return this.size;
 
-    const response = await fetch(this.url, {
-      method: "HEAD",
-      headers: this.headers,
-    });
-    if (!response.ok) throw new Error(`HTTP ${response.status}`);
+    try {
+      const response = await fetch(this.url, {
+        method: "HEAD",
+        headers: this.headers,
+      });
 
-    const contentLength = response.headers.get("Content-Length");
-    if (!contentLength) throw new Error("Content-Length missing");
+      if (!response.ok) {
+        // Provide specific error messages for common status codes
+        if (response.status === 403) {
+          throw new Error("Access denied. Check video permissions.");
+        } else if (response.status === 401) {
+          throw new Error("Authentication required.");
+        } else if (response.status === 404) {
+          throw new Error("Video not found.");
+        } else {
+          throw new Error(`HTTP ${response.status}`);
+        }
+      }
 
-    this.size = parseInt(contentLength, 10);
-    Logger.debug(TAG, `File size: ${this.size} bytes`);
+      const contentLength = response.headers.get("Content-Length");
+      if (!contentLength) throw new Error("Content-Length missing");
 
-    // Resize buffer to 3% of file size (clamped to min/max)
-    const calculatedBufferSize = Math.floor(this.size * BUFFER_PERCENTAGE);
-    this.resizeBuffer(calculatedBufferSize);
-    Logger.debug(
-      TAG,
-      `Buffer size set to ${(this.bufferSize / 1024 / 1024).toFixed(2)} MB (3% of ${(this.size / 1024 / 1024).toFixed(2)} MB file)`,
-    );
+      this.size = parseInt(contentLength, 10);
+      Logger.debug(TAG, `File size: ${this.size} bytes`);
 
-    // Start caching using the known file size to optimal calculation
-    // this.ensureHeadCache();
+      // Resize buffer to 3% of file size (clamped to min/max)
+      const calculatedBufferSize = Math.floor(this.size * BUFFER_PERCENTAGE);
+      this.resizeBuffer(calculatedBufferSize);
+      Logger.debug(
+        TAG,
+        `Buffer size set to ${(this.bufferSize / 1024 / 1024).toFixed(2)} MB (3% of ${(this.size / 1024 / 1024).toFixed(2)} MB file)`,
+      );
 
-    return this.size;
+      // Start caching using the known file size to optimal calculation
+      // this.ensureHeadCache();
+
+      return this.size;
+    } catch (error) {
+      // Check if it's a CORS error (no response received)
+      const errorMessage = (error as any).message || "";
+      const isCorsError =
+        (error as any).name === "TypeError" &&
+        errorMessage.includes("Failed to fetch") &&
+        !errorMessage.includes("HTTP"); // Not an HTTP status error
+
+      if (isCorsError) {
+        throw new Error(
+          "Failed to fetch video resource. Check your connection or CORS settings."
+        );
+      }
+
+      // Re-throw other errors (403, 404, etc.)
+      throw error;
+    }
   }
 
   private get bufferEnd(): number {
