@@ -54,6 +54,7 @@ export class HttpSource implements SourceAdapter {
   // Stream state
   private reader: ReadableStreamDefaultReader<Uint8Array> | null = null;
   private abortController: AbortController | null = null;
+  private streamError: Error | null = null; // Store fatal errors from background stream
 
   // Track maximum buffered position (independent of sliding window)
   private maxBufferedEnd: number = 0;
@@ -272,6 +273,9 @@ export class HttpSource implements SourceAdapter {
 
     Logger.info(TAG, `Starting stream from ${fromOffset}`);
 
+    // Clear any previous stream error
+    this.streamError = null;
+
     // EOF Guard: If we are asking for data past end of file, don't fetch.
     if (this.size > 0 && fromOffset >= this.size) {
       Logger.debug(TAG, "Requested stream at or past EOF. Ignoring.");
@@ -489,14 +493,16 @@ export class HttpSource implements SourceAdapter {
           errorMessage.includes("Failed to fetch");
 
         if (isCorsError) {
+          const corsError = new Error(
+            "CORS error: Server does not allow cross-origin requests. Check server CORS configuration."
+          );
           Logger.error(
             TAG,
             `CORS error: Cannot access ${this.url}. The server may not allow cross-origin requests, or CORS headers are not properly configured.`
           );
           this.atomicSetStreaming(false);
-          throw new Error(
-            "CORS error: Server does not allow cross-origin requests. Check server CORS configuration."
-          );
+          this.streamError = corsError; // Store for read() to pick up
+          throw corsError;
         }
 
         Logger.warn(TAG, `Stream error, retrying...`, error);
@@ -586,6 +592,11 @@ export class HttpSource implements SourceAdapter {
         : 0;
 
     while (this.bufferEnd < needed && this.atomicIsStreaming()) {
+      // Check for fatal stream errors (e.g., CORS) and throw immediately
+      if (this.streamError) {
+        throw this.streamError;
+      }
+
       if (Date.now() > deadline) {
         Logger.error(
           TAG,
@@ -610,6 +621,11 @@ export class HttpSource implements SourceAdapter {
     }
 
     const success = this.bufferEnd >= needed;
+
+    // Check for fatal stream errors one more time after loop
+    if (this.streamError) {
+      throw this.streamError;
+    }
 
     // Special case: If stream ended normally, and we have data up to the end, it's success (EOF read)
     if (!success && !this.atomicIsStreaming()) {
