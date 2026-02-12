@@ -199,3 +199,44 @@ distributed under the License is distributed on an "AS IS" BASIS,
 WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 See the License for the specific language governing permissions and
 limitations under the License.
+
+================================================================================
+
+THIRD-PARTY LICENSES
+
+================================================================================
+
+SoundTouch Audio Processing Library
+------------------------------------
+
+Location: src/utils/soundtouch.ts
+
+Copyright (c) Olli Parviainen
+Copyright (c) Ryan Berdeen
+Copyright (c) Jakub Fiala
+Copyright (c) Steve 'Cutter' Blades
+
+Licensed under the GNU Lesser General Public License, Version 2.1
+
+This library is free software; you can redistribute it and/or
+modify it under the terms of the GNU Lesser General Public
+License as published by the Free Software Foundation; either
+version 2.1 of the License, or (at your option) any later version.
+
+This library is distributed in the hope that it will be useful,
+but WITHOUT ANY WARRANTY; without even the implied warranty of
+MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the GNU
+Lesser General Public License for more details.
+
+You should have received a copy of the GNU Lesser General Public
+License along with this library; if not, write to the Free Software
+Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA 02111-1307 USA
+
+Full LGPL 2.1 License: https://www.gnu.org/licenses/old-licenses/lgpl-2.1.html
+Original Project: https://www.surina.net/soundtouch/
+JavaScript Port: https://github.com/cutterbl/SoundTouchJS
+
+Note: This project uses SoundTouch as a library for audio pitch preservation.
+The TypeScript port in this codebase is a derivative work that maintains
+the original LGPL 2.1 license for that specific component while the rest
+of the project remains under Apache 2.0.
