@@ -36,8 +36,12 @@ export class AudioRenderer {
   private preservePitch: boolean = true;
   private soundTouch: SoundTouch | null = null;
 
+  // Background playback support
+  private visibilityChangeHandler: (() => void) | null = null;
+
   constructor() {
     Logger.debug(TAG, "Created");
+    this.setupBackgroundPlayback();
   }
 
   /**
@@ -67,6 +71,75 @@ export class AudioRenderer {
     } catch (error) {
       Logger.error(TAG, "Failed to initialize", error);
       return false;
+    }
+  }
+
+  /**
+   * Setup background playback support using Page Visibility API
+   */
+  private setupBackgroundPlayback(): void {
+    // Handle page visibility changes to prevent audio suspension in background tabs
+    this.visibilityChangeHandler = () => {
+      if (document.hidden) {
+        Logger.debug(TAG, "Tab hidden - keeping audio context running");
+        // Ensure AudioContext keeps running even in background
+        if (
+          this.audioContext &&
+          this.audioContext.state === "suspended" &&
+          this.isPlaying &&
+          !this._muted
+        ) {
+          this.audioContext.resume().catch((err) => {
+            Logger.warn(TAG, "Failed to resume AudioContext in background", err);
+          });
+        }
+      } else {
+        Logger.debug(TAG, "Tab visible");
+        // Resume AudioContext when tab becomes visible
+        if (
+          this.audioContext &&
+          this.audioContext.state === "suspended" &&
+          this.isPlaying &&
+          !this._muted
+        ) {
+          this.audioContext.resume().catch((err) => {
+            Logger.warn(TAG, "Failed to resume AudioContext on visibility", err);
+          });
+        }
+      }
+    };
+
+    document.addEventListener("visibilitychange", this.visibilityChangeHandler);
+  }
+
+  /**
+   * Setup MediaSession API for better background playback and media controls
+   */
+  setupMediaSession(metadata?: {
+    title?: string;
+    artist?: string;
+    album?: string;
+    artwork?: Array<{ src: string; sizes: string; type: string }>;
+  }): void {
+    if (!("mediaSession" in navigator)) {
+      Logger.warn(TAG, "MediaSession API not supported");
+      return;
+    }
+
+    try {
+      // Set metadata
+      if (metadata) {
+        navigator.mediaSession.metadata = new MediaMetadata({
+          title: metadata.title || "Video Player",
+          artist: metadata.artist || "",
+          album: metadata.album || "",
+          artwork: metadata.artwork || [],
+        });
+      }
+
+      Logger.debug(TAG, "MediaSession configured");
+    } catch (error) {
+      Logger.warn(TAG, "Failed to setup MediaSession", error);
     }
   }
 
@@ -737,6 +810,12 @@ export class AudioRenderer {
   async destroy(): Promise<void> {
     this.isPlaying = false;
     this.reset();
+
+    // Remove visibility change listener
+    if (this.visibilityChangeHandler) {
+      document.removeEventListener("visibilitychange", this.visibilityChangeHandler);
+      this.visibilityChangeHandler = null;
+    }
 
     if (this.audioContext) {
       await this.audioContext.close();

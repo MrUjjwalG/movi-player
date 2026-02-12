@@ -72,6 +72,9 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
   private muted: boolean = false; // Mute state
   private wasPlayingBeforeRebuffer: boolean = false; // Track if we were playing before entering rebuffering state
 
+  // MediaSession state tracking
+  private lastMediaSessionUpdate: number = 0;
+
   // Playback Loop
   private animationFrameId: number | null = null;
 
@@ -422,6 +425,9 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
       this.stateManager.setState("ready");
       this.emit("loadEnd", undefined);
 
+      // Setup MediaSession for background playback and media controls
+      this.setupMediaSession();
+
       // Initialize preview pipeline in background (fire-and-forget)
       // Only if enabled in config to save memory
       if (this.config.enablePreviews) {
@@ -704,6 +710,9 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
         this.clock.pause();
         return;
       }
+
+      // Update MediaSession state
+      this.updateMediaSessionState("playing");
     } else {
       Logger.error(
         TAG,
@@ -752,6 +761,9 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
     }
 
     this.stateManager.setState("paused");
+
+    // Update MediaSession state
+    this.updateMediaSessionState("paused");
 
     if (this.animationFrameId !== null) {
       cancelAnimationFrame(this.animationFrameId);
@@ -849,6 +861,7 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
     if (this.wasPlayingBeforeSeek) {
       Logger.info(TAG, "Resuming playback after seek");
       this.stateManager.setState("playing");
+      this.updateMediaSessionState("playing");
       this.clock.start();
       if (!this.disableAudio && !this.audioRenderer.isAudioPlaying()) {
         this.audioRenderer.play();
@@ -921,6 +934,12 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
 
     // Emit periodic time update for UI
     this.emit("timeUpdate", this.getCurrentTime());
+
+    // Update MediaSession position state periodically (throttle to every ~1 second)
+    if (!this.lastMediaSessionUpdate || performance.now() - this.lastMediaSessionUpdate > 1000) {
+      this.updateMediaSessionState();
+      this.lastMediaSessionUpdate = performance.now();
+    }
 
     // Prevent concurrent async WASM operations (Asyncify limitation)
     // Add timeout safeguard - if demux has been in flight too long, reset it
@@ -2192,6 +2211,117 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
    */
   getMediaInfo(): MediaInfo | null {
     return this.mediaInfo;
+  }
+
+  /**
+   * Setup MediaSession API for background playback and system media controls
+   */
+  private setupMediaSession(): void {
+    if (!("mediaSession" in navigator)) {
+      Logger.debug(TAG, "MediaSession API not supported");
+      return;
+    }
+
+    try {
+      // Extract title from source
+      let title = "Video";
+      const src = this.config.source;
+
+      if (src.type === "url" && src.url) {
+        // Extract filename from URL
+        const urlPath = src.url.split("?")[0]; // Remove query params
+        const fileName = urlPath.split("/").pop() || "Video";
+        title = decodeURIComponent(fileName);
+      } else if (src.type === "file" && src.file) {
+        title = src.file.name;
+      }
+
+      // Set metadata
+      navigator.mediaSession.metadata = new MediaMetadata({
+        title: title,
+        artist: "",
+        album: "",
+      });
+
+      // Setup AudioRenderer MediaSession
+      this.audioRenderer.setupMediaSession({
+        title: title,
+      });
+
+      // Setup action handlers
+      navigator.mediaSession.setActionHandler("play", () => {
+        Logger.debug(TAG, "MediaSession: play action");
+        this.play().catch((err) => {
+          Logger.error(TAG, "MediaSession play failed", err);
+        });
+      });
+
+      navigator.mediaSession.setActionHandler("pause", () => {
+        Logger.debug(TAG, "MediaSession: pause action");
+        this.pause();
+      });
+
+      navigator.mediaSession.setActionHandler("seekbackward", (details) => {
+        Logger.debug(TAG, "MediaSession: seekbackward action", details);
+        const currentTime = this.getCurrentTime();
+        const seekTime = Math.max(0, currentTime - (details.seekOffset || 10));
+        this.seek(seekTime).catch((err) => {
+          Logger.error(TAG, "MediaSession seekbackward failed", err);
+        });
+      });
+
+      navigator.mediaSession.setActionHandler("seekforward", (details) => {
+        Logger.debug(TAG, "MediaSession: seekforward action", details);
+        const currentTime = this.getCurrentTime();
+        const duration = this.getDuration();
+        const seekTime = Math.min(duration, currentTime + (details.seekOffset || 10));
+        this.seek(seekTime).catch((err) => {
+          Logger.error(TAG, "MediaSession seekforward failed", err);
+        });
+      });
+
+      navigator.mediaSession.setActionHandler("seekto", (details) => {
+        if (details.seekTime !== null && details.seekTime !== undefined) {
+          Logger.debug(TAG, "MediaSession: seekto action", details.seekTime);
+          this.seek(details.seekTime).catch((err) => {
+            Logger.error(TAG, "MediaSession seekto failed", err);
+          });
+        }
+      });
+
+      Logger.debug(TAG, "MediaSession configured with title:", title);
+    } catch (error) {
+      Logger.warn(TAG, "Failed to setup MediaSession", error);
+    }
+  }
+
+  /**
+   * Update MediaSession playback state and position
+   */
+  private updateMediaSessionState(state?: "playing" | "paused" | "none"): void {
+    if (!("mediaSession" in navigator)) return;
+
+    try {
+      // Update playback state
+      if (state) {
+        navigator.mediaSession.playbackState = state;
+      }
+
+      // Update position state
+      if (this.mediaInfo && state !== "none") {
+        const currentTime = this.getCurrentTime();
+        const duration = this.getDuration();
+        const playbackRate = this.getPlaybackRate();
+
+        navigator.mediaSession.setPositionState({
+          duration: duration,
+          playbackRate: playbackRate,
+          position: Math.min(currentTime, duration),
+        });
+      }
+    } catch (error) {
+      // Silently ignore errors
+    }
   }
 
   resizeCanvas(width: number, height: number): void {
