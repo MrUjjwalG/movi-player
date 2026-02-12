@@ -14,6 +14,7 @@ const TAG = "HttpSource";
 const MIN_BUFFER_SIZE = 2 * 1024 * 1024; // 2MB minimum
 const DEFAULT_MAX_BUFFER_SIZE_MB = 520; // Default max buffer size in MB (matches default LRU cache)
 const BUFFER_PERCENTAGE = 0.03; // 3% of file size
+const MAX_STREAM_BUFFER_SIZE = 50 * 1024 * 1024; // 50MB max per streaming session (regardless of total buffer size)
 // IMPORTANT: Header size increased to 6 Int32 values (24 bytes) to support 64-bit buffer start offsets
 const HEADER_SIZE = 24; // Header bytes for atomics (6 Int32 values)
 
@@ -330,12 +331,38 @@ export class HttpSource implements SourceAdapter {
           break;
         }
 
-        // Fetch
-        Logger.debug(TAG, `Fetching range: ${resumeOffset}-`);
+        // Calculate bounded range end: download at most MAX_STREAM_BUFFER_SIZE
+        // This prevents downloading too much data on seeks in large files
+        const maxDownload = Math.min(
+          MAX_STREAM_BUFFER_SIZE,
+          this.bufferSize * 0.9 // Don't exceed 90% of allocated buffer
+        );
+        const rangeEnd = this.size > 0
+          ? Math.min(resumeOffset + maxDownload - 1, this.size - 1)
+          : resumeOffset + maxDownload - 1;
+
+        // Fetch with bounded range
+        Logger.debug(TAG, `Fetching range: ${resumeOffset}-${rangeEnd} (max ${(maxDownload / 1024 / 1024).toFixed(1)}MB)`);
         const response = await fetch(this.url, {
-          headers: { ...this.headers, Range: `bytes=${resumeOffset}-` },
+          headers: { ...this.headers, Range: `bytes=${resumeOffset}-${rangeEnd}` },
           signal: this.abortController!.signal,
         });
+
+        // CRITICAL: Check for 206 Partial Content response
+        // If server returns 200, it's sending entire file instead of range!
+        if (response.status === 200) {
+          const sizeStr = this.size > 0
+            ? `${(this.size / 1024 / 1024 / 1024).toFixed(2)}GB`
+            : "unknown size";
+          Logger.error(
+            TAG,
+            `Server does not support range requests! Returned 200 instead of 206. Would download entire file (${sizeStr}). Cannot stream from this source.`
+          );
+          // Abort the response to prevent downloading
+          this.abortController?.abort();
+          this.atomicSetStreaming(false);
+          throw new Error("Server does not support HTTP range requests (required for video streaming)");
+        }
 
         if (!response.ok && response.status !== 206) {
           // If 4xx error (client error), maybe don't retry indefinitely
@@ -411,6 +438,18 @@ export class HttpSource implements SourceAdapter {
                 }
 
                 this.unlock();
+
+                // Stop if we've downloaded the bounded amount (prevents excessive downloading on seeks)
+                const downloadedBytes = currentEnd - startOffset;
+                const maxDownload = Math.min(
+                  MAX_STREAM_BUFFER_SIZE,
+                  this.bufferSize * 0.9
+                );
+                if (downloadedBytes >= maxDownload) {
+                  Logger.debug(TAG, `Downloaded ${(downloadedBytes / 1024 / 1024).toFixed(1)}MB (limit reached), stopping stream`);
+                  this.atomicSetStreaming(false);
+                  break;
+                }
 
                 // Stop if buffer nearly full
                 if (newWritePos >= buffer.length * 0.9) {

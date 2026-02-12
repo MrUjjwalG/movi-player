@@ -13,6 +13,8 @@ const TAG = "ThumbnailHttpSource";
 
 // Buffer 512KB at a time - enough for most keyframes
 const BUFFER_SIZE = 512 * 1024;
+// Maximum fetch size to prevent excessive downloads (5MB cap)
+const MAX_FETCH_SIZE = 5 * 1024 * 1024;
 
 export class ThumbnailHttpSource implements SourceAdapter {
   private url: string;
@@ -80,9 +82,12 @@ export class ThumbnailHttpSource implements SourceAdapter {
     }
 
     // Need to fetch - calculate optimal range
-    // Fetch a larger chunk to avoid multiple small requests
+    // Fetch a larger chunk to avoid multiple small requests, but cap at MAX_FETCH_SIZE
     const fetchStart = offset;
-    const fetchSize = Math.max(BUFFER_SIZE, length);
+    const fetchSize = Math.min(
+      Math.max(BUFFER_SIZE, length),
+      MAX_FETCH_SIZE // Cap to prevent excessive downloads
+    );
     const fetchEnd =
       this.size > 0
         ? Math.min(fetchStart + fetchSize - 1, this.size - 1)
@@ -129,7 +134,22 @@ export class ThumbnailHttpSource implements SourceAdapter {
         });
         clearTimeout(timeoutId);
 
-        if (!response.ok) {
+        // CRITICAL: Check for 206 Partial Content response
+        // If server returns 200 instead of 206, it's sending the ENTIRE file!
+        if (response.status === 200) {
+          const sizeStr = this.size > 0
+            ? `${(this.size / 1024 / 1024).toFixed(1)}MB`
+            : "unknown size";
+          Logger.error(
+            TAG,
+            `Server does not support range requests! Returned 200 instead of 206. Would download entire file (${sizeStr}). Thumbnails disabled for this source.`
+          );
+          // Abort the response to prevent downloading
+          controller.abort();
+          throw new Error("Server does not support HTTP range requests (required for thumbnails)");
+        }
+
+        if (!response.ok && response.status !== 206) {
           if (response.status === 416) {
             Logger.warn(
               TAG,
