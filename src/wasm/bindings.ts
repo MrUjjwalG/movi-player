@@ -616,6 +616,15 @@ export class WasmBindings {
 
       const info = parsePacketInfo(this.module, infoPtr);
 
+      // Validate packet size to prevent corrupted state from creating invalid arrays
+      if (info.size < 0 || info.size > this.packetBufferSize) {
+        Logger.error(
+          TAG,
+          `Invalid packet size: ${info.size} (buffer size: ${this.packetBufferSize}). State may be corrupted.`,
+        );
+        throw new Error(`Invalid packet size: ${info.size}`);
+      }
+
       // Copy packet data
       const data = new Uint8Array(info.size);
       data.set(

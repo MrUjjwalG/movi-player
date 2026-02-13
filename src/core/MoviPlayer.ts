@@ -766,7 +766,7 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
    */
   private demuxInFlight = false;
   private demuxInFlightStartTime: number = 0;
-  private static readonly DEMUX_TIMEOUT = 10000; // 10 seconds timeout for demux operations
+  private static readonly DEMUX_TIMEOUT = 35000; // 35 seconds timeout (slightly more than HTTP timeout of 30s)
   private eofReached = false;
 
   /**
@@ -1281,7 +1281,23 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
       }
     } catch (e) {
       Logger.error(TAG, "Demux error", e);
-      // this.pause(); // Don't pause on glitch, maybe retry or just log
+
+      // Check for fatal errors that indicate corrupted state
+      const errorMessage = (e as any).message || "";
+      const isFatalError =
+        errorMessage.includes("Invalid packet size") ||
+        errorMessage.includes("Invalid typed array length") ||
+        errorMessage.includes("State may be corrupted");
+
+      if (isFatalError) {
+        // Fatal error - pause playback and stop processing
+        Logger.error(TAG, "Fatal demux error detected, pausing playback");
+        this.pause();
+        this.emit("error", new Error("Playback error: corrupt data stream"));
+        return; // Exit process loop
+      }
+
+      // For non-fatal errors, continue (network glitches, etc.)
     } finally {
       this.demuxInFlight = false;
     }

@@ -556,11 +556,11 @@ export class MoviElement extends HTMLElement {
               <div class="movi-subtitle-track-container">
                 <button class="movi-btn movi-subtitle-track-btn" aria-label="Subtitles/Captions">
                   <svg class="movi-icon-subtitle" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-                    <rect width="18" height="14" x="3" y="5" rx="2" ry="2"></rect>
-                    <path d="M11 9H9a2 2 0 0 0-2 2v2a2 2 0 0 0 2 2h2 M17 9h-2a2 2 0 0 0-2 2v2a2 2 0 0 0 2 2h2"></path>
+                    <rect width="20" height="16" x="2" y="4" rx="2" ry="2"></rect>
+                    <path d="M10 8.5H8a2 2 0 0 0-2 2v3a2 2 0 0 0 2 2h2 M18 8.5h-2a2 2 0 0 0-2 2v3a2 2 0 0 0 2 2h2"></path>
                   </svg>
                   <svg class="movi-icon-subtitle-filled" viewBox="0 0 24 24" fill="currentColor" style="display: none;">
-                    <path fill-rule="evenodd" clip-rule="evenodd" d="M19 4H5c-1.11 0-2 .9-2 2v12c0 1.1.89 2 2 2h14c1.1 0 2-.9 2-2V6c0-1.1-.9-2-2-2z M11 11 H9.5 V10.5 H7.5 V13.5 H9.5 V13 H11 V14 C11 14.55 10.55 15 10 15 H7 C6.45 15 6 14.55 6 14 V10 C6 9.45 6.45 9 7 9 H10 C10.55 9 11 9.45 11 10 V11 Z M18 11 H16.5 V10.5 H14.5 V13.5 H16.5 V13 H18 V14 C18 14.55 17.55 15 17 15 H14 C13.45 15 13 14.55 13 14 V10 C13 9.45 13.45 9 14 9 H17 C17.55 9 18 9.45 18 10 V11 Z"></path>
+                    <path d="M20 4H4c-1.1 0-2 .9-2 2v12c0 1.1.9 2 2 2h16c1.1 0 2-.9 2-2V6c0-1.1-.9-2-2-2zM10 15H7c-.83 0-1.5-.67-1.5-1.5v-3c0-.83.67-1.5 1.5-1.5h3V11H7.5v2.5h2V13H10v2zm8 0h-3c-.83 0-1.5-.67-1.5-1.5v-3c0-.83.67-1.5 1.5-1.5h3V11h-2.5v2.5h2V13H18v2z"></path>
                   </svg>
                 </button>
                 <div class="movi-subtitle-track-menu" style="display: none;">
@@ -4664,7 +4664,7 @@ export class MoviElement extends HTMLElement {
         position: relative;
         display: none; /* Hidden by default, shown when subtitle tracks available */
         align-items: center;
-        margin-left: 8px;
+        margin-left: 4px;
       }
 
       .movi-subtitle-track-btn {
@@ -6852,10 +6852,20 @@ export class MoviElement extends HTMLElement {
 
       if (error instanceof Error) {
         message = error.message;
-        if (message.includes("fetch")) {
+
+        // Check for CORS errors - these typically show as "Load failed" TypeError
+        if (
+          message.includes("Load failed") ||
+          message.toLowerCase().includes("cors") ||
+          message.toLowerCase().includes("access-control-allow-origin")
+        ) {
           title = "Network Error";
           message =
             "Failed to fetch video resource. Check your connection or CORS settings.";
+        } else if (message.includes("fetch")) {
+          title = "Network Error";
+          message =
+            "Failed to fetch video resource. Check your connection or try again.";
         } else if (message.includes("decode")) {
           title = "Playback Error";
         }

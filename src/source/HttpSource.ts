@@ -59,6 +59,11 @@ export class HttpSource implements SourceAdapter {
   // Track maximum buffered position (independent of sliding window)
   private maxBufferedEnd: number = 0;
 
+  // Force restart tracking (to prevent cascading failures)
+  private consecutiveForceRestarts: number = 0;
+  private lastForceRestartTime: number = 0;
+  private readonly MAX_FORCE_RESTARTS = 3; // Max consecutive force restarts before giving up
+
   // Dynamic buffer size (3% of file size, clamped)
   // Start with minimum size, will be resized when file size is known
   private bufferSize: number = MIN_BUFFER_SIZE;
@@ -615,9 +620,10 @@ export class HttpSource implements SourceAdapter {
   private async waitForData(
     offset: number,
     length: number,
-    timeout = 15000,
+    timeout = 30000, // Base timeout, extended if progress is being made
   ): Promise<boolean> {
-    const deadline = Date.now() + timeout;
+    const startTime = Date.now();
+    let deadline = startTime + timeout;
     let needed = offset + length;
 
     // Clamp to known file size
@@ -633,13 +639,46 @@ export class HttpSource implements SourceAdapter {
         ? Atomics.load(this.headerView, HEADER.VERSION)
         : 0;
 
+    // Track progress to allow slow but steady streams
+    let lastProgress = this.bufferEnd;
+    let lastProgressTime = Date.now();
+    const PROGRESS_TIMEOUT = 15000; // 15s without any progress = stalled
+
     while (this.bufferEnd < needed && this.atomicIsStreaming()) {
       // Check for fatal stream errors (e.g., CORS) and throw immediately
       if (this.streamError) {
         throw this.streamError;
       }
 
-      if (Date.now() > deadline) {
+      const now = Date.now();
+
+      // Check if we're making progress (buffer is growing)
+      if (this.bufferEnd > lastProgress) {
+        // Progress detected! Reset progress timeout
+        lastProgress = this.bufferEnd;
+        lastProgressTime = now;
+
+        // For slow networks, extend the deadline as long as progress continues
+        // This allows slow but steady downloads to complete
+        const elapsed = now - startTime;
+        if (elapsed > timeout * 0.8) {
+          // If we've used 80% of timeout but are still making progress, extend it
+          deadline = now + PROGRESS_TIMEOUT;
+        }
+      }
+
+      // Check for stalled stream (no progress for PROGRESS_TIMEOUT)
+      const timeSinceProgress = now - lastProgressTime;
+      if (timeSinceProgress > PROGRESS_TIMEOUT) {
+        Logger.error(
+          TAG,
+          `Stream stalled: no progress for ${(timeSinceProgress / 1000).toFixed(1)}s at ${offset}, needed ${needed}, currently ${this.bufferEnd}`,
+        );
+        return false;
+      }
+
+      // Also check absolute deadline
+      if (now > deadline) {
         Logger.error(
           TAG,
           `Timeout waiting for data at ${offset}, needed ${needed}, currently ${this.bufferEnd}`,
@@ -715,6 +754,10 @@ export class HttpSource implements SourceAdapter {
     if (this.isInBuffer(offset, length)) {
       // Don't update maxBufferedEnd on reads - reads consume data, they don't indicate buffering
       // maxBufferedEnd is updated when we write to the buffer (streaming)
+
+      // Reset force restart counter on successful read
+      this.consecutiveForceRestarts = 0;
+
       Logger.debug(TAG, `Read: serving from buffer`);
       return this.readFromBuffer(offset, length);
     }
@@ -735,7 +778,11 @@ export class HttpSource implements SourceAdapter {
       Logger.debug(TAG, `Read: waiting for data from active stream...`);
       const success = await this.waitForData(offset, length);
       Logger.debug(TAG, `Read: waitForData returned ${success}`);
-      if (success) return this.readFromBuffer(offset, length);
+      if (success) {
+        // Reset force restart counter on successful read
+        this.consecutiveForceRestarts = 0;
+        return this.readFromBuffer(offset, length);
+      }
 
       // If wait failed but stream is still theoretically active/valid,
       // it means we timed out. We could restart, or throw.
@@ -745,10 +792,37 @@ export class HttpSource implements SourceAdapter {
         if (this.isInBuffer(offset, length))
           return this.readFromBuffer(offset, length);
 
+        // Check if we're in a force restart loop
+        const now = Date.now();
+        const timeSinceLastRestart = now - this.lastForceRestartTime;
+
+        // Reset counter if it's been more than 5 seconds since last restart
+        if (timeSinceLastRestart > 5000) {
+          this.consecutiveForceRestarts = 0;
+        }
+
+        if (this.consecutiveForceRestarts >= this.MAX_FORCE_RESTARTS) {
+          Logger.error(
+            TAG,
+            `Too many consecutive force restarts (${this.consecutiveForceRestarts}), giving up.`,
+          );
+          throw new Error(
+            `Stream failed after ${this.consecutiveForceRestarts} restart attempts`,
+          );
+        }
+
+        // Exponential backoff before restarting: 100ms, 200ms, 400ms
+        const backoffDelay = Math.min(100 * Math.pow(2, this.consecutiveForceRestarts), 500);
         Logger.warn(
           TAG,
-          `Read timeout for ${offset} but stream is active. Force restarting.`,
+          `Read timeout for ${offset} but stream is active. Force restarting after ${backoffDelay}ms (attempt ${this.consecutiveForceRestarts + 1}/${this.MAX_FORCE_RESTARTS}).`,
         );
+
+        // Wait before restarting to avoid cascade
+        await new Promise((r) => setTimeout(r, backoffDelay));
+
+        this.consecutiveForceRestarts++;
+        this.lastForceRestartTime = now;
       }
     }
 
@@ -759,6 +833,9 @@ export class HttpSource implements SourceAdapter {
     const success = await this.waitForData(offset, length);
     Logger.debug(TAG, `Read: waitForData returned ${success}`);
     if (!success) throw new Error(`Timeout at ${offset}`);
+
+    // Reset force restart counter on successful read
+    this.consecutiveForceRestarts = 0;
 
     // Don't update maxBufferedEnd on reads - it's updated when streaming writes to buffer
     return this.readFromBuffer(offset, length);
