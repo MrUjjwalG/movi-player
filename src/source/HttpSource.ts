@@ -14,6 +14,7 @@ const TAG = "HttpSource";
 const MIN_BUFFER_SIZE = 2 * 1024 * 1024; // 2MB minimum
 const DEFAULT_MAX_BUFFER_SIZE_MB = 520; // Default max buffer size in MB (matches default LRU cache)
 const BUFFER_PERCENTAGE = 0.03; // 3% of file size
+const MAX_STREAM_BUFFER_SIZE = 50 * 1024 * 1024; // 50MB max per streaming session (regardless of total buffer size)
 // IMPORTANT: Header size increased to 6 Int32 values (24 bytes) to support 64-bit buffer start offsets
 const HEADER_SIZE = 24; // Header bytes for atomics (6 Int32 values)
 
@@ -53,9 +54,15 @@ export class HttpSource implements SourceAdapter {
   // Stream state
   private reader: ReadableStreamDefaultReader<Uint8Array> | null = null;
   private abortController: AbortController | null = null;
+  private streamError: Error | null = null; // Store fatal errors from background stream
 
   // Track maximum buffered position (independent of sliding window)
   private maxBufferedEnd: number = 0;
+
+  // Force restart tracking (to prevent cascading failures)
+  private consecutiveForceRestarts: number = 0;
+  private lastForceRestartTime: number = 0;
+  private readonly MAX_FORCE_RESTARTS = 3; // Max consecutive force restarts before giving up
 
   // Dynamic buffer size (3% of file size, clamped)
   // Start with minimum size, will be resized when file size is known
@@ -223,30 +230,60 @@ export class HttpSource implements SourceAdapter {
   async getSize(): Promise<number> {
     if (this.size >= 0) return this.size;
 
-    const response = await fetch(this.url, {
-      method: "HEAD",
-      headers: this.headers,
-    });
-    if (!response.ok) throw new Error(`HTTP ${response.status}`);
+    try {
+      const response = await fetch(this.url, {
+        method: "HEAD",
+        headers: this.headers,
+      });
 
-    const contentLength = response.headers.get("Content-Length");
-    if (!contentLength) throw new Error("Content-Length missing");
+      if (!response.ok) {
+        // Provide specific error messages for common status codes
+        if (response.status === 403) {
+          throw new Error("Access denied. Check video permissions.");
+        } else if (response.status === 401) {
+          throw new Error("Authentication required.");
+        } else if (response.status === 404) {
+          throw new Error("Video not found.");
+        } else {
+          throw new Error(`HTTP ${response.status}`);
+        }
+      }
 
-    this.size = parseInt(contentLength, 10);
-    Logger.debug(TAG, `File size: ${this.size} bytes`);
+      const contentLength = response.headers.get("Content-Length");
+      if (!contentLength) throw new Error("Content-Length missing");
 
-    // Resize buffer to 3% of file size (clamped to min/max)
-    const calculatedBufferSize = Math.floor(this.size * BUFFER_PERCENTAGE);
-    this.resizeBuffer(calculatedBufferSize);
-    Logger.debug(
-      TAG,
-      `Buffer size set to ${(this.bufferSize / 1024 / 1024).toFixed(2)} MB (3% of ${(this.size / 1024 / 1024).toFixed(2)} MB file)`,
-    );
+      this.size = parseInt(contentLength, 10);
+      Logger.debug(TAG, `File size: ${this.size} bytes`);
 
-    // Start caching using the known file size to optimal calculation
-    // this.ensureHeadCache();
+      // Resize buffer to 3% of file size (clamped to min/max)
+      const calculatedBufferSize = Math.floor(this.size * BUFFER_PERCENTAGE);
+      this.resizeBuffer(calculatedBufferSize);
+      Logger.debug(
+        TAG,
+        `Buffer size set to ${(this.bufferSize / 1024 / 1024).toFixed(2)} MB (3% of ${(this.size / 1024 / 1024).toFixed(2)} MB file)`,
+      );
 
-    return this.size;
+      // Start caching using the known file size to optimal calculation
+      // this.ensureHeadCache();
+
+      return this.size;
+    } catch (error) {
+      // Check if it's a CORS error (no response received)
+      const errorMessage = (error as any).message || "";
+      const isCorsError =
+        (error as any).name === "TypeError" &&
+        errorMessage.includes("Failed to fetch") &&
+        !errorMessage.includes("HTTP"); // Not an HTTP status error
+
+      if (isCorsError) {
+        throw new Error(
+          "Failed to fetch video resource. Check your connection or CORS settings."
+        );
+      }
+
+      // Re-throw other errors (403, 404, etc.)
+      throw error;
+    }
   }
 
   private get bufferEnd(): number {
@@ -270,6 +307,9 @@ export class HttpSource implements SourceAdapter {
     await this.stopStream();
 
     Logger.info(TAG, `Starting stream from ${fromOffset}`);
+
+    // Clear any previous stream error
+    this.streamError = null;
 
     // EOF Guard: If we are asking for data past end of file, don't fetch.
     if (this.size > 0 && fromOffset >= this.size) {
@@ -330,12 +370,41 @@ export class HttpSource implements SourceAdapter {
           break;
         }
 
-        // Fetch
-        Logger.debug(TAG, `Fetching range: ${resumeOffset}-`);
+        // Calculate bounded range end: download at most MAX_STREAM_BUFFER_SIZE
+        // This prevents downloading too much data on seeks in large files
+        const maxDownload = Math.floor(Math.min(
+          MAX_STREAM_BUFFER_SIZE,
+          this.bufferSize * 0.9 // Don't exceed 90% of allocated buffer
+        ));
+        const rangeEnd = this.size > 0
+          ? Math.min(resumeOffset + maxDownload - 1, this.size - 1)
+          : resumeOffset + maxDownload - 1;
+
+        // Fetch with bounded range
+        Logger.debug(TAG, `Fetching range: ${resumeOffset}-${rangeEnd} (max ${(maxDownload / 1024 / 1024).toFixed(1)}MB)`);
         const response = await fetch(this.url, {
-          headers: { ...this.headers, Range: `bytes=${resumeOffset}-` },
+          headers: {
+            ...this.headers,
+            Range: `bytes=${resumeOffset}-${rangeEnd}`,
+          },
+          cache: 'no-store', // Prevent cached 200 responses
           signal: this.abortController!.signal,
         });
+
+        // CRITICAL: Check for 206 Partial Content response
+        // If server returns 200, it's sending entire file instead of range!
+        if (response.status === 200) {
+          const rangeError = new Error("Server does not support range requests.");
+          Logger.error(
+            TAG,
+            `Server returned 200 instead of 206. Range requests not supported.`
+          );
+          // Abort the response to prevent downloading
+          this.abortController?.abort();
+          this.atomicSetStreaming(false);
+          this.streamError = rangeError; // Store for read() to pick up immediately
+          throw rangeError;
+        }
 
         if (!response.ok && response.status !== 206) {
           // If 4xx error (client error), maybe don't retry indefinitely
@@ -412,6 +481,18 @@ export class HttpSource implements SourceAdapter {
 
                 this.unlock();
 
+                // Stop if we've downloaded the bounded amount (prevents excessive downloading on seeks)
+                const downloadedBytes = currentEnd - startOffset;
+                const maxDownload = Math.floor(Math.min(
+                  MAX_STREAM_BUFFER_SIZE,
+                  this.bufferSize * 0.9
+                ));
+                if (downloadedBytes >= maxDownload) {
+                  Logger.debug(TAG, `Downloaded ${(downloadedBytes / 1024 / 1024).toFixed(1)}MB (limit reached), stopping stream`);
+                  this.atomicSetStreaming(false);
+                  break;
+                }
+
                 // Stop if buffer nearly full
                 if (newWritePos >= buffer.length * 0.9) {
                   Logger.debug(TAG, `Buffer nearly full, stopping stream`);
@@ -440,6 +521,35 @@ export class HttpSource implements SourceAdapter {
       } catch (error) {
         if ((error as any).name === "AbortError") {
           break;
+        }
+
+        // Check for CORS errors (TypeError: Failed to fetch)
+        // CORS errors cannot be retried as they're a configuration issue
+        const errorMessage = (error as any).message || "";
+        const isCorsError =
+          (error as any).name === "TypeError" &&
+          errorMessage.includes("Failed to fetch");
+
+        if (isCorsError) {
+          const corsError = new Error(
+            "Failed to fetch video resource. Check your connection or CORS settings."
+          );
+          Logger.error(TAG, `CORS error accessing ${this.url}`);
+          this.atomicSetStreaming(false);
+          this.streamError = corsError; // Store for read() to pick up
+          throw corsError;
+        }
+
+        // Check for range request error - don't retry, it's a fatal server limitation
+        const isRangeError =
+          (error as any).message &&
+          (error as any).message.includes("does not support range requests");
+
+        if (isRangeError) {
+          Logger.error(TAG, `Range requests not supported, cannot stream this URL`);
+          this.atomicSetStreaming(false);
+          // streamError already set above
+          throw error;
         }
 
         Logger.warn(TAG, `Stream error, retrying...`, error);
@@ -510,9 +620,10 @@ export class HttpSource implements SourceAdapter {
   private async waitForData(
     offset: number,
     length: number,
-    timeout = 15000,
+    timeout = 30000, // Base timeout, extended if progress is being made
   ): Promise<boolean> {
-    const deadline = Date.now() + timeout;
+    const startTime = Date.now();
+    let deadline = startTime + timeout;
     let needed = offset + length;
 
     // Clamp to known file size
@@ -528,8 +639,46 @@ export class HttpSource implements SourceAdapter {
         ? Atomics.load(this.headerView, HEADER.VERSION)
         : 0;
 
+    // Track progress to allow slow but steady streams
+    let lastProgress = this.bufferEnd;
+    let lastProgressTime = Date.now();
+    const PROGRESS_TIMEOUT = 15000; // 15s without any progress = stalled
+
     while (this.bufferEnd < needed && this.atomicIsStreaming()) {
-      if (Date.now() > deadline) {
+      // Check for fatal stream errors (e.g., CORS) and throw immediately
+      if (this.streamError) {
+        throw this.streamError;
+      }
+
+      const now = Date.now();
+
+      // Check if we're making progress (buffer is growing)
+      if (this.bufferEnd > lastProgress) {
+        // Progress detected! Reset progress timeout
+        lastProgress = this.bufferEnd;
+        lastProgressTime = now;
+
+        // For slow networks, extend the deadline as long as progress continues
+        // This allows slow but steady downloads to complete
+        const elapsed = now - startTime;
+        if (elapsed > timeout * 0.8) {
+          // If we've used 80% of timeout but are still making progress, extend it
+          deadline = now + PROGRESS_TIMEOUT;
+        }
+      }
+
+      // Check for stalled stream (no progress for PROGRESS_TIMEOUT)
+      const timeSinceProgress = now - lastProgressTime;
+      if (timeSinceProgress > PROGRESS_TIMEOUT) {
+        Logger.error(
+          TAG,
+          `Stream stalled: no progress for ${(timeSinceProgress / 1000).toFixed(1)}s at ${offset}, needed ${needed}, currently ${this.bufferEnd}`,
+        );
+        return false;
+      }
+
+      // Also check absolute deadline
+      if (now > deadline) {
         Logger.error(
           TAG,
           `Timeout waiting for data at ${offset}, needed ${needed}, currently ${this.bufferEnd}`,
@@ -553,6 +702,11 @@ export class HttpSource implements SourceAdapter {
     }
 
     const success = this.bufferEnd >= needed;
+
+    // Check for fatal stream errors one more time after loop
+    if (this.streamError) {
+      throw this.streamError;
+    }
 
     // Special case: If stream ended normally, and we have data up to the end, it's success (EOF read)
     if (!success && !this.atomicIsStreaming()) {
@@ -600,6 +754,10 @@ export class HttpSource implements SourceAdapter {
     if (this.isInBuffer(offset, length)) {
       // Don't update maxBufferedEnd on reads - reads consume data, they don't indicate buffering
       // maxBufferedEnd is updated when we write to the buffer (streaming)
+
+      // Reset force restart counter on successful read
+      this.consecutiveForceRestarts = 0;
+
       Logger.debug(TAG, `Read: serving from buffer`);
       return this.readFromBuffer(offset, length);
     }
@@ -620,7 +778,11 @@ export class HttpSource implements SourceAdapter {
       Logger.debug(TAG, `Read: waiting for data from active stream...`);
       const success = await this.waitForData(offset, length);
       Logger.debug(TAG, `Read: waitForData returned ${success}`);
-      if (success) return this.readFromBuffer(offset, length);
+      if (success) {
+        // Reset force restart counter on successful read
+        this.consecutiveForceRestarts = 0;
+        return this.readFromBuffer(offset, length);
+      }
 
       // If wait failed but stream is still theoretically active/valid,
       // it means we timed out. We could restart, or throw.
@@ -630,10 +792,37 @@ export class HttpSource implements SourceAdapter {
         if (this.isInBuffer(offset, length))
           return this.readFromBuffer(offset, length);
 
+        // Check if we're in a force restart loop
+        const now = Date.now();
+        const timeSinceLastRestart = now - this.lastForceRestartTime;
+
+        // Reset counter if it's been more than 5 seconds since last restart
+        if (timeSinceLastRestart > 5000) {
+          this.consecutiveForceRestarts = 0;
+        }
+
+        if (this.consecutiveForceRestarts >= this.MAX_FORCE_RESTARTS) {
+          Logger.error(
+            TAG,
+            `Too many consecutive force restarts (${this.consecutiveForceRestarts}), giving up.`,
+          );
+          throw new Error(
+            `Stream failed after ${this.consecutiveForceRestarts} restart attempts`,
+          );
+        }
+
+        // Exponential backoff before restarting: 100ms, 200ms, 400ms
+        const backoffDelay = Math.min(100 * Math.pow(2, this.consecutiveForceRestarts), 500);
         Logger.warn(
           TAG,
-          `Read timeout for ${offset} but stream is active. Force restarting.`,
+          `Read timeout for ${offset} but stream is active. Force restarting after ${backoffDelay}ms (attempt ${this.consecutiveForceRestarts + 1}/${this.MAX_FORCE_RESTARTS}).`,
         );
+
+        // Wait before restarting to avoid cascade
+        await new Promise((r) => setTimeout(r, backoffDelay));
+
+        this.consecutiveForceRestarts++;
+        this.lastForceRestartTime = now;
       }
     }
 
@@ -644,6 +833,9 @@ export class HttpSource implements SourceAdapter {
     const success = await this.waitForData(offset, length);
     Logger.debug(TAG, `Read: waitForData returned ${success}`);
     if (!success) throw new Error(`Timeout at ${offset}`);
+
+    // Reset force restart counter on successful read
+    this.consecutiveForceRestarts = 0;
 
     // Don't update maxBufferedEnd on reads - it's updated when streaming writes to buffer
     return this.readFromBuffer(offset, length);

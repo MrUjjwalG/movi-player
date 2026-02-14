@@ -34,6 +34,7 @@ export class MoviElement extends HTMLElement {
   private eventHandlers: Map<string, () => void> = new Map();
   private controlsContainer: HTMLElement | null = null;
   private brokenIndicator: HTMLElement | null = null;
+  private emptyStateIndicator: HTMLElement | null = null;
   private controlsTimeout: number | null = null;
   private isOverControls: boolean = false;
   private isSeeking: boolean = false;
@@ -267,6 +268,33 @@ export class MoviElement extends HTMLElement {
     swFallbackBtn?.addEventListener("click", () => {
       this.enableSoftwareDecoding();
     });
+
+    // Create empty state indicator (shown when no src is set)
+    this.emptyStateIndicator = document.createElement("div");
+    this.emptyStateIndicator.className = "movi-empty-state";
+    this.emptyStateIndicator.style.display = "flex"; // Show by default (no src initially)
+    this.emptyStateIndicator.innerHTML = `
+      <div class="movi-empty-container">
+        <div class="movi-empty-icon-wrapper">
+          <svg viewBox="0 0 48 48" fill="none">
+            <rect x="8" y="12" width="32" height="24" rx="2" stroke="rgba(255, 255, 255, 0.3)" stroke-width="1.5" fill="rgba(255, 255, 255, 0.02)"/>
+            <rect x="6" y="14" width="2" height="4" rx="0.5" fill="rgba(255, 255, 255, 0.2)"/>
+            <rect x="6" y="22" width="2" height="4" rx="0.5" fill="rgba(255, 255, 255, 0.2)"/>
+            <rect x="6" y="30" width="2" height="4" rx="0.5" fill="rgba(255, 255, 255, 0.2)"/>
+            <rect x="40" y="14" width="2" height="4" rx="0.5" fill="rgba(255, 255, 255, 0.2)"/>
+            <rect x="40" y="22" width="2" height="4" rx="0.5" fill="rgba(255, 255, 255, 0.2)"/>
+            <rect x="40" y="30" width="2" height="4" rx="0.5" fill="rgba(255, 255, 255, 0.2)"/>
+            <circle cx="24" cy="24" r="5" fill="rgba(255, 255, 255, 0.06)" stroke="rgba(255, 255, 255, 0.2)" stroke-width="1"/>
+            <path d="M22 21l6 3-6 3z" fill="rgba(255, 255, 255, 0.3)"/>
+          </svg>
+        </div>
+        <div class="movi-empty-text">
+          <h3 class="movi-empty-title">No Video</h3>
+          <p class="movi-empty-message">Add a video source to start playback</p>
+        </div>
+      </div>
+    `;
+    shadowRoot.appendChild(this.emptyStateIndicator);
 
     // Create OSD (On-Screen Display) container
     const osdContainer = document.createElement("div");
@@ -528,11 +556,11 @@ export class MoviElement extends HTMLElement {
               <div class="movi-subtitle-track-container">
                 <button class="movi-btn movi-subtitle-track-btn" aria-label="Subtitles/Captions">
                   <svg class="movi-icon-subtitle" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-                    <rect width="18" height="14" x="3" y="5" rx="2" ry="2"></rect>
-                    <path d="M11 9H9a2 2 0 0 0-2 2v2a2 2 0 0 0 2 2h2 M17 9h-2a2 2 0 0 0-2 2v2a2 2 0 0 0 2 2h2"></path>
+                    <rect width="20" height="16" x="2" y="4" rx="2" ry="2"></rect>
+                    <path d="M10 8.5H8a2 2 0 0 0-2 2v3a2 2 0 0 0 2 2h2 M18 8.5h-2a2 2 0 0 0-2 2v3a2 2 0 0 0 2 2h2"></path>
                   </svg>
                   <svg class="movi-icon-subtitle-filled" viewBox="0 0 24 24" fill="currentColor" style="display: none;">
-                    <path fill-rule="evenodd" clip-rule="evenodd" d="M19 4H5c-1.11 0-2 .9-2 2v12c0 1.1.89 2 2 2h14c1.1 0 2-.9 2-2V6c0-1.1-.9-2-2-2z M11 11 H9.5 V10.5 H7.5 V13.5 H9.5 V13 H11 V14 C11 14.55 10.55 15 10 15 H7 C6.45 15 6 14.55 6 14 V10 C6 9.45 6.45 9 7 9 H10 C10.55 9 11 9.45 11 10 V11 Z M18 11 H16.5 V10.5 H14.5 V13.5 H16.5 V13 H18 V14 C18 14.55 17.55 15 17 15 H14 C13.45 15 13 14.55 13 14 V10 C13 9.45 13.45 9 14 9 H17 C17.55 9 18 9.45 18 10 V11 Z"></path>
+                    <path d="M20 4H4c-1.1 0-2 .9-2 2v12c0 1.1.9 2 2 2h16c1.1 0 2-.9 2-2V6c0-1.1-.9-2-2-2zM10 15H7c-.83 0-1.5-.67-1.5-1.5v-3c0-.83.67-1.5 1.5-1.5h3V11H7.5v2.5h2V13H10v2zm8 0h-3c-.83 0-1.5-.67-1.5-1.5v-3c0-.83.67-1.5 1.5-1.5h3V11h-2.5v2.5h2V13H18v2z"></path>
                   </svg>
                 </button>
                 <div class="movi-subtitle-track-menu" style="display: none;">
@@ -4636,7 +4664,7 @@ export class MoviElement extends HTMLElement {
         position: relative;
         display: none; /* Hidden by default, shown when subtitle tracks available */
         align-items: center;
-        margin-left: 8px;
+        margin-left: 4px;
       }
 
       .movi-subtitle-track-btn {
@@ -5899,7 +5927,72 @@ export class MoviElement extends HTMLElement {
       .movi-sw-fallback-btn svg {
         flex-shrink: 0;
       }
-      
+
+      /* Empty State Indicator */
+      .movi-empty-state {
+        position: absolute;
+        top: 0;
+        left: 0;
+        width: 100%;
+        height: 100%;
+        background: rgba(0, 0, 0, 0.5);
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        justify-content: center;
+        z-index: 5;
+        color: white;
+        font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+        text-align: center;
+        padding: 40px;
+        opacity: 0;
+        animation: movi-fade-in 0.4s ease forwards;
+      }
+
+      .movi-empty-container {
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        gap: 16px;
+      }
+
+      .movi-empty-icon-wrapper {
+        width: 96px;
+        height: 96px;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        opacity: 0.6;
+      }
+
+      .movi-empty-icon-wrapper svg {
+        width: 100%;
+        height: 100%;
+      }
+
+      .movi-empty-title {
+        font-size: 18px;
+        font-weight: 600;
+        margin: 0;
+        color: rgba(255, 255, 255, 0.9);
+        letter-spacing: -0.01em;
+      }
+
+      .movi-empty-text {
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        gap: 6px;
+      }
+
+      .movi-empty-message {
+        font-size: 13px;
+        line-height: 1.5;
+        color: rgba(255, 255, 255, 0.5);
+        margin: 0;
+        font-weight: 400;
+      }
+
       /* Mobile Responsiveness for Context Menu - Side Panel Mode */
       @media (max-width: 1024px), (pointer: coarse) {
         .movi-context-menu.movi-context-menu-mobile {
@@ -6175,6 +6268,9 @@ export class MoviElement extends HTMLElement {
     // Initial visibility check
     this.updateControlsVisibility();
 
+    // Check for required security headers
+    this.checkSecurityHeaders();
+
     // Automatically initialize player if src is set
     if (this._src) {
       this.initializePlayer();
@@ -6325,6 +6421,16 @@ export class MoviElement extends HTMLElement {
         if (!(this._src instanceof File)) {
           const oldSrc = this._src;
           this._src = newValue || null;
+
+          // Show/hide empty state indicator based on src
+          if (this.emptyStateIndicator) {
+            if (!this._src && !this.player) {
+              this.emptyStateIndicator.style.display = "flex";
+            } else {
+              this.emptyStateIndicator.style.display = "none";
+            }
+          }
+
           // If src changed and element is connected, reload
           if (this.isConnected && this._src && this._src !== oldSrc) {
             this.load();
@@ -6592,11 +6698,16 @@ export class MoviElement extends HTMLElement {
    * Automatically create and initialize MoviPlayer
    */
   private async initializePlayer(): Promise<void> {
-    if (!this._src || this.isLoading || this.player) {
+    if (!this._src || this.isLoading || this.player || this._isUnsupported) {
       return;
     }
 
     this.isLoading = true;
+
+    // Hide empty state indicator when loading begins
+    if (this.emptyStateIndicator) {
+      this.emptyStateIndicator.style.display = "none";
+    }
 
     try {
       // Determine source type (URL or File)
@@ -6741,10 +6852,20 @@ export class MoviElement extends HTMLElement {
 
       if (error instanceof Error) {
         message = error.message;
-        if (message.includes("fetch")) {
+
+        // Check for CORS errors - these typically show as "Load failed" TypeError
+        if (
+          message.includes("Load failed") ||
+          message.toLowerCase().includes("cors") ||
+          message.toLowerCase().includes("access-control-allow-origin")
+        ) {
           title = "Network Error";
           message =
             "Failed to fetch video resource. Check your connection or CORS settings.";
+        } else if (message.includes("fetch")) {
+          title = "Network Error";
+          message =
+            "Failed to fetch video resource. Check your connection or try again.";
         } else if (message.includes("decode")) {
           title = "Playback Error";
         }
@@ -6901,6 +7022,12 @@ export class MoviElement extends HTMLElement {
       this.player.destroy();
       this.player = null;
     }
+
+    // Show empty state if no src after player cleanup
+    if (!this._src && this.emptyStateIndicator) {
+      this.emptyStateIndicator.style.display = "flex";
+    }
+
     await this.initializePlayer();
   }
 
@@ -7275,6 +7402,48 @@ export class MoviElement extends HTMLElement {
   }
 
   /**
+   * Check if required security headers (COOP/COEP) are present
+   * These headers are required for SharedArrayBuffer support (needed by FFmpeg)
+   */
+  private checkSecurityHeaders(): void {
+    // Check if Cross-Origin-Isolated context is available
+    if (!window.crossOriginIsolated) {
+      Logger.warn(
+        TAG,
+        "Security headers missing: Cross-Origin-Opener-Policy and Cross-Origin-Embedder-Policy are required",
+      );
+
+      // Show error message
+      if (this.brokenIndicator) {
+        this.brokenIndicator.style.display = "flex";
+
+        const titleEl =
+          this.brokenIndicator.querySelector(".movi-broken-title");
+        if (titleEl) titleEl.textContent = "Security Headers Missing";
+
+        const messageEl = this.brokenIndicator.querySelector(
+          ".movi-broken-message",
+        );
+        if (messageEl) {
+          messageEl.textContent =
+            "This player requires Cross-Origin-Opener-Policy: same-origin and Cross-Origin-Embedder-Policy: require-corp headers to be set on the server.";
+        }
+
+        // Hide the software fallback button (not applicable for header issues)
+        const swFallbackBtn = this.brokenIndicator.querySelector(
+          ".movi-sw-fallback-btn",
+        ) as HTMLElement;
+        if (swFallbackBtn) {
+          swFallbackBtn.style.display = "none";
+        }
+      }
+
+      // Prevent player initialization
+      this._isUnsupported = true;
+    }
+  }
+
+  /**
    * Enable software decoding and reload the video
    */
   private async enableSoftwareDecoding(): Promise<void> {
@@ -7638,10 +7807,18 @@ export class MoviElement extends HTMLElement {
       } else {
         this.removeAttribute("src");
         this._src = null;
+        // Show empty state when src is cleared
+        if (this.emptyStateIndicator && !this.player) {
+          this.emptyStateIndicator.style.display = "flex";
+        }
       }
     } else {
       this.removeAttribute("src");
       this._src = null;
+      // Show empty state when src is cleared
+      if (this.emptyStateIndicator && !this.player) {
+        this.emptyStateIndicator.style.display = "flex";
+      }
     }
   }
 

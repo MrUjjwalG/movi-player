@@ -13,6 +13,8 @@ const TAG = "ThumbnailHttpSource";
 
 // Buffer 512KB at a time - enough for most keyframes
 const BUFFER_SIZE = 512 * 1024;
+// Maximum fetch size to prevent excessive downloads (5MB cap)
+const MAX_FETCH_SIZE = 5 * 1024 * 1024;
 
 export class ThumbnailHttpSource implements SourceAdapter {
   private url: string;
@@ -80,9 +82,12 @@ export class ThumbnailHttpSource implements SourceAdapter {
     }
 
     // Need to fetch - calculate optimal range
-    // Fetch a larger chunk to avoid multiple small requests
+    // Fetch a larger chunk to avoid multiple small requests, but cap at MAX_FETCH_SIZE
     const fetchStart = offset;
-    const fetchSize = Math.max(BUFFER_SIZE, length);
+    const fetchSize = Math.min(
+      Math.max(BUFFER_SIZE, length),
+      MAX_FETCH_SIZE // Cap to prevent excessive downloads
+    );
     const fetchEnd =
       this.size > 0
         ? Math.min(fetchStart + fetchSize - 1, this.size - 1)
@@ -125,11 +130,24 @@ export class ThumbnailHttpSource implements SourceAdapter {
             ...this.headers,
             Range: `bytes=${fetchStart}-${fetchEnd}`,
           },
+          cache: 'no-store', // Prevent cached 200 responses
           signal: controller.signal,
         });
         clearTimeout(timeoutId);
 
-        if (!response.ok) {
+        // CRITICAL: Check for 206 Partial Content response
+        // If server returns 200 instead of 206, it's sending the ENTIRE file!
+        if (response.status === 200) {
+          Logger.error(
+            TAG,
+            `Server returned 200 instead of 206. Range requests not supported.`
+          );
+          // Abort the response to prevent downloading
+          controller.abort();
+          throw new Error("Server does not support range requests.");
+        }
+
+        if (!response.ok && response.status !== 206) {
           if (response.status === 416) {
             Logger.warn(
               TAG,
@@ -170,6 +188,20 @@ export class ThumbnailHttpSource implements SourceAdapter {
         if ((error as any).name === "AbortError") {
           Logger.debug(TAG, `Read aborted at offset ${offset}`);
           return new ArrayBuffer(0); // Cancelled
+        }
+
+        // Check for CORS errors (TypeError: Failed to fetch)
+        // CORS errors are fatal and should not be retried
+        const errorMessage = (error as any).message || "";
+        const isCorsError =
+          (error as any).name === "TypeError" &&
+          errorMessage.includes("Failed to fetch");
+
+        if (isCorsError) {
+          Logger.error(TAG, `CORS error accessing ${this.url}`);
+          throw new Error(
+            "Failed to fetch video resource. Check your connection or CORS settings."
+          );
         }
 
         // Check if fatal error

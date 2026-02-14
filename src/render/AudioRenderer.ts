@@ -4,6 +4,7 @@
  */
 
 import { Logger } from "../utils/Logger";
+import { SoundTouch } from "../utils/soundtouch";
 
 const TAG = "AudioRenderer";
 
@@ -30,6 +31,10 @@ export class AudioRenderer {
 
   // Playback rate change rebuffering flag
   private isRebufferingForRateChange: boolean = false;
+
+  // Pitch preservation
+  private preservePitch: boolean = true;
+  private soundTouch: SoundTouch | null = null;
 
   constructor() {
     Logger.debug(TAG, "Created");
@@ -122,11 +127,18 @@ export class AudioRenderer {
         audioBuffer.copyToChannel(channelData, channel);
       }
 
+      // Apply pitch preservation if enabled and playback rate is not 1.0
+      let processedBuffer = audioBuffer;
+      if (this.preservePitch && Math.abs(this._playbackRate - 1.0) > 0.01) {
+        processedBuffer = this.processSoundTouch(audioBuffer, this._playbackRate);
+      }
+
       // Create buffer source
       const source = this.audioContext.createBufferSource();
-      source.buffer = audioBuffer;
+      source.buffer = processedBuffer;
       source.connect(this.gainNode);
-      source.playbackRate.value = this._playbackRate;
+      // When using SoundTouch, playback rate is already applied, so keep it at 1.0
+      source.playbackRate.value = this.preservePitch && Math.abs(this._playbackRate - 1.0) > 0.01 ? 1.0 : this._playbackRate;
 
       // Schedule playback sequentially
       const now = this.audioContext.currentTime;
@@ -267,7 +279,11 @@ export class AudioRenderer {
       try {
         await this.audioContext.resume();
       } catch (err) {
-        Logger.warn(TAG, "Failed to resume AudioContext (user gesture may be required)", err);
+        Logger.warn(
+          TAG,
+          "Failed to resume AudioContext (user gesture may be required)",
+          err,
+        );
       }
     }
 
@@ -286,7 +302,86 @@ export class AudioRenderer {
     // and we want to continue exactly where we left off.
     // If this is a fresh start or seek, reset() would have been called previously.
 
-    Logger.debug(TAG, `Playing (muted: ${this._muted}, audioContext: ${this.audioContext ? 'initialized' : 'deferred'}, state: ${this.audioContext?.state || 'N/A'})`);
+    Logger.debug(
+      TAG,
+      `Playing (muted: ${this._muted}, audioContext: ${this.audioContext ? "initialized" : "deferred"}, state: ${this.audioContext?.state || "N/A"})`,
+    );
+  }
+
+  /**
+   * Initialize or update SoundTouch instance
+   */
+  private initSoundTouch(): void {
+    if (!this.soundTouch) {
+      this.soundTouch = new SoundTouch();
+    }
+    this.soundTouch.tempo = this._playbackRate;
+    this.soundTouch.pitch = 1.0;
+  }
+
+  /**
+   * Process audio buffer through SoundTouch for pitch-preserving playback rate changes
+   */
+  private processSoundTouch(
+    inputBuffer: AudioBuffer,
+    playbackRate: number
+  ): AudioBuffer {
+    if (!this.audioContext) return inputBuffer;
+
+    // Initialize or update SoundTouch
+    this.initSoundTouch();
+
+    const numChannels = inputBuffer.numberOfChannels;
+    const sampleRate = inputBuffer.sampleRate;
+    const inputFrames = inputBuffer.length;
+
+    // Convert planar to interleaved stereo
+    const interleavedInput = new Float32Array(inputFrames * 2);
+    const leftChannel = inputBuffer.getChannelData(0);
+    const rightChannel = numChannels > 1 ? inputBuffer.getChannelData(1) : leftChannel;
+
+    for (let i = 0; i < inputFrames; i++) {
+      interleavedInput[i * 2] = leftChannel[i];
+      interleavedInput[i * 2 + 1] = rightChannel[i];
+    }
+
+    // Feed samples to SoundTouch
+    this.soundTouch!.inputBuffer.putSamples(interleavedInput, 0, inputFrames);
+    this.soundTouch!.process();
+
+    // Calculate expected output frames
+    const expectedFrames = Math.ceil(inputFrames / playbackRate);
+    const availableFrames = this.soundTouch!.outputBuffer.frameCount;
+    const framesToExtract = Math.min(expectedFrames, availableFrames);
+
+    if (framesToExtract === 0) {
+      // Return a silent buffer if no output available
+      return this.audioContext.createBuffer(numChannels, 1, sampleRate);
+    }
+
+    // Extract processed samples
+    const interleavedOutput = new Float32Array(framesToExtract * 2);
+    this.soundTouch!.outputBuffer.receiveSamples(interleavedOutput, framesToExtract);
+
+    // Create output buffer
+    const outputBuffer = this.audioContext.createBuffer(
+      numChannels,
+      framesToExtract,
+      sampleRate
+    );
+
+    // De-interleave and copy to output buffer
+    const outputLeft = outputBuffer.getChannelData(0);
+    const outputRight = numChannels > 1 ? outputBuffer.getChannelData(1) : null;
+
+    for (let i = 0; i < framesToExtract; i++) {
+      outputLeft[i] = interleavedOutput[i * 2];
+      if (outputRight) {
+        outputRight[i] = interleavedOutput[i * 2 + 1];
+      }
+    }
+
+    return outputBuffer;
   }
 
   /**
@@ -356,6 +451,11 @@ export class AudioRenderer {
 
     const oldRate = this._playbackRate;
 
+    // Clear SoundTouch state when rate changes
+    if (this.soundTouch && this.preservePitch) {
+      this.soundTouch.clear();
+    }
+
     // Pivot the clock before changing rate
     if (
       this.audioContext &&
@@ -423,6 +523,21 @@ export class AudioRenderer {
   }
 
   /**
+   * Set pitch preservation mode
+   */
+  setPreservePitch(preserve: boolean): void {
+    this.preservePitch = preserve;
+    Logger.debug(TAG, `Pitch preservation: ${preserve}`);
+  }
+
+  /**
+   * Get pitch preservation mode
+   */
+  getPreservePitch(): boolean {
+    return this.preservePitch;
+  }
+
+  /**
    * Check if audio is rebuffering due to playback rate change
    */
   isRebuffering(): boolean {
@@ -458,11 +573,14 @@ export class AudioRenderer {
 
     // Resume AudioContext on unmute (user gesture) if it was suspended
     if (this.audioContext && this.audioContext.state === "suspended") {
-      this.audioContext.resume().then(() => {
-        Logger.debug(TAG, "AudioContext resumed on unmute");
-      }).catch((err) => {
-        Logger.warn(TAG, "Failed to resume AudioContext on unmute", err);
-      });
+      this.audioContext
+        .resume()
+        .then(() => {
+          Logger.debug(TAG, "AudioContext resumed on unmute");
+        })
+        .catch((err) => {
+          Logger.warn(TAG, "Failed to resume AudioContext on unmute", err);
+        });
     }
 
     Logger.debug(TAG, "Unmuted");
@@ -489,6 +607,11 @@ export class AudioRenderer {
     this.firstBufferMediaTime = 0;
     this.scheduledCount = 0;
     this.maxScheduledMediaTime = 0;
+
+    // Clear SoundTouch state
+    if (this.soundTouch) {
+      this.soundTouch.clear();
+    }
   }
 
   /**
@@ -621,6 +744,7 @@ export class AudioRenderer {
     }
 
     this.gainNode = null;
+    this.soundTouch = null;
     Logger.debug(TAG, "Destroyed");
   }
 }

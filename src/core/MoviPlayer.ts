@@ -188,14 +188,17 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
           // These frames are decoded to build decoder state (reference frames),
           // but we don't display them - we want accurate seeking to the target time
           const frameTime = frame.timestamp / 1_000_000; // Convert to seconds
-          if (this.seekTargetTime >= 0 && frameTime < this.seekTargetTime) {
+          // CRITICAL: Check seekTargetTime !== -1 instead of >= 0 to support negative start times
+          // Some media files have negative PTS offsets (e.g., startTime = -0.105s)
+          if (this.seekTargetTime !== -1 && frameTime < this.seekTargetTime) {
             // Drop this frame, it's before our target time
             frame.close();
             return;
           }
 
           // Video reached target! Clear the flag to ensure sync and transition to final state
-          if (this.seekTargetTime >= 0) {
+          if (this.seekTargetTime !== -1) {
+            Logger.debug(TAG, `onFrame: frameTime=${frameTime.toFixed(3)}s >= seekTargetTime=${this.seekTargetTime.toFixed(3)}s, calling notifySeekCompletion`);
             this.notifySeekCompletion(frameTime);
           }
 
@@ -763,7 +766,7 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
    */
   private demuxInFlight = false;
   private demuxInFlightStartTime: number = 0;
-  private static readonly DEMUX_TIMEOUT = 10000; // 10 seconds timeout for demux operations
+  private static readonly DEMUX_TIMEOUT = 35000; // 35 seconds timeout (slightly more than HTTP timeout of 30s)
   private eofReached = false;
 
   /**
@@ -771,7 +774,11 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
    * Clears the seek flag, synchronizes clock, and transitions to final state.
    */
   private notifySeekCompletion(time: number): void {
-    if (!this.waitingForVideoSync) return;
+    Logger.debug(TAG, `notifySeekCompletion called: time=${time.toFixed(3)}s, waitingForVideoSync=${this.waitingForVideoSync}, seekTargetTime=${this.seekTargetTime.toFixed(3)}s`);
+    if (!this.waitingForVideoSync) {
+      Logger.warn(TAG, "notifySeekCompletion: early return (waitingForVideoSync=false)");
+      return;
+    }
 
     const seekTarget = this.seekTargetTime;
     this.seekTargetTime = -1;
@@ -784,17 +791,45 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
     );
 
     // Sync correction: Match clock to actual video/audio start time
-    // Allow small tolerance (0.01) to ensure the frame is displayed (clock >= frameTime)
+    // CRITICAL: If we have pending audio packets, sync to the EARLIEST audio packet
+    // instead of the video frame. This prevents dropping audio when hardware video
+    // decoding has delay (which causes video to arrive 100-500ms after audio).
     if (time > seekTarget + 0.01) {
-      Logger.debug(
-        TAG,
-        `Stream jumped ahead. Syncing clock to ${time.toFixed(3)}s.`,
-      );
-      this.clock.seek(time);
+      let syncTime = time;
 
-      // Filter pending audio packets that are now too old
+      // If we have pending audio, use the earliest audio packet time
+      if (this.pendingAudioPackets.length > 0) {
+        const earliestAudioTime = Math.min(
+          ...this.pendingAudioPackets.map((p) => p.timestamp)
+        );
+
+        // Sync to audio if it's earlier than video (hardware decode delay case)
+        if (earliestAudioTime < time) {
+          syncTime = earliestAudioTime;
+          Logger.debug(
+            TAG,
+            `Video arrived late (${time.toFixed(3)}s), syncing clock to earliest audio (${syncTime.toFixed(3)}s) instead`,
+          );
+        } else {
+          // Video and audio aligned, sync to video
+          Logger.debug(
+            TAG,
+            `Stream jumped ahead. Syncing clock to video at ${syncTime.toFixed(3)}s.`,
+          );
+        }
+      } else {
+        Logger.debug(
+          TAG,
+          `Stream jumped ahead. Syncing clock to ${syncTime.toFixed(3)}s.`,
+        );
+      }
+
+      this.clock.seek(syncTime);
+
+      // Only filter audio packets that are truly too old (before seek target)
+      // Don't drop packets just because video arrived late!
       this.pendingAudioPackets = this.pendingAudioPackets.filter(
-        (p) => p.timestamp >= time - 0.05,
+        (p) => p.timestamp >= seekTarget - 0.01,
       );
     }
 
@@ -1148,8 +1183,9 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
               // IMPORTANT: Skip audio packets before the seek target time
               // This prevents A/V sync from being based on the keyframe time (e.g., 0s)
               // instead of the actual seek target (e.g., 2s)
+              // CRITICAL: Check seekTargetTime !== -1 to support negative start times
               if (
-                this.seekTargetTime >= 0 &&
+                this.seekTargetTime !== -1 &&
                 packet.timestamp < this.seekTargetTime
               ) {
                 // Skip this audio packet, it's before our target time
@@ -1171,7 +1207,7 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
               // to be filtered after audio catches up. The seekTargetTime will be cleared
               // after POST_SEEK_THROTTLE_MS when justSeeked becomes false, or on next seek.
               if (
-                this.seekTargetTime >= 0 &&
+                this.seekTargetTime !== -1 &&
                 packet.timestamp >= this.seekTargetTime
               ) {
                 Logger.debug(
@@ -1245,7 +1281,23 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
       }
     } catch (e) {
       Logger.error(TAG, "Demux error", e);
-      // this.pause(); // Don't pause on glitch, maybe retry or just log
+
+      // Check for fatal errors that indicate corrupted state
+      const errorMessage = (e as any).message || "";
+      const isFatalError =
+        errorMessage.includes("Invalid packet size") ||
+        errorMessage.includes("Invalid typed array length") ||
+        errorMessage.includes("State may be corrupted");
+
+      if (isFatalError) {
+        // Fatal error - pause playback and stop processing
+        Logger.error(TAG, "Fatal demux error detected, pausing playback");
+        this.pause();
+        this.emit("error", new Error("Playback error: corrupt data stream"));
+        return; // Exit process loop
+      }
+
+      // For non-fatal errors, continue (network glitches, etc.)
     } finally {
       this.demuxInFlight = false;
     }

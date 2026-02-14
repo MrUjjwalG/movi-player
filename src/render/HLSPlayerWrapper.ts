@@ -32,6 +32,11 @@ export class HLSPlayerWrapper extends EventEmitter<PlayerEventMap> {
     this.videoElement.playsInline = true;
     this.videoElement.style.display = "none"; // Hidden by default, canvas renderer will draw frames
 
+    // Preserve pitch when changing playback speed
+    (this.videoElement as any).preservesPitch = true;
+    (this.videoElement as any).mozPreservesPitch = true; // Firefox
+    (this.videoElement as any).webkitPreservesPitch = true; // Safari/older Chrome
+
     if (config.renderer === "canvas" && config.canvas) {
       this.canvasRenderer = new CanvasRenderer(config.canvas);
     }
