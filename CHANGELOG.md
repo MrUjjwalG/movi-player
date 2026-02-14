@@ -5,9 +5,16 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [0.1.5-beta.0] - 2026-02-11
+## [0.1.5] - 2026-02-15
+
+### Added
+- Pitch preservation for playback rate changes
+- Pitch preservation support for HLS playback
+- MediaSession API integration for background playback and media controls
+- HTTPS support for local development environment
 
 ### Changed
+- Simplified error messages to be more concise and consistent
 - Replaced all hardcoded purple colors with CSS variables (--movi-primary) for full theme customization
 - Enhanced center play button with theme color by default
 - Center play button now displays with colored glow and border initially (not just on hover)
@@ -16,6 +23,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - All UI elements now use CSS variables for consistent theming
 
 ### Fixed
+- Improved playback stability with enhanced error handling and timeout management
+- Resolved audio-video sync issues with hardware decoding
+- Distinguished 403/401/404 errors from CORS errors for better error reporting
+- CORS errors now propagate immediately instead of waiting for timeout
 - Title bar z-index now properly positioned below control menus in mobile view
 - Fixed menu accessibility issue where speed/subtitle menus appeared behind title
 - Center play button backdrop blur now enabled on mobile/touch devices
@@ -25,7 +36,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Controls no longer auto-hide when menus are open on mobile
 - Loading spinner now theme-aware and visible on all backgrounds
 
-## [0.1.5] - 2026-02-11 (unreleased)
+### Documentation
+- Added SoundTouch third-party license attribution
+
+## [0.1.5-beta.0] - 2026-02-11 (unreleased)
 
 ### Changed
 - Enhanced center play button with purple theme color by default
