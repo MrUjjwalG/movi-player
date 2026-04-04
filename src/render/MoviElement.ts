@@ -1751,9 +1751,37 @@ export class MoviElement extends HTMLElement {
     // Fullscreen change listener
     document.addEventListener("fullscreenchange", () => {
       const isFullscreen = !!document.fullscreenElement;
+
+      // If exiting fullscreen while an overlay was open, close overlay and re-enter fullscreen
+      if (!isFullscreen) {
+        const wasOverlayOpen = this._contextMenuVisible ||
+          (this.shadowRoot?.querySelector(".movi-shortcuts-panel") as HTMLElement)?.style.display !== "none" ||
+          (this.shadowRoot?.querySelector(".movi-nerd-stats") as HTMLElement)?.style.display !== "none" ||
+          (this.shadowRoot?.querySelector(".movi-timeline-panel") as HTMLElement)?.style.display !== "none";
+
+        if (wasOverlayOpen) {
+          // Close all overlays
+          if (this._contextMenuVisible) {
+            const ctx = this.shadowRoot?.querySelector(".movi-context-menu") as HTMLElement;
+            if (ctx) { ctx.style.display = "none"; ctx.classList.remove("visible"); }
+            const bd = this.shadowRoot?.querySelector(".movi-context-menu-backdrop") as HTMLElement;
+            if (bd) bd.style.display = "none";
+            this._contextMenuVisible = false;
+          }
+          const panels = this.shadowRoot?.querySelectorAll(".movi-shortcuts-panel, .movi-nerd-stats, .movi-timeline-panel");
+          panels?.forEach((p) => { (p as HTMLElement).style.display = "none"; });
+          if (this._nerdStatsVisible) {
+            this._nerdStatsVisible = false;
+            if (this.nerdStatsInterval) { clearInterval(this.nerdStatsInterval); this.nerdStatsInterval = null; }
+          }
+
+          // Re-enter fullscreen
+          this.requestFullscreen().catch(() => {});
+          return;
+        }
+      }
+
       this.updateFullscreenIcon(isFullscreen);
-      // Resize canvas when entering/exiting fullscreen
-      // Use requestAnimationFrame to ensure layout is complete
       requestAnimationFrame(() => {
         requestAnimationFrame(() => {
           this.updateCanvasSize();
@@ -2563,6 +2591,11 @@ export class MoviElement extends HTMLElement {
     if (!this.hasAttribute("tabindex")) {
       this.setAttribute("tabindex", "0");
     }
+
+    // Auto-focus on mouse enter so keyboard shortcuts work without clicking
+    this.addEventListener("mouseenter", () => {
+      this.focus();
+    });
   }
 
   private setupContextMenu(shadowRoot: ShadowRoot): void {
@@ -2904,8 +2937,10 @@ export class MoviElement extends HTMLElement {
 
     // Hide context menu on escape
     document.addEventListener("keydown", (e) => {
-      if (e.key === "Escape" && this._contextMenuVisible) {
-        hideContextMenu(); // Used new local method
+      if (e.key === "Escape") {
+        if (this._contextMenuVisible) {
+          hideContextMenu();
+        }
       }
     });
 
