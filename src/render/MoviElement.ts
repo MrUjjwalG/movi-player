@@ -92,6 +92,8 @@ export class MoviElement extends HTMLElement {
   private _watermark: string | null = null; // Watermark image URL
   private _title: string | null = null; // Video title to display
   private _showTitle: boolean = false; // Show title at top if true
+  private _resume: boolean = false; // Resume playback from last position (opt-in)
+  private _resumeSaveInterval: number | null = null; // Interval to save position
   private _titleAutoLoaded: boolean = false; // Track if title was auto-loaded from metadata
   private _lastDuration: number = 0; // Track duration changes for title auto-load
   private posterElement!: HTMLImageElement; // Poster image element
@@ -149,6 +151,7 @@ export class MoviElement extends HTMLElement {
       "watermark",
       "title",
       "showtitle",
+      "resume",
     ];
   }
 
@@ -776,6 +779,73 @@ export class MoviElement extends HTMLElement {
     timelinePanel.querySelector(".movi-timeline-close")?.addEventListener("click", (e) => {
       e.stopPropagation();
       timelinePanel.style.display = "none";
+    });
+
+    // Create Resume Dialog
+    const resumeDialog = document.createElement("div");
+    resumeDialog.className = "movi-resume-dialog";
+    resumeDialog.style.display = "none";
+    resumeDialog.innerHTML = `
+      <div class="movi-resume-text">Resume from <span class="movi-resume-time">0:00</span>?</div>
+      <div class="movi-resume-buttons">
+        <button class="movi-resume-btn movi-resume-yes">Resume</button>
+        <button class="movi-resume-btn movi-resume-no">Start Over</button>
+      </div>
+    `;
+    shadowRoot.appendChild(resumeDialog);
+
+    resumeDialog.querySelector(".movi-resume-yes")?.addEventListener("click", (e) => {
+      e.stopPropagation();
+      const time = parseFloat(resumeDialog.dataset.time || "0");
+      resumeDialog.style.display = "none";
+      if (this.player && time > 0) {
+        this.player.seek(time).then(() => this.play()).catch(() => {});
+      }
+    });
+
+    resumeDialog.querySelector(".movi-resume-no")?.addEventListener("click", (e) => {
+      e.stopPropagation();
+      resumeDialog.style.display = "none";
+      this.clearResumePosition();
+    });
+
+    // Create Keyboard Shortcuts Panel
+    const shortcutsPanel = document.createElement("div");
+    shortcutsPanel.className = "movi-shortcuts-panel";
+    shortcutsPanel.style.display = "none";
+    shortcutsPanel.innerHTML = `
+      <div class="movi-shortcuts-header">
+        <span class="movi-shortcuts-title">Keyboard Shortcuts</span>
+        <button class="movi-shortcuts-close" aria-label="Close">&times;</button>
+      </div>
+      <div class="movi-shortcuts-body">
+        <div class="movi-shortcuts-col">
+          <div class="movi-shortcut-row"><kbd>Space</kbd><span>Play / Pause</span></div>
+          <div class="movi-shortcut-row"><kbd>K</kbd><span>Play / Pause</span></div>
+          <div class="movi-shortcut-row"><kbd>F</kbd><span>Fullscreen</span></div>
+          <div class="movi-shortcut-row"><kbd>M</kbd><span>Mute / Unmute</span></div>
+          <div class="movi-shortcut-row"><kbd>&uarr;</kbd><span>Volume Up</span></div>
+          <div class="movi-shortcut-row"><kbd>&darr;</kbd><span>Volume Down</span></div>
+          <div class="movi-shortcut-row"><kbd>S</kbd><span>Snapshot</span></div>
+        </div>
+        <div class="movi-shortcuts-col">
+          <div class="movi-shortcut-row"><kbd>&larr;</kbd><span>Seek -10s</span></div>
+          <div class="movi-shortcut-row"><kbd>&rarr;</kbd><span>Seek +10s</span></div>
+          <div class="movi-shortcut-row"><kbd>Ctrl+&larr;</kbd><span>Prev Frame</span></div>
+          <div class="movi-shortcut-row"><kbd>Ctrl+&rarr;</kbd><span>Next Frame</span></div>
+          <div class="movi-shortcut-row"><kbd>0</kbd><span>Seek to Start</span></div>
+          <div class="movi-shortcut-row"><kbd>R</kbd><span>Rotate Video</span></div>
+          <div class="movi-shortcut-row"><kbd>I</kbd><span>Stats for Nerds</span></div>
+          <div class="movi-shortcut-row"><kbd>T</kbd><span>Timeline</span></div>
+          <div class="movi-shortcut-row"><kbd>?</kbd><span>This Panel</span></div>
+        </div>
+      </div>
+    `;
+    shadowRoot.appendChild(shortcutsPanel);
+
+    shortcutsPanel.querySelector(".movi-shortcuts-close")?.addEventListener("click", (e) => {
+      e.stopPropagation();
+      shortcutsPanel.style.display = "none";
     });
 
     // Setup control handlers
@@ -2456,6 +2526,14 @@ export class MoviElement extends HTMLElement {
             const statusEl = this.shadowRoot?.querySelector(".movi-rotate-status");
             if (statusEl) statusEl.textContent = `${deg}°`;
             this.syncThumbnailRotation(deg);
+          }
+          break;
+        case "?":
+          // ?: Show keyboard shortcuts
+          e.preventDefault();
+          {
+            const panel = this.shadowRoot?.querySelector(".movi-shortcuts-panel") as HTMLElement;
+            if (panel) panel.style.display = panel.style.display === "none" ? "flex" : "none";
           }
           break;
         case "0":
@@ -5516,6 +5594,223 @@ export class MoviElement extends HTMLElement {
       }
 
       /* ========================================
+         KEYBOARD SHORTCUTS PANEL
+      ======================================== */
+      .movi-shortcuts-panel {
+        position: absolute;
+        top: 50%;
+        left: 50%;
+        transform: translate(-50%, -50%);
+        z-index: 100;
+        background: rgba(0, 0, 0, 0.92);
+        backdrop-filter: blur(20px);
+        -webkit-backdrop-filter: blur(20px);
+        border: 1px solid rgba(255, 255, 255, 0.1);
+        border-radius: 12px;
+        padding: 0;
+        flex-direction: column;
+        min-width: 420px;
+        max-width: 520px;
+        box-shadow: 0 16px 48px rgba(0, 0, 0, 0.6);
+        font-family: 'Inter', -apple-system, sans-serif;
+        color: rgba(255, 255, 255, 0.9);
+        pointer-events: auto;
+      }
+
+      .movi-shortcuts-header {
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        padding: 14px 18px;
+        border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+      }
+
+      .movi-shortcuts-title {
+        font-size: 14px;
+        font-weight: 700;
+        letter-spacing: 0.02em;
+      }
+
+      .movi-shortcuts-close {
+        background: none;
+        border: none;
+        color: rgba(255, 255, 255, 0.5);
+        font-size: 22px;
+        cursor: pointer;
+        padding: 0 4px;
+        line-height: 1;
+        transition: color 0.15s;
+      }
+
+      .movi-shortcuts-close:hover {
+        color: #fff;
+      }
+
+      .movi-shortcuts-body {
+        display: flex;
+        gap: 24px;
+        padding: 14px 18px 18px;
+      }
+
+      .movi-shortcuts-col {
+        flex: 1;
+        display: flex;
+        flex-direction: column;
+        gap: 8px;
+      }
+
+      .movi-shortcut-row {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 12px;
+      }
+
+      .movi-shortcut-row kbd {
+        background: rgba(255, 255, 255, 0.1);
+        border: 1px solid rgba(255, 255, 255, 0.15);
+        border-radius: 5px;
+        padding: 3px 8px;
+        font-size: 11px;
+        font-family: 'SF Mono', 'Fira Code', 'Consolas', monospace;
+        font-weight: 600;
+        min-width: 28px;
+        text-align: center;
+        color: rgba(255, 255, 255, 0.85);
+        white-space: nowrap;
+      }
+
+      .movi-shortcut-row span {
+        font-size: 12px;
+        color: rgba(255, 255, 255, 0.6);
+        text-align: right;
+        flex: 1;
+      }
+
+      @media (max-width: 640px) {
+        .movi-shortcuts-panel {
+          min-width: unset;
+          max-width: unset;
+          left: 8px;
+          right: 8px;
+          top: 50%;
+          transform: translateY(-50%);
+          width: auto;
+        }
+
+        .movi-shortcuts-body {
+          flex-direction: column;
+          gap: 8px;
+          padding: 10px 14px 14px;
+        }
+
+        .movi-shortcut-row kbd {
+          font-size: 10px;
+        }
+
+        .movi-shortcut-row span {
+          font-size: 11px;
+        }
+      }
+
+      /* ========================================
+         RESUME DIALOG
+      ======================================== */
+      .movi-resume-dialog {
+        position: absolute;
+        bottom: 90px;
+        right: 16px;
+        z-index: 50;
+        background: rgba(0, 0, 0, 0.9);
+        backdrop-filter: blur(16px);
+        -webkit-backdrop-filter: blur(16px);
+        border: 1px solid rgba(255, 255, 255, 0.12);
+        border-radius: 10px;
+        padding: 14px 20px;
+        display: flex;
+        align-items: center;
+        gap: 16px;
+        box-shadow: 0 8px 32px rgba(0, 0, 0, 0.5);
+        font-family: 'Inter', -apple-system, sans-serif;
+        pointer-events: auto;
+        animation: movi-resume-slide-up 0.3s ease;
+      }
+
+      @keyframes movi-resume-slide-up {
+        from { opacity: 0; transform: translateY(10px); }
+        to { opacity: 1; transform: translateY(0); }
+      }
+
+      @keyframes movi-resume-fade-out {
+        from { opacity: 1; transform: translateY(0); }
+        to { opacity: 0; transform: translateY(10px); }
+      }
+
+      .movi-resume-text {
+        font-size: 13px;
+        font-weight: 500;
+        color: rgba(255, 255, 255, 0.9);
+        white-space: nowrap;
+      }
+
+      .movi-resume-time {
+        font-weight: 700;
+        color: var(--movi-primary);
+      }
+
+      .movi-resume-buttons {
+        display: flex;
+        gap: 8px;
+      }
+
+      .movi-resume-btn {
+        border: none;
+        border-radius: 6px;
+        padding: 7px 16px;
+        font-size: 12px;
+        font-weight: 600;
+        font-family: inherit;
+        cursor: pointer;
+        transition: opacity 0.15s, transform 0.1s;
+        white-space: nowrap;
+      }
+
+      .movi-resume-btn:hover {
+        opacity: 0.85;
+      }
+
+      .movi-resume-btn:active {
+        transform: scale(0.97);
+      }
+
+      .movi-resume-yes {
+        background: var(--movi-primary);
+        color: #fff;
+      }
+
+      .movi-resume-no {
+        background: rgba(255, 255, 255, 0.12);
+        color: rgba(255, 255, 255, 0.8);
+      }
+
+      @media (max-width: 640px) {
+        .movi-resume-dialog {
+          bottom: 80px;
+          padding: 10px 14px;
+          gap: 10px;
+        }
+
+        .movi-resume-text {
+          font-size: 12px;
+        }
+
+        .movi-resume-btn {
+          padding: 6px 12px;
+          font-size: 11px;
+        }
+      }
+
+      /* ========================================
          RESPONSIVE STYLES - Mobile First
       ======================================== */
 
@@ -6999,6 +7294,10 @@ export class MoviElement extends HTMLElement {
       this.nerdStatsInterval = null;
     }
 
+    // Save position and stop resume saving
+    if (this._resume) this.saveResumePosition();
+    this.stopResumeSaving();
+
     // Cleanup event handlers
     this.eventHandlers.forEach((unsubscribe) => unsubscribe());
     this.eventHandlers.clear();
@@ -7089,6 +7388,9 @@ export class MoviElement extends HTMLElement {
       case "showtitle":
         this._showTitle = newValue !== null;
         this.updateTitle();
+        break;
+      case "resume":
+        this._resume = newValue !== null;
         break;
       case "src":
         // Only handle string src attributes, File objects are handled via setter
@@ -7495,6 +7797,17 @@ export class MoviElement extends HTMLElement {
         await this.player.seek(this._startAt).catch((e: unknown) => {
           Logger.warn(TAG, "Failed to seek to start time", e);
         });
+      } else if (this._resume && this.player) {
+        // Show resume dialog if saved position exists
+        const savedTime = this.getResumePosition();
+        if (savedTime > 2 && savedTime < this.duration - 5) {
+          this.showResumeDialog(savedTime);
+        }
+      }
+
+      // Start saving position periodically if resume enabled
+      if (this._resume) {
+        this.startResumeSaving();
       }
 
       // Auto-play if requested
@@ -7634,9 +7947,12 @@ export class MoviElement extends HTMLElement {
       } else if (state === "paused") {
         this.dispatchEvent(new Event("pause"));
         this.showControls();
+        if (this._resume) this.saveResumePosition();
       } else if (state === "ended") {
         this.dispatchEvent(new Event("ended"));
         this.showControls();
+        // Clear resume position when video ends (start fresh next time)
+        if (this._resume) this.clearResumePosition();
       }
     };
     this.player.on("stateChange", stateChangeHandler);
@@ -8518,6 +8834,10 @@ export class MoviElement extends HTMLElement {
     this._titleAutoLoaded = false;
     this._lastDuration = 0;
 
+    // Save position before switching source, then stop saving
+    if (this._resume) this.saveResumePosition();
+    this.stopResumeSaving();
+
     // Reset timeline and rotation on source change
     this.resetTimeline();
     this.syncThumbnailRotation(0);
@@ -8861,6 +9181,114 @@ export class MoviElement extends HTMLElement {
     timelineImgs.forEach((img) => {
       (img as HTMLElement).style.transform = deg === 0 ? "none" : `rotate(${deg}deg)`;
     });
+  }
+
+  /**
+   * Show resume dialog with saved position
+   */
+  private showResumeDialog(savedTime: number): void {
+    const shadowRoot = this.shadowRoot;
+    if (!shadowRoot) return;
+
+    const dialog = shadowRoot.querySelector(".movi-resume-dialog") as HTMLElement;
+    if (!dialog) return;
+
+    const timeEl = dialog.querySelector(".movi-resume-time");
+    if (timeEl) timeEl.textContent = this.formatTime(savedTime);
+    dialog.dataset.time = savedTime.toString();
+    dialog.style.display = "flex";
+
+    // Auto-hide after 10 seconds with fade-out
+    setTimeout(() => {
+      if (dialog.style.display !== "none") {
+        dialog.style.animation = "movi-resume-fade-out 0.4s ease forwards";
+        setTimeout(() => {
+          dialog.style.display = "none";
+          dialog.style.animation = "";
+        }, 400);
+      }
+    }, 10000);
+  }
+
+  // ─── Resume Playback ────────────────────────────────────────────
+
+  /**
+   * Get a unique key for the current source (for localStorage)
+   */
+  private getResumeKey(): string {
+    const src = this._src;
+    if (src instanceof File) {
+      return `movi-resume:${src.name}:${src.size}`;
+    }
+    if (typeof src === "string") {
+      return `movi-resume:${src}`;
+    }
+    return "";
+  }
+
+  /**
+   * Get saved resume position from localStorage
+   */
+  private getResumePosition(): number {
+    const key = this.getResumeKey();
+    if (!key) return 0;
+    try {
+      const val = localStorage.getItem(key);
+      return val ? parseFloat(val) : 0;
+    } catch {
+      return 0;
+    }
+  }
+
+  /**
+   * Save current position to localStorage
+   */
+  private saveResumePosition(): void {
+    const key = this.getResumeKey();
+    if (!key || !this.player) return;
+    const time = this.currentTime;
+    if (time <= 0) return;
+    try {
+      localStorage.setItem(key, time.toFixed(2));
+    } catch {
+      // localStorage full or unavailable
+    }
+  }
+
+  /**
+   * Start periodically saving playback position
+   */
+  private startResumeSaving(): void {
+    this.stopResumeSaving();
+    // Save every 5 seconds
+    this._resumeSaveInterval = window.setInterval(() => {
+      if (this.player && this.player.getState() === "playing") {
+        this.saveResumePosition();
+      }
+    }, 5000);
+  }
+
+  /**
+   * Stop saving playback position
+   */
+  private stopResumeSaving(): void {
+    if (this._resumeSaveInterval) {
+      clearInterval(this._resumeSaveInterval);
+      this._resumeSaveInterval = null;
+    }
+  }
+
+  /**
+   * Clear saved position for current source
+   */
+  private clearResumePosition(): void {
+    const key = this.getResumeKey();
+    if (!key) return;
+    try {
+      localStorage.removeItem(key);
+    } catch {
+      // ignore
+    }
   }
 
   private resetTimeline(): void {
