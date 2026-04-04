@@ -124,12 +124,19 @@ export class Demuxer {
     const metadata: Record<string, string> = {};
     if (title) metadata.title = title;
 
+    // Get chapters
+    const chapters = this.bindings.getChapters();
+    if (chapters.length > 0) {
+      Logger.info(TAG, `Found ${chapters.length} chapters`);
+    }
+
     return {
       formatName: this.bindings.getFormatName(),
       duration: this.duration,
       bitRate: 0, // TODO
       startTime: startTime,
       tracks: this.tracks,
+      chapters: chapters,
       metadata: metadata,
     };
   }

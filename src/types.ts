@@ -102,12 +102,19 @@ export interface PlayerConfig {
 // Media Info
 // ============================================================================
 
+export interface Chapter {
+  title: string;
+  start: number; // seconds
+  end: number;   // seconds
+}
+
 export interface MediaInfo {
   formatName: string;
   duration: number;
   bitRate: number;
   startTime: number;
   tracks: Track[];
+  chapters: Chapter[];
   metadata?: {
     [key: string]: string;
   };

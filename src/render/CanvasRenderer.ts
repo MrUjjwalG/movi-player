@@ -51,8 +51,12 @@ export class CanvasRenderer {
   // Frame rate for timing calculations
   private videoFrameRate: number = 60; // Default to 60fps
 
-  // Rotation (degrees: 0, 90, 180, 270)
+  // Rotation (degrees: 0, 90, 180, 270) - total = metadata + manual
   private rotation: number = 0;
+  private metadataRotation: number = 0; // From video metadata
+  private manualRotation: number = 0;   // User-applied rotation
+  private containerWidth: number = 0;   // Original container width (before any rotation)
+  private containerHeight: number = 0;  // Original container height
 
   // Fit mode for canvas rendering
   private fitMode: "contain" | "cover" | "fill" | "zoom" | "control" =
@@ -163,14 +167,15 @@ export class CanvasRenderer {
       this.videoFrameRate = 60;
     }
 
-    // Set rotation
+    // Set rotation from metadata
     if (rotation !== undefined) {
-      this.rotation = rotation;
+      this.metadataRotation = rotation;
+      this.rotation = (this.metadataRotation + this.manualRotation) % 360;
       if (this.canvas instanceof HTMLCanvasElement) {
-        this.canvas.style.transform = `rotate(${rotation}deg)`;
+        this.canvas.style.transform = `rotate(${this.rotation}deg)`;
         this.canvas.style.transformOrigin = "center center";
       }
-      Logger.debug(TAG, `Rotation set to: ${rotation}° (CSS transform)`);
+      Logger.debug(TAG, `Rotation set to: ${this.rotation}° (metadata: ${this.metadataRotation}°, manual: ${this.manualRotation}°)`);
     }
 
     // Capture metadata for potential re-config (HDR toggle)
@@ -621,8 +626,14 @@ export class CanvasRenderer {
     return this.isHDRSource;
   }
 
-  resize(width: number, height: number): void {
+  resize(width: number, height: number, fromRotate: boolean = false): void {
     if (width > 0 && height > 0) {
+      // Store original container dimensions (only from external resize, not from rotate)
+      if (!fromRotate) {
+        this.containerWidth = width;
+        this.containerHeight = height;
+      }
+
       Logger.debug(
         TAG,
         `Resizing to: ${width}x${height} (Rotation: ${this.rotation}°)`,
@@ -678,14 +689,17 @@ export class CanvasRenderer {
           this.canvas.style.transform = `translate(-50%, -50%) rotate(${this.rotation}deg)`;
           this.canvas.style.transformOrigin = "center center";
         } else {
-          // Restore standard sizing
-          this.canvas.style.width = "100%";
-          this.canvas.style.height = "100%";
+          // Restore standard sizing (0° and 180°)
           this.canvas.style.position = "relative";
           this.canvas.style.top = "";
           this.canvas.style.left = "";
           this.canvas.style.margin = "";
-          this.canvas.style.transform = "none";
+          this.canvas.style.setProperty("width", "100%", "important");
+          this.canvas.style.setProperty("height", "100%", "important");
+          this.canvas.style.setProperty("max-width", "none", "important");
+          this.canvas.style.setProperty("max-height", "none", "important");
+          this.canvas.style.transformOrigin = "center center";
+          this.canvas.style.transform = this.rotation === 180 ? "rotate(180deg)" : "none";
         }
       }
 
@@ -1338,6 +1352,28 @@ export class CanvasRenderer {
   setSubtitleOverlay(overlay: HTMLElement | null): void {
     this.subtitleOverlay = overlay;
     Logger.debug(TAG, `Subtitle overlay ${overlay ? "set" : "cleared"}`);
+  }
+
+  /**
+   * Rotate video by 90 degrees clockwise
+   */
+  rotate90(): number {
+    this.manualRotation = (this.manualRotation + 90) % 360;
+    this.rotation = (this.metadataRotation + this.manualRotation) % 360;
+    Logger.debug(TAG, `Rotation: ${this.rotation}° (metadata: ${this.metadataRotation}°, manual: ${this.manualRotation}°)`);
+
+    if (this.containerWidth > 0 && this.containerHeight > 0) {
+      this.resize(this.containerWidth, this.containerHeight, true);
+    }
+
+    return this.manualRotation;
+  }
+
+  /**
+   * Get manual rotation (user-applied, not metadata)
+   */
+  getRotation(): number {
+    return this.manualRotation;
   }
 
   /**

@@ -52,7 +52,7 @@ export class AudioRenderer {
   // Stable audio: starvation detection
   private starvationStartTime: number = 0;
   private isStarved: boolean = false;
-  private static readonly STARVATION_THRESHOLD = 800; // ms without new audio data before considered starved
+  private static readonly STARVATION_THRESHOLD = 2000; // ms without new audio data before considered starved
 
   constructor() {
     Logger.debug(TAG, "Created");
@@ -977,6 +977,10 @@ export class AudioRenderer {
    */
   isAudioStarved(): boolean {
     if (!this.isPlaying || !this.hasFirstBuffer) return false;
+
+    // Only starve if buffer is actually empty (not just no new decodes)
+    const bufferAhead = this.getBufferedDuration();
+    if (bufferAhead > 0.1) return false; // Still have audio buffered, not starved
 
     const timeSinceLastDecode = performance.now() - this.lastDecodeTime;
     if (this.lastDecodeTime > 0 && timeSinceLastDecode > AudioRenderer.STARVATION_THRESHOLD) {

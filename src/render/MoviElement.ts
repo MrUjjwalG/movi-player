@@ -439,6 +439,14 @@ export class MoviElement extends HTMLElement {
         <span class="movi-context-menu-label">Fullscreen</span>
         <span class="movi-context-menu-shortcut">F</span>
       </div>
+      <div class="movi-context-menu-item" data-action="rotate-video">
+        <svg class="movi-context-menu-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+          <path d="M21 12a9 9 0 1 1-9-9 9.75 9.75 0 0 1 6.74 2.74L21 8"></path>
+          <path d="M21 3v5h-5"></path>
+        </svg>
+        <span class="movi-context-menu-label">Rotate Video</span>
+        <span class="movi-context-menu-status movi-rotate-status">0°</span>
+      </div>
       <div class="movi-context-menu-item" data-action="loop-toggle">
         <svg class="movi-context-menu-icon movi-context-menu-loop-outline" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
            <path d="M17 2l4 4-4 4"></path>
@@ -521,11 +529,13 @@ export class MoviElement extends HTMLElement {
           <div class="movi-progress-bar">
             <div class="movi-progress-buffer"></div>
             <div class="movi-progress-filled"></div>
+            <div class="movi-chapter-markers"></div>
             <div class="movi-progress-handle"></div>
           </div>
           <div class="movi-seek-thumbnail" style="display: none;">
              <div class="movi-thumbnail-placeholder" style="display: none;"></div>
              <img class="movi-thumbnail-img" style="display: none;">
+             <span class="movi-seek-chapter-title"></span>
              <span class="movi-seek-time">0:00</span>
           </div>
         </div>
@@ -1042,6 +1052,22 @@ export class MoviElement extends HTMLElement {
 
       const time = percent * duration;
       thumbnailTime.textContent = this.formatTime(time);
+
+      // Show chapter title if hovering over a chapter
+      const chapterTitleEl = shadowRoot.querySelector(".movi-seek-chapter-title") as HTMLElement;
+      if (chapterTitleEl) {
+        const chapters = this.player?.getChapters() ?? [];
+        const chapter = chapters.find((ch, i) => {
+          const end = i < chapters.length - 1 ? chapters[i + 1].start : duration;
+          return time >= ch.start && time < end;
+        });
+        if (chapter) {
+          chapterTitleEl.textContent = chapter.title;
+          chapterTitleEl.style.display = "block";
+        } else {
+          chapterTitleEl.style.display = "none";
+        }
+      }
 
       if (this._thumb) {
         requestPreview(time);
@@ -2417,6 +2443,21 @@ export class MoviElement extends HTMLElement {
           e.preventDefault();
           this.toggleTimeline();
           break;
+        case "r":
+        case "R":
+          // R: Rotate video 90°
+          e.preventDefault();
+          if (this.player) {
+            const deg = this.player.rotateVideo();
+            this.showOSD(
+              `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12a9 9 0 1 1-9-9 9.75 9.75 0 0 1 6.74 2.74L21 8"/><path d="M21 3v5h-5"/></svg>`,
+              `${deg}°`,
+            );
+            const statusEl = this.shadowRoot?.querySelector(".movi-rotate-status");
+            if (statusEl) statusEl.textContent = `${deg}°`;
+            this.syncThumbnailRotation(deg);
+          }
+          break;
         case "0":
           // 0: Seek to start
           e.preventDefault();
@@ -2935,6 +2976,14 @@ export class MoviElement extends HTMLElement {
         hideContextMenu();
       } else if (action === "hdr-toggle") {
         this.hdr = !this.hdr;
+        hideContextMenu();
+      } else if (action === "rotate-video") {
+        if (this.player) {
+          const deg = this.player.rotateVideo();
+          const statusEl = shadowRoot.querySelector(".movi-rotate-status");
+          if (statusEl) statusEl.textContent = `${deg}°`;
+          this.syncThumbnailRotation(deg);
+        }
         hideContextMenu();
       } else if (action === "loop-toggle") {
         this.loop = !this.loop;
@@ -4591,6 +4640,34 @@ export class MoviElement extends HTMLElement {
         transition: width 0.1s linear;
       }
 
+      .movi-chapter-markers {
+        position: absolute;
+        top: 0;
+        left: 0;
+        right: 0;
+        height: 100%;
+        z-index: 3;
+        pointer-events: none;
+      }
+
+      .movi-chapter-marker {
+        position: absolute;
+        top: 0;
+        width: 3px;
+        height: 100%;
+        background: rgba(0, 0, 0, 0.7);
+        transform: translateX(-1.5px);
+        border-radius: 1px;
+        z-index: 3;
+      }
+
+      .movi-chapter-segment {
+        position: absolute;
+        top: 0;
+        height: 100%;
+        pointer-events: none;
+      }
+
       .movi-progress-buffer {
         position: absolute;
         top: 0;
@@ -5383,6 +5460,39 @@ export class MoviElement extends HTMLElement {
         background: linear-gradient(transparent, rgba(0, 0, 0, 0.8));
         padding: 12px 4px 4px;
         font-variant-numeric: tabular-nums;
+      }
+
+      .movi-timeline-chapter {
+        min-width: 130px;
+      }
+
+      .movi-timeline-chapter-label {
+        position: absolute;
+        bottom: 0;
+        left: 0;
+        right: 0;
+        background: linear-gradient(transparent, rgba(0, 0, 0, 0.85));
+        padding: 16px 6px 5px;
+        display: flex;
+        flex-direction: column;
+        gap: 1px;
+      }
+
+      .movi-timeline-chapter-title {
+        font-size: 10px;
+        font-weight: 600;
+        color: #fff;
+        white-space: nowrap;
+        overflow: hidden;
+        text-overflow: ellipsis;
+      }
+
+      .movi-timeline-chapter .movi-timeline-time {
+        position: static;
+        background: none;
+        padding: 0;
+        font-size: 9px;
+        color: rgba(255, 255, 255, 0.5);
       }
 
       .movi-timeline-status {
@@ -6251,7 +6361,7 @@ export class MoviElement extends HTMLElement {
       .movi-seek-thumbnail {
         position: absolute;
         bottom: 25px;
-        left: 0; 
+        left: 0;
         transform: translateX(-50%);
         background-color: rgba(28, 28, 28, 0.9);
         color: white;
@@ -6264,6 +6374,7 @@ export class MoviElement extends HTMLElement {
         opacity: 0;
         transition: opacity 0.1s ease;
         box-shadow: 0 4px 8px rgba(0,0,0,0.6);
+        overflow: hidden;
         z-index: 20;
         display: none;
         flex-direction: column;
@@ -6272,19 +6383,33 @@ export class MoviElement extends HTMLElement {
         text-align: center;
       }
       .movi-thumbnail-img {
+        display: block;
         width: auto;
         height: auto;
         max-width: 180px;
-        max-height: 160px;
+        max-height: 200px;
         object-fit: contain;
         margin-bottom: 4px;
-        background-color: #000;
         border: 1px solid #333;
         border-radius: 2px;
         pointer-events: none;
       }
       .movi-seek-thumbnail.visible {
         opacity: 1;
+      }
+
+      .movi-seek-chapter-title {
+        display: none;
+        font-size: 11px;
+        font-weight: 600;
+        color: #fff;
+        text-align: center;
+        max-width: 180px;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+        padding: 0 4px;
+        margin-bottom: 2px;
       }
       
       @keyframes movi-shimmer-anim {
@@ -7484,6 +7609,7 @@ export class MoviElement extends HTMLElement {
       this.updateAudioTrackMenu();
       this.updateSubtitleTrackMenu();
       this.updateQualityMenu();
+      this.renderChapterMarkers();
     };
     this.player.trackManager.on("tracksChange", tracksChangeHandler);
     this.eventHandlers.set("tracksChange", () =>
@@ -7567,6 +7693,12 @@ export class MoviElement extends HTMLElement {
     this._lastDuration = 0;
 
     this.resetTimeline();
+
+    // Clear chapter markers
+    if (this.shadowRoot) {
+      const markers = this.shadowRoot.querySelector(".movi-chapter-markers") as HTMLElement;
+      if (markers) markers.innerHTML = "";
+    }
 
     if (this.player) {
       // If player exists, destroy and recreate
@@ -7737,6 +7869,55 @@ export class MoviElement extends HTMLElement {
       this._lastDuration = this.duration;
       // Call updateTitle to check if we need to auto-load from metadata
       this.updateTitle();
+    }
+  }
+
+  /**
+   * Render chapter markers on the progress bar (YouTube-style)
+   */
+  private renderChapterMarkers(): void {
+    const shadowRoot = this.shadowRoot;
+    if (!shadowRoot || !this.player) return;
+
+    const container = shadowRoot.querySelector(".movi-chapter-markers") as HTMLElement;
+    if (!container) return;
+
+    container.innerHTML = "";
+
+    const chapters = this.player.getChapters();
+    const duration = this.player.getDuration();
+    if (chapters.length === 0 || duration <= 0) return;
+
+    // Add chapter dividers (gaps between chapters)
+    for (let i = 1; i < chapters.length; i++) {
+      const ch = chapters[i];
+      const percent = (ch.start / duration) * 100;
+
+      const marker = document.createElement("div");
+      marker.className = "movi-chapter-marker";
+      marker.style.left = `${percent}%`;
+
+      // Tooltip with chapter title
+      marker.setAttribute("data-title", ch.title);
+
+      container.appendChild(marker);
+    }
+
+    // Add chapter segment hover labels
+    for (let i = 0; i < chapters.length; i++) {
+      const ch = chapters[i];
+      const startPct = (ch.start / duration) * 100;
+      const endPct = i < chapters.length - 1
+        ? (chapters[i + 1].start / duration) * 100
+        : 100;
+
+      const segment = document.createElement("div");
+      segment.className = "movi-chapter-segment";
+      segment.style.left = `${startPct}%`;
+      segment.style.width = `${endPct - startPct}%`;
+      segment.setAttribute("data-title", ch.title);
+
+      container.appendChild(segment);
     }
   }
 
@@ -8337,8 +8518,13 @@ export class MoviElement extends HTMLElement {
     this._titleAutoLoaded = false;
     this._lastDuration = 0;
 
-    // Reset timeline panel on source change
+    // Reset timeline and rotation on source change
     this.resetTimeline();
+    this.syncThumbnailRotation(0);
+    if (this.shadowRoot) {
+      const statusEl = this.shadowRoot.querySelector(".movi-rotate-status");
+      if (statusEl) statusEl.textContent = "0°";
+    }
 
     if (value instanceof File) {
       // For File objects, store in memory (can't store in attributes)
@@ -8658,6 +8844,25 @@ export class MoviElement extends HTMLElement {
   /**
    * Reset timeline panel (clear thumbnails, hide panel)
    */
+  /**
+   * Sync thumbnail and timeline rotation with video rotation
+   */
+  private syncThumbnailRotation(deg: number): void {
+    if (!this.shadowRoot) return;
+
+    // Seek thumbnail
+    const thumbImg = this.shadowRoot.querySelector(".movi-thumbnail-img") as HTMLElement;
+    if (thumbImg) {
+      thumbImg.style.transform = deg === 0 ? "none" : `rotate(${deg}deg)`;
+    }
+
+    // Timeline items
+    const timelineImgs = this.shadowRoot.querySelectorAll(".movi-timeline-item img");
+    timelineImgs.forEach((img) => {
+      (img as HTMLElement).style.transform = deg === 0 ? "none" : `rotate(${deg}deg)`;
+    });
+  }
+
   private resetTimeline(): void {
     if (!this.shadowRoot) return;
     const strip = this.shadowRoot.querySelector(".movi-timeline-strip") as HTMLElement;
@@ -8697,45 +8902,101 @@ export class MoviElement extends HTMLElement {
 
     const strip = shadowRoot.querySelector(".movi-timeline-strip") as HTMLElement;
     const status = shadowRoot.querySelector(".movi-timeline-status") as HTMLElement;
+    const titleEl = shadowRoot.querySelector(".movi-timeline-title") as HTMLElement;
     if (!strip || !status) return;
 
     strip.innerHTML = "";
-    status.textContent = "Generating...";
-
-    const count = 20;
 
     const formatTime = (s: number) => {
-      const m = Math.floor(s / 60);
+      const h = Math.floor(s / 3600);
+      const m = Math.floor((s % 3600) / 60);
       const sec = Math.floor(s % 60);
-      return `${m}:${sec.toString().padStart(2, "0")}`;
+      return h > 0
+        ? `${h}:${m.toString().padStart(2, "0")}:${sec.toString().padStart(2, "0")}`
+        : `${m}:${sec.toString().padStart(2, "0")}`;
     };
 
-    await this.player.generateTimeline(count, (_i, _total, blob, time) => {
-      const item = document.createElement("div");
-      item.className = "movi-timeline-item";
+    const chapters = this.player.getChapters();
+    const hasChapters = chapters.length > 0;
 
-      const img = document.createElement("img");
-      img.src = URL.createObjectURL(blob);
-      img.alt = `Timeline ${formatTime(time)}`;
+    if (hasChapters) {
+      // Chapter-based timeline
+      if (titleEl) titleEl.textContent = `Chapters (${chapters.length})`;
+      status.textContent = "Generating...";
 
-      const label = document.createElement("span");
-      label.className = "movi-timeline-time";
-      label.textContent = formatTime(time);
+      for (let i = 0; i < chapters.length; i++) {
+        const ch = chapters[i];
+        // Generate thumbnail at chapter start time
+        const blob = await this.player.getPreviewFrame(ch.start);
 
-      item.appendChild(img);
-      item.appendChild(label);
+        const item = document.createElement("div");
+        item.className = "movi-timeline-item movi-timeline-chapter";
 
-      // Click to seek
-      item.addEventListener("click", (e) => {
-        e.stopPropagation();
-        this.currentTime = time;
+        if (blob) {
+          const img = document.createElement("img");
+          img.src = URL.createObjectURL(blob);
+          img.alt = ch.title;
+          item.appendChild(img);
+        }
+
+        const labelContainer = document.createElement("div");
+        labelContainer.className = "movi-timeline-chapter-label";
+
+        const titleSpan = document.createElement("span");
+        titleSpan.className = "movi-timeline-chapter-title";
+        titleSpan.textContent = ch.title;
+
+        const timeSpan = document.createElement("span");
+        timeSpan.className = "movi-timeline-time";
+        timeSpan.textContent = formatTime(ch.start);
+
+        labelContainer.appendChild(titleSpan);
+        labelContainer.appendChild(timeSpan);
+        item.appendChild(labelContainer);
+
+        // Click to seek to chapter
+        item.addEventListener("click", (e) => {
+          e.stopPropagation();
+          this.currentTime = ch.start;
+        });
+
+        strip.appendChild(item);
+        status.textContent = `${i + 1} / ${chapters.length}`;
+      }
+
+      status.textContent = `${chapters.length} chapters`;
+    } else {
+      // Regular interval-based timeline
+      if (titleEl) titleEl.textContent = "Timeline";
+      status.textContent = "Generating...";
+      const count = 20;
+
+      await this.player.generateTimeline(count, (_i, _total, blob, time) => {
+        const item = document.createElement("div");
+        item.className = "movi-timeline-item";
+
+        const img = document.createElement("img");
+        img.src = URL.createObjectURL(blob);
+        img.alt = `Timeline ${formatTime(time)}`;
+
+        const label = document.createElement("span");
+        label.className = "movi-timeline-time";
+        label.textContent = formatTime(time);
+
+        item.appendChild(img);
+        item.appendChild(label);
+
+        item.addEventListener("click", (e) => {
+          e.stopPropagation();
+          this.currentTime = time;
+        });
+
+        strip.appendChild(item);
+        status.textContent = `${strip.children.length} / ${count}`;
       });
 
-      strip.appendChild(item);
-      status.textContent = `${strip.children.length} / ${count}`;
-    });
-
-    status.textContent = `${strip.children.length} thumbnails`;
+      status.textContent = `${strip.children.length} thumbnails`;
+    }
   }
 
   get muted(): boolean {

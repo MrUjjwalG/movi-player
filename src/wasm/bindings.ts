@@ -552,6 +552,50 @@ export class WasmBindings {
   }
 
   /**
+   * Get number of chapters in the media
+   */
+  getChapterCount(): number {
+    if (!this.contextPtr) return 0;
+    return this.module._movi_get_chapter_count(this.contextPtr);
+  }
+
+  /**
+   * Get all chapters from the media
+   */
+  getChapters(): Array<{ title: string; start: number; end: number }> {
+    if (!this.contextPtr) return [];
+    const count = this.getChapterCount();
+    if (count <= 0) return [];
+
+    const chapters: Array<{ title: string; start: number; end: number }> = [];
+    const titleBufPtr = this.module._malloc(256);
+
+    try {
+      for (let i = 0; i < count; i++) {
+        const start = this.module._movi_get_chapter_start(this.contextPtr, i);
+        const end = this.module._movi_get_chapter_end(this.contextPtr, i);
+
+        // Get title
+        this.module.HEAPU8.fill(0, titleBufPtr, titleBufPtr + 256);
+        this.module._movi_get_chapter_title(this.contextPtr, i, titleBufPtr, 256);
+        const titleBytes = this.module.HEAPU8.subarray(titleBufPtr, titleBufPtr + 256);
+        const nullIdx = titleBytes.indexOf(0);
+        const title = new TextDecoder().decode(titleBytes.subarray(0, nullIdx > 0 ? nullIdx : 256));
+
+        chapters.push({
+          title: title || `Chapter ${i + 1}`,
+          start: start >= 0 ? start : 0,
+          end: end >= 0 ? end : 0,
+        });
+      }
+    } finally {
+      this.module._free(titleBufPtr);
+    }
+
+    return chapters;
+  }
+
+  /**
    * Seek to timestamp (async due to Asyncify)
    */
   async seek(

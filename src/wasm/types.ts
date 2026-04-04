@@ -41,6 +41,10 @@ export interface MoviWasmModule {
   _movi_get_duration: (ctx: number) => number;
   _movi_get_start_time: (ctx: number) => number;
   _movi_get_stream_count: (ctx: number) => number;
+  _movi_get_chapter_count: (ctx: number) => number;
+  _movi_get_chapter_start: (ctx: number, index: number) => number;
+  _movi_get_chapter_end: (ctx: number, index: number) => number;
+  _movi_get_chapter_title: (ctx: number, index: number, buffer: number, bufferSize: number) => number;
   _movi_get_stream_info: (
     ctx: number,
     streamIndex: number,

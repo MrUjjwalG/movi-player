@@ -897,16 +897,6 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
         Logger.debug(TAG, "Entered buffering state for playback rate change");
       }
       // Continue processing to allow new audio to be decoded and scheduled
-    } else if (!this.disableAudio && this.audioRenderer.isAudioStarved()) {
-      // Stable audio: enter buffering state when audio is starved (no data for extended period)
-      const currentState = this.stateManager.getState();
-      if (currentState === "playing") {
-        this.wasPlayingBeforeRebuffer = true;
-        this.stateManager.setState("buffering");
-        this.clock.pause();
-        Logger.warn(TAG, `Audio starvation detected (${this.audioRenderer.getStarvationDuration().toFixed(0)}ms), entering buffering state`);
-      }
-      // Continue processing to allow new audio to be decoded
     } else if (this.stateManager.getState() === "buffering" && this.wasPlayingBeforeRebuffer) {
       // Rebuffering complete, resume playback only if we were playing before
       // Transition to paused first, then let play() method handle the transition to playing
@@ -1697,8 +1687,17 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
             }
           }
 
-          // Render using WebGL if available, otherwise fall back to 2D
+          // When rotated, ensure 2D context exists (WebGL path doesn't handle rotation)
+          if (rotation !== 0 && !this.thumbnailContext && this.thumbnailCanvas) {
+            this.thumbnailContext = this.thumbnailCanvas.getContext("2d", {
+              alpha: false,
+              willReadFrequently: true,
+            }) as any;
+          }
+
+          // Render using WebGL if available (skip WebGL when rotated — 2D handles rotation)
           if (
+            rotation === 0 &&
             this.thumbnailGL &&
             this.thumbnailGLProgram &&
             this.thumbnailGLTexture &&
@@ -2248,6 +2247,13 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
     return this.mediaInfo;
   }
 
+  /**
+   * Get chapters from the media (empty array if none)
+   */
+  getChapters(): Array<{ title: string; start: number; end: number }> {
+    return this.mediaInfo?.chapters ?? [];
+  }
+
   resizeCanvas(width: number, height: number): void {
     if (this.hlsWrapper) {
       this.hlsWrapper.resizeCanvas(width, height);
@@ -2301,6 +2307,23 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
     if (this.videoRenderer) {
       this.videoRenderer.setSubtitleControlsPadding(padding);
     }
+  }
+
+  /**
+   * Rotate video 90 degrees clockwise
+   */
+  rotateVideo(): number {
+    if (this.videoRenderer) {
+      return this.videoRenderer.rotate90();
+    }
+    return 0;
+  }
+
+  /**
+   * Get current video rotation
+   */
+  getVideoRotation(): number {
+    return this.videoRenderer?.getRotation() ?? 0;
   }
 
   setFitMode(mode: "contain" | "cover" | "fill" | "zoom" | "control"): void {

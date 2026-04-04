@@ -261,3 +261,43 @@ int movi_read_frame(MoviContext *ctx, PacketInfo *info, uint8_t *buffer,
   memcpy(buffer, ctx->pkt->data, copy_size);
   return copy_size;
 }
+
+// Chapter support
+EMSCRIPTEN_KEEPALIVE
+int movi_get_chapter_count(MoviContext *ctx) {
+  if (!ctx || !ctx->fmt_ctx)
+    return 0;
+  return (int)ctx->fmt_ctx->nb_chapters;
+}
+
+EMSCRIPTEN_KEEPALIVE
+double movi_get_chapter_start(MoviContext *ctx, int index) {
+  if (!ctx || !ctx->fmt_ctx || index < 0 || index >= (int)ctx->fmt_ctx->nb_chapters)
+    return -1.0;
+  AVChapter *ch = ctx->fmt_ctx->chapters[index];
+  return ch->start * av_q2d(ch->time_base);
+}
+
+EMSCRIPTEN_KEEPALIVE
+double movi_get_chapter_end(MoviContext *ctx, int index) {
+  if (!ctx || !ctx->fmt_ctx || index < 0 || index >= (int)ctx->fmt_ctx->nb_chapters)
+    return -1.0;
+  AVChapter *ch = ctx->fmt_ctx->chapters[index];
+  return ch->end * av_q2d(ch->time_base);
+}
+
+EMSCRIPTEN_KEEPALIVE
+int movi_get_chapter_title(MoviContext *ctx, int index, char *buffer, int buffer_size) {
+  if (!ctx || !ctx->fmt_ctx || !buffer || buffer_size <= 0 ||
+      index < 0 || index >= (int)ctx->fmt_ctx->nb_chapters)
+    return 0;
+  AVChapter *ch = ctx->fmt_ctx->chapters[index];
+  const AVDictionaryEntry *entry = av_dict_get(ch->metadata, "title", NULL, 0);
+  if (entry && entry->value) {
+    strncpy(buffer, entry->value, buffer_size - 1);
+    buffer[buffer_size - 1] = '\0';
+    return (int)strlen(buffer);
+  }
+  buffer[0] = '\0';
+  return 0;
+}
