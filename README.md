@@ -88,6 +88,34 @@ await player.play();
 AES-256-GCM encrypted, HMAC signed, 2s token expiry, IP + fingerprint binding.
 See [encrypted-server/](encrypted-server/) for the server example.
 
+### Demuxer Only (50KB)
+
+Extract metadata, tracks, HDR info, and thumbnails without playing the video.
+
+```typescript
+import { Demuxer, HttpSource } from "movi-player/demuxer";
+
+const demuxer = new Demuxer(new HttpSource("video.mp4"));
+const info = await demuxer.open();
+
+console.log(`Duration: ${info.duration}s, Format: ${info.formatName}`);
+console.log(`Chapters: ${info.chapters.length}`);
+
+const video = demuxer.getVideoTracks()[0];
+console.log(`${video.width}x${video.height} ${video.codec} ${video.frameRate}fps`);
+console.log(`HDR: ${video.isHDR}, Color: ${video.colorPrimaries}/${video.colorTransfer}`);
+
+const audio = demuxer.getAudioTracks();
+console.log(`Audio: ${audio.map(a => `${a.codec} ${a.language}`).join(", ")}`);
+
+const subs = demuxer.getSubtitleTracks();
+console.log(`Subtitles: ${subs.map(s => `${s.codec} ${s.language}`).join(", ")}`);
+
+demuxer.close();
+```
+
+Use cases: video validators, asset management, HDR detection pipelines, search indexing, format analysis before transcoding.
+
 ## Modules
 
 | Module | Size | What you get |
