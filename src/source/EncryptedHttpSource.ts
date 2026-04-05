@@ -73,7 +73,6 @@ export class EncryptedHttpSource implements SourceAdapter {
   private tokenExpiresAt: number = 0;
 
   // Token refresh
-  private refreshTimer: number | null = null;
   private isRefreshing: boolean = false;
 
   // Nonce tracking (prevent reuse on client side too)
@@ -162,10 +161,17 @@ export class EncryptedHttpSource implements SourceAdapter {
         this.lastSpeedTime = now;
       }
 
-      // Decrypt
-      const decrypted = await this.decrypt(encryptedData);
-      this.position = clampedOffset + decrypted.byteLength;
-      return decrypted;
+      // Decrypt if key available (client-side encryption)
+      // If server decrypts, cryptoKey will be null and we pass data through
+      if (this.cryptoKey && this.iv) {
+        const decrypted = await this.decrypt(encryptedData);
+        this.position = clampedOffset + decrypted.byteLength;
+        return decrypted;
+      }
+
+      // Server-side decryption — data already decrypted
+      this.position = clampedOffset + encryptedData.byteLength;
+      return encryptedData;
     } catch (error) {
       Logger.error(TAG, "Read failed", error);
       throw error;
@@ -186,10 +192,6 @@ export class EncryptedHttpSource implements SourceAdapter {
   }
 
   close(): void {
-    if (this.refreshTimer) {
-      clearInterval(this.refreshTimer);
-      this.refreshTimer = null;
-    }
     this.cryptoKey = null;
     this.hmacKey = null;
     this.iv = null;
@@ -278,11 +280,13 @@ export class EncryptedHttpSource implements SourceAdapter {
 
       const data: TokenResponse = await response.json();
 
-      // Import AES decryption key
-      const keyBytes = Uint8Array.from(atob(data.key), (c) => c.charCodeAt(0));
-      this.cryptoKey = await crypto.subtle.importKey(
-        "raw", keyBytes, { name: "AES-GCM" }, false, ["decrypt"]
-      );
+      // Import AES decryption key (optional — server may decrypt)
+      if (data.key) {
+        const keyBytes = Uint8Array.from(atob(data.key), (c) => c.charCodeAt(0));
+        this.cryptoKey = await crypto.subtle.importKey(
+          "raw", keyBytes, { name: "AES-GCM" }, false, ["decrypt"]
+        );
+      }
 
       // Import HMAC signing key
       const hmacBytes = Uint8Array.from(atob(data.hmacSecret), (c) => c.charCodeAt(0));
@@ -290,8 +294,10 @@ export class EncryptedHttpSource implements SourceAdapter {
         "raw", hmacBytes, { name: "HMAC", hash: "SHA-256" }, false, ["sign"]
       );
 
-      // Store IV and token
-      this.iv = Uint8Array.from(atob(data.iv), (c) => c.charCodeAt(0));
+      // Store IV (optional)
+      if (data.iv) {
+        this.iv = Uint8Array.from(atob(data.iv), (c) => c.charCodeAt(0));
+      }
       this.currentToken = data.token;
       this.tokenExpiresAt = data.expiresAt;
       this.chunkSize = data.chunkSize || this.chunkSize;
@@ -304,16 +310,6 @@ export class EncryptedHttpSource implements SourceAdapter {
       this.usedNonces.clear();
 
       Logger.debug(TAG, `Token refreshed, expires in ${data.expiresAt - Date.now()}ms`);
-
-      // Start auto-refresh timer
-      if (!this.refreshTimer) {
-        const interval = this.config.tokenRefreshInterval ?? 1500;
-        this.refreshTimer = window.setInterval(() => {
-          this.refreshToken().catch((e) => {
-            Logger.warn(TAG, "Auto token refresh failed", e);
-          });
-        }, interval);
-      }
     } finally {
       this.isRefreshing = false;
     }

@@ -56,6 +56,9 @@ export type { SourceAdapter } from './source/SourceAdapter';
 export { HttpSource, createHttpSource } from './source/HttpSource';
 export { FileSource, createFileSource } from './source/FileSource';
 export { ThumbnailHttpSource, createThumbnailHttpSource } from './source/ThumbnailHttpSource';
+export { EncryptedHttpSource } from './source/EncryptedHttpSource';
+export type { EncryptedSourceConfig } from './source/EncryptedHttpSource';
+export { generateFingerprint } from './utils/Fingerprint';
 
 // Cache
 export { LRUCache } from './cache/LRUCache';

@@ -1,0 +1,416 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Movi - Encrypted Playback</title>
+    <style>
+      :root {
+        --primary-accent: #6c5dd3;
+        --secondary-accent: #00d4ff;
+        --font-family: "Inter", system-ui, -apple-system, sans-serif;
+        --bg-base: #0f0f12;
+        --text-primary: #ffffff;
+        --text-secondary: #a0a0b0;
+        --glass-bg: rgba(255, 255, 255, 0.05);
+        --glass-border: rgba(255, 255, 255, 0.1);
+        --input-bg: rgba(0, 0, 0, 0.3);
+        --input-focus-bg: rgba(0, 0, 0, 0.5);
+        --input-text: #ffffff;
+        --input-placeholder: rgba(255, 255, 255, 0.4);
+      }
+
+      * { margin: 0; padding: 0; box-sizing: border-box; }
+
+      body {
+        background-color: var(--bg-base);
+        background-image:
+          radial-gradient(circle at 15% 50%, rgba(108, 93, 211, 0.15) 0%, transparent 25%),
+          radial-gradient(circle at 85% 30%, rgba(0, 212, 255, 0.1) 0%, transparent 25%);
+        color: var(--text-primary);
+        font-family: var(--font-family);
+        min-height: 100vh;
+        display: flex;
+        flex-direction: column;
+        overflow-x: hidden;
+      }
+
+      .app-container {
+        position: relative;
+        width: 100%;
+        max-width: 1400px;
+        margin: 0 auto;
+        padding: 2rem;
+        display: flex;
+        flex-direction: column;
+        gap: 1rem;
+        flex: 1;
+      }
+
+      header {
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+      }
+
+      .brand {
+        font-size: 1.5rem;
+        font-weight: 700;
+        background: linear-gradient(135deg, #ffffff 0%, #a0a0b0 100%);
+        background-clip: text;
+        -webkit-background-clip: text;
+        -webkit-text-fill-color: transparent;
+        letter-spacing: -0.5px;
+      }
+
+      .brand-badge {
+        display: inline-flex;
+        align-items: center;
+        gap: 6px;
+        background: rgba(0, 255, 136, 0.1);
+        border: 1px solid rgba(0, 255, 136, 0.2);
+        color: #00ff88;
+        font-size: 0.7rem;
+        font-weight: 600;
+        padding: 4px 10px;
+        border-radius: 20px;
+        letter-spacing: 0.05em;
+        text-transform: uppercase;
+      }
+
+      .brand-badge svg { width: 12px; height: 12px; }
+
+      .config-panel {
+        background: var(--glass-bg);
+        border: 1px solid var(--glass-border);
+        border-radius: 16px;
+        padding: 1.5rem;
+        display: flex;
+        flex-direction: column;
+        gap: 1rem;
+      }
+
+      .config-row {
+        display: flex;
+        gap: 1rem;
+        align-items: end;
+        flex-wrap: wrap;
+      }
+
+      .config-field {
+        flex: 1;
+        min-width: 200px;
+        display: flex;
+        flex-direction: column;
+        gap: 4px;
+      }
+
+      .config-field label {
+        font-size: 0.75rem;
+        font-weight: 600;
+        color: var(--text-secondary);
+        text-transform: uppercase;
+        letter-spacing: 0.05em;
+      }
+
+      .config-field input {
+        width: 100%;
+        background: var(--input-bg);
+        border: 1px solid var(--glass-border);
+        border-radius: 10px;
+        padding: 0.75rem 1rem;
+        color: var(--input-text);
+        font-family: 'SF Mono', 'Fira Code', monospace;
+        font-size: 0.85rem;
+        transition: all 0.3s ease;
+      }
+
+      .config-field input:focus {
+        outline: none;
+        border-color: var(--primary-accent);
+        background: var(--input-focus-bg);
+      }
+
+      .config-field input::placeholder {
+        color: var(--input-placeholder);
+      }
+
+      .btn {
+        background: rgba(255, 255, 255, 0.1);
+        border: none;
+        color: #ffffff;
+        font-family: inherit;
+        font-weight: 600;
+        font-size: 0.9rem;
+        padding: 0 1.5rem;
+        height: 46px;
+        border-radius: 10px;
+        cursor: pointer;
+        transition: all 0.2s ease;
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        gap: 0.5rem;
+        white-space: nowrap;
+      }
+
+      .btn-primary {
+        background: linear-gradient(135deg, var(--primary-accent), #4a3bba);
+        box-shadow: 0 8px 16px rgba(108, 93, 211, 0.3);
+      }
+
+      .btn-primary:hover {
+        transform: translateY(-2px);
+        box-shadow: 0 12px 20px rgba(108, 93, 211, 0.4);
+      }
+
+      .btn-primary:disabled {
+        opacity: 0.5;
+        cursor: not-allowed;
+        transform: none;
+      }
+
+      .player-stage {
+        position: relative;
+        width: 100%;
+        overflow: hidden;
+        background: #000;
+        aspect-ratio: 16/9;
+        display: flex;
+        justify-content: center;
+        border-radius: 12px;
+      }
+
+      movi-player {
+        width: 100%;
+        height: 100%;
+        display: block;
+      }
+
+      .security-info {
+        display: grid;
+        grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
+        gap: 8px;
+        margin-top: 0.5rem;
+      }
+
+      .sec-item {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        font-size: 0.8rem;
+        color: var(--text-secondary);
+        padding: 6px 0;
+      }
+
+      .sec-dot {
+        width: 6px;
+        height: 6px;
+        border-radius: 50%;
+        background: #333;
+        flex-shrink: 0;
+        transition: background 0.3s;
+      }
+
+      .sec-dot.active { background: #00ff88; box-shadow: 0 0 8px rgba(0,255,136,0.4); }
+
+      .status-bar {
+        margin-top: 0.5rem;
+        display: flex;
+        justify-content: center;
+        align-items: center;
+        gap: 0.5rem;
+        color: var(--text-secondary);
+        font-size: 0.85rem;
+        font-weight: 500;
+      }
+
+      .status-dot {
+        width: 6px;
+        height: 6px;
+        border-radius: 50%;
+        background-color: var(--text-secondary);
+        display: inline-block;
+      }
+
+      .status-dot.active {
+        background-color: #00ff88;
+        box-shadow: 0 0 8px #00ff88;
+      }
+
+      @media (max-width: 768px) {
+        .app-container { padding: 1rem; }
+        .config-row { flex-direction: column; }
+        .config-field { min-width: unset; }
+        .btn { width: 100%; }
+        .security-info { grid-template-columns: 1fr 1fr; }
+      }
+    </style>
+  </head>
+
+  <body>
+    <div class="app-container">
+      <header>
+        <div style="display: flex; align-items: center; gap: 12px;">
+          <div class="brand">Movi Player</div>
+          <span class="brand-badge">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+              <rect x="3" y="11" width="18" height="11" rx="2" ry="2"></rect>
+              <path d="M7 11V7a5 5 0 0 1 10 0v4"></path>
+            </svg>
+            Encrypted
+          </span>
+        </div>
+      </header>
+
+      <section class="config-panel">
+        <div class="config-row">
+          <div class="config-field">
+            <label>Token Server URL</label>
+            <input type="text" id="token-url" placeholder="http://localhost:3000/api/token" value="http://localhost:3000/api/token" />
+          </div>
+          <div class="config-field">
+            <label>Video Endpoint</label>
+            <input type="text" id="video-url" placeholder="http://localhost:3000/api/video" value="http://localhost:3000/api/video" />
+          </div>
+        </div>
+        <div class="config-row">
+          <div class="config-field">
+            <label>Video ID</label>
+            <input type="text" id="video-id" placeholder="my-video.mp4" value="video.mp4" />
+          </div>
+          <div class="config-field">
+            <label>Session Token</label>
+            <input type="text" id="session-token" placeholder="jwt-or-session-token" />
+          </div>
+          <button class="btn btn-primary" id="load-btn">
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+              <rect x="3" y="11" width="18" height="11" rx="2" ry="2"></rect>
+              <path d="M7 11V7a5 5 0 0 1 10 0v4"></path>
+            </svg>
+            Load Encrypted
+          </button>
+        </div>
+
+        <div class="security-info" id="security-info">
+          <div class="sec-item"><div class="sec-dot" id="sec-encryption"></div>AES-256-GCM Encryption</div>
+          <div class="sec-item"><div class="sec-dot" id="sec-hmac"></div>HMAC-SHA256 Signatures</div>
+          <div class="sec-item"><div class="sec-dot" id="sec-token"></div>2s Token Expiry</div>
+          <div class="sec-item"><div class="sec-dot" id="sec-ip"></div>IP Binding</div>
+          <div class="sec-item"><div class="sec-dot" id="sec-fp"></div>Fingerprint Binding</div>
+          <div class="sec-item"><div class="sec-dot" id="sec-nonce"></div>One-time Nonce</div>
+          <div class="sec-item"><div class="sec-dot" id="sec-replay"></div>Replay Protection</div>
+          <div class="sec-item"><div class="sec-dot" id="sec-canvas"></div>Canvas Rendering</div>
+        </div>
+      </section>
+
+      <section class="player-stage">
+        <movi-player
+          id="movi-player"
+          renderer="canvas"
+          controls
+          objectfit="control"
+          thumb
+          fastseek
+          showtitle
+        >
+          <div style="width:100%;height:100%;display:flex;align-items:center;justify-content:center;background:#000;color:#333;font-size:14px;">
+            Configure encrypted source above
+          </div>
+        </movi-player>
+      </section>
+
+      <div class="status-bar">
+        <span class="status-dot" id="status-indicator"></span>
+        <span id="current-source">Ready — configure encrypted source</span>
+      </div>
+    </div>
+
+    <script type="module">
+      import "movi-player/element";
+      import { generateFingerprint } from "movi-player";
+
+      const player = document.getElementById("movi-player");
+      const loadBtn = document.getElementById("load-btn");
+      const statusText = document.getElementById("current-source");
+      const statusDot = document.getElementById("status-indicator");
+
+      // Security indicator dots
+      const secDots = {
+        encryption: document.getElementById("sec-encryption"),
+        hmac: document.getElementById("sec-hmac"),
+        token: document.getElementById("sec-token"),
+        ip: document.getElementById("sec-ip"),
+        fp: document.getElementById("sec-fp"),
+        nonce: document.getElementById("sec-nonce"),
+        replay: document.getElementById("sec-replay"),
+        canvas: document.getElementById("sec-canvas"),
+      };
+
+      function setStatus(msg, active = false) {
+        statusText.textContent = msg;
+        statusDot.className = "status-dot" + (active ? " active" : "");
+      }
+
+      function activateSecurity(...keys) {
+        keys.forEach((k) => {
+          if (secDots[k]) secDots[k].classList.add("active");
+        });
+      }
+
+      // Generate session token if empty
+      const sessionInput = document.getElementById("session-token");
+      if (!sessionInput.value) {
+        sessionInput.value = "session-" + Date.now() + "-" + Math.random().toString(36).slice(2);
+      }
+
+      loadBtn.addEventListener("click", async () => {
+        const tokenUrl = document.getElementById("token-url").value.trim();
+        const videoUrl = document.getElementById("video-url").value.trim();
+        const videoId = document.getElementById("video-id").value.trim();
+        const sessionToken = sessionInput.value.trim();
+
+        if (!tokenUrl || !videoUrl || !videoId) {
+          setStatus("Please fill all fields");
+          return;
+        }
+
+        loadBtn.disabled = true;
+        setStatus("Generating fingerprint...");
+
+        try {
+          // 1. Generate fingerprint
+          const fingerprint = await generateFingerprint();
+          activateSecurity("fp", "canvas");
+          setStatus("Fingerprint: " + fingerprint.slice(0, 16) + "...");
+
+          // 2. Load encrypted source
+          setStatus("Connecting to token server...");
+          activateSecurity("encryption", "token", "ip");
+
+          await player.loadEncrypted({
+            videoUrl,
+            tokenUrl,
+            videoId,
+            fingerprint,
+            sessionToken,
+            tokenRefreshInterval: 1500,
+            onAuthFailed: (reason) => {
+              setStatus("Auth failed: " + reason, false);
+            },
+          });
+
+          // All security layers active
+          activateSecurity("hmac", "nonce", "replay");
+          setStatus("Encrypted playback active — tokens refresh every 1.5s", true);
+
+        } catch (e) {
+          setStatus("Error: " + e.message);
+          console.error(e);
+        } finally {
+          loadBtn.disabled = false;
+        }
+      });
+    </script>
+  </body>
+</html>

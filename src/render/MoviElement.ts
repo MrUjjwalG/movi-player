@@ -8993,15 +8993,19 @@ export class MoviElement extends HTMLElement {
       this.updatePlaybackRate();
       this.updateCanvasSize();
       this.updateFitMode();
+      this.updateTimeDisplay();
       if (this.player) {
         this.player.setHDREnabled(this._hdr);
         this.player.setStableAudio(this._stableVolume);
+        this.player.setSubtitleOverlay(this.subtitleOverlay);
         this.updateStableAudioUI();
       }
       this.updateHDRVisibility();
       this.updateControlsVisibility();
       this.updateControlsState();
       this.updateLoadingIndicator();
+      this.renderChapterMarkers();
+      this.startUIUpdates();
 
       if (this._autoplay && this.player) {
         await this.player.play().catch(() => {});
