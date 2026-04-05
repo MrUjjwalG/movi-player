@@ -56,6 +56,7 @@ export class MoviElement extends HTMLElement {
 
   // Nerd Stats
   private _nerdStatsVisible: boolean = false;
+  private _currentManualRotation: number = 0; // Track for thumbnail margin re-apply
   private nerdStatsInterval: number | null = null;
   private networkSpeedHistory: number[] = []; // speed samples for graph
   private static readonly GRAPH_MAX_SAMPLES = 60; // 30 seconds of data (500ms interval)
@@ -1065,6 +1066,19 @@ export class MoviElement extends HTMLElement {
           ) as HTMLElement;
           if (thumbnailPlaceholder) thumbnailPlaceholder.style.display = "none";
           thumbnailImg.style.display = "block";
+
+          // Re-apply rotation margin if rotated
+          if (this._currentManualRotation % 180 !== 0) {
+            requestAnimationFrame(() => {
+              thumbnailImg.style.margin = "0";
+              const w = thumbnailImg.offsetWidth;
+              const h = thumbnailImg.offsetHeight;
+              if (w > 0 && h > 0) {
+                const diff = (w - h) / 2;
+                thumbnailImg.style.margin = `${diff}px ${-diff}px ${diff + 6}px ${-diff}px`;
+              }
+            });
+          }
         }
       } catch (e) {
         // Ignore aborts
@@ -5568,7 +5582,16 @@ export class MoviElement extends HTMLElement {
         display: block;
         height: 90px;
         width: auto;
-        object-fit: cover;
+        object-fit: contain;
+      }
+
+      .movi-timeline-portrait .movi-timeline-item {
+        min-width: auto;
+      }
+
+      .movi-timeline-portrait .movi-timeline-item img {
+        height: auto;
+        width: 55px;
       }
 
       .movi-timeline-time {
@@ -6750,6 +6773,18 @@ export class MoviElement extends HTMLElement {
         white-space: nowrap;
         padding: 0 4px;
         margin-bottom: 2px;
+        position: relative;
+        z-index: 2;
+      }
+
+      .movi-seek-time {
+        position: relative;
+        z-index: 2;
+      }
+
+      .movi-thumbnail-img {
+        position: relative;
+        z-index: 1;
       }
       
       @keyframes movi-shimmer-anim {
@@ -9373,14 +9408,64 @@ export class MoviElement extends HTMLElement {
    */
   private syncThumbnailRotation(deg: number): void {
     if (!this.shadowRoot) return;
+    this._currentManualRotation = deg;
+
+    // Get video aspect ratio to determine if portrait
+    const videoTrack = this.player?.getVideoTracks()?.[0];
+    const isPortraitVideo = videoTrack && videoTrack.height > videoTrack.width;
+    const is90 = deg % 180 !== 0;
+    // After 90° rotation: portrait becomes landscape, landscape becomes portrait
+    const resultIsPortrait = is90 ? !isPortraitVideo : isPortraitVideo;
 
     // Seek thumbnail
-    const thumbImg = this.shadowRoot.querySelector(".movi-thumbnail-img") as HTMLElement;
+    const thumbImg = this.shadowRoot.querySelector(".movi-thumbnail-img") as HTMLImageElement;
+    const thumbContainer = this.shadowRoot.querySelector(".movi-seek-thumbnail") as HTMLElement;
     if (thumbImg) {
-      thumbImg.style.transform = deg === 0 ? "none" : `rotate(${deg}deg)`;
+      thumbImg.style.maxWidth = "180px";
+      thumbImg.style.maxHeight = "200px";
+
+      if (deg === 0) {
+        thumbImg.style.transform = "none";
+        thumbImg.style.margin = "";
+      } else if (is90) {
+        // Rotate + adjust margin so layout reflects rotated dimensions
+        // After rotate(90), the image visually swaps W↔H but layout stays original
+        // margin hack: shift by (W-H)/2 to compensate
+        thumbImg.style.transform = `rotate(${deg}deg)`;
+        const fixLayout = () => {
+          const w = thumbImg.offsetWidth;
+          const h = thumbImg.offsetHeight;
+          if (w > 0 && h > 0) {
+            const diff = (w - h) / 2;
+            thumbImg.style.margin = `${diff}px ${-diff}px ${diff + 6}px ${-diff}px`;
+          }
+        };
+        if (thumbImg.complete && thumbImg.naturalWidth) {
+          requestAnimationFrame(fixLayout);
+        }
+        thumbImg.addEventListener("load", () => requestAnimationFrame(fixLayout), { once: true });
+      } else {
+        // 180°
+        thumbImg.style.transform = `rotate(${deg}deg)`;
+        thumbImg.style.margin = "";
+      }
+    }
+    // Reset container
+    if (thumbContainer) {
+      thumbContainer.style.width = "";
     }
 
-    // Timeline items
+    // Timeline — update portrait/landscape class based on result after rotation
+    const strip = this.shadowRoot.querySelector(".movi-timeline-strip");
+    if (strip) {
+      if (resultIsPortrait) {
+        strip.classList.add("movi-timeline-portrait");
+      } else {
+        strip.classList.remove("movi-timeline-portrait");
+      }
+    }
+
+    // Timeline items — apply rotation transform
     const timelineImgs = this.shadowRoot.querySelectorAll(".movi-timeline-item img");
     timelineImgs.forEach((img) => {
       (img as HTMLElement).style.transform = deg === 0 ? "none" : `rotate(${deg}deg)`;
@@ -9538,6 +9623,15 @@ export class MoviElement extends HTMLElement {
     if (!strip || !status) return;
 
     strip.innerHTML = "";
+
+    // Detect portrait video
+    const videoTrack = this.player.getVideoTracks()?.[0];
+    const isPortrait = videoTrack && videoTrack.height > videoTrack.width;
+    if (isPortrait) {
+      strip.classList.add("movi-timeline-portrait");
+    } else {
+      strip.classList.remove("movi-timeline-portrait");
+    }
 
     const formatTime = (s: number) => {
       const h = Math.floor(s / 3600);
