@@ -1,7 +1,6 @@
 # Movi Player
 
-Modern video player for the web. WebCodecs + FFmpeg WASM.
-HDR, multi-track, encrypted playback, no server-side processing.
+Play any video format directly in the browser. No transcoding, no server processing.
 
 [![npm](https://img.shields.io/npm/v/movi-player.svg)](https://www.npmjs.com/package/movi-player)
 [![License](https://img.shields.io/badge/License-Apache%202.0-blue.svg)](LICENSE)
@@ -9,6 +8,31 @@ HDR, multi-track, encrypted playback, no server-side processing.
 [Documentation](https://mrujjwalg.github.io/movi-player/) | [Live Demo](https://movi-player-examples.vercel.app/element.html) | [Examples](https://github.com/MrUjjwalG/movi-player-examples)
 
 ![Movi Player](docs/images/element.gif)
+
+## Why Movi Player?
+
+**The browser can't play MKV, HEVC, or HDR videos.** You either transcode everything server-side or tell users "format not supported." Movi Player fixes this.
+
+- **Play anything** -- MKV, HEVC, AV1, 4K HDR, multi-audio, subtitles. Formats that `<video>` can't touch.
+- **Zero server cost** -- No FFmpeg on your server. No transcoding pipeline. Everything runs in the browser via WebAssembly.
+- **Drop-in replacement** -- `<movi-player src="video.mp4" controls>` works like `<video>` but plays everything.
+- **Content protection** -- Built-in encrypted playback with AES-256-GCM, token auth, HMAC signing. No DRM license server needed.
+- **HDR rendering** -- Detects and renders BT.2020/PQ/HLG content on supported displays. Other players can't.
+- **Canvas-based** -- No `<video>` element exposed. Right-click save disabled. Screen recording gets watermarked.
+
+### vs. Other Players
+
+| | Movi Player | video.js | hls.js | Plyr |
+|---|---|---|---|---|
+| MKV / HEVC / AV1 | Yes | No | No | No |
+| HDR rendering | Yes | No | No | No |
+| No server transcoding | Yes | No | No | No |
+| Canvas rendering (no `<video>`) | Yes | No | No | No |
+| Encrypted playback | Yes | No | No | No |
+| Built-in subtitle rendering | Yes | Plugin | No | No |
+| Multi-audio track switching | Yes | Plugin | Yes | No |
+| Chapters on progress bar | Yes | Plugin | No | No |
+| Bundle size | 50-410KB | 500KB+ | 60KB | 25KB |
 
 ## Install
 
