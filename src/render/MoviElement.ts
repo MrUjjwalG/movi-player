@@ -8935,6 +8935,87 @@ export class MoviElement extends HTMLElement {
     this.src = file;
   }
 
+  /**
+   * Load an encrypted video source (programmatic API)
+   *
+   * Usage:
+   *   const player = document.querySelector('movi-player');
+   *   player.loadEncrypted({
+   *     videoUrl: '/api/video',
+   *     tokenUrl: '/api/token',
+   *     videoId: 'my-video',
+   *     fingerprint: await generateFingerprint(),
+   *     sessionToken: 'jwt-token',
+   *   });
+   */
+  async loadEncrypted(config: {
+    videoUrl: string;
+    tokenUrl: string;
+    videoId: string;
+    fingerprint: string;
+    sessionToken: string;
+    tokenRefreshInterval?: number;
+    onAuthFailed?: (reason: string) => void;
+  }): Promise<void> {
+    // Reset existing player
+    this.resetTimeline();
+    this.syncThumbnailRotation(0);
+
+    if (this.player) {
+      this.player.destroy();
+      this.player = null;
+    }
+
+    this.isLoading = true;
+    if (this.emptyStateIndicator) {
+      this.emptyStateIndicator.style.display = "none";
+    }
+
+    try {
+      // Create player with encrypted source
+      this.player = new MoviPlayer({
+        source: {
+          type: "encrypted",
+          encrypted: config,
+        },
+        renderer: "canvas",
+        canvas: this.canvas,
+        enablePreviews: this._thumb,
+        frameRate: this._fps || undefined,
+      });
+
+      this.setupEventHandlers();
+      await this.player.load();
+
+      // Apply properties
+      this.updateVolume();
+      this.updateMuted();
+      this.updatePlaybackRate();
+      this.updateCanvasSize();
+      this.updateFitMode();
+      if (this.player) {
+        this.player.setHDREnabled(this._hdr);
+        this.player.setStableAudio(this._stableVolume);
+        this.updateStableAudioUI();
+      }
+      this.updateHDRVisibility();
+      this.updateControlsVisibility();
+      this.updateControlsState();
+      this.updateLoadingIndicator();
+
+      if (this._autoplay && this.player) {
+        await this.player.play().catch(() => {});
+      }
+
+      this.isLoading = false;
+      Logger.info("MoviElement", "Encrypted source loaded");
+    } catch (e) {
+      this.isLoading = false;
+      Logger.error("MoviElement", "Failed to load encrypted source", e);
+      throw e;
+    }
+  }
+
   get autoplay(): boolean {
     return this._autoplay;
   }

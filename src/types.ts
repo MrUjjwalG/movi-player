@@ -73,10 +73,20 @@ export interface SubtitleCue {
 // ============================================================================
 
 export interface SourceConfig {
-  type: "url" | "file";
+  type: "url" | "file" | "encrypted";
   url?: string;
   file?: File;
   headers?: Record<string, string>;
+  /** Encrypted source config */
+  encrypted?: {
+    videoUrl: string;
+    tokenUrl: string;
+    videoId: string;
+    fingerprint: string;
+    sessionToken: string;
+    tokenRefreshInterval?: number;
+    onAuthFailed?: (reason: string) => void;
+  };
 }
 
 export interface CacheConfig {

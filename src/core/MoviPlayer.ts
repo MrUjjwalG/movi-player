@@ -452,6 +452,14 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
       return new FileSource(config.file, this.cache);
     }
 
+    if (config.type === "encrypted" && config.encrypted) {
+      const { EncryptedHttpSource } = await import("../source/EncryptedHttpSource");
+      return new EncryptedHttpSource({
+        ...config.encrypted,
+        headers: config.headers,
+      });
+    }
+
     if (config.type === "url" && config.url) {
       const maxBufferSizeMB = this.config.cache?.maxSizeMB;
       const source = new HttpSource(
@@ -2243,6 +2251,26 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
   /**
    * Get media info
    */
+  /**
+   * Load an encrypted video source
+   * Reconfigures the player with an EncryptedHttpSource
+   */
+  async loadEncrypted(config: {
+    videoUrl: string;
+    tokenUrl: string;
+    videoId: string;
+    fingerprint: string;
+    sessionToken: string;
+    tokenRefreshInterval?: number;
+    onAuthFailed?: (reason: string) => void;
+  }): Promise<void> {
+    this.config.source = {
+      type: "encrypted",
+      encrypted: config,
+    };
+    await this.load();
+  }
+
   getMediaInfo(): MediaInfo | null {
     return this.mediaInfo;
   }
