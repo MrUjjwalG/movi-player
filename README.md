@@ -90,6 +90,8 @@ See [encrypted-server/](encrypted-server/) for the server example.
 
 ### Demuxer Only (50KB)
 
+![Demuxer](docs/images/demuxer.webp)
+
 Extract metadata, tracks, HDR info, and thumbnails without playing the video.
 
 ```typescript
