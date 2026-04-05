@@ -92,6 +92,8 @@ See [encrypted-server/](encrypted-server/) for the server example.
 
 ![Demuxer](docs/images/demuxer.webp)
 
+[Live Demo](https://movi-player-examples.vercel.app/demuxer.html) | [Source](https://github.com/MrUjjwalG/movi-player-examples/blob/main/demuxer.html)
+
 Extract metadata, tracks, HDR info, and thumbnails without playing the video.
 
 ```typescript
