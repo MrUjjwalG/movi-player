@@ -5,6 +5,32 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.2.0-beta.1] - 2026-04-05
+
+### Added
+- Chrome Extension: popup with "Paste & Play" (clipboard) and "Play from Computer", context menu on video links, play button overlay on detected URLs, drag & drop player page.
+- Memory usage in nerd stats (Chrome only).
+- Portrait video detection for timeline thumbnails.
+
+### Changed
+- Context menu: "Stats for nerds" moved to bottom.
+- Extension popup: complete redesign with card layout, no input box.
+- Extension build script copies only element.js (6.5MB vs 40MB+).
+
+### Fixed
+- Nerd stats close button z-index (was behind graph on mobile).
+- Nerd stats graph canvas auto-resize to container width.
+- Nerd stats graph hidden when player height < 300px.
+- Mobile controls: compact buttons (34px), smaller icons, tighter layout.
+- Timeline/thumbnail rotation: negative margin trick for proper container fit.
+- Portrait thumbnails in timeline use width constraint instead of height.
+- Timeline position syncs with controls show/hide (smooth transition).
+- Subtitles stack above timeline when both visible.
+- Focus restored after closing timeline, resume dialog, nerd stats.
+- "Start Over" now seeks to 0:00.
+- Network/disk speed resets to 0 after 1s idle (fixes stale graph on pause).
+- Seek thumbnail rotation margin re-applied on each hover.
+
 ## [0.2.0] - 2026-04-05
 
 ### Added
