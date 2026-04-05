@@ -80,6 +80,7 @@ export class EncryptedHttpSource implements SourceAdapter {
 
   // Stats
   private totalBytesDownloaded: number = 0;
+  private maxBufferedEnd: number = 0; // Furthest byte position read
   private lastSpeedBytes: number = 0;
   private lastSpeedTime: number = 0;
   private currentSpeed: number = 0;
@@ -166,11 +167,13 @@ export class EncryptedHttpSource implements SourceAdapter {
       if (this.cryptoKey && this.iv) {
         const decrypted = await this.decrypt(encryptedData);
         this.position = clampedOffset + decrypted.byteLength;
+        if (this.position > this.maxBufferedEnd) this.maxBufferedEnd = this.position;
         return decrypted;
       }
 
       // Server-side decryption — data already decrypted
       this.position = clampedOffset + encryptedData.byteLength;
+      if (this.position > this.maxBufferedEnd) this.maxBufferedEnd = this.position;
       return encryptedData;
     } catch (error) {
       Logger.error(TAG, "Read failed", error);
@@ -338,6 +341,13 @@ export class EncryptedHttpSource implements SourceAdapter {
   }
 
   // ─── Stats ─────────────────────────────────────────────────────
+
+  /**
+   * Get furthest byte position read (for buffer progress bar)
+   */
+  getBufferedEnd(): number {
+    return this.maxBufferedEnd;
+  }
 
   getNetworkStats(): { totalBytes: number; currentSpeed: number; elapsed: number } {
     return {

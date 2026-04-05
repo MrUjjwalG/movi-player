@@ -2706,6 +2706,15 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
       return duration;
     }
 
+    // For EncryptedHttpSource, use getBufferedEnd() like HttpSource
+    if (this.source && "getBufferedEnd" in this.source && !(this.source instanceof HttpSource) && this.fileSize > 0) {
+      const bufferedBytes = (this.source as any).getBufferedEnd();
+      if (bufferedBytes > 0) {
+        const ratio = Math.min(1, bufferedBytes / this.fileSize);
+        return Math.max(ratio * duration, this.getCurrentTime());
+      }
+    }
+
     return 0;
   }
 

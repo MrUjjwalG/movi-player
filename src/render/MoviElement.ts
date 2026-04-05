@@ -94,6 +94,10 @@ export class MoviElement extends HTMLElement {
   private _showTitle: boolean = false; // Show title at top if true
   private _resume: boolean = false; // Resume playback from last position (opt-in)
   private _stableVolume: boolean = false; // Stable volume / loudness normalization (opt-in)
+  private _encrypted: boolean = false;   // Encrypted source mode
+  private _tokenUrl: string = "";        // Token endpoint for encrypted playback
+  private _videoUrl: string = "";        // Video endpoint for encrypted playback
+  private _videoId: string = "";         // Video ID for encrypted playback
   private _resumeSaveInterval: number | null = null; // Interval to save position
   private _titleAutoLoaded: boolean = false; // Track if title was auto-loaded from metadata
   private _lastDuration: number = 0; // Track duration changes for title auto-load
@@ -154,6 +158,10 @@ export class MoviElement extends HTMLElement {
       "showtitle",
       "resume",
       "stablevolume",
+      "encrypted",
+      "tokenurl",
+      "videourl",
+      "videoid",
     ];
   }
 
@@ -7271,8 +7279,16 @@ export class MoviElement extends HTMLElement {
     // Check for required security headers
     this.checkSecurityHeaders();
 
-    // Automatically initialize player if src is set
-    if (this._src) {
+    // Read encrypted attributes
+    this._encrypted = this.hasAttribute("encrypted");
+    this._tokenUrl = this.getAttribute("tokenurl") || "";
+    this._videoUrl = this.getAttribute("videourl") || "";
+    this._videoId = this.getAttribute("videoid") || "";
+    this._resume = this.hasAttribute("resume");
+    this._stableVolume = this.hasAttribute("stablevolume");
+
+    // Automatically initialize player if src is set or encrypted mode
+    if (this._src || (this._encrypted && this._tokenUrl && this._videoUrl)) {
       this.initializePlayer();
     }
 
@@ -7435,6 +7451,18 @@ export class MoviElement extends HTMLElement {
           this.player.setStableAudio(this._stableVolume);
           this.updateStableAudioUI();
         }
+        break;
+      case "encrypted":
+        this._encrypted = newValue !== null;
+        break;
+      case "tokenurl":
+        this._tokenUrl = newValue || "";
+        break;
+      case "videourl":
+        this._videoUrl = newValue || "";
+        break;
+      case "videoid":
+        this._videoId = newValue || "";
         break;
       case "src":
         // Only handle string src attributes, File objects are handled via setter
@@ -7718,6 +7746,24 @@ export class MoviElement extends HTMLElement {
    * Automatically create and initialize MoviPlayer
    */
   private async initializePlayer(): Promise<void> {
+    // If encrypted mode, use loadEncrypted instead
+    if (this._encrypted && this._tokenUrl && this._videoUrl && !this.isLoading && !this.player) {
+      try {
+        const { generateFingerprint } = await import("../utils/Fingerprint");
+        const fingerprint = await generateFingerprint();
+        await this.loadEncrypted({
+          videoUrl: this._videoUrl,
+          tokenUrl: this._tokenUrl,
+          videoId: this._videoId || "default",
+          fingerprint,
+          sessionToken: "session-" + Date.now(),
+        });
+      } catch (e) {
+        Logger.error("MoviElement", "Failed to initialize encrypted source", e);
+      }
+      return;
+    }
+
     if (!this._src || this.isLoading || this.player || this._isUnsupported) {
       return;
     }
@@ -8972,13 +9018,14 @@ export class MoviElement extends HTMLElement {
     }
 
     try {
-      // Create player with encrypted source
+      // Create player with encrypted source (respecting element properties)
       this.player = new MoviPlayer({
         source: {
           type: "encrypted",
           encrypted: config,
         },
         renderer: "canvas",
+        decoder: this._sw,
         canvas: this.canvas,
         enablePreviews: this._thumb,
         frameRate: this._fps || undefined,
@@ -8987,7 +9034,7 @@ export class MoviElement extends HTMLElement {
       this.setupEventHandlers();
       await this.player.load();
 
-      // Apply properties
+      // Apply all element properties (same as initializePlayer)
       this.updateVolume();
       this.updateMuted();
       this.updatePlaybackRate();
@@ -9007,9 +9054,35 @@ export class MoviElement extends HTMLElement {
       this.renderChapterMarkers();
       this.startUIUpdates();
 
+      // Seek to start position or resume
+      if (this._startAt > 0 && this.player) {
+        await this.player.seek(this._startAt).catch(() => {});
+      } else if (this._resume && this.player) {
+        const savedTime = this.getResumePosition();
+        if (savedTime > 2 && savedTime < this.duration - 5) {
+          this.showResumeDialog(savedTime);
+        }
+      }
+
+      // Start resume saving if enabled
+      if (this._resume) {
+        this.startResumeSaving();
+      }
+
+      // Autoplay or render first frame
       if (this._autoplay && this.player) {
         await this.player.play().catch(() => {});
+      } else if (this.player) {
+        if (this._startAt === 0) {
+          this.player.seek(0).catch(() => {});
+        }
       }
+
+      // Ambient mode
+      this.updateAmbientMode();
+
+      // Dispatch load event
+      this.dispatchEvent(new Event("loadeddata"));
 
       this.isLoading = false;
       Logger.info("MoviElement", "Encrypted source loaded");

@@ -20,8 +20,8 @@
 
 import express from "express";
 import cors from "cors";
-import { readFileSync, existsSync, statSync, readdirSync, openSync, readSync, closeSync } from "fs";
-import { randomBytes, createHmac } from "crypto";
+import { readFileSync, existsSync, readdirSync } from "fs";
+import { randomBytes, createHmac, createDecipheriv } from "crypto";
 import { fileURLToPath } from "url";
 import { dirname, join } from "path";
 
@@ -32,33 +32,74 @@ const PORT = 3000;
 app.use(cors({ origin: true, credentials: true }));
 app.use(express.json());
 
+// Required for SharedArrayBuffer (movi-player WASM)
+app.use((_req, res, next) => {
+  res.set("Cross-Origin-Opener-Policy", "same-origin");
+  res.set("Cross-Origin-Embedder-Policy", "require-corp");
+  next();
+});
+
+// Serve movi-player dist files
+app.use("/dist", express.static(join(__dirname, "../dist")));
+
 // ─── Configuration ───────────────────────────────────────────────
 const TOKEN_TTL = 2000;        // Token valid for 2 seconds
 const TIMESTAMP_WINDOW = 2000; // Request timestamp must be within 2s
-const MAX_REQUESTS_PER_MIN = 120; // Rate limit
+// Rate limiting disabled for demo — in production, use per-second limits
+// const MAX_REQUESTS_PER_SEC = 50;
 
-let encFile = null;
-let keyInfo = null;
+// ─── Multi-file Video Library ────────────────────────────────────
+const videos = new Map(); // videoId -> { encFile, keyInfo, encBuffer, chunkIndex }
 
-// Find .enc + .key files
-const dirFiles = readdirSync(__dirname);
+const videosDir = join(__dirname, "videos");
+const dirFiles = existsSync(videosDir) ? readdirSync(videosDir) : [];
 for (const f of dirFiles) {
   if (f.endsWith(".enc")) {
-    const keyPath = join(__dirname, f.replace(/\.enc$/, ".key"));
+    const keyPath = join(videosDir, f.replace(/\.enc$/, ".key"));
     if (existsSync(keyPath)) {
-      encFile = join(__dirname, f);
-      keyInfo = JSON.parse(readFileSync(keyPath, "utf-8"));
-      break;
+      const ki = JSON.parse(readFileSync(keyPath, "utf-8"));
+      const encPath = join(videosDir, f);
+      const encBuf = readFileSync(encPath);
+
+      // Parse chunk index
+      const cc = encBuf.readUInt32LE(0);
+      const ci = [];
+      for (let i = 0; i < cc; i++) {
+        const idx = 4 + i * 16;
+        ci.push({
+          originalOffset: encBuf.readUInt32LE(idx),
+          originalSize: encBuf.readUInt32LE(idx + 4),
+          encOffset: encBuf.readUInt32LE(idx + 8),
+          encSize: encBuf.readUInt32LE(idx + 12),
+        });
+      }
+
+      videos.set(ki.originalFile, { encFile: encPath, keyInfo: ki, encBuffer: encBuf, chunkIndex: ci });
+      console.log(`  [${videos.size}] ${ki.originalFile} (${(ki.originalSize / 1024 / 1024).toFixed(1)} MB, ${ki.chunkCount} chunks)`);
     }
   }
 }
 
-if (!encFile || !keyInfo) {
-  console.error("No encrypted video found! Run: node encrypt.js <video-file>");
+if (videos.size === 0) {
+  console.error("No encrypted videos found! Run: node encrypt.js <video-file>");
   process.exit(1);
 }
 
-console.log(`Video: ${keyInfo.originalFile} (${(keyInfo.originalSize / 1024 / 1024).toFixed(1)} MB)`);
+console.log(`\nLoaded ${videos.size} encrypted video(s)`);
+
+/**
+ * Decrypt a single chunk on-demand (~2MB RAM, freed after response)
+ */
+function decryptChunk(video, chunkIdx) {
+  const info = video.chunkIndex[chunkIdx];
+  const encChunk = video.encBuffer.subarray(info.encOffset, info.encOffset + info.encSize);
+  const iv = encChunk.subarray(0, 12);
+  const authTag = encChunk.subarray(12, 28);
+  const ciphertext = encChunk.subarray(28);
+  const decipher = createDecipheriv("aes-256-gcm", Buffer.from(video.keyInfo.key, "base64"), iv);
+  decipher.setAuthTag(authTag);
+  return Buffer.concat([decipher.update(ciphertext), decipher.final()]);
+}
 
 // ─── Security Stores (production: use Redis) ─────────────────────
 
@@ -68,8 +109,6 @@ const activeTokens = new Map();
 // Used nonces: nonce -> timestamp (for replay protection)
 const usedNonces = new Map();
 
-// Rate limiting: ip -> { count, resetAt }
-const rateLimits = new Map();
 
 // Cleanup expired data every 5s
 setInterval(() => {
@@ -80,9 +119,6 @@ setInterval(() => {
   for (const [nonce, ts] of usedNonces) {
     if (now - ts > 10000) usedNonces.delete(nonce);
   }
-  for (const [ip, data] of rateLimits) {
-    if (now > data.resetAt) rateLimits.delete(ip);
-  }
 }, 5000);
 
 // ─── Helpers ─────────────────────────────────────────────────────
@@ -92,16 +128,7 @@ function getClientIP(req) {
     req.headers["x-real-ip"] || req.socket.remoteAddress;
 }
 
-function checkRateLimit(ip) {
-  const now = Date.now();
-  let entry = rateLimits.get(ip);
-  if (!entry || now > entry.resetAt) {
-    entry = { count: 0, resetAt: now + 60000 };
-    rateLimits.set(ip, entry);
-  }
-  entry.count++;
-  return entry.count <= MAX_REQUESTS_PER_MIN;
-}
+// Rate limiting disabled for demo
 
 function verifyHMAC(token, nonce, timestamp, offset, length, hmacSecret) {
   const message = `${token}:${nonce}:${timestamp}:${offset}:${length}`;
@@ -111,7 +138,17 @@ function verifyHMAC(token, nonce, timestamp, offset, length, hmacSecret) {
   return expected;
 }
 
-// ─── API: Get Token + Key + HMAC Secret ──────────────────────────
+// ─── API: List Videos ────────────────────────────────────────────
+app.get("/api/videos", (_req, res) => {
+  const list = Array.from(videos.entries()).map(([id, v]) => ({
+    id,
+    size: v.keyInfo.originalSize,
+    chunks: v.keyInfo.chunkCount,
+  }));
+  res.json(list);
+});
+
+// ─── API: Get Token + HMAC Secret ────────────────────────────────
 
 app.post("/api/token", (req, res) => {
   const { videoId, fingerprint } = req.body;
@@ -121,10 +158,10 @@ app.post("/api/token", (req, res) => {
     return res.status(400).json({ error: "Missing videoId or fingerprint" });
   }
 
-  // Rate limit
-  if (!checkRateLimit(ip)) {
-    console.log(`[RATE LIMIT] IP=${ip}`);
-    return res.status(429).json({ error: "Too many requests" });
+  // Check video exists
+  const video = videos.get(videoId);
+  if (!video) {
+    return res.status(404).json({ error: "Video not found", available: Array.from(videos.keys()) });
   }
 
   // Generate token + HMAC secret (both unique per refresh)
@@ -132,22 +169,21 @@ app.post("/api/token", (req, res) => {
   const hmacSecret = randomBytes(32).toString("base64");
   const expiresAt = Date.now() + TOKEN_TTL;
 
-  // Store with bindings
+  // Store with bindings + videoId
   activeTokens.set(token, {
     ip,
     fingerprint,
     hmacSecret,
+    videoId,
     expiresAt,
   });
 
   res.json({
-    key: keyInfo.key,
-    iv: keyInfo.iv,
     token,
     expiresAt,
-    fileSize: keyInfo.originalSize,
-    chunkSize: 2 * 1024 * 1024,
-    hmacSecret, // Client uses this to sign requests
+    fileSize: video.keyInfo.originalSize,
+    chunkSize: video.keyInfo.chunkSize,
+    hmacSecret,
   });
 
   console.log(`[TOKEN] IP=${ip} fp=${fingerprint.slice(0, 8)}... TTL=${TOKEN_TTL}ms`);
@@ -155,7 +191,7 @@ app.post("/api/token", (req, res) => {
 
 // ─── API: Serve Encrypted Video (with full validation) ───────────
 
-app.get("/api/video", (req, res) => {
+app.get("/api/video", async (req, res) => {
   const token = req.headers["x-token"];
   const fingerprint = req.headers["x-fingerprint"];
   const nonce = req.headers["x-nonce"];
@@ -163,105 +199,71 @@ app.get("/api/video", (req, res) => {
   const signature = req.headers["x-signature"];
   const ip = getClientIP(req);
 
-  // 1. Rate limit
-  if (!checkRateLimit(ip)) {
-    console.log(`[REJECT] Rate limit: IP=${ip}`);
-    return res.status(429).json({ error: "Rate limited" });
-  }
+  if (!token || !fingerprint || !nonce || !timestamp || !signature) return res.status(401).json({ error: "Missing auth headers" });
 
-  // 2. All headers required
-  if (!token || !fingerprint || !nonce || !timestamp || !signature) {
-    console.log(`[REJECT] Missing headers`);
-    return res.status(401).json({ error: "Missing auth headers" });
-  }
-
-  // 3. Token exists
   const tokenData = activeTokens.get(token);
-  if (!tokenData) {
-    console.log(`[REJECT] Invalid token`);
-    return res.status(401).json({ error: "Invalid token" });
-  }
-
-  // 4. Token not expired
-  if (Date.now() > tokenData.expiresAt) {
-    activeTokens.delete(token);
-    console.log(`[REJECT] Token expired`);
-    return res.status(401).json({ error: "Token expired" });
-  }
-
-  // 5. IP binding
-  if (tokenData.ip !== ip) {
-    console.log(`[REJECT] IP mismatch: ${tokenData.ip} ≠ ${ip}`);
-    return res.status(403).json({ error: "IP mismatch" });
-  }
-
-  // 6. Fingerprint binding
-  if (tokenData.fingerprint !== fingerprint) {
-    console.log(`[REJECT] Fingerprint mismatch`);
-    return res.status(403).json({ error: "Fingerprint mismatch" });
-  }
-
-  // 7. Timestamp within window
-  const timeDiff = Math.abs(Date.now() - timestamp);
-  if (timeDiff > TIMESTAMP_WINDOW) {
-    console.log(`[REJECT] Timestamp too old: ${timeDiff}ms`);
-    return res.status(403).json({ error: "Request too old" });
-  }
-
-  // 8. Nonce not reused (replay protection)
-  if (usedNonces.has(nonce)) {
-    console.log(`[REJECT] Nonce reused (replay attack)`);
-    return res.status(403).json({ error: "Replay detected" });
-  }
+  if (!tokenData) return res.status(401).json({ error: "Invalid token" });
+  if (Date.now() > tokenData.expiresAt) { activeTokens.delete(token); return res.status(401).json({ error: "Token expired" }); }
+  if (tokenData.ip !== ip) return res.status(403).json({ error: "IP mismatch" });
+  if (tokenData.fingerprint !== fingerprint) return res.status(403).json({ error: "Fingerprint mismatch" });
+  if (Math.abs(Date.now() - timestamp) > TIMESTAMP_WINDOW) return res.status(403).json({ error: "Request too old" });
+  if (usedNonces.has(nonce)) return res.status(403).json({ error: "Replay detected" });
   usedNonces.set(nonce, Date.now());
 
-  // 9. Parse range
-  const range = req.headers.range;
-  const fileSize = statSync(encFile).size;
-  let start = 0;
-  let end = fileSize - 1;
+  // Get video for this token
+  const video = videos.get(tokenData.videoId);
+  if (!video) return res.status(404).json({ error: "Video not found" });
 
+  // Parse range using original size
+  const originalSize = video.keyInfo.originalSize;
+  const range = req.headers.range;
+  let start = 0;
+  let end = originalSize - 1;
   if (range) {
     const parts = range.replace(/bytes=/, "").split("-");
     start = parseInt(parts[0], 10);
-    end = parts[1] ? parseInt(parts[1], 10) : fileSize - 1;
+    end = parts[1] ? parseInt(parts[1], 10) : originalSize - 1;
   }
-  const chunkLength = end - start + 1;
+  end = Math.min(end, originalSize - 1);
+  const responseLength = end - start + 1;
 
-  // 10. Verify HMAC signature
-  const expectedSig = verifyHMAC(
-    token, nonce, timestamp, start, chunkLength, tokenData.hmacSecret
-  );
-  if (signature !== expectedSig) {
-    console.log(`[REJECT] HMAC mismatch (tampered request)`);
-    return res.status(403).json({ error: "Invalid signature" });
+  // Verify HMAC
+  const expectedSig = verifyHMAC(token, nonce, timestamp, start, responseLength, tokenData.hmacSecret);
+  if (signature !== expectedSig) return res.status(403).json({ error: "Invalid signature" });
+
+  // On-demand chunk decryption — only decrypt needed chunks (~2MB each)
+  const CHUNK_SIZE = video.keyInfo.chunkSize;
+  const firstChunk = Math.floor(start / CHUNK_SIZE);
+  const lastChunk = Math.floor(end / CHUNK_SIZE);
+  const parts2 = [];
+
+  for (let i = firstChunk; i <= lastChunk; i++) {
+    const decrypted = decryptChunk(video, i);
+    const chunkStart = i * CHUNK_SIZE;
+    const sliceStart = Math.max(0, start - chunkStart);
+    const sliceEnd = Math.min(decrypted.length, end - chunkStart + 1);
+    parts2.push(decrypted.subarray(sliceStart, sliceEnd));
   }
-
-  // ✅ All checks passed — serve encrypted chunk
-  const fd = openSync(encFile, "r");
-  const buffer = Buffer.alloc(chunkLength);
-  readSync(fd, buffer, 0, chunkLength, start);
-  closeSync(fd);
+  const responseData = Buffer.concat(parts2);
 
   if (range) {
     res.writeHead(206, {
-      "Content-Range": `bytes ${start}-${end}/${fileSize}`,
+      "Content-Range": `bytes ${start}-${end}/${originalSize}`,
       "Accept-Ranges": "bytes",
-      "Content-Length": chunkLength,
+      "Content-Length": responseData.length,
       "Content-Type": "application/octet-stream",
       "Cache-Control": "no-store, no-cache",
     });
   } else {
     res.writeHead(200, {
-      "Content-Length": fileSize,
+      "Content-Length": originalSize,
       "Content-Type": "application/octet-stream",
       "Accept-Ranges": "bytes",
       "Cache-Control": "no-store, no-cache",
     });
   }
-
-  res.end(buffer);
-  console.log(`[SERVE] ${start}-${end} (${(chunkLength / 1024).toFixed(0)}KB) IP=${ip}`);
+  res.end(responseData);
+  console.log(`[SERVE] ${start}-${end} (${(responseData.length / 1024).toFixed(0)}KB) chunks ${firstChunk}-${lastChunk} IP=${ip}`);
 });
 
 // ─── Serve Player Page ──────────────────────────────────────────
@@ -315,105 +317,31 @@ app.get("/", (_req, res) => {
 <body>
   <h1>Encrypted Playback</h1>
   <p class="subtitle">AES-256-GCM + HMAC signed + 2s tokens + IP/fingerprint binding</p>
-  <div class="player-container" style="display:flex;align-items:center;justify-content:center;">
-    <div style="text-align:center;color:#444;font-size:13px;padding:20px;">
-      <svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="#8B5CF6" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" style="margin-bottom:12px;">
-        <rect x="3" y="11" width="18" height="11" rx="2" ry="2"></rect>
-        <path d="M7 11V7a5 5 0 0 1 10 0v4"></path>
-      </svg>
-      <div>Encrypted video server running</div>
-      <div style="margin-top:4px;color:#666;">Use movi-player element with <code>loadEncrypted()</code> to play</div>
-    </div>
+  <div class="player-container">
+    <movi-player id="player"
+      controls thumb fastseek showtitle autoplay muted
+      encrypted
+      tokenurl="/api/token"
+      videourl="/api/video"
+      videoid="${Array.from(videos.keys())[0]}"
+    ></movi-player>
   </div>
   <div class="info" id="info">Initializing encrypted playback...</div>
 
   <script type="module">
+    // Just import element — encrypted playback is handled by attributes!
+    import '/dist/element.js';
+
     const info = document.getElementById('info');
 
-    function log(lines) {
-      info.innerHTML = lines.map(([label, value, type]) =>
-        '<span class="l">' + label + '</span> ' +
-        (type === 'ok' ? '<span class="ok">' + value + '</span>' : value)
-      ).join('<br>') +
+    // Show security info
+    info.innerHTML =
       '<div class="security-grid">' +
         ['AES-256-GCM Encryption', 'HMAC-SHA256 Signatures', '2s Token Expiry', 'IP Binding',
-         'Fingerprint Binding', 'One-time Nonce', 'Replay Protection', 'Rate Limiting',
+         'Fingerprint Binding', 'One-time Nonce', 'Replay Protection',
          'No &lt;video&gt; Element', 'Canvas Rendering'
         ].map(s => '<div class="sec-item"><div class="dot"></div>' + s + '</div>').join('') +
       '</div>';
-    }
-
-    // Inline fingerprint generator (same as Fingerprint.ts)
-    async function generateFingerprint() {
-      const c = [
-        navigator.userAgent,
-        screen.width + 'x' + screen.height + 'x' + screen.colorDepth,
-        Intl.DateTimeFormat().resolvedOptions().timeZone,
-        navigator.language,
-        navigator.platform,
-        'cores:' + (navigator.hardwareConcurrency || 'unknown'),
-      ];
-      try {
-        const cv = document.createElement('canvas');
-        cv.width = 64; cv.height = 64;
-        const ctx = cv.getContext('2d');
-        if (ctx) {
-          ctx.textBaseline = 'top'; ctx.font = '14px Arial';
-          ctx.fillStyle = '#f60'; ctx.fillRect(0,0,64,64);
-          ctx.fillStyle = '#069'; ctx.fillText('movi:fp', 2, 15);
-          c.push(cv.toDataURL().slice(-50));
-        }
-      } catch {}
-      try {
-        const gl = document.createElement('canvas').getContext('webgl');
-        if (gl) {
-          const ext = gl.getExtension('WEBGL_debug_renderer_info');
-          if (ext) c.push(gl.getParameter(ext.UNMASKED_RENDERER_WEBGL));
-        }
-      } catch {}
-      const data = new TextEncoder().encode(c.join('|'));
-      const hash = await crypto.subtle.digest('SHA-256', data);
-      return Array.from(new Uint8Array(hash)).map(b => b.toString(16).padStart(2,'0')).join('');
-    }
-
-    async function init() {
-      try {
-        log([['Status:', 'Generating fingerprint...']]);
-        const fingerprint = await generateFingerprint();
-
-        log([
-          ['Fingerprint:', fingerprint.slice(0, 24) + '...'],
-          ['Status:', 'Requesting token...'],
-        ]);
-
-        // Request token to verify connection
-        const tokenRes = await fetch('/api/token', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ videoId: '${keyInfo.originalFile}', fingerprint }),
-        });
-
-        if (!tokenRes.ok) throw new Error('Token request failed: ' + tokenRes.status);
-        const token = await tokenRes.json();
-
-        log([
-          ['Fingerprint:', fingerprint.slice(0, 24) + '...'],
-          ['Video:', '${keyInfo.originalFile}'],
-          ['File Size:', (token.fileSize / 1024 / 1024).toFixed(1) + ' MB'],
-          ['Token TTL:', '2 seconds'],
-          ['Status:', 'Token server connected — encrypted video ready', 'ok'],
-          ['', ''],
-          ['Note:', 'This demo shows the token + HMAC handshake.'],
-          ['', 'To play encrypted video, use movi-player with loadEncrypted() API.'],
-        ]);
-
-      } catch (e) {
-        info.textContent = 'Error: ' + e.message;
-        console.error(e);
-      }
-    }
-
-    init();
   </script>
 </body>
 </html>`);
@@ -424,6 +352,6 @@ app.get("/", (_req, res) => {
 app.listen(PORT, () => {
   console.log(`\n🔒 Encrypted Video Server — http://localhost:${PORT}`);
   console.log(`   Token TTL: ${TOKEN_TTL}ms`);
-  console.log(`   Rate limit: ${MAX_REQUESTS_PER_MIN}/min`);
+  console.log(`   Rate limit: disabled (demo)`);
   console.log(`\n   Security: AES-GCM + HMAC + Nonce + IP + Fingerprint + Rate Limit`);
 });

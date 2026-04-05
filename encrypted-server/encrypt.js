@@ -1,17 +1,24 @@
 /**
- * encrypt.js - Encrypt a video file with AES-256-GCM
+ * encrypt.js - Chunk-level AES-256-GCM encryption
+ *
+ * Each 2MB chunk is encrypted separately with its own IV.
+ * This allows on-demand decryption of individual chunks
+ * without loading the entire file into memory.
+ *
+ * File format:
+ *   [4 bytes: chunk count (uint32)]
+ *   [chunk 0: 12-byte IV + 16-byte auth tag + encrypted data]
+ *   [chunk 1: 12-byte IV + 16-byte auth tag + encrypted data]
+ *   ...
  *
  * Usage: node encrypt.js <input-video> [output-file]
- * Example: node encrypt.js video.mp4 video.enc
- *
- * Generates:
- *   - <output>.enc  — encrypted video file
- *   - <output>.key  — JSON with key + IV (keep this SECRET on server)
  */
 
 import { createCipheriv, randomBytes } from "crypto";
-import { createReadStream, writeFileSync, statSync } from "fs";
+import { readFileSync, writeFileSync, statSync } from "fs";
 import { basename } from "path";
+
+const CHUNK_SIZE = 2 * 1024 * 1024; // 2MB chunks
 
 async function main() {
   const inputFile = process.argv[2];
@@ -19,56 +26,78 @@ async function main() {
 
   if (!inputFile) {
     console.error("Usage: node encrypt.js <input-video> [output-file]");
-    console.error("Example: node encrypt.js video.mp4 video.enc");
     process.exit(1);
   }
 
-  const key = randomBytes(32);
-  const iv = randomBytes(12);
+  const masterKey = randomBytes(32);
+  const inputSize = statSync(inputFile).size;
+  const inputData = readFileSync(inputFile);
+  const chunkCount = Math.ceil(inputSize / CHUNK_SIZE);
 
   console.log(`Encrypting: ${inputFile}`);
-  console.log(`Output: ${outputFile}`);
+  console.log(`Size: ${(inputSize / 1024 / 1024).toFixed(1)} MB`);
+  console.log(`Chunks: ${chunkCount} x ${(CHUNK_SIZE / 1024 / 1024).toFixed(0)}MB`);
 
-  const inputSize = statSync(inputFile).size;
-  console.log(`Input size: ${(inputSize / 1024 / 1024).toFixed(1)} MB`);
+  // Build output: [4-byte chunk count] + [chunks...]
+  const parts = [];
 
-  const cipher = createCipheriv("aes-256-gcm", key, iv);
+  // Header: chunk count (uint32 LE)
+  const header = Buffer.alloc(4);
+  header.writeUInt32LE(chunkCount, 0);
+  parts.push(header);
 
-  const chunks = [];
+  // Chunk index: offset + size for each chunk (for random access)
+  // [chunkCount x { originalOffset: uint32, originalSize: uint32, encOffset: uint32, encSize: uint32 }]
+  const indexSize = chunkCount * 16;
+  const indexBuf = Buffer.alloc(indexSize);
+  parts.push(indexBuf); // placeholder, fill later
 
-  await new Promise((resolve, reject) => {
-    cipher.on("data", (chunk) => chunks.push(chunk));
-    cipher.on("end", resolve);
-    cipher.on("error", reject);
+  let encOffset = 4 + indexSize; // after header + index
 
-    const input = createReadStream(inputFile);
-    input.on("data", (chunk) => cipher.write(chunk));
-    input.on("end", () => cipher.end());
-    input.on("error", reject);
-  });
+  for (let i = 0; i < chunkCount; i++) {
+    const start = i * CHUNK_SIZE;
+    const end = Math.min(start + CHUNK_SIZE, inputSize);
+    const chunk = inputData.subarray(start, end);
 
-  const authTag = cipher.getAuthTag();
-  const encryptedData = Buffer.concat(chunks);
-  const finalOutput = Buffer.concat([authTag, encryptedData]);
-  writeFileSync(outputFile, finalOutput);
+    // Each chunk gets its own IV
+    const iv = randomBytes(12);
+    const cipher = createCipheriv("aes-256-gcm", masterKey, iv);
+    const encrypted = Buffer.concat([cipher.update(chunk), cipher.final()]);
+    const authTag = cipher.getAuthTag();
+
+    // Chunk format: [12-byte IV][16-byte tag][encrypted data]
+    const encChunk = Buffer.concat([iv, authTag, encrypted]);
+    parts.push(encChunk);
+
+    // Fill index entry
+    const idx = i * 16;
+    indexBuf.writeUInt32LE(start, idx);       // original offset
+    indexBuf.writeUInt32LE(end - start, idx + 4); // original size
+    indexBuf.writeUInt32LE(encOffset, idx + 8);   // encrypted offset
+    indexBuf.writeUInt32LE(encChunk.length, idx + 12); // encrypted size
+    encOffset += encChunk.length;
+
+    process.stdout.write(`\r  Chunk ${i + 1}/${chunkCount}`);
+  }
+
+  const output = Buffer.concat(parts);
+  writeFileSync(outputFile, output);
 
   const keyFile = outputFile.replace(/\.enc$/, ".key");
-  const keyInfo = {
-    key: key.toString("base64"),
-    iv: iv.toString("base64"),
-    authTagLength: 16,
-    algorithm: "aes-256-gcm",
+  writeFileSync(keyFile, JSON.stringify({
+    key: masterKey.toString("base64"),
+    algorithm: "aes-256-gcm-chunked",
+    chunkSize: CHUNK_SIZE,
+    chunkCount,
     originalSize: inputSize,
-    encryptedSize: finalOutput.length,
+    encryptedSize: output.length,
     originalFile: basename(inputFile),
-  };
+  }, null, 2));
 
-  writeFileSync(keyFile, JSON.stringify(keyInfo, null, 2));
-
-  console.log(`\nEncrypted: ${outputFile} (${(finalOutput.length / 1024 / 1024).toFixed(1)} MB)`);
-  console.log(`Key file: ${keyFile} (KEEP THIS SECRET)`);
-  console.log("\nDone! Run the server:");
-  console.log(`  npm start`);
+  console.log(`\n\nEncrypted: ${outputFile} (${(output.length / 1024 / 1024).toFixed(1)} MB)`);
+  console.log(`Key: ${keyFile}`);
+  console.log(`Chunks: ${chunkCount} (on-demand decrypt, ~${(CHUNK_SIZE / 1024 / 1024).toFixed(0)}MB RAM per request)`);
+  console.log(`\nRun: npm start`);
 }
 
 main().catch((e) => { console.error(e); process.exit(1); });
