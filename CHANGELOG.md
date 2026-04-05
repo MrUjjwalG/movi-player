@@ -5,6 +5,38 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.2.0] - 2026-04-05
+
+### Added
+- **Stable Volume**: DynamicsCompressorNode for loudness normalization (YouTube-like). Opt-in via `stablevolume` attribute. Smooth gain transitions, AudioContext auto-recovery, gap filling on underrun.
+- **Nerd Stats**: Press `I` for comprehensive overlay — codec, resolution, FPS, decoder type, buffer health, color info, and live network/disk activity graph.
+- **Timeline**: Press `T` for auto-generated thumbnail strip. Chapter-aware when video has chapters. 20 thumbnails, click-to-seek.
+- **Chapter Support**: Extract chapters from video metadata (FFmpeg WASM). Chapter markers on progress bar, chapter titles in seek tooltip.
+- **Video Rotation**: Press `R` to rotate 90. Metadata rotation auto-applied. Thumbnails and seek previews sync with rotation.
+- **Keyboard Shortcuts Panel**: Press `?` to view all shortcuts in a two-column overlay.
+- **Resume Playback**: Opt-in via `resume` attribute. Saves position to localStorage, shows "Resume / Start Over" dialog on reload.
+- **Encrypted Playback**: AES-256-GCM chunked encryption with HMAC-SHA256 signed requests, one-time nonces, IP + fingerprint binding. Configurable via HTML attributes (`encrypted`, `tokenurl`, `videourl`, `videoid`) or `loadEncrypted()` API.
+- **Browser Fingerprint**: Canvas, WebGL, screen, timezone based fingerprint for token binding.
+- **Encrypted Server Example**: Node.js Express server with encrypt CLI, multi-video support, chunked on-demand decryption (~2MB RAM per request).
+- **Subtitle Shift**: Subtitles move up smoothly when controls are visible.
+- **Continuous Double-tap Seek**: YouTube-like mobile behavior with cumulative OSD.
+- **Auto-focus on Hover**: Keyboard shortcuts work without clicking the player.
+
+### Changed
+- Stable volume is now opt-in via `stablevolume` attribute (not enabled by default).
+- Loop and stable volume icons use filled/outline toggle pattern (like subtitle CC button).
+- Nerd stats includes quality label, pixel format, color range/primaries/transfer, language, subtitle info.
+- README rewritten — concise, no repetition, clear value proposition and comparison table.
+
+### Fixed
+- Subtitle track switch now seeks to current position to pick up subtitle packets.
+- Thumbnail 403 errors now retry with exponential backoff instead of fatal failure.
+- Audio starvation threshold increased to 2s, requires empty buffer before triggering.
+- Removed starvation-based rebuffering (caused false buffering during thumbnail generation).
+- Fullscreen Escape key closes overlays (context menu, shortcuts, stats) before exiting fullscreen.
+- 180 rotation now renders at full size (was shrinking due to resize logic).
+- EncryptedHttpSource buffer progress bar shows real-time download progress.
+
 ## [0.1.5] - 2026-02-15
 
 ### Added

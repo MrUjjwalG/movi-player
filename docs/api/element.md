@@ -447,6 +447,66 @@ Sets custom buffer size in seconds.
 
 ---
 
+#### `resume`
+
+Saves playback position to localStorage and shows a resume dialog on reload.
+
+```html
+<movi-player src="video.mp4" resume></movi-player>
+```
+
+Position is saved every 5 seconds and on pause. Cleared when video ends. Uses URL as key for streams, filename+size for local files.
+
+---
+
+#### `stablevolume`
+
+Enables loudness normalization (DynamicsCompressorNode). Reduces loud scenes and boosts quiet ones.
+
+```html
+<movi-player src="video.mp4" stablevolume></movi-player>
+```
+
+Toggle at runtime via the UI button or context menu.
+
+---
+
+#### `encrypted`
+
+Enables encrypted video playback. Requires `tokenurl` and `videourl` attributes.
+
+```html
+<movi-player
+  encrypted
+  tokenurl="/api/token"
+  videourl="/api/video"
+  videoid="movie.mp4"
+  controls autoplay muted
+></movi-player>
+```
+
+See [Encrypted Server Example](https://github.com/mrujjwalg/movi-player/tree/develop/encrypted-server) for the complete server implementation.
+
+---
+
+#### `tokenurl`
+
+Token endpoint URL for encrypted playback. Server returns HMAC signing secret and file metadata.
+
+---
+
+#### `videourl`
+
+Video endpoint URL for encrypted playback. Chunks are served with token + HMAC validation.
+
+---
+
+#### `videoid`
+
+Video identifier sent to the token server. Maps to a specific encrypted file on the server.
+
+---
+
 ### Standard HTML Attributes
 
 #### `width` / `height`
@@ -766,6 +826,31 @@ await player.load();
 
 ---
 
+#### `loadEncrypted(config): Promise<void>`
+
+Loads an encrypted video source programmatically.
+
+```typescript
+await player.loadEncrypted({
+  videoUrl: "/api/video",
+  tokenUrl: "/api/token",
+  videoId: "movie.mp4",
+  fingerprint: await generateFingerprint(),
+  sessionToken: "jwt-token",
+});
+```
+
+**Config:**
+- `videoUrl` — Encrypted video endpoint
+- `tokenUrl` — Token/HMAC endpoint
+- `videoId` — Video identifier
+- `fingerprint` — Browser fingerprint string
+- `sessionToken` — Auth session token
+- `tokenRefreshInterval` — Token refresh ms (default: 1500)
+- `onAuthFailed` — Callback on auth failure
+
+---
+
 ### Track Selection
 
 #### `getVideoTracks(): VideoTrack[]`
@@ -936,6 +1021,31 @@ player.addEventListener("error", (event) => {
   console.error("Playback error:", event.detail);
 });
 ```
+
+---
+
+## Keyboard Shortcuts
+
+Press `?` during playback to view the shortcuts panel.
+
+| Key | Action |
+|---|---|
+| `Space` / `K` | Play / Pause |
+| `F` | Fullscreen |
+| `M` | Mute / Unmute |
+| `R` | Rotate video 90 |
+| `I` | Stats for nerds |
+| `T` | Timeline thumbnails |
+| `S` | Snapshot |
+| `?` | Shortcuts panel |
+| `0` / `Home` | Seek to start |
+| `End` | Seek to end |
+| `Left` | Seek -10s |
+| `Right` | Seek +10s |
+| `Ctrl+Left` | Previous frame (when paused) |
+| `Ctrl+Right` | Next frame (when paused) |
+| `Up` | Volume up |
+| `Down` | Volume down |
 
 ---
 
