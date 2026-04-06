@@ -452,6 +452,7 @@ export class MoviElement extends HTMLElement {
         </svg>
         <span class="movi-context-menu-label">HDR Mode</span>
         <span class="movi-context-menu-status movi-hdr-status">On</span>
+        <span class="movi-context-menu-shortcut">H</span>
       </div>
       <div class="movi-context-menu-divider movi-hdr-divider" style="display: none;"></div>
       <div class="movi-context-menu-item" data-action="fullscreen">
@@ -468,6 +469,7 @@ export class MoviElement extends HTMLElement {
         </svg>
         <span class="movi-context-menu-label">Rotate Video</span>
         <span class="movi-context-menu-status movi-rotate-status">0°</span>
+        <span class="movi-context-menu-shortcut">R</span>
       </div>
       <div class="movi-context-menu-item" data-action="loop-toggle">
         <svg class="movi-context-menu-icon movi-context-menu-loop-outline" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
@@ -481,6 +483,7 @@ export class MoviElement extends HTMLElement {
         </svg>
         <span class="movi-context-menu-label">Loop</span>
         <span class="movi-context-menu-status movi-loop-status">Off</span>
+        <span class="movi-context-menu-shortcut">L</span>
       </div>
       <div class="movi-context-menu-item" data-action="stable-audio-toggle">
         <svg class="movi-context-menu-icon movi-context-menu-stable-outline" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
@@ -496,6 +499,7 @@ export class MoviElement extends HTMLElement {
         </svg>
         <span class="movi-context-menu-label">Stable Volume</span>
         <span class="movi-context-menu-status movi-stable-audio-status">Off</span>
+        <span class="movi-context-menu-shortcut">U</span>
       </div>
       <div class="movi-context-menu-divider"></div>
       <div class="movi-context-menu-item" data-action="snapshot">
@@ -527,6 +531,7 @@ export class MoviElement extends HTMLElement {
           <path d="M6 20v-4"></path>
         </svg>
         <span class="movi-context-menu-label">Stats for nerds</span>
+        <span class="movi-context-menu-shortcut">I</span>
       </div>
     `;
     shadowRoot.appendChild(contextMenu);
@@ -840,21 +845,23 @@ export class MoviElement extends HTMLElement {
       <div class="movi-shortcuts-body">
         <div class="movi-shortcuts-col">
           <div class="movi-shortcut-row"><kbd>Space</kbd><span>Play / Pause</span></div>
-          <div class="movi-shortcut-row"><kbd>K</kbd><span>Play / Pause</span></div>
           <div class="movi-shortcut-row"><kbd>F</kbd><span>Fullscreen</span></div>
           <div class="movi-shortcut-row"><kbd>M</kbd><span>Mute / Unmute</span></div>
-          <div class="movi-shortcut-row"><kbd>&uarr;</kbd><span>Volume Up</span></div>
-          <div class="movi-shortcut-row"><kbd>&darr;</kbd><span>Volume Down</span></div>
-          <div class="movi-shortcut-row"><kbd>S</kbd><span>Snapshot</span></div>
+          <div class="movi-shortcut-row"><kbd>&uarr; / &darr;</kbd><span>Volume</span></div>
+          <div class="movi-shortcut-row"><kbd>&larr; / &rarr;</kbd><span>Seek ±10s</span></div>
+          <div class="movi-shortcut-row"><kbd>0</kbd><span>Seek to Start</span></div>
+          <div class="movi-shortcut-row"><kbd>Ctrl+&larr;/&rarr;</kbd><span>Frame Step</span></div>
+          <div class="movi-shortcut-row"><kbd>+/-</kbd><span>Speed Up/Down</span></div>
+          <div class="movi-shortcut-row"><kbd>V</kbd><span>Cycle Subtitles</span></div>
+          <div class="movi-shortcut-row"><kbd>B</kbd><span>Cycle Audio</span></div>
         </div>
         <div class="movi-shortcuts-col">
-          <div class="movi-shortcut-row"><kbd>&larr;</kbd><span>Seek -10s</span></div>
-          <div class="movi-shortcut-row"><kbd>&rarr;</kbd><span>Seek +10s</span></div>
-          <div class="movi-shortcut-row"><kbd>Ctrl+&larr;</kbd><span>Prev Frame</span></div>
-          <div class="movi-shortcut-row"><kbd>Ctrl+&rarr;</kbd><span>Next Frame</span></div>
-          <div class="movi-shortcut-row"><kbd>0</kbd><span>Seek to Start</span></div>
-          <div class="movi-shortcut-row"><kbd>R</kbd><span>Rotate Video</span></div>
           <div class="movi-shortcut-row"><kbd>A</kbd><span>Aspect Ratio</span></div>
+          <div class="movi-shortcut-row"><kbd>R</kbd><span>Rotate Video</span></div>
+          <div class="movi-shortcut-row"><kbd>L</kbd><span>Loop</span></div>
+          <div class="movi-shortcut-row"><kbd>U</kbd><span>Stable Volume</span></div>
+          <div class="movi-shortcut-row"><kbd>H</kbd><span>HDR Mode</span></div>
+          <div class="movi-shortcut-row"><kbd>S</kbd><span>Snapshot</span></div>
           <div class="movi-shortcut-row"><kbd>I</kbd><span>Stats for Nerds</span></div>
           <div class="movi-shortcut-row"><kbd>T</kbd><span>Timeline</span></div>
           <div class="movi-shortcut-row"><kbd>?</kbd><span>This Panel</span></div>
@@ -2573,6 +2580,114 @@ export class MoviElement extends HTMLElement {
               `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">${osdSvg}</svg>`,
               labels[next],
             );
+          }
+          break;
+        case "l":
+        case "L":
+          // L: Toggle loop
+          e.preventDefault();
+          this.loop = !this.loop;
+          this.showOSD(
+            `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M17 2l4 4-4 4"/><path d="M3 11v-1a4 4 0 0 1 4-4h14"/><path d="M7 22l-4-4 4-4"/><path d="M21 13v1a4 4 0 0 1-4 4H3"/></svg>`,
+            this.loop ? "Loop On" : "Loop Off",
+          );
+          break;
+        case "v":
+        case "V":
+          // V: Cycle subtitle track (VLC standard)
+          e.preventDefault();
+          if (this.player) {
+            const subs = this.player.getSubtitleTracks();
+            if (subs.length > 0) {
+              const active = this.player.trackManager.getActiveSubtitleTrack();
+              const activeIdx = active ? subs.findIndex(t => t.id === active.id) : -1;
+              const nextIdx = activeIdx + 1;
+              if (nextIdx >= subs.length) {
+                this.player.selectSubtitleTrack(null);
+                this.showOSD(
+                  `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect width="18" height="14" x="3" y="5" rx="2"/><path d="M7 15h4M13 15h4"/><line x1="3" y1="5" x2="21" y2="19" stroke-width="2.5"/></svg>`,
+                  "Subtitles Off",
+                );
+              } else {
+                const next = subs[nextIdx];
+                this.player.selectSubtitleTrack(next.id);
+                this.showOSD(
+                  `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect width="18" height="14" x="3" y="5" rx="2"/><path d="M7 15h4M13 15h4"/></svg>`,
+                  `${next.language?.toUpperCase() || "Sub"} (${nextIdx + 1}/${subs.length})`,
+                );
+              }
+              this.updateSubtitleTrackMenu();
+            }
+          }
+          break;
+        case "b":
+        case "B":
+          // B: Cycle audio track (VLC standard)
+          e.preventDefault();
+          if (this.player) {
+            const audios = this.player.getAudioTracks();
+            if (audios.length > 1) {
+              const active = this.player.trackManager.getActiveAudioTrack();
+              const activeIdx = active ? audios.findIndex(t => t.id === active.id) : 0;
+              const nextIdx = (activeIdx + 1) % audios.length;
+              const next = audios[nextIdx];
+              this.player.selectAudioTrack(next.id);
+              this.showOSD(
+                `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M9 18V5l12-2v13"/><circle cx="6" cy="18" r="3"/><circle cx="18" cy="16" r="3"/></svg>`,
+                `${next.language?.toUpperCase() || "Audio"} (${nextIdx + 1}/${audios.length})`,
+              );
+              this.updateAudioTrackMenu();
+            }
+          }
+          break;
+        case "h":
+        case "H":
+          // H: Toggle HDR mode (only if content is HDR)
+          e.preventDefault();
+          {
+            const hdrItem = this.shadowRoot?.querySelector('.movi-context-menu-item[data-action="hdr-toggle"]') as HTMLElement;
+            if (hdrItem && hdrItem.style.display !== "none") {
+              this.hdr = !this.hdr;
+              this.showOSD(
+                `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4.93 4.93l1.41 1.41M17.66 17.66l1.41 1.41M2 12h2M20 12h2M6.34 17.66l-1.41 1.41M19.07 4.93l-1.41 1.41"/></svg>`,
+                this.hdr ? "HDR On" : "HDR Off",
+              );
+            }
+          }
+          break;
+        case "u":
+        case "U":
+          // U: Toggle stable volume
+          e.preventDefault();
+          if (this.player) {
+            const current = this.player.getStableAudio();
+            this.player.setStableAudio(!current);
+            this.updateStableAudioUI(this.shadowRoot!);
+            this.showOSD(
+              `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="2" y="4" width="20" height="16" rx="2"/><path d="M6 15v-2M9 15v-4M12 15v-6M15 15v-4M18 15v-2"/></svg>`,
+              !current ? "Stable Volume On" : "Stable Volume Off",
+            );
+          }
+          break;
+        case "=":
+        case "+":
+          // +: Speed up (VLC standard)
+          e.preventDefault();
+          {
+            const speeds = [0.25, 0.5, 0.75, 1, 1.25, 1.5, 1.75, 2];
+            const curIdx = speeds.findIndex(s => s >= this._playbackRate);
+            const nextIdx = Math.min((curIdx === -1 ? 3 : curIdx) + 1, speeds.length - 1);
+            this.playbackRate = speeds[nextIdx];
+          }
+          break;
+        case "-":
+          // -: Speed down (VLC standard)
+          e.preventDefault();
+          {
+            const speeds = [0.25, 0.5, 0.75, 1, 1.25, 1.5, 1.75, 2];
+            const curIdx = speeds.findIndex(s => s >= this._playbackRate);
+            const nextIdx = Math.max((curIdx === -1 ? 3 : curIdx) - 1, 0);
+            this.playbackRate = speeds[nextIdx];
           }
           break;
         case "?":
