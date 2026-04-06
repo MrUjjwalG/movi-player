@@ -74,6 +74,7 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
 
   // Playback Loop
   private animationFrameId: number | null = null;
+  private backgroundIntervalId: number | null = null; // Fallback for background playback
 
   // WakeLock to prevent screen sleep during playback
   private wakeLock: WakeLockSentinel | null = null;
@@ -177,6 +178,12 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
     // Setup decoder outputs
     if (this.videoDecoder) {
       this.videoDecoder.setOnFrame((frame) => {
+        // Background mode: drop video frames silently (audio keeps playing)
+        if (document.hidden) {
+          frame.close();
+          return;
+        }
+
         // Queue frames for smooth presentation with A/V sync
         // Allow processing if playing OR if we are seeking (waiting for sync)
         if (
@@ -764,6 +771,10 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
     if (this.animationFrameId !== null) {
       cancelAnimationFrame(this.animationFrameId);
       this.animationFrameId = null;
+    }
+    if (this.backgroundIntervalId !== null) {
+      clearInterval(this.backgroundIntervalId);
+      this.backgroundIntervalId = null;
     }
 
     Logger.info(TAG, "Paused");
@@ -2648,20 +2659,40 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
    * Handle visibility change
    */
   private handleVisibilityChange = async (): Promise<void> => {
-    // If the page becomes visible again and we are playing, we MUST re-acquire the lock.
-    // The browser automatically releases the lock when visibility is lost (e.g. minimizing,
-    // switching tabs, or potentially during the "black screen" transition of a lid close).
-    if (
-      document.visibilityState === "visible" &&
-      this.stateManager.getState() === "playing"
-    ) {
-      // Small delay to ensure browser is ready
-      setTimeout(() => {
-        if (this.stateManager.getState() === "playing") {
-          Logger.debug(TAG, "Visibility restored, re-acquiring WakeLock");
-          this.requestWakeLock();
-        }
-      }, 1000);
+    const isPlaying = this.stateManager.getState() === "playing" || this.stateManager.getState() === "buffering";
+
+    if (document.visibilityState === "hidden" && isPlaying) {
+      // Tab went to background — switch to setInterval for playback loop
+      // requestAnimationFrame stops in background tabs
+      if (!this.backgroundIntervalId) {
+        Logger.debug(TAG, "Tab hidden — switching to background interval");
+        this.backgroundIntervalId = window.setInterval(() => {
+          if (this.stateManager.getState() === "playing" || this.stateManager.getState() === "buffering") {
+            this.processLoop();
+          }
+        }, 16); // ~60fps equivalent
+      }
+
+      // Resume AudioContext if suspended
+      if (this.audioRenderer) {
+        (this.audioRenderer as any).audioContext?.resume?.().catch(() => {});
+      }
+    } else if (document.visibilityState === "visible") {
+      // Tab visible again — stop background interval, RAF takes over
+      if (this.backgroundIntervalId) {
+        clearInterval(this.backgroundIntervalId);
+        this.backgroundIntervalId = null;
+        Logger.debug(TAG, "Tab visible — back to requestAnimationFrame");
+      }
+
+      if (isPlaying) {
+        // Re-acquire WakeLock
+        setTimeout(() => {
+          if (this.stateManager.getState() === "playing") {
+            this.requestWakeLock();
+          }
+        }, 1000);
+      }
     }
   };
 
@@ -2831,6 +2862,10 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
     this.clock.pause();
     if (this.animationFrameId !== null) {
       cancelAnimationFrame(this.animationFrameId);
+    }
+    if (this.backgroundIntervalId !== null) {
+      clearInterval(this.backgroundIntervalId);
+      this.backgroundIntervalId = null;
     }
 
     // Destroy HLS wrapper

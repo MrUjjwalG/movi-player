@@ -9306,7 +9306,7 @@ export class MoviElement extends HTMLElement {
       // Hide graph when height is too small
       const graphSection = overlay.querySelector(".movi-nerd-stats-graph-section") as HTMLElement;
       if (graphSection) {
-        graphSection.style.display = availableHeight < 300 ? "none" : "block";
+        graphSection.style.display = availableHeight < 250 ? "none" : "";
       }
       this.networkSpeedHistory = [];
       this.updateNerdStats(shadowRoot);
@@ -9380,13 +9380,14 @@ export class MoviElement extends HTMLElement {
 
     // Auto-resize canvas to match CSS width
     const rect = canvas.getBoundingClientRect();
-    if (rect.width > 0) {
+    if (rect.width > 0 && rect.height > 0) {
       canvas.width = Math.round(rect.width);
       canvas.height = Math.round(rect.height);
     }
 
     const w = canvas.width;
     const h = canvas.height;
+    if (w <= 0 || h <= 0) return;
     const data = this.networkSpeedHistory;
     const maxSamples = MoviElement.GRAPH_MAX_SAMPLES;
 
@@ -9395,9 +9396,7 @@ export class MoviElement extends HTMLElement {
 
     // Background
     ctx.fillStyle = "rgba(0, 0, 0, 0.3)";
-    ctx.beginPath();
-    ctx.roundRect(0, 0, w, h, 4);
-    ctx.fill();
+    ctx.fillRect(0, 0, w, h);
 
     if (data.length < 2) return;
 

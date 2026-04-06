@@ -5,6 +5,17 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.2.0-beta.2] - 2026-04-06
+
+### Added
+- Background audio playback: video keeps playing audio when tab is in background. Uses setInterval fallback when requestAnimationFrame stops.
+
+### Fixed
+- Video frames silently dropped in background (prevents WebGL errors that would stop audio).
+- AudioContext resumed on tab hide to prevent suspension.
+- Background interval cleaned up on pause/destroy.
+- Network/disk activity graph: canvas auto-resize, roundRect compatibility fix, proper hide threshold.
+
 ## [0.2.0-beta.1] - 2026-04-05
 
 ### Added
