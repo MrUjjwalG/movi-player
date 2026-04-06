@@ -549,13 +549,14 @@ export class HttpSource implements SourceAdapter {
         }
 
         // Check for CORS errors (TypeError: Failed to fetch)
-        // CORS errors cannot be retried as they're a configuration issue
+        // But NOT if we're offline — network errors look identical to CORS errors
         const errorMessage = (error as any).message || "";
-        const isCorsError =
+        const isFetchError =
           (error as any).name === "TypeError" &&
           errorMessage.includes("Failed to fetch");
+        const isOffline = typeof self !== "undefined" && self.navigator && !self.navigator.onLine;
 
-        if (isCorsError) {
+        if (isFetchError && !isOffline) {
           const corsError = new Error(
             "Failed to fetch video resource. Check your connection or CORS settings."
           );

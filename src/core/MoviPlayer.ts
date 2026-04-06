@@ -71,6 +71,7 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
   private disableAudio: boolean = false; // Set to true to disable audio for debugging
   private muted: boolean = false; // Mute state
   private wasPlayingBeforeRebuffer: boolean = false; // Track if we were playing before entering rebuffering state
+  private _stallStartTime: number = 0; // When stall was first detected
 
   // Playback Loop
   private animationFrameId: number | null = null;
@@ -915,16 +916,17 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
       }
       // Continue processing to allow new audio to be decoded and scheduled
     } else if (this.stateManager.getState() === "buffering" && this.wasPlayingBeforeRebuffer) {
-      // Rebuffering complete, resume playback only if we were playing before
-      // Transition to paused first, then let play() method handle the transition to playing
-      this.stateManager.setState("paused");
-      this.wasPlayingBeforeRebuffer = false;
-      Logger.debug(TAG, "Exited buffering state, resuming playback");
-
-      // Resume playback by calling play() method (proper state machine transition)
-      this.play().catch((err) => {
-        Logger.error(TAG, "Failed to resume playback after rebuffering:", err);
-      });
+      // Resume as soon as we have any data available
+      const videoReady = this.videoRenderer ? this.videoRenderer.getQueueSize() > 0 : true;
+      const audioReady = this.disableAudio || this.audioRenderer.getBufferedDuration() > 0.05;
+      if (videoReady || audioReady) {
+        this.stateManager.setState("paused");
+        this.wasPlayingBeforeRebuffer = false;
+        Logger.info(TAG, "Buffers refilled, resuming playback");
+        this.play().catch((err) => {
+          Logger.error(TAG, "Failed to resume playback after rebuffering:", err);
+        });
+      }
     }
 
     // Update FileSource preload position based on current time
@@ -938,6 +940,28 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
 
     // Emit periodic time update for UI
     this.emit("timeUpdate", this.getCurrentTime());
+
+    // Stall detection: if playing but both video and audio buffers are critically low
+    if (this.stateManager.getState() === "playing" && !this.eofReached && !this.waitingForVideoSync) {
+      const videoEmpty = this.videoRenderer ? this.videoRenderer.getQueueSize() === 0 : false;
+      const audioLow = this.disableAudio || this.audioRenderer.getBufferedDuration() < 0.05;
+      if (videoEmpty && audioLow) {
+        if (!this._stallStartTime) {
+          this._stallStartTime = performance.now();
+        } else if (performance.now() - this._stallStartTime > 500) {
+          // Only enter buffering after 500ms of continuous stall
+          Logger.warn(TAG, "Stall detected: buffers empty for 500ms, entering buffering state");
+          this.wasPlayingBeforeRebuffer = true;
+          this.stateManager.setState("buffering");
+          this.clock.pause();
+          this._stallStartTime = 0;
+        }
+      } else {
+        this._stallStartTime = 0;
+      }
+    } else {
+      this._stallStartTime = 0;
+    }
 
     // Prevent concurrent async WASM operations (Asyncify limitation)
     // Add timeout safeguard - if demux has been in flight too long, reset it
