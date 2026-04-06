@@ -85,6 +85,11 @@ export class EncryptedHttpSource implements SourceAdapter {
   private lastSpeedTime: number = 0;
   private currentSpeed: number = 0;
   private startTime: number = 0;
+  private lastReadTime: number = 0;
+
+  // Retry config
+  private static readonly MAX_RETRIES = 5;
+  private static readonly BASE_DELAY = 1000;
 
   constructor(config: EncryptedSourceConfig) {
     this.config = config;
@@ -99,85 +104,120 @@ export class EncryptedHttpSource implements SourceAdapter {
   }
 
   async read(offset: number, length: number): Promise<ArrayBuffer> {
-    // Ensure we have a valid token
-    if (!this.currentToken || Date.now() >= this.tokenExpiresAt) {
-      await this.refreshToken();
-    }
-
-    const clampedOffset = Math.max(0, Math.min(offset, this.size));
-    const availableLength = this.size - clampedOffset;
+    const clampedOffset = Math.max(0, Math.min(offset, this.size > 0 ? this.size : Infinity));
+    const availableLength = this.size > 0 ? this.size - clampedOffset : length;
     const clampedLength = Math.max(0, Math.min(length, availableLength));
-    if (clampedLength === 0) return new ArrayBuffer(0);
+    if (clampedLength === 0 && this.size > 0) return new ArrayBuffer(0);
 
-    try {
-      // Generate unique nonce for this request
-      const nonce = this.generateNonce();
-      const timestamp = Date.now();
+    this.lastReadTime = Date.now();
+    let retryCount = 0;
 
-      // Sign the request with HMAC
-      const signature = await this.signRequest(
-        this.currentToken, nonce, timestamp, clampedOffset, clampedLength
-      );
+    while (true) {
+      try {
+        // Ensure we have a valid token
+        if (!this.currentToken || Date.now() >= this.tokenExpiresAt) {
+          await this.refreshToken();
+        }
 
-      const headers: Record<string, string> = {
-        "Range": `bytes=${clampedOffset}-${clampedOffset + clampedLength - 1}`,
-        "X-Token": this.currentToken,
-        "X-Fingerprint": this.config.fingerprint,
-        "X-Nonce": nonce,
-        "X-Timestamp": timestamp.toString(),
-        "X-Signature": signature,
-        ...this.config.headers,
-      };
+        // Generate unique nonce for this request
+        const nonce = this.generateNonce();
+        const timestamp = Date.now();
 
-      const response = await fetch(this.config.videoUrl, {
-        method: "GET",
-        headers,
-        credentials: "include",
-      });
+        // Sign the request with HMAC
+        const signature = await this.signRequest(
+          this.currentToken, nonce, timestamp, clampedOffset, clampedLength
+        );
 
-      if (response.status === 401 || response.status === 403) {
-        Logger.warn(TAG, `Auth failed: ${response.status}`);
-        this.config.onAuthFailed?.(`Token rejected: ${response.status}`);
-        await this.refreshToken();
-        return this.read(offset, length);
-      }
+        const headers: Record<string, string> = {
+          "Range": `bytes=${clampedOffset}-${clampedOffset + clampedLength - 1}`,
+          "X-Token": this.currentToken,
+          "X-Fingerprint": this.config.fingerprint,
+          "X-Nonce": nonce,
+          "X-Timestamp": timestamp.toString(),
+          "X-Signature": signature,
+          ...this.config.headers,
+        };
 
-      if (!response.ok) {
-        throw new Error(`HTTP ${response.status}: ${response.statusText}`);
-      }
+        const response = await fetch(this.config.videoUrl, {
+          method: "GET",
+          headers,
+          credentials: "include",
+        });
 
-      const encryptedData = await response.arrayBuffer();
+        if (response.status === 401 || response.status === 403) {
+          Logger.warn(TAG, `Auth failed: ${response.status}`);
+          this.config.onAuthFailed?.(`Token rejected: ${response.status}`);
+          await this.refreshToken();
+          continue; // Retry with new token
+        }
 
-      // Track stats
-      this.totalBytesDownloaded += encryptedData.byteLength;
-      const now = Date.now();
-      if (this.startTime === 0) {
-        this.startTime = now;
-        this.lastSpeedTime = now;
-      }
-      const elapsed = (now - this.lastSpeedTime) / 1000;
-      if (elapsed >= 0.5) {
-        this.currentSpeed = (this.totalBytesDownloaded - this.lastSpeedBytes) / elapsed;
-        this.lastSpeedBytes = this.totalBytesDownloaded;
-        this.lastSpeedTime = now;
-      }
+        if (!response.ok) {
+          throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+        }
 
-      // Decrypt if key available (client-side encryption)
-      // If server decrypts, cryptoKey will be null and we pass data through
-      if (this.cryptoKey && this.iv) {
-        const decrypted = await this.decrypt(encryptedData);
-        this.position = clampedOffset + decrypted.byteLength;
+        const encryptedData = await response.arrayBuffer();
+
+        // Track stats
+        this.totalBytesDownloaded += encryptedData.byteLength;
+        const now = Date.now();
+        if (this.startTime === 0) {
+          this.startTime = now;
+          this.lastSpeedTime = now;
+        }
+        const elapsed = (now - this.lastSpeedTime) / 1000;
+        if (elapsed >= 0.5) {
+          this.currentSpeed = (this.totalBytesDownloaded - this.lastSpeedBytes) / elapsed;
+          this.lastSpeedBytes = this.totalBytesDownloaded;
+          this.lastSpeedTime = now;
+        }
+        this.lastReadTime = now;
+
+        // Decrypt if key available (client-side encryption)
+        // If server decrypts, cryptoKey will be null and we pass data through
+        let result: ArrayBuffer;
+        if (this.cryptoKey && this.iv) {
+          result = await this.decrypt(encryptedData);
+        } else {
+          result = encryptedData;
+        }
+        this.position = clampedOffset + result.byteLength;
         if (this.position > this.maxBufferedEnd) this.maxBufferedEnd = this.position;
-        return decrypted;
-      }
 
-      // Server-side decryption — data already decrypted
-      this.position = clampedOffset + encryptedData.byteLength;
-      if (this.position > this.maxBufferedEnd) this.maxBufferedEnd = this.position;
-      return encryptedData;
-    } catch (error) {
-      Logger.error(TAG, "Read failed", error);
-      throw error;
+        retryCount = 0; // Reset on success
+        return result;
+      } catch (error) {
+        const errorMessage = (error as any)?.message || "";
+        const isFetchError = (error as any)?.name === "TypeError" && errorMessage.includes("Failed to fetch");
+        const isOffline = typeof self !== "undefined" && self.navigator && !self.navigator.onLine;
+
+        // If offline, wait for connection before retrying
+        if (isFetchError && isOffline) {
+          Logger.warn(TAG, "Network offline, waiting for connection...");
+          await new Promise<void>((resolve) => {
+            const onOnline = () => { self.removeEventListener("online", onOnline); resolve(); };
+            self.addEventListener("online", onOnline);
+          });
+          Logger.info(TAG, "Network online, resuming...");
+          retryCount = 0;
+          continue;
+        }
+
+        // CORS or fatal error when online — don't retry
+        if (isFetchError && !isOffline) {
+          Logger.error(TAG, "CORS or network error", error);
+          throw new Error("Failed to fetch encrypted video. Check connection or CORS settings.");
+        }
+
+        retryCount++;
+        if (retryCount > EncryptedHttpSource.MAX_RETRIES) {
+          Logger.error(TAG, `Max retries (${EncryptedHttpSource.MAX_RETRIES}) reached`);
+          throw error;
+        }
+
+        Logger.warn(TAG, `Read error, retrying (${retryCount}/${EncryptedHttpSource.MAX_RETRIES})...`);
+        const delay = Math.min(EncryptedHttpSource.BASE_DELAY * Math.pow(1.5, retryCount), 10000);
+        await new Promise(r => setTimeout(r, delay));
+      }
     }
   }
 
@@ -350,6 +390,10 @@ export class EncryptedHttpSource implements SourceAdapter {
   }
 
   getNetworkStats(): { totalBytes: number; currentSpeed: number; elapsed: number } {
+    // Reset speed to 0 after 1s idle (prevents stale graph on pause)
+    if (this.lastReadTime > 0 && (Date.now() - this.lastReadTime) > 1000) {
+      this.currentSpeed = 0;
+    }
     return {
       totalBytes: this.totalBytesDownloaded,
       currentSpeed: this.currentSpeed,
