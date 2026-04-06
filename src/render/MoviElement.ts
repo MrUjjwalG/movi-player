@@ -756,13 +756,6 @@ export class MoviElement extends HTMLElement {
         <button class="movi-nerd-stats-close" aria-label="Close stats">&times;</button>
       </div>
       <div class="movi-nerd-stats-body"></div>
-      <div class="movi-nerd-stats-graph-section">
-        <div class="movi-nerd-stats-graph-header">
-          <span class="movi-nerd-stats-graph-title">Network Activity</span>
-          <span class="movi-nerd-stats-graph-speed">— </span>
-        </div>
-        <canvas class="movi-nerd-stats-graph" width="340" height="80"></canvas>
-      </div>
     `;
     shadowRoot.appendChild(nerdStats);
 
@@ -1779,36 +1772,6 @@ export class MoviElement extends HTMLElement {
     // Fullscreen change listener
     document.addEventListener("fullscreenchange", () => {
       const isFullscreen = !!document.fullscreenElement;
-
-      // If exiting fullscreen while an overlay was open, close overlay and re-enter fullscreen
-      if (!isFullscreen) {
-        const wasOverlayOpen = this._contextMenuVisible ||
-          (this.shadowRoot?.querySelector(".movi-shortcuts-panel") as HTMLElement)?.style.display !== "none" ||
-          (this.shadowRoot?.querySelector(".movi-nerd-stats") as HTMLElement)?.style.display !== "none" ||
-          (this.shadowRoot?.querySelector(".movi-timeline-panel") as HTMLElement)?.style.display !== "none";
-
-        if (wasOverlayOpen) {
-          // Close all overlays
-          if (this._contextMenuVisible) {
-            const ctx = this.shadowRoot?.querySelector(".movi-context-menu") as HTMLElement;
-            if (ctx) { ctx.style.display = "none"; ctx.classList.remove("visible"); }
-            const bd = this.shadowRoot?.querySelector(".movi-context-menu-backdrop") as HTMLElement;
-            if (bd) bd.style.display = "none";
-            this._contextMenuVisible = false;
-          }
-          const panels = this.shadowRoot?.querySelectorAll(".movi-shortcuts-panel, .movi-nerd-stats, .movi-timeline-panel");
-          panels?.forEach((p) => { (p as HTMLElement).style.display = "none"; });
-          if (this._nerdStatsVisible) {
-            this._nerdStatsVisible = false;
-            if (this.nerdStatsInterval) { clearInterval(this.nerdStatsInterval); this.nerdStatsInterval = null; }
-          }
-
-          // Re-enter fullscreen
-          this.requestFullscreen().catch(() => {});
-          return;
-        }
-      }
-
       this.updateFullscreenIcon(isFullscreen);
       requestAnimationFrame(() => {
         requestAnimationFrame(() => {
@@ -2962,15 +2925,6 @@ export class MoviElement extends HTMLElement {
       },
       true,
     );
-
-    // Hide context menu on escape
-    document.addEventListener("keydown", (e) => {
-      if (e.key === "Escape") {
-        if (this._contextMenuVisible) {
-          hideContextMenu();
-        }
-      }
-    });
 
     // Handle backdrop click to close menu
     const backdrop = shadowRoot.querySelector(
@@ -4531,7 +4485,7 @@ export class MoviElement extends HTMLElement {
       }
 
       /* Ensure canvas fills fullscreen */
-      :host(:fullscreen) canvas,
+      :host(:fullscreen) canvas:not(.movi-nerd-stats-graph),
       :host(:fullscreen) video {
         width: 100vw !important;
         max-width: 100vw !important;
@@ -5377,8 +5331,8 @@ export class MoviElement extends HTMLElement {
 
       .movi-nerd-stats-body {
         padding: 6px 12px 10px;
-        flex: 1;
         overflow-y: auto;
+        flex: 1;
         min-height: 0;
       }
 
@@ -5411,8 +5365,8 @@ export class MoviElement extends HTMLElement {
 
       .movi-nerd-stats-graph-section {
         border-top: 1px solid rgba(255, 255, 255, 0.08);
-        padding: 8px 12px 10px;
-        flex-shrink: 0;
+        margin-top: 6px;
+        padding: 8px 0 0;
       }
 
       .movi-nerd-stats-graph-header {
@@ -5442,6 +5396,9 @@ export class MoviElement extends HTMLElement {
         height: 80px;
         border-radius: 4px;
         display: block;
+        position: static;
+        z-index: auto;
+        object-fit: unset;
       }
 
       @media (max-width: 640px) {
@@ -5491,6 +5448,9 @@ export class MoviElement extends HTMLElement {
           height: 50px;
           width: 100%;
           display: block;
+          position: static;
+          z-index: auto;
+          object-fit: unset;
         }
 
         .movi-nerd-stats-graph-header {
@@ -9296,18 +9256,6 @@ export class MoviElement extends HTMLElement {
 
     if (this._nerdStatsVisible) {
       overlay.style.display = "flex";
-      // Set max-height dynamically — stay above controls
-      const hostHeight = (this as HTMLElement).offsetHeight || (this as HTMLElement).clientHeight || 400;
-      const bar = this.shadowRoot?.querySelector(".movi-controls-bar") as HTMLElement;
-      const controlsHeight = (bar?.offsetHeight ?? 80) + 30;
-      const availableHeight = hostHeight - controlsHeight;
-      overlay.style.maxHeight = `${availableHeight}px`;
-
-      // Hide graph when height is too small
-      const graphSection = overlay.querySelector(".movi-nerd-stats-graph-section") as HTMLElement;
-      if (graphSection) {
-        graphSection.style.display = availableHeight < 250 ? "none" : "";
-      }
       this.networkSpeedHistory = [];
       this.updateNerdStats(shadowRoot);
       // Update every 500ms
@@ -9329,8 +9277,16 @@ export class MoviElement extends HTMLElement {
    */
   private updateNerdStats(shadowRoot: ShadowRoot): void {
     if (!this.player || !this._nerdStatsVisible) return;
+    const overlay = shadowRoot.querySelector(".movi-nerd-stats") as HTMLElement;
     const body = shadowRoot.querySelector(".movi-nerd-stats-body");
-    if (!body) return;
+    if (!body || !overlay) return;
+
+    // Recalculate max-height every update (fullscreen/resize)
+    const hostHeight = (this as HTMLElement).offsetHeight || (this as HTMLElement).clientHeight || 400;
+    const bar = shadowRoot.querySelector(".movi-controls-bar") as HTMLElement;
+    const controlsHeight = (bar?.offsetHeight ?? 60) + 8;
+    const topGap = hostHeight < 400 ? 4 : 12;
+    overlay.style.maxHeight = `${hostHeight - controlsHeight - topGap}px`;
 
     const stats = this.player.getStats();
     let html = "";
@@ -9340,30 +9296,29 @@ export class MoviElement extends HTMLElement {
         <span class="movi-nerd-stats-value">${value}</span>
       </div>`;
     }
-    body.innerHTML = html;
-
-    // Update I/O graph (network or disk)
+    // Append graph section at the end of stats body
     const speed = this.player.getNetworkSpeed();
     this.networkSpeedHistory.push(speed);
     if (this.networkSpeedHistory.length > MoviElement.GRAPH_MAX_SAMPLES) {
       this.networkSpeedHistory.shift();
     }
 
-    // Update graph title based on source type
-    const graphTitle = shadowRoot.querySelector(".movi-nerd-stats-graph-title");
-    if (graphTitle) {
-      graphTitle.textContent = this.player.isFileSource() ? "Disk Activity" : "Network Activity";
-    }
+    const graphLabel = this.player.isFileSource() ? "Disk Activity" : "Network Activity";
+    const speedText = speed > 1048576
+      ? `${(speed / 1048576).toFixed(1)} MB/s`
+      : speed > 0
+        ? `${(speed / 1024).toFixed(0)} KB/s`
+        : "—";
 
-    // Update speed label
-    const speedLabel = shadowRoot.querySelector(".movi-nerd-stats-graph-speed");
-    if (speedLabel) {
-      speedLabel.textContent = speed > 1048576
-        ? `${(speed / 1048576).toFixed(1)} MB/s`
-        : speed > 0
-          ? `${(speed / 1024).toFixed(0)} KB/s`
-          : "—";
-    }
+    html += `<div class="movi-nerd-stats-graph-section">
+      <div class="movi-nerd-stats-graph-header">
+        <span class="movi-nerd-stats-graph-title">${graphLabel}</span>
+        <span class="movi-nerd-stats-graph-speed">${speedText}</span>
+      </div>
+      <canvas class="movi-nerd-stats-graph" width="300" height="80"></canvas>
+    </div>`;
+
+    body.innerHTML = html;
 
     // Draw graph
     this.drawNetworkGraph(shadowRoot);
@@ -9373,21 +9328,29 @@ export class MoviElement extends HTMLElement {
    * Draw network throughput graph on canvas
    */
   private drawNetworkGraph(shadowRoot: ShadowRoot): void {
-    const canvas = shadowRoot.querySelector(".movi-nerd-stats-graph") as HTMLCanvasElement;
+    const body = shadowRoot.querySelector(".movi-nerd-stats-body");
+    const canvas = body?.querySelector(".movi-nerd-stats-graph") as HTMLCanvasElement;
     if (!canvas) return;
     const ctx = canvas.getContext("2d");
     if (!ctx) return;
 
-    // Auto-resize canvas to match CSS width
+    // Auto-resize canvas to match CSS layout size (HiDPI aware)
     const rect = canvas.getBoundingClientRect();
-    if (rect.width > 0 && rect.height > 0) {
-      canvas.width = Math.round(rect.width);
-      canvas.height = Math.round(rect.height);
+    const dpr = window.devicePixelRatio || 1;
+    const cssW = Math.round(rect.width);
+    const cssH = Math.round(rect.height);
+    if (cssW <= 0 || cssH <= 0) return;
+    const bufW = Math.round(cssW * dpr);
+    const bufH = Math.round(cssH * dpr);
+    if (canvas.width !== bufW || canvas.height !== bufH) {
+      canvas.width = bufW;
+      canvas.height = bufH;
     }
 
-    const w = canvas.width;
-    const h = canvas.height;
-    if (w <= 0 || h <= 0) return;
+    // Use CSS dimensions for drawing, scale context each frame
+    const w = cssW;
+    const h = cssH;
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
     const data = this.networkSpeedHistory;
     const maxSamples = MoviElement.GRAPH_MAX_SAMPLES;
 

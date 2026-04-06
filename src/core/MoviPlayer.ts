@@ -2611,6 +2611,10 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
     if (this.source instanceof FileSource) {
       return this.source.getDiskStats().currentSpeed;
     }
+    // EncryptedHttpSource (dynamic import, check duck-typed)
+    if (this.source && "getNetworkStats" in this.source && !(this.source instanceof HttpSource)) {
+      return (this.source as any).getNetworkStats().currentSpeed;
+    }
     return 0;
   }
 
@@ -2672,11 +2676,27 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
       this.stopBackgroundTimer();
 
       if (isPlaying) {
+        // Smooth resume: reset video renderer sync to prevent stutter
+        if (this.videoRenderer) {
+          this.videoRenderer.clearQueue();
+        }
+
+        // Re-sync clock to audio (audio was playing continuously)
+        this.clock.seek(this.clock.getTime());
+
+        // Resume AudioContext if needed
+        if (this.audioRenderer) {
+          (this.audioRenderer as any).audioContext?.resume?.().catch(() => {});
+        }
+
+        // Restart presentation loop
+        this.processLoop();
+
         setTimeout(() => {
           if (this.stateManager.getState() === "playing") {
             this.requestWakeLock();
           }
-        }, 1000);
+        }, 500);
       }
     }
   };
