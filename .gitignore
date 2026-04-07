@@ -7,6 +7,8 @@ old/
 .claude/
 docs/.vitepress/cache/
 docs/.vitepress/dist/
+chrome-extension/screenshots/
+*.zip
 *.mp4
 *.webm
 
