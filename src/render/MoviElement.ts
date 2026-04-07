@@ -4957,6 +4957,11 @@ export class MoviElement extends HTMLElement {
         cursor: default !important;
       }
       
+      /* Move timeline panel above controls bar when visible */
+      :host:has(.movi-controls-container.movi-controls-visible) .movi-timeline-panel {
+        bottom: 125px;
+      }
+
       /* Force enable pointer events on all interactive controls */
       .movi-controls-container.movi-controls-visible .movi-controls-bar,
       .movi-controls-container.movi-controls-visible .movi-controls-bar *,
@@ -5895,7 +5900,7 @@ export class MoviElement extends HTMLElement {
       ======================================== */
       .movi-timeline-panel {
         position: absolute;
-        bottom: 120px;
+        bottom: 12px;
         left: 12px;
         transition: bottom 0.3s ease;
         right: 12px;
@@ -10149,19 +10154,6 @@ export class MoviElement extends HTMLElement {
       strip.classList.add("movi-timeline-portrait");
     } else {
       strip.classList.remove("movi-timeline-portrait");
-    }
-
-    // Set timeline position based on controls visibility
-    const panel = shadowRoot.querySelector(".movi-timeline-panel") as HTMLElement;
-    if (panel) {
-      const controlsVisible = this.controlsContainer?.classList.contains("movi-controls-visible");
-      if (controlsVisible) {
-        const bar = shadowRoot.querySelector(".movi-controls-bar") as HTMLElement;
-        const barHeight = bar?.offsetHeight ?? 80;
-        panel.style.bottom = `${barHeight + 20}px`;
-      } else {
-        panel.style.bottom = "12px";
-      }
     }
 
     // Helper to apply rotation to a single image element
