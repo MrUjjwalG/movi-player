@@ -560,7 +560,7 @@ export class MoviElement extends HTMLElement {
     container.className = "movi-controls-container";
     container.innerHTML = `
       <div class="movi-controls-overlay"></div>
-      <div class="movi-controls-bar" style="position: relative; z-index: 10;">
+      <div class="movi-controls-bar" style="position: relative;">
         <div class="movi-progress-container">
           <div class="movi-progress-bar">
             <div class="movi-progress-buffer"></div>
@@ -2391,6 +2391,73 @@ export class MoviElement extends HTMLElement {
 
       // Only handle if player exists (content loaded)
       if (!this.player) return;
+
+      // Resume dialog keyboard navigation
+      const resumeDialog = this.shadowRoot?.querySelector(".movi-resume-dialog") as HTMLElement;
+      if (resumeDialog && resumeDialog.style.display !== "none") {
+        const yesBtn = resumeDialog.querySelector(".movi-resume-yes") as HTMLElement;
+        const noBtn = resumeDialog.querySelector(".movi-resume-no") as HTMLElement;
+        if (e.key === "ArrowLeft" || e.key === "ArrowRight") {
+          e.preventDefault();
+          // Toggle focus between Resume and Start Over
+          // Toggle visual selection
+          const yesSelected = yesBtn?.classList.contains("movi-resume-focused");
+          yesBtn?.classList.toggle("movi-resume-focused", !yesSelected);
+          noBtn?.classList.toggle("movi-resume-focused", yesSelected);
+          return;
+        } else if (e.key === "Enter" || e.key === " ") {
+          e.preventDefault();
+          const focused = resumeDialog.querySelector(".movi-resume-focused") as HTMLElement;
+          (focused || yesBtn)?.click();
+          return;
+        } else if (e.key === "Escape") {
+          e.preventDefault();
+          noBtn?.click();
+          return;
+        }
+      }
+
+      // Timeline navigation — intercept when timeline is open
+      const timelinePanel = this.shadowRoot?.querySelector(".movi-timeline-panel") as HTMLElement;
+      if (timelinePanel && timelinePanel.style.display !== "none") {
+        if (e.key === "Escape") {
+          e.preventDefault();
+          this.toggleTimeline();
+          return;
+        }
+        if (e.key === "ArrowLeft" || e.key === "ArrowRight" || e.key === "Enter") {
+          e.preventDefault();
+          const items = timelinePanel.querySelectorAll(".movi-timeline-item");
+          if (items.length === 0) return;
+
+          // Find currently selected item
+          let selectedIdx = -1;
+          items.forEach((item, i) => {
+            if ((item as HTMLElement).classList.contains("movi-timeline-selected")) {
+              selectedIdx = i;
+            }
+          });
+
+          if (e.key === "ArrowRight") {
+            selectedIdx = Math.min(selectedIdx + 1, items.length - 1);
+          } else if (e.key === "ArrowLeft") {
+            selectedIdx = Math.max(selectedIdx - 1, 0);
+          } else if (e.key === "Enter" && selectedIdx >= 0) {
+            // Seek to selected item
+            (items[selectedIdx] as HTMLElement).click();
+            return;
+          }
+
+          // Update selection
+          items.forEach((item) => (item as HTMLElement).classList.remove("movi-timeline-selected"));
+          if (selectedIdx >= 0) {
+            const selected = items[selectedIdx] as HTMLElement;
+            selected.classList.add("movi-timeline-selected");
+            selected.scrollIntoView({ behavior: "smooth", block: "nearest", inline: "center" });
+          }
+          return;
+        }
+      }
 
       switch (e.key) {
         case " ":
@@ -4962,6 +5029,11 @@ export class MoviElement extends HTMLElement {
         bottom: 125px;
       }
 
+      /* Hide seek thumbnail when timeline is open — prevents z-index overlap */
+      :host:has(.movi-timeline-panel[style*="flex"]) .movi-seek-thumbnail {
+        display: none !important;
+      }
+
       /* Force enable pointer events on all interactive controls */
       .movi-controls-container.movi-controls-visible .movi-controls-bar,
       .movi-controls-container.movi-controls-visible .movi-controls-bar *,
@@ -5900,11 +5972,11 @@ export class MoviElement extends HTMLElement {
       ======================================== */
       .movi-timeline-panel {
         position: absolute;
-        bottom: 12px;
+        bottom: 125px;
         left: 12px;
         transition: bottom 0.3s ease;
         right: 12px;
-        z-index: 9;
+        z-index: 11;
         background: rgba(0, 0, 0, 0.88);
         backdrop-filter: blur(16px);
         -webkit-backdrop-filter: blur(16px);
@@ -6011,7 +6083,8 @@ export class MoviElement extends HTMLElement {
         transition: border-color 0.2s, transform 0.2s;
       }
 
-      .movi-timeline-item:hover {
+      .movi-timeline-item:hover,
+      .movi-timeline-item.movi-timeline-selected {
         border-color: var(--movi-primary);
         transform: scale(1.05);
       }
@@ -6287,6 +6360,12 @@ export class MoviElement extends HTMLElement {
 
       .movi-resume-btn:active {
         transform: scale(0.97);
+      }
+
+      .movi-resume-btn.movi-resume-focused {
+        outline: 2px solid var(--movi-primary);
+        outline-offset: 2px;
+        transform: scale(1.05);
       }
 
       .movi-resume-yes {
@@ -9957,9 +10036,8 @@ export class MoviElement extends HTMLElement {
     }
 
     // Timeline items — apply rotation + margin fix
-    const timelineImgs = this.shadowRoot.querySelectorAll(".movi-timeline-item img");
-    timelineImgs.forEach((img) => {
-      const el = img as HTMLElement;
+    const timelineImgs = this.shadowRoot.querySelectorAll(".movi-timeline-item img") as NodeListOf<HTMLImageElement>;
+    timelineImgs.forEach((el) => {
       if (deg === 0) {
         el.style.transform = "none";
         el.style.margin = "";
@@ -9969,15 +10047,17 @@ export class MoviElement extends HTMLElement {
         el.style.width = "90px";
         el.style.height = "auto";
         el.style.transform = `rotate(${deg}deg)`;
-        el.style.margin = "0";
-        requestAnimationFrame(() => {
-          const w = el.offsetWidth;
-          const h = el.offsetHeight;
-          if (w > 0 && h > 0) {
-            const diff = (w - h) / 2;
-            el.style.margin = `${diff}px ${-diff}px`;
-          }
-        });
+        // Use naturalWidth/Height — works even when element is hidden
+        const nw = el.naturalWidth;
+        const nh = el.naturalHeight;
+        if (nw > 0 && nh > 0) {
+          // After setting width:90px, rendered height = 90 * (nh/nw)
+          const renderedH = 90 * (nh / nw);
+          const diff = (90 - renderedH) / 2;
+          el.style.margin = `${diff}px ${-diff}px`;
+        } else {
+          el.style.margin = "0";
+        }
       } else {
         // 180°
         el.style.transform = `rotate(${deg}deg)`;
@@ -10002,6 +10082,11 @@ export class MoviElement extends HTMLElement {
     if (timeEl) timeEl.textContent = this.formatTime(savedTime);
     dialog.dataset.time = savedTime.toString();
     dialog.style.display = "flex";
+
+    // Highlight Resume button for keyboard navigation
+    dialog.querySelectorAll(".movi-resume-btn").forEach(b => b.classList.remove("movi-resume-focused"));
+    const yesBtn = dialog.querySelector(".movi-resume-yes") as HTMLElement;
+    yesBtn?.classList.add("movi-resume-focused");
 
     // Auto-hide after 10 seconds with fade-out
     setTimeout(() => {
@@ -10143,12 +10228,18 @@ export class MoviElement extends HTMLElement {
 
     strip.innerHTML = "";
 
-    // Detect portrait video and apply rotation immediately
+    // Detect portrait video — consider metadata rotation
     const videoTrack = this.player.getVideoTracks()?.[0];
-    const isPortrait = videoTrack && videoTrack.height > videoTrack.width;
+    const metadataRotation = videoTrack?.rotation || 0;
+    const metaIs90 = metadataRotation % 180 !== 0;
+    // After metadata rotation, is the video portrait?
+    const isPortraitAfterMeta = videoTrack
+      ? (metaIs90 ? videoTrack.width > videoTrack.height : videoTrack.height > videoTrack.width)
+      : false;
     const deg = this._currentManualRotation;
     const is90 = deg % 180 !== 0;
-    const resultIsPortrait = is90 ? !isPortrait : isPortrait;
+    // Manual rotation flips orientation again
+    const resultIsPortrait = is90 ? !isPortraitAfterMeta : isPortraitAfterMeta;
 
     if (resultIsPortrait) {
       strip.classList.add("movi-timeline-portrait");
