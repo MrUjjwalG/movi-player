@@ -10114,7 +10114,8 @@ export class MoviElement extends HTMLElement {
       // Auto-generate if strip is empty
       const strip = shadowRoot.querySelector(".movi-timeline-strip") as HTMLElement;
       if (strip && strip.children.length === 0) {
-        this.generateTimelineStrip(shadowRoot);
+        // Small delay to ensure panel is rendered and player is ready
+        requestAnimationFrame(() => this.generateTimelineStrip(shadowRoot));
       }
     } else {
       panel.style.display = "none";

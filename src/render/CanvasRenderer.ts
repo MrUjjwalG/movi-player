@@ -1249,8 +1249,7 @@ export class CanvasRenderer {
       // Attempting to draw a closed frame causes "WebGL: INVALID_OPERATION: texImage2D: can't texture a closed VideoFrame"
       // Explicitly check display dimensions which are 0 on closed frames
       if (frame.displayWidth === 0 || frame.displayHeight === 0) {
-        Logger.warn(TAG, "Attempted to draw closed/invalid frame");
-        return;
+        return; // Silently skip closed/invalid frames (normal at EOF)
       }
 
       const contentWidth = frame.displayWidth;

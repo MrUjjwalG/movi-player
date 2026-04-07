@@ -986,28 +986,20 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
 
     // Check if we've reached EOF and decoders are empty - transition to ended
     if (this.eofReached) {
-      // Check if all decoders have finished processing (with tolerance for queued frames)
-      // Allow up to 5 frames in decoder queue as normal processing lag
-      if (
-        this.videoDecoder.queueSize <= 5 &&
-        this.audioDecoder.queueSize === 0
-      ) {
-        // Check time to see if we are done
-        const currentTime = this.clock.getTime();
-        const duration = this.mediaInfo?.duration ?? 0;
-        const timeDone =
-          currentTime >= duration + this.startTime - 0.2 || duration === 0;
+      const currentTime = this.clock.getTime();
+      const duration = this.mediaInfo?.duration ?? 0;
+      const timeDone =
+        currentTime >= duration + this.startTime - 0.5 || duration === 0;
 
-        // Also check if video renderer has shown all frames
-        // BUT if we reached duration (timeDone), we should end regardless of queue
-        // (handles case where last frames are slightly beyond clamped clock)
-        const videoDone =
-          !this.videoRenderer || this.videoRenderer.getQueueSize() === 0;
+      const videoDone =
+        !this.videoRenderer || this.videoRenderer.getQueueSize() === 0;
+      const decodersDone =
+        this.videoDecoder.queueSize === 0 && this.audioDecoder.queueSize === 0;
 
-        if (videoDone || timeDone) {
-          this.handleEnded();
-          return;
-        }
+      // End if: time reached duration, or all queues empty, or decoders done + video done
+      if (timeDone || (decodersDone && videoDone)) {
+        this.handleEnded();
+        return;
       }
       return; // Don't demux more, just wait for playback to finish
     }
@@ -1545,8 +1537,10 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
         if (this.previewInitPromise) {
           Logger.debug(TAG, "Waiting for existing preview initialization...");
           await this.previewInitPromise;
-        } else {
-          Logger.debug(TAG, "Initializing thumbnail pipeline (lazy)...");
+        }
+        // If still no bindings (init failed or promise was cleared), retry
+        if (!this.thumbnailBindings) {
+          Logger.debug(TAG, "Initializing thumbnail pipeline (retry)...");
           this.previewInitPromise = this.initPreviewPipeline();
           await this.previewInitPromise;
         }
