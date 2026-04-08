@@ -66,14 +66,14 @@ export class PlayerStateManager extends EventEmitter<StateEvents> {
    * Check if can play
    */
   canPlay(): boolean {
-    return ['ready', 'paused', 'ended'].includes(this.state);
+    return ['ready', 'paused', 'ended', 'buffering'].includes(this.state);
   }
   
   /**
    * Check if can pause
    */
   canPause(): boolean {
-    return this.state === 'playing';
+    return this.state === 'playing' || this.state === 'buffering';
   }
   
   /**

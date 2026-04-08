@@ -655,6 +655,14 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
     }
 
     const currentState = this.stateManager.getState();
+
+    // During buffering, just mark intent to resume when ready
+    if (currentState === "buffering") {
+      this.wasPlayingBeforeRebuffer = true;
+      Logger.info(TAG, "Play requested during buffering — will resume when ready");
+      return;
+    }
+
     const wasEnded = currentState === "ended";
 
     // If ended, seek to start (0) to replay from beginning
@@ -807,6 +815,22 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
 
     if (!this.stateManager.canPause()) {
       Logger.warn(TAG, "Cannot pause in current state");
+      return;
+    }
+
+    // During buffering, transition to paused and stop auto-resume
+    if (this.stateManager.getState() === "buffering") {
+      this.wasPlayingBeforeRebuffer = false;
+      if (!this.disableAudio) this.audioRenderer.pause();
+      if (this.nativeAudioEl) this.nativeAudioEl.pause();
+      if (this.videoRenderer) this.videoRenderer.stopPresentationLoop();
+      this.stateManager.setState("paused");
+      if (this.animationFrameId !== null) {
+        cancelAnimationFrame(this.animationFrameId);
+        this.animationFrameId = null;
+      }
+      this.stopBackgroundTimer();
+      Logger.info(TAG, "Paused during buffering");
       return;
     }
 
@@ -1425,8 +1449,9 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
     }
 
     // Track intent: if we were playing (or already seeking but originally playing), we want to resume
+    // During buffering, preserve the pre-buffering play/pause intent
     if (currentState !== "seeking") {
-      this.wasPlayingBeforeSeek = currentState === "playing";
+      this.wasPlayingBeforeSeek = currentState === "playing" || (currentState === "buffering" && this.wasPlayingBeforeRebuffer);
     }
 
     // Pause clock so UI time doesn't advance during seek while in loading state

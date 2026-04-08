@@ -1949,12 +1949,14 @@ export class MoviElement extends HTMLElement {
       return;
 
     const state = this.player.getState();
-    // Only allow seeking if player is ready, playing, paused, or ended
+    // Allow seeking in playable states + buffering/seeking
     if (
       state !== "ready" &&
       state !== "playing" &&
       state !== "paused" &&
-      state !== "ended"
+      state !== "ended" &&
+      state !== "buffering" &&
+      state !== "seeking"
     ) {
       return;
     }
@@ -2015,12 +2017,14 @@ export class MoviElement extends HTMLElement {
     if (!touch) return;
 
     const state = this.player.getState();
-    // Only allow seeking if player is ready, playing, paused, or ended
+    // Allow seeking in playable states + buffering/seeking
     if (
       state !== "ready" &&
       state !== "playing" &&
       state !== "paused" &&
-      state !== "ended"
+      state !== "ended" &&
+      state !== "buffering" &&
+      state !== "seeking"
     ) {
       return;
     }
