@@ -2,7 +2,8 @@
 #include <libavutil/imgutils.h>
 
 EMSCRIPTEN_KEEPALIVE
-int movi_enable_decoder(MoviContext *ctx, int stream_index) {
+int movi_enable_decoder(MoviContext *ctx, int stream_index,
+                        uint8_t *extradata, int extradata_size) {
   if (!ctx || !ctx->fmt_ctx || stream_index < 0 ||
       stream_index >= (int)ctx->fmt_ctx->nb_streams)
     return -1;
@@ -19,6 +20,16 @@ int movi_enable_decoder(MoviContext *ctx, int stream_index) {
   if (avcodec_parameters_to_context(c, codecpar) < 0) {
     avcodec_free_context(&c);
     return -4;
+  }
+  // If caller provided extradata and codecpar had none, inject it.
+  // Needed for PGS/DVD subtitles where the container may omit extradata.
+  if (extradata && extradata_size > 0 && c->extradata_size == 0) {
+    c->extradata = av_malloc(extradata_size + AV_INPUT_BUFFER_PADDING_SIZE);
+    if (c->extradata) {
+      memcpy(c->extradata, extradata, extradata_size);
+      memset(c->extradata + extradata_size, 0, AV_INPUT_BUFFER_PADDING_SIZE);
+      c->extradata_size = extradata_size;
+    }
   }
   // Set pkt_timebase from stream time_base (required for subtitle duration
   // handling) FFmpeg uses pkt_timebase to convert packet duration to
@@ -319,11 +330,9 @@ int movi_decode_subtitle(MoviContext *ctx, int stream_index, uint8_t *data,
   }
 
   // Set packet PTS and DTS
-  // pts is in seconds, convert to stream timebase
   AVRational tb = ctx->fmt_ctx->streams[stream_index]->time_base;
   int64_t packet_pts = AV_NOPTS_VALUE;
   if (pts != 0) {
-    // Convert from seconds to stream timebase
     packet_pts = (int64_t)(pts / av_q2d(tb));
     pkt->pts = packet_pts;
     pkt->dts = packet_pts;
@@ -332,17 +341,11 @@ int movi_decode_subtitle(MoviContext *ctx, int stream_index, uint8_t *data,
     pkt->dts = AV_NOPTS_VALUE;
   }
 
-  // Set packet duration if provided (from demuxer, e.g., SRT file timestamps)
-  // This is critical for FFmpeg to automatically set end_display_time
-  // Also store it in context for fallback if FFmpeg doesn't set
-  // end_display_time
   if (duration > 0) {
-    // Convert from seconds to stream timebase
     pkt->duration = (int64_t)(duration / av_q2d(tb));
-    ctx->last_subtitle_packet_duration =
-        duration; // Store in seconds for fallback
+    ctx->last_subtitle_packet_duration = duration;
   } else {
-    pkt->duration = 0; // Set to 0 instead of AV_NOPTS_VALUE for subtitles
+    pkt->duration = 0;
     ctx->last_subtitle_packet_duration = 0;
   }
 

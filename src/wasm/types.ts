@@ -77,7 +77,7 @@ export interface MoviWasmModule {
   ) => number;
 
   // Decoding
-  _movi_enable_decoder: (ctx: number, stream_index: number) => number;
+  _movi_enable_decoder: (ctx: number, stream_index: number, extradata: number, extradata_size: number) => number;
   _movi_send_packet: (
     ctx: number,
     stream_index: number,

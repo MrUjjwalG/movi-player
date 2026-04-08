@@ -357,6 +357,9 @@ export class HttpSource implements SourceAdapter {
     let windowInitialized = false;
     const MAX_RETRIES = 10;
     const BASE_DELAY = 1000;
+    const MAX_RANGE_RETRIES = 3; // Retries for CDN cache warming (first hit returns 200 instead of 206)
+    const RANGE_RETRY_DELAY = 1500; // ms between range retries
+    let rangeRetryCount = 0;
 
     while (this.atomicIsStreaming()) {
       try {
@@ -398,20 +401,35 @@ export class HttpSource implements SourceAdapter {
           signal: this.abortController!.signal,
         });
 
-        // CRITICAL: Check for 206 Partial Content response
-        // If server returns 200, it's sending entire file instead of range!
+        // Check for 206 Partial Content response
+        // If server returns 200, it may be a CDN cache warming issue (e.g. Cloudflare first hit)
+        // Retry a few times before treating as fatal — CDN often supports range after caching the file
         if (response.status === 200) {
+          // Abort the 200 response body to prevent downloading entire file
+          try { response.body?.cancel(); } catch {}
+
+          rangeRetryCount++;
+          if (rangeRetryCount <= MAX_RANGE_RETRIES) {
+            Logger.warn(
+              TAG,
+              `Server returned 200 instead of 206 (attempt ${rangeRetryCount}/${MAX_RANGE_RETRIES}). ` +
+              `CDN may be caching — retrying in ${RANGE_RETRY_DELAY}ms...`
+            );
+            await new Promise(r => setTimeout(r, RANGE_RETRY_DELAY));
+            continue; // Retry the fetch loop
+          }
+
+          // Exhausted retries — fatal
           const rangeError = new Error("Server does not support range requests.");
-          Logger.error(
-            TAG,
-            `Server returned 200 instead of 206. Range requests not supported.`
-          );
-          // Abort the response to prevent downloading
+          Logger.error(TAG, `Server returned 200 after ${MAX_RANGE_RETRIES} retries. Range requests not supported.`);
           this.abortController?.abort();
           this.atomicSetStreaming(false);
-          this.streamError = rangeError; // Store for read() to pick up immediately
+          this.streamError = rangeError;
           throw rangeError;
         }
+
+        // Reset range retry counter on successful 206
+        rangeRetryCount = 0;
 
         if (!response.ok && response.status !== 206) {
           // If 4xx error (client error), maybe don't retry indefinitely

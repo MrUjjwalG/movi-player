@@ -700,9 +700,19 @@ export class WasmBindings {
   }
 
   // Decoding support
-  enableDecoder(streamIndex: number): number {
+  enableDecoder(streamIndex: number, extradata?: Uint8Array): number {
     if (!this.contextPtr) return -1;
-    return this.module._movi_enable_decoder(this.contextPtr, streamIndex);
+    if (!extradata || extradata.length === 0) {
+      return this.module._movi_enable_decoder(this.contextPtr, streamIndex, 0, 0);
+    }
+    const ptr = this.module._malloc(extradata.length);
+    if (!ptr) return -1;
+    try {
+      this.module.HEAPU8.set(extradata, ptr);
+      return this.module._movi_enable_decoder(this.contextPtr, streamIndex, ptr, extradata.length);
+    } finally {
+      this.module._free(ptr);
+    }
   }
 
   sendPacket(

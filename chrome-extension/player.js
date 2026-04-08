@@ -6,6 +6,15 @@ const overlay = document.getElementById("fileOverlay");
 const dropZone = document.getElementById("dropZone");
 const filePicker = document.getElementById("filePicker");
 
+// Update tab title from metadata once media is loaded
+customElements.whenDefined("movi-player").then(() => {
+  const player = document.getElementById("player");
+  player.addEventListener("loadeddata", () => {
+    const title = player.title;
+    if (title) document.title = title + " — Movi Player";
+  });
+});
+
 function loadFile(file) {
   overlay.classList.add("hidden");
   document.title = file.name + " — Movi Player";

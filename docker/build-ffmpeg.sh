@@ -48,6 +48,12 @@ EOF
     
     echo "=== Installing dav1d ==="
     ninja -C build install
+
+    # Strip PTHREADS flags from dav1d pkg-config — dav1d auto-enables threads
+    # for Emscripten but our WASM build uses USE_PTHREADS=0, causing FFmpeg
+    # configure to fail on conflicting flags.
+    sed -i 's/-s USE_PTHREADS=[0-9]*//g; s/-s PTHREAD_POOL_SIZE=[0-9]*//g' \
+        "${DAV1D_PREFIX}/lib/pkgconfig/dav1d.pc"
 fi
 
 ls -R /src/dist/ffmpeg/lib || echo "Directory not found"
@@ -91,6 +97,7 @@ else
         --cxx=em++ \
         --ar=emar \
         --ranlib=emranlib \
+        --nm=emnm \
         --disable-all \
         --disable-asm \
         --disable-debug \
@@ -98,6 +105,7 @@ else
         --disable-doc \
         --disable-autodetect \
         --enable-small \
+        --enable-zlib \
         --enable-avcodec \
         --enable-avformat \
         --enable-avutil \
@@ -109,9 +117,9 @@ else
         --enable-decoder=h264,hevc,vp9,vp8,libdav1d,aac,aac_latm,mp3,opus,vorbis,flac,ac3,eac3,dca,pcm_s16le,pcm_s24le,pcm_f32le,subrip,ass,ssa,mov_text,pgssub,dvb_subtitle,dvdsubtitle,webvtt,srt \
         --enable-parser=h264,hevc,vp8,vp9,av1,aac,mp3,opus,vorbis,flac,hdmv_pgs_subtitle \
         --enable-bsf=aac_adtstoasc,h264_mp4toannexb,hevc_mp4toannexb,iso_media_metadata_manipulator,extract_extradata,vp9_superframe \
-        --extra-cflags="-Oz -flto -s USE_PTHREADS=0 -D_FILE_OFFSET_BITS=64 -I${DAV1D_PREFIX}/include" \
-        --extra-cxxflags="-Oz -flto -D_FILE_OFFSET_BITS=64 -I${DAV1D_PREFIX}/include" \
-        --extra-ldflags="-s WASM=1 -Oz -flto -L${DAV1D_PREFIX}/lib"
+        --extra-cflags="-Oz -flto -s USE_PTHREADS=0 -s USE_ZLIB=1 -D_FILE_OFFSET_BITS=64 -I${DAV1D_PREFIX}/include" \
+        --extra-cxxflags="-Oz -flto -s USE_ZLIB=1 -D_FILE_OFFSET_BITS=64 -I${DAV1D_PREFIX}/include" \
+        --extra-ldflags="-s WASM=1 -s USE_ZLIB=1 -Oz -flto -L${DAV1D_PREFIX}/lib"
 
     echo "=== Compiling FFmpeg ==="
     emmake make -j$(nproc)
@@ -178,6 +186,7 @@ emcc /src/wasm/*.c \
     -s TEXTDECODER=2 \
     -s SUPPORT_LONGJMP=0 \
     -s SUPPORT_ERRNO=0 \
+    -sUSE_ZLIB=1 \
     --closure 0 \
     --js-library /src/wasm/library_movi.js \
     -o /src/dist/wasm/movi.js
