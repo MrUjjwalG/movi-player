@@ -116,7 +116,7 @@ export default defineConfig({
     ],
 
     footer: {
-      message: "Released under the Apache-2.0 License.",
+      message: 'Released under the Apache-2.0 License. <a href="/movi-player/privacy-policy">Privacy Policy</a>',
       copyright: "Copyright © 2024-present Ujjwal Kashyap",
     },
 
