@@ -2511,6 +2511,12 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
     }
   }
 
+  setLetterboxColor(r: number, g: number, b: number): void {
+    if (this.videoRenderer) {
+      this.videoRenderer.setLetterboxColor(r, g, b);
+    }
+  }
+
   /**
    * Set playback rate
    */

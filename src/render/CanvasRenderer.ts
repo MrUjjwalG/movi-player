@@ -61,6 +61,8 @@ export class CanvasRenderer {
   // Fit mode for canvas rendering
   private fitMode: "contain" | "cover" | "fill" | "zoom" | "control" =
     "contain"; // Default to contain (maintain aspect ratio)
+  private letterboxColor: [number, number, number] = [0, 0, 0]; // Current smoothed RGB (0-255)
+  private letterboxTarget: [number, number, number] = [0, 0, 0]; // Target RGB from ambient sampling
 
 
   // Subtitle rendering
@@ -776,6 +778,14 @@ export class CanvasRenderer {
   }
 
   /**
+   * Set letterbox/pillarbox color (for ambient background effect).
+   * Color is applied on the next frame draw via clearColor.
+   */
+  setLetterboxColor(r: number, g: number, b: number): void {
+    this.letterboxTarget = [r, g, b];
+  }
+
+  /**
    * Set fit mode for canvas rendering
    * - 'contain': Scale to fit while maintaining aspect ratio (default)
    * - 'cover': Scale to cover entire canvas while maintaining aspect ratio (may crop)
@@ -1315,7 +1325,12 @@ export class CanvasRenderer {
 
       // GL Draw steps:
       gl.viewport(0, 0, this.width, this.height);
-      gl.clearColor(0, 0, 0, 1);
+      // Smooth letterbox color transition (lerp toward target every frame for ~60fps smooth)
+      const f = 0.08;
+      this.letterboxColor[0] += (this.letterboxTarget[0] - this.letterboxColor[0]) * f;
+      this.letterboxColor[1] += (this.letterboxTarget[1] - this.letterboxColor[1]) * f;
+      this.letterboxColor[2] += (this.letterboxTarget[2] - this.letterboxColor[2]) * f;
+      gl.clearColor(this.letterboxColor[0] / 255, this.letterboxColor[1] / 255, this.letterboxColor[2] / 255, 1);
       gl.clear(gl.COLOR_BUFFER_BIT);
 
       // WebGL viewport needs y from bottom

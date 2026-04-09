@@ -28,7 +28,7 @@ const TAG = "MoviElement";
 const OSD = {
   loop: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M17 2l4 4-4 4"/><path d="M3 11v-1a4 4 0 0 1 4-4h14"/><path d="M7 22l-4-4 4-4"/><path d="M21 13v1a4 4 0 0 1-4 4H3"/></svg>`,
   stableAudio: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="2" y="4" width="20" height="16" rx="2"/><path d="M6 15v-2M9 15v-4M12 15v-6M15 15v-4M18 15v-2"/></svg>`,
-  hdr: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4.93 4.93l1.41 1.41M17.66 17.66l1.41 1.41M2 12h2M20 12h2M6.34 17.66l-1.41 1.41M19.07 4.93l-1.41 1.41"/></svg>`,
+  hdr: `<span style="font-weight:700;font-size:14px;letter-spacing:1px;padding:4px 10px;border:2px solid currentColor;border-radius:6px;">HDR</span>`,
   speed: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polygon points="5 3 19 12 5 21 5 3"/><line x1="19" y1="3" x2="19" y2="21"/></svg>`,
   audio: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M9 18V5l12-2v13"/><circle cx="6" cy="18" r="3"/><circle cx="18" cy="16" r="3"/></svg>`,
   subOn: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect width="18" height="14" x="3" y="5" rx="2"/><path d="M7 15h4M13 15h4"/></svg>`,
@@ -37,6 +37,7 @@ const OSD = {
   rotate: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 12a9 9 0 0 0-9-9 9.75 9.75 0 0 0-6.74 2.74L3 8"/><path d="M3 3v5h5"/></svg>`,
   muted: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5"/><line x1="23" y1="9" x2="17" y2="15"/><line x1="17" y1="9" x2="23" y2="15"/></svg>`,
   unmuted: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5"/><path d="M19.07 4.93a10 10 0 0 1 0 14.14"/><path d="M15.54 8.46a5 5 0 0 1 0 7.07"/></svg>`,
+  ambient: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="5"/><path d="M12 1v2M12 21v2M4.22 4.22l1.42 1.42M18.36 18.36l1.42 1.42M1 12h2M21 12h2M4.22 19.78l1.42-1.42M18.36 5.64l1.42-1.42"/></svg>`,
 } as const;
 
 export class MoviElement extends HTMLElement {
@@ -459,17 +460,7 @@ export class MoviElement extends HTMLElement {
       </div>
       <div class="movi-context-menu-submenu movi-context-menu-submenu-subtitle" data-submenu="subtitle-track" style="display: none;"></div>
       <div class="movi-context-menu-item" data-action="hdr-toggle" style="display: none;">
-        <svg class="movi-context-menu-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-          <path d="M12 2v2"></path>
-          <path d="M12 20v2"></path>
-          <path d="M4.93 4.93l1.41 1.41"></path>
-          <path d="M17.66 17.66l1.41 1.41"></path>
-          <path d="M2 12h2"></path>
-          <path d="M20 12h2"></path>
-          <path d="M6.34 17.66l-1.41 1.41"></path>
-          <path d="M19.07 4.93l-1.41 1.41"></path>
-          <circle cx="12" cy="12" r="4"></circle>
-        </svg>
+        <span class="movi-context-menu-icon" style="font-weight:700;font-size:10px;letter-spacing:0.5px;width:16px;text-align:center;overflow:visible;white-space:nowrap;display:inline-flex;align-items:center;justify-content:center;">HDR</span>
         <span class="movi-context-menu-label">HDR Mode</span>
         <span class="movi-context-menu-status movi-hdr-status">On</span>
         <span class="movi-context-menu-shortcut">H</span>
@@ -527,6 +518,29 @@ export class MoviElement extends HTMLElement {
         <span class="movi-context-menu-label">Stable Volume</span>
         <span class="movi-context-menu-status movi-stable-audio-status">Off</span>
         <span class="movi-context-menu-shortcut">U</span>
+      </div>
+      <div class="movi-context-menu-item" data-action="ambient-toggle">
+        <svg class="movi-context-menu-icon movi-context-menu-ambient-outline" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+          <circle cx="12" cy="12" r="5"></circle>
+          <path d="M12 1v2"></path><path d="M12 21v2"></path>
+          <path d="M4.22 4.22l1.42 1.42"></path><path d="M18.36 18.36l1.42 1.42"></path>
+          <path d="M1 12h2"></path><path d="M21 12h2"></path>
+          <path d="M4.22 19.78l1.42-1.42"></path><path d="M18.36 5.64l1.42-1.42"></path>
+        </svg>
+        <svg class="movi-context-menu-icon movi-context-menu-ambient-filled" viewBox="0 0 24 24" fill="currentColor" style="display: none;">
+          <circle cx="12" cy="12" r="5"></circle>
+          <path d="M12 1v2" stroke="currentColor" stroke-width="2" stroke-linecap="round"></path>
+          <path d="M12 21v2" stroke="currentColor" stroke-width="2" stroke-linecap="round"></path>
+          <path d="M4.22 4.22l1.42 1.42" stroke="currentColor" stroke-width="2" stroke-linecap="round"></path>
+          <path d="M18.36 18.36l1.42 1.42" stroke="currentColor" stroke-width="2" stroke-linecap="round"></path>
+          <path d="M1 12h2" stroke="currentColor" stroke-width="2" stroke-linecap="round"></path>
+          <path d="M21 12h2" stroke="currentColor" stroke-width="2" stroke-linecap="round"></path>
+          <path d="M4.22 19.78l1.42-1.42" stroke="currentColor" stroke-width="2" stroke-linecap="round"></path>
+          <path d="M18.36 5.64l1.42-1.42" stroke="currentColor" stroke-width="2" stroke-linecap="round"></path>
+        </svg>
+        <span class="movi-context-menu-label">Ambient Mode</span>
+        <span class="movi-context-menu-status movi-ambient-status">Off</span>
+        <span class="movi-context-menu-shortcut">G</span>
       </div>
       <div class="movi-context-menu-divider"></div>
       <div class="movi-context-menu-item" data-action="snapshot">
@@ -2851,6 +2865,23 @@ export class MoviElement extends HTMLElement {
             );
           }
           break;
+        case "g":
+        case "G":
+          // G: Toggle ambient mode
+          e.preventDefault();
+          this._ambientMode = !this._ambientMode;
+          if (this._ambientMode) {
+            this.setAttribute("ambientmode", "");
+          } else {
+            this.removeAttribute("ambientmode");
+          }
+          this.updateAmbientMode();
+          this.updateAmbientUI();
+          this.showOSD(
+            OSD.ambient,
+            this._ambientMode ? "Ambient Mode On" : "Ambient Mode Off",
+          );
+          break;
         case "=":
         case "+":
           // +: Speed up (VLC standard)
@@ -3476,6 +3507,20 @@ export class MoviElement extends HTMLElement {
             !current ? "Stable Volume On" : "Stable Volume Off",
           );
         }
+        hideContextMenu();
+      } else if (action === "ambient-toggle") {
+        this._ambientMode = !this._ambientMode;
+        if (this._ambientMode) {
+          this.setAttribute("ambientmode", "");
+        } else {
+          this.removeAttribute("ambientmode");
+        }
+        this.updateAmbientMode();
+        this.updateAmbientUI();
+        this.showOSD(
+          OSD.ambient,
+          this._ambientMode ? "Ambient Mode On" : "Ambient Mode Off",
+        );
         hideContextMenu();
       } else if (action === "nerd-stats") {
         this.toggleNerdStats(shadowRoot);
@@ -8759,6 +8804,7 @@ export class MoviElement extends HTMLElement {
 
       // Initialize ambient mode if enabled
       this.updateAmbientMode();
+      this.updateAmbientUI();
 
       // Dispatch load event
       this.dispatchEvent(new Event("loadeddata"));
@@ -9581,6 +9627,8 @@ export class MoviElement extends HTMLElement {
       if (this.ambientWrapperElement) {
         this.ambientWrapperElement.style.opacity = "0";
       }
+      // Reset letterbox to black
+      this.player?.setLetterboxColor(0, 0, 0);
       this.stopAmbientColorSampling();
     }
   }
@@ -9744,16 +9792,30 @@ export class MoviElement extends HTMLElement {
       ${color4} 100%
     )`;
 
-    // Apply to external ambient wrapper element
-    if (this.ambientWrapperElement && this._ambientMode) {
-      this.ambientWrapperElement.style.background = gradient;
+    if (this._ambientMode) {
+      const isFullscreen = document.fullscreenElement === this;
 
-      // For light mode, we might also want to add a subtle box shadow to help it pop
-      if (this._theme === "light") {
-        this.ambientWrapperElement.style.filter =
-          "saturate(1.5) brightness(1.1)";
+      if (this.ambientWrapperElement && !isFullscreen) {
+        // External wrapper in normal mode — wrapper handles ambient, letterbox stays black
+        this.ambientWrapperElement.style.background = gradient;
+        this.player?.setLetterboxColor(0, 0, 0);
+
+        if (this._theme === "light") {
+          this.ambientWrapperElement.style.filter =
+            "saturate(1.5) brightness(1.1)";
+        } else {
+          this.ambientWrapperElement.style.filter = "none";
+        }
       } else {
-        this.ambientWrapperElement.style.filter = "none";
+        // Fullscreen or no wrapper — letterbox color on canvas
+        const maxBrightness = 80;
+        const peak = Math.max(r, g, b, 1);
+        const scale = Math.min(maxBrightness / peak, 0.45);
+        this.player?.setLetterboxColor(
+          Math.floor(r * scale),
+          Math.floor(g * scale),
+          Math.floor(b * scale),
+        );
       }
     }
   }
@@ -10186,6 +10248,28 @@ export class MoviElement extends HTMLElement {
       loopBtn?.classList.remove("active");
       loopMenuItem?.classList.remove("movi-context-menu-active");
       if (loopStatus) loopStatus.textContent = "Off";
+      if (ctxOutline) ctxOutline.style.display = "block";
+      if (ctxFilled) ctxFilled.style.display = "none";
+    }
+  }
+
+  private updateAmbientUI(): void {
+    const shadowRoot = this.shadowRoot;
+    if (!shadowRoot) return;
+
+    const menuItem = shadowRoot.querySelector('.movi-context-menu-item[data-action="ambient-toggle"]');
+    const status = shadowRoot.querySelector(".movi-ambient-status");
+    const ctxOutline = shadowRoot.querySelector(".movi-context-menu-ambient-outline") as HTMLElement;
+    const ctxFilled = shadowRoot.querySelector(".movi-context-menu-ambient-filled") as HTMLElement;
+
+    if (this._ambientMode) {
+      menuItem?.classList.add("movi-context-menu-active");
+      if (status) status.textContent = "On";
+      if (ctxOutline) ctxOutline.style.display = "none";
+      if (ctxFilled) ctxFilled.style.display = "block";
+    } else {
+      menuItem?.classList.remove("movi-context-menu-active");
+      if (status) status.textContent = "Off";
       if (ctxOutline) ctxOutline.style.display = "block";
       if (ctxFilled) ctxFilled.style.display = "none";
     }
