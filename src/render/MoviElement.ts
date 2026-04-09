@@ -29,7 +29,7 @@ const OSD = {
   loop: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M17 2l4 4-4 4"/><path d="M3 11v-1a4 4 0 0 1 4-4h14"/><path d="M7 22l-4-4 4-4"/><path d="M21 13v1a4 4 0 0 1-4 4H3"/></svg>`,
   stableAudio: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="2" y="4" width="20" height="16" rx="2"/><path d="M6 15v-2M9 15v-4M12 15v-6M15 15v-4M18 15v-2"/></svg>`,
   hdr: `<span style="font-weight:700;font-size:14px;letter-spacing:1px;padding:4px 10px;border:2px solid currentColor;border-radius:6px;">HDR</span>`,
-  speed: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polygon points="5 3 19 12 5 21 5 3"/><line x1="19" y1="3" x2="19" y2="21"/></svg>`,
+  speed: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M5.64 18.36a9 9 0 1 1 12.72 0"/><path d="m12 12 4-4"/></svg>`,
   audio: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M9 18V5l12-2v13"/><circle cx="6" cy="18" r="3"/><circle cx="18" cy="16" r="3"/></svg>`,
   subOn: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect width="18" height="14" x="3" y="5" rx="2"/><path d="M7 15h4M13 15h4"/></svg>`,
   subOff: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect width="18" height="14" x="3" y="5" rx="2"/><path d="M7 15h4M13 15h4"/><line x1="3" y1="5" x2="21" y2="19" stroke-width="2.5"/></svg>`,
@@ -2766,12 +2766,12 @@ export class MoviElement extends HTMLElement {
               if (activeIdx === -1) {
                 // Currently off → select first
                 this.player.selectSubtitleLang(extSubs[0].lang);
-                this.showOSD(subOsdOn, `${extSubs[0].label} (1/${extSubs.length})`);
+                this.showOSD(subOsdOn, `${extSubs[0].label} [${extSubs[0].lang.toUpperCase()}] (1/${extSubs.length})`);
               } else if (activeIdx + 1 < extSubs.length) {
                 // Next track
                 const next = extSubs[activeIdx + 1];
                 this.player.selectSubtitleLang(next.lang);
-                this.showOSD(subOsdOn, `${next.label} (${activeIdx + 2}/${extSubs.length})`);
+                this.showOSD(subOsdOn, `${next.label} [${next.lang.toUpperCase()}] (${activeIdx + 2}/${extSubs.length})`);
               } else {
                 // Last → off
                 this.player.selectSubtitleLang(null);
@@ -2789,7 +2789,10 @@ export class MoviElement extends HTMLElement {
               } else {
                 const next = muxedSubs[nextIdx];
                 this.player.selectSubtitleTrack(next.id);
-                this.showOSD(subOsdOn, `${next.language?.toUpperCase() || "Sub"} (${nextIdx + 1}/${muxedSubs.length})`);
+                const muxSubLang = next.language?.toUpperCase() || "";
+                const muxSubLabel = next.label || muxSubLang || "Sub";
+                const muxSubOsd = muxSubLang && muxSubLabel !== muxSubLang ? `${muxSubLabel} [${muxSubLang}]` : muxSubLabel;
+                this.showOSD(subOsdOn, `${muxSubOsd} (${nextIdx + 1}/${muxedSubs.length})`);
               }
               this.updateSubtitleTrackMenu();
             }
@@ -2805,10 +2808,10 @@ export class MoviElement extends HTMLElement {
             const bIcon = OSD.audio;
 
             // Build unified list: muxed first, then external
-            type AudioEntry = { type: "muxed"; id: number; label: string } | { type: "ext"; lang: string; label: string };
+            type AudioEntry = { type: "muxed"; id: number; label: string; langCode: string } | { type: "ext"; lang: string; label: string; langCode: string };
             const allAudio: AudioEntry[] = [
-              ...bMuxed.map((t) => ({ type: "muxed" as const, id: t.id, label: t.label || t.language || `Audio ${t.id}` })),
-              ...bExternal.map((t) => ({ type: "ext" as const, lang: t.lang, label: t.label })),
+              ...bMuxed.map((t) => ({ type: "muxed" as const, id: t.id, label: t.label || t.language || `Audio ${t.id}`, langCode: t.language?.toUpperCase() || "" })),
+              ...bExternal.map((t) => ({ type: "ext" as const, lang: t.lang, label: t.label, langCode: t.lang.toUpperCase() })),
             ];
 
             if (allAudio.length > 1) {
@@ -2831,7 +2834,8 @@ export class MoviElement extends HTMLElement {
                 if (this.player.isNativeAudioActive()) this.player.useMuxedAudio();
                 this.player.selectAudioTrack(next.id);
               }
-              this.showOSD(bIcon, `${next.label} (${nextIdx + 1}/${allAudio.length})`);
+              const audioOsdLabel = next.langCode ? `${next.label} [${next.langCode}]` : next.label;
+              this.showOSD(bIcon, `${audioOsdLabel} (${nextIdx + 1}/${allAudio.length})`);
               this.updateAudioTrackMenu();
             }
           }
@@ -3425,7 +3429,10 @@ export class MoviElement extends HTMLElement {
             this.player.selectSubtitleLang(null);
             this.player.selectSubtitleTrack(trackId);
             const trk = this.player.getSubtitleTracks().find(t => t.id === trackId);
-            this.showOSD(subOsdIcon, trk?.label || trk?.language || `Subtitle ${trackId}`);
+            const ctxSubLang = trk?.language?.toUpperCase() || "";
+            const ctxSubLabel = trk?.label || ctxSubLang || `Subtitle ${trackId}`;
+            const ctxSubOsd = ctxSubLang && ctxSubLabel !== ctxSubLang ? `${ctxSubLabel} [${ctxSubLang}]` : ctxSubLabel;
+            this.showOSD(subOsdIcon, ctxSubOsd);
           }
         }
         hideContextMenu();
@@ -4397,7 +4404,8 @@ export class MoviElement extends HTMLElement {
               // External audio track — switch to native <audio>
               this.player.selectAudioLang(lang);
               const t = this.player.getAudioLangs().find(a => a.lang === lang);
-              this.showOSD(audioIcon, t?.label || lang);
+              const extAudioOsd = t ? `${t.label} [${lang.toUpperCase()}]` : lang.toUpperCase();
+              this.showOSD(audioIcon, extAudioOsd);
             } else if (trackIdStr) {
               // Muxed audio track — switch back to WASM if needed
               if (this.player.isNativeAudioActive()) {
@@ -4406,7 +4414,10 @@ export class MoviElement extends HTMLElement {
               const tid = parseInt(trackIdStr);
               this.player.selectAudioTrack(tid);
               const trk = this.player.getAudioTracks().find(a => a.id === tid);
-              this.showOSD(audioIcon, trk?.label || trk?.language || `Audio ${tid}`);
+              const muxAudioLang = trk?.language?.toUpperCase() || "";
+              const muxAudioLabel = trk?.label || muxAudioLang || `Audio ${tid}`;
+              const muxAudioOsd = muxAudioLang && muxAudioLabel !== muxAudioLang ? `${muxAudioLabel} [${muxAudioLang}]` : muxAudioLabel;
+              this.showOSD(audioIcon, muxAudioOsd);
             }
             this.updateAudioTrackMenu();
             const menu = this.shadowRoot?.querySelector(
@@ -4728,7 +4739,8 @@ export class MoviElement extends HTMLElement {
               const st = this.player.getSubtitleLangs().find(t => t.lang === subtitleLang);
               this.player.selectSubtitleLang(subtitleLang);
               this.updateSubtitleTrackMenu();
-              this.showOSD(subIconOn, st?.label || subtitleLang);
+              const extSubOsd = st ? `${st.label} [${subtitleLang.toUpperCase()}]` : subtitleLang.toUpperCase();
+              this.showOSD(subIconOn, extSubOsd);
             } else if (trackIdStr === "null") {
               // Disable all subtitles (muxed + external)
               this.player.selectSubtitleTrack(null).catch(() => {});
@@ -4741,7 +4753,10 @@ export class MoviElement extends HTMLElement {
               this.player.selectSubtitleLang(null);
               this.player.selectSubtitleTrack(trackId).catch(() => {});
               const trk = this.player.getSubtitleTracks().find(t => t.id === trackId);
-              this.showOSD(subIconOn, trk?.label || trk?.language || `Subtitle ${trackId}`);
+              const muxSubLangC = trk?.language?.toUpperCase() || "";
+              const muxSubLabelC = trk?.label || muxSubLangC || `Subtitle ${trackId}`;
+              const muxSubOsdC = muxSubLangC && muxSubLabelC !== muxSubLangC ? `${muxSubLabelC} [${muxSubLangC}]` : muxSubLabelC;
+              this.showOSD(subIconOn, muxSubOsdC);
             }
             // Close menu
             const menu = this.shadowRoot?.querySelector(
