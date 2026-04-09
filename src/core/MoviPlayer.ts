@@ -92,6 +92,7 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
   private animationFrameId: number | null = null;
   private backgroundIntervalId: number | null = null;
   private backgroundWorker: Worker | null = null; // Worker-based timer for Safari
+  private isBackgrounded: boolean = false; // True when tab is hidden (background)
 
   // WakeLock to prevent screen sleep during playback
   private wakeLock: WakeLockSentinel | null = null;
@@ -1038,7 +1039,7 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
     // Stall detection: if playing but both video and audio buffers are critically low
     // Skip near end of video to avoid false stall at EOF
     const nearEnd = this.mediaInfo && this.clock.getTime() >= (this.mediaInfo.duration + this.startTime) - 3;
-    if (this.stateManager.getState() === "playing" && !this.eofReached && !this.waitingForVideoSync && !nearEnd) {
+    if (this.stateManager.getState() === "playing" && !this.eofReached && !this.waitingForVideoSync && !nearEnd && !this.isBackgrounded) {
       const videoEmpty = this.videoRenderer ? this.videoRenderer.getQueueSize() === 0 : false;
       const hasAudio = !!this.trackManager.getActiveAudioTrack() && !this.disableAudio;
       const audioLow = !hasAudio || this.audioRenderer.getBufferedDuration() < 0.05;
@@ -1132,11 +1133,15 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
     // Renderer queue limits (in frames)
     const maxVideoBuffered = isSoftware ? 60 : isPostSeek ? 20 : 100;
 
+    // In background (not PiP), ignore video backpressure since video decode is skipped.
+    // Only check audio backpressure to keep audio flowing smoothly.
+    const skipVideoBackpressure = this.isBackgrounded && !this.isPiPActive;
+
     if (
-      this.videoDecoder.queueSize > maxVideoQueue ||
+      (!skipVideoBackpressure && this.videoDecoder.queueSize > maxVideoQueue) ||
       (!this.disableAudio && this.audioDecoder.queueSize > maxAudioQueue) ||
       (!this.disableAudio && audioBuffered > maxAudioBuffered) ||
-      videoBuffered > maxVideoBuffered
+      (!skipVideoBackpressure && videoBuffered > maxVideoBuffered)
     ) {
       if (
         this.waitingForVideoSync &&
@@ -1273,6 +1278,13 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
           const activeAudio = this.trackManager.getActiveAudioTrack();
 
           if (activeVideo && activeVideo.id === packet.streamIndex) {
+            // In background (not PiP), skip video decoding entirely.
+            // This prevents frame queue buildup that blocks audio demuxing via backpressure.
+            // At 60fps, video queue fills in ~1.7s and starves audio.
+            if (this.isBackgrounded && !this.isPiPActive) {
+              continue;
+            }
+
             // After seek, skip non-keyframe video packets until we find a keyframe
             // This prevents decoder errors (decoder needs keyframe after flush)
             if (this.seekingToKeyframe) {
@@ -3080,7 +3092,16 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
 
     if (document.visibilityState === "hidden" && isPlaying) {
       // Tab went to background — use Worker timer (Safari throttles setInterval to 1s+)
+      this.isBackgrounded = true;
       this.startBackgroundTimer();
+
+      // In background (not PiP), stop video presentation and clear queue
+      // to prevent frame accumulation that blocks audio demuxing via backpressure.
+      // At 60fps, the queue fills in ~1.7s and starves audio completely.
+      if (!this.isPiPActive && this.videoRenderer) {
+        this.videoRenderer.stopPresentationLoop();
+        this.videoRenderer.clearQueue();
+      }
 
       // Resume AudioContext if suspended
       if (this.audioRenderer) {
@@ -3088,25 +3109,28 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
       }
     } else if (document.visibilityState === "visible") {
       // Tab visible again — stop background timer, RAF takes over
+      this.isBackgrounded = false;
       this.stopBackgroundTimer();
 
       if (isPlaying) {
-        // Only clear video queue if PiP is NOT active
-        // PiP window keeps rendering frames even when main tab is hidden
-        if (!this.isPiPActive && this.videoRenderer) {
-          this.videoRenderer.clearQueue();
-        }
-
-        // Re-sync clock to audio (audio was playing continuously)
-        this.clock.seek(this.clock.getTime());
-
         // Resume AudioContext if needed
         if (this.audioRenderer) {
           (this.audioRenderer as any).audioContext?.resume?.().catch(() => {});
         }
 
-        // Restart presentation loop
-        this.processLoop();
+        if (!this.isPiPActive) {
+          // Seek to current audio position for clean video recovery.
+          // In background, video decoding was skipped so demuxer is at audio position.
+          // A full seek re-positions demuxer, flushes decoders, and restarts cleanly.
+          const audioTime = this.clock.getTime();
+          Logger.debug(TAG, `Foreground recovery: seeking to ${audioTime.toFixed(2)}s`);
+          this.seek(audioTime).catch((err) => {
+            Logger.error(TAG, "Foreground recovery seek failed", err);
+          });
+        } else {
+          // PiP was active — just restart processLoop, video was rendering in PiP
+          this.processLoop();
+        }
 
         setTimeout(() => {
           if (this.stateManager.getState() === "playing") {
