@@ -11294,8 +11294,9 @@ export class MoviElement extends HTMLElement {
       this.duration > 0
     ) {
       const mediaInfo = this.player.getMediaInfo();
-      if (mediaInfo?.metadata?.title) {
-        this._title = mediaInfo.metadata.title;
+      const metaTitle = mediaInfo?.metadata?.title;
+      if (metaTitle && !/download/i.test(metaTitle)) {
+        this._title = metaTitle;
         this._titleAutoLoaded = true;
       } else if (this._src) {
         // Fallback to filename if no metadata title
@@ -11334,7 +11335,7 @@ export class MoviElement extends HTMLElement {
             } catch { /* ignore */ }
           }
           if (filename) {
-            this._title = filename;
+            this._title = this.cleanVideoTitle(filename);
           }
         }
         this._titleAutoLoaded = true;
@@ -11354,6 +11355,31 @@ export class MoviElement extends HTMLElement {
       titleBar.style.display = "none";
       titleBar.classList.remove("movi-title-visible");
     }
+  }
+
+  /**
+   * Clean a video filename into a human-readable title (VLC-style).
+   * "The.Boys.S05E01.Fifteen.Inches.of.Sheer.Dynamite.2160p.AMZN.WEB-DL.Hindi.DDP5.1-English.DDP5.1.Atmos.DV.HDR.H.265-4kHdHub.Com"
+   * → "The Boys S05E01 Fifteen Inches of Sheer Dynamite"
+   */
+  private cleanVideoTitle(filename: string): string {
+    // Replace dots and underscores with spaces
+    let title = filename.replace(/[._]/g, " ");
+
+    // Remove common release group / site suffixes (e.g., "-4kHdHub Com", "-YIFY")
+    title = title.replace(/\s*-\s*\w+\s*$/, "");
+
+    // Truncate at quality/codec markers
+    const cutPatterns = /\b(2160p|1080p|720p|480p|4K|UHD|WEB[ -]?DL|WEB[ -]?Rip|BluRay|BDRip|BRRip|HDRip|DVDRip|HDTV|AMZN|NF|DSNP|HMAX|ATVP|PCOK|PMTP|MA |DDP?\d|AAC|AC3|FLAC|Atmos|TrueHD|DTS|HEVC|H[ .]?26[45]|x26[45]|AV1|VP9|HDR|HDR10|DV|DoVi|Dolby|REMUX|PROPER|REPACK|iNTERNAL|EXTENDED|UNRATED|DC |10bit|8bit)\b/i;
+    const match = title.match(cutPatterns);
+    if (match && match.index && match.index > 5) {
+      title = title.substring(0, match.index);
+    }
+
+    // Clean up extra spaces and trailing hyphens/dashes
+    title = title.replace(/\s*[-–—]\s*$/, "").replace(/\s+/g, " ").trim();
+
+    return title || filename;
   }
 
   get duration(): number {
