@@ -73,10 +73,36 @@ export interface SubtitleCue {
 // ============================================================================
 
 export interface SourceConfig {
-  type: "url" | "file";
+  type: "url" | "file" | "encrypted";
   url?: string;
   file?: File;
   headers?: Record<string, string>;
+  /** Encrypted source config */
+  encrypted?: {
+    videoUrl: string;
+    tokenUrl: string;
+    videoId: string;
+    fingerprint: string;
+    sessionToken: string;
+    tokenRefreshInterval?: number;
+    onAuthFailed?: (reason: string) => void;
+  };
+}
+
+/** Audio source with language metadata for multi-language support */
+export interface AudioSourceEntry {
+  url: string;
+  type?: string;
+  lang: string;       // BCP 47 language code (e.g., "en", "hi", "ja")
+  label: string;      // Display name (e.g., "English", "Hindi")
+}
+
+/** External subtitle source (VTT/SRT) with language metadata */
+export interface SubtitleSourceEntry {
+  url: string;
+  lang: string;       // BCP 47 language code
+  label: string;      // Display name
+  format?: "vtt" | "srt"; // Auto-detected from URL extension if omitted
 }
 
 export interface CacheConfig {
@@ -89,6 +115,12 @@ export type DecoderType = "auto" | "software";
 
 export interface PlayerConfig {
   source: SourceConfig;
+  /** Separate audio source — single or multi-language */
+  audioSource?: SourceConfig;
+  /** Multiple audio tracks with language metadata */
+  audioTracks?: AudioSourceEntry[];
+  /** External subtitle tracks (VTT/SRT) with language metadata */
+  subtitleTracks?: SubtitleSourceEntry[];
   renderer?: RendererType;
   decoder?: DecoderType;
   cache?: CacheConfig;
@@ -96,11 +128,20 @@ export interface PlayerConfig {
   wasmBinary?: Uint8Array; // Embedded WASM binary data
   enablePreviews?: boolean; // Enable thumbnail preview pipeline (default: false)
   frameRate?: number; // Override frame rate (fps) - 0 = auto
+  drm?: boolean; // Enable DRM mode for HLS (native video element, no canvas)
+  licenseUrl?: string; // Widevine/FairPlay license server URL
+  licenseHeaders?: Record<string, string>; // Custom headers for license requests (e.g., auth tokens)
 }
 
 // ============================================================================
 // Media Info
 // ============================================================================
+
+export interface Chapter {
+  title: string;
+  start: number; // seconds
+  end: number;   // seconds
+}
 
 export interface MediaInfo {
   formatName: string;
@@ -108,6 +149,7 @@ export interface MediaInfo {
   bitRate: number;
   startTime: number;
   tracks: Track[];
+  chapters: Chapter[];
   metadata?: {
     [key: string]: string;
   };

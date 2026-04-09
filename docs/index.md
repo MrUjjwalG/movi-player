@@ -5,7 +5,7 @@ layout: home
 hero:
   name: "Movi-Player"
   text: "Modern Video Player for the Web"
-  tagline: WebCodecs + FFmpeg WASM powered. HDR support. No server processing.
+  tagline: WebCodecs + FFmpeg WASM powered. HDR, ambient mode, PiP, encrypted playback. No server processing.
   image:
     src: /logo.svg
     alt: Movi-Player
@@ -39,6 +39,15 @@ features:
   - icon: 🔄
     title: Multi-Track Support
     details: Multiple audio and subtitle tracks without any conversion or processing.
+  - icon: 🎨
+    title: Ambient Mode
+    details: Dynamic letterbox glow that samples video colors in real-time with smooth 60fps transitions.
+  - icon: 🖼️
+    title: Picture-in-Picture
+    details: Document PiP with full controls — play/pause, seek, mute, progress bar. Press P.
+  - icon: 🔒
+    title: Content Protection
+    details: AES-256-GCM encrypted playback, DRM via Widevine/FairPlay, canvas-based rendering.
 ---
 
 <div style="margin-top: 60px; display: flex; flex-direction: column; align-items: center;">

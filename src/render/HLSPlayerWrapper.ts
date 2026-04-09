@@ -21,6 +21,7 @@ export class HLSPlayerWrapper extends EventEmitter<PlayerEventMap> {
   private state: PlayerState = "idle";
   public trackManager: TrackManager;
   private frameCallbackId: number | null = null;
+  private _framesRendered: number = 0;
 
   constructor(config: PlayerConfig) {
     super();
@@ -37,7 +38,9 @@ export class HLSPlayerWrapper extends EventEmitter<PlayerEventMap> {
     (this.videoElement as any).mozPreservesPitch = true; // Firefox
     (this.videoElement as any).webkitPreservesPitch = true; // Safari/older Chrome
 
-    if (config.renderer === "canvas" && config.canvas) {
+    // DRM mode: use native video element directly (no canvas)
+    // Canvas can't access DRM-protected frames (browser blocks VideoFrame copy)
+    if (!config.drm && config.renderer === "canvas" && config.canvas) {
       this.canvasRenderer = new CanvasRenderer(config.canvas);
     }
 
@@ -168,6 +171,7 @@ export class HLSPlayerWrapper extends EventEmitter<PlayerEventMap> {
       const frame = new VideoFrame(this.videoElement);
       this.canvasRenderer.render(frame);
       frame.close();
+      this._framesRendered++;
     } catch (e) {
       Logger.warn(TAG, "Failed to create VideoFrame", e);
     }
@@ -195,12 +199,19 @@ export class HLSPlayerWrapper extends EventEmitter<PlayerEventMap> {
       throw new Error("HLS source must be a URL");
     }
 
+    if (this.config.drm) {
+      Logger.info(TAG, "DRM mode enabled — using native video element (no canvas)");
+      if (this.config.licenseUrl) {
+        this.setupEME(this.config.licenseUrl, this.config.licenseHeaders);
+      }
+    }
+
     this.hls = new Hls({
       enableWorker: true,
       lowLatencyMode: false,
       backBufferLength: 90,
-      maxBufferLength: 30, // 30 seconds
-      maxMaxBufferLength: 600, // Allow large buffer to avoid full errors during seeking/quality switch
+      maxBufferLength: 30,
+      maxMaxBufferLength: 600,
     });
 
     this.hls.attachMedia(this.videoElement);
@@ -223,22 +234,48 @@ export class HLSPlayerWrapper extends EventEmitter<PlayerEventMap> {
         resolve();
       });
 
+      let networkRetries = 0;
+      let mediaRetries = 0;
+      const MAX_NETWORK_RETRIES = 3;
+      const MAX_MEDIA_RETRIES = 2;
+
       this.hls!.on(Hls.Events.ERROR, (_event, data) => {
         if (data.fatal) {
-          Logger.error(TAG, `HLS Fatal Error: ${data.details}`);
+          Logger.error(TAG, `HLS Fatal Error: ${data.details} (response: ${data.response?.code})`);
+
+          const emitFatal = (msg: string) => {
+            this.hls!.destroy();
+            const err = new Error(msg);
+            this.emit("error", err);
+            this.setState("error");
+            reject(err);
+          };
+
           switch (data.type) {
             case Hls.ErrorTypes.NETWORK_ERROR:
-              this.hls!.startLoad();
+              // Don't retry 404/403 — resource doesn't exist or is forbidden
+              const status = data.response?.code;
+              if (status === 404 || status === 403) {
+                emitFatal(`Stream unavailable (HTTP ${status})`);
+              } else if (networkRetries < MAX_NETWORK_RETRIES) {
+                networkRetries++;
+                Logger.info(TAG, `Network retry ${networkRetries}/${MAX_NETWORK_RETRIES}`);
+                this.hls!.startLoad();
+              } else {
+                emitFatal(`Network error: ${data.details}`);
+              }
               break;
             case Hls.ErrorTypes.MEDIA_ERROR:
-              this.hls!.recoverMediaError();
+              if (mediaRetries < MAX_MEDIA_RETRIES) {
+                mediaRetries++;
+                Logger.info(TAG, `Media recovery ${mediaRetries}/${MAX_MEDIA_RETRIES}`);
+                this.hls!.recoverMediaError();
+              } else {
+                emitFatal(`Media error: ${data.details}`);
+              }
               break;
             default:
-              this.hls!.destroy();
-              const err = new Error(`HLS Error: ${data.details}`);
-              this.emit("error", err);
-              this.setState("error");
-              reject(err);
+              emitFatal(`HLS Error: ${data.details}`);
               break;
           }
         } else {
@@ -289,14 +326,17 @@ export class HLSPlayerWrapper extends EventEmitter<PlayerEventMap> {
     };
     tracks.push(autoTrack);
 
-    const seenLabels = new Set<string>();
+    // Count how many levels share the same resolution
+    const heightCount = new Map<number, number>();
+    data.levels.forEach((level: any) => {
+      heightCount.set(level.height, (heightCount.get(level.height) || 0) + 1);
+    });
 
     data.levels.forEach((level: any, index: number) => {
-      const label = `${level.height}p`;
-
-      // Skip duplicates based on label (resolution)
-      if (seenLabels.has(label)) return;
-      seenLabels.add(label);
+      const hasDuplicates = (heightCount.get(level.height) || 0) > 1;
+      const label = hasDuplicates
+        ? `${level.height}p · ${(level.bitrate / 1000).toFixed(0)} kbps`
+        : `${level.height}p`;
 
       const videoTrack: VideoTrack = {
         id: index,
@@ -380,6 +420,72 @@ export class HLSPlayerWrapper extends EventEmitter<PlayerEventMap> {
     }
   }
 
+  /**
+   * Setup Encrypted Media Extensions (EME) for Widevine/FairPlay DRM
+   * Requires a valid license server URL from a DRM provider (e.g., PallyCon, EZDRM, BuyDRM)
+   */
+  private setupEME(licenseUrl: string, headers?: Record<string, string>): void {
+    const video = this.videoElement;
+
+    video.addEventListener("encrypted", async (event) => {
+      Logger.info(TAG, `EME: encrypted event — initDataType=${event.initDataType}`);
+
+      try {
+        const config: MediaKeySystemConfiguration[] = [{
+          initDataTypes: [event.initDataType],
+          videoCapabilities: [{ contentType: 'video/mp4; codecs="avc1.42E01E"' }],
+          audioCapabilities: [{ contentType: 'audio/mp4; codecs="mp4a.40.2"' }],
+        }];
+
+        // Try Widevine first, then FairPlay
+        let keySystem = "com.widevine.alpha";
+        let access: MediaKeySystemAccess;
+        try {
+          access = await navigator.requestMediaKeySystemAccess(keySystem, config);
+        } catch {
+          keySystem = "com.apple.fps.1_0";
+          access = await navigator.requestMediaKeySystemAccess(keySystem, config);
+        }
+
+        Logger.info(TAG, `EME: Using ${keySystem}`);
+        const keys = await access.createMediaKeys();
+        await video.setMediaKeys(keys);
+
+        const session = keys.createSession();
+        session.addEventListener("message", async (e) => {
+          // Request license from server
+          const response = await fetch(licenseUrl, {
+            method: "POST",
+            body: e.message,
+            headers: {
+              "Content-Type": "application/octet-stream",
+              ...headers,
+            },
+          });
+
+          if (!response.ok) {
+            Logger.error(TAG, `EME: License request failed (HTTP ${response.status})`);
+            this.emit("error", new Error(`DRM license request failed (HTTP ${response.status})`));
+            return;
+          }
+
+          const license = await response.arrayBuffer();
+          await session.update(new Uint8Array(license));
+          Logger.info(TAG, "EME: License acquired, playback authorized");
+        });
+
+        await session.generateRequest(event.initDataType, event.initData!);
+      } catch (err) {
+        Logger.error(TAG, "EME: DRM setup failed", err);
+        this.emit("error", new Error(`DRM not supported or license server unreachable`));
+      }
+    });
+  }
+
+  getVideoElement(): HTMLVideoElement {
+    return this.videoElement;
+  }
+
   getBufferEndTime(): number {
     if (this.videoElement.buffered.length) {
       return this.videoElement.buffered.end(
@@ -429,6 +535,108 @@ export class HLSPlayerWrapper extends EventEmitter<PlayerEventMap> {
       else if (mode === "cover") this.videoElement.style.objectFit = "cover";
       else if (mode === "fill") this.videoElement.style.objectFit = "fill";
     }
+  }
+
+  getStats(): Record<string, string | number | boolean> {
+    const stats: Record<string, string | number | boolean> = {};
+
+    // Get actual playing level from HLS.js (handles Auto mode correctly)
+    const level = this.hls?.levels?.[this.hls.currentLevel];
+    const w = level?.width || this.videoElement.videoWidth || 0;
+    const h = level?.height || this.videoElement.videoHeight || 0;
+
+    // --- Video ---
+    if (w && h) {
+      stats["Video Codec"] = level?.videoCodec ?? "N/A";
+      stats["Resolution"] = `${w}x${h}`;
+      stats["Quality"] = h >= 2160 ? "4K" : h >= 1440 ? "2K" : h >= 1080 ? "1080p" : h >= 720 ? "720p" : h >= 480 ? "480p" : "SD";
+      if (level?.frameRate) stats["Frame Rate"] = `${level.frameRate} fps`;
+      stats["Video Bitrate"] = level?.bitrate
+        ? `${(level.bitrate / 1000).toFixed(0)} kbps`
+        : "N/A";
+    }
+    if (level?.audioCodec) {
+      stats["Audio Codec"] = level.audioCodec;
+    }
+
+    // --- Decoder ---
+    if (this.canvasRenderer) {
+      const rStats = this.canvasRenderer.getStats();
+      stats["Video Decoder"] = "Hardware (Native)";
+      stats["Renderer"] = "Canvas";
+      stats["Color Space"] = rStats.colorSpace || "N/A";
+    } else {
+      stats["Video Decoder"] = "Hardware (Native)";
+      stats["Renderer"] = "HTML5 Video";
+    }
+
+    // --- Playback ---
+    stats["Playback State"] = this.state;
+    stats["Playback Rate"] = `${this.videoElement.playbackRate}x`;
+
+    // --- Frames ---
+    const quality = (this.videoElement as any).getVideoPlaybackQuality?.();
+    if (quality) {
+      stats["Frames Decoded"] = quality.totalVideoFrames;
+      stats["Frames Dropped"] = quality.droppedVideoFrames;
+    }
+    if (this.canvasRenderer) {
+      stats["Frames Rendered"] = this._framesRendered;
+    }
+
+    // --- Buffer ---
+    if (this.videoElement.buffered.length > 0) {
+      const buffEnd = this.videoElement.buffered.end(this.videoElement.buffered.length - 1);
+      const ahead = buffEnd - this.videoElement.currentTime;
+      stats["Buffer Ahead"] = `${ahead.toFixed(1)}s`;
+    }
+
+    // --- HLS specific ---
+    if (this.hls) {
+      const levels = this.hls.levels;
+      if (levels && levels.length > 1) {
+        const activeLabel = level ? `${level.height}p` : "N/A";
+        stats["HLS Level"] = this.hls.autoLevelEnabled
+          ? `Auto (${activeLabel})`
+          : activeLabel;
+        const minH = Math.min(...levels.map(l => l.height));
+        const maxH = Math.max(...levels.map(l => l.height));
+        stats["Available Levels"] = `${levels.length} (${minH}p–${maxH}p)`;
+      }
+      if (this.hls.bandwidthEstimate) {
+        stats["Bandwidth Estimate"] = `${(this.hls.bandwidthEstimate / 1000).toFixed(0)} kbps`;
+      }
+      // Latency (live streams)
+      const latency = this.hls.latency;
+      if (latency > 0) {
+        stats["Live Latency"] = `${latency.toFixed(1)}s`;
+      }
+      // Type
+      const details = levels?.[this.hls.currentLevel]?.details;
+      if (details) {
+        stats["Stream Type"] = details.live ? "Live" : "VOD";
+      }
+    }
+
+    // Memory usage (Chrome only)
+    const mem = (performance as any).memory;
+    if (mem) {
+      stats["Memory Used"] = `${(mem.usedJSHeapSize / 1048576).toFixed(0)} MB`;
+    }
+
+    return stats;
+  }
+
+  getNetworkSpeed(): number {
+    // Use HLS.js bandwidth estimate (bits/s → bytes/s)
+    if (this.hls?.bandwidthEstimate) {
+      return this.hls.bandwidthEstimate / 8;
+    }
+    return 0;
+  }
+
+  isFileSource(): boolean {
+    return false;
   }
 
   destroy(): void {

@@ -25,6 +25,13 @@ export class FileSource implements SourceAdapter {
   private duration: number = 0;
   private preloadOffset: number = 0; // Current byte offset being preloaded around
 
+  // Disk read stats
+  private totalBytesRead: number = 0;
+  private lastSpeedBytes: number = 0;
+  private lastSpeedTime: number = 0;
+  private currentReadSpeed: number = 0; // bytes per second
+  private readStartTime: number = 0;
+
   constructor(file: File, cache: LRUCache | null = null) {
     this.file = file;
     this.size = file.size;
@@ -140,6 +147,20 @@ export class FileSource implements SourceAdapter {
    */
   getPosition(): number {
     return this.position;
+  }
+
+  /**
+   * Get disk read stats for nerd stats overlay
+   */
+  getDiskStats(): { totalBytes: number; currentSpeed: number; elapsed: number } {
+    // If no read in last 1s, speed is 0 (paused/idle)
+    const timeSinceLastRead = this.lastSpeedTime > 0 ? (Date.now() - this.lastSpeedTime) / 1000 : 0;
+    const speed = timeSinceLastRead > 1 ? 0 : this.currentReadSpeed;
+    return {
+      totalBytes: this.totalBytesRead,
+      currentSpeed: speed,
+      elapsed: this.readStartTime > 0 ? (Date.now() - this.readStartTime) / 1000 : 0,
+    };
   }
 
   /**
@@ -278,6 +299,21 @@ export class FileSource implements SourceAdapter {
   ): Promise<ArrayBuffer> {
     const blob = this.file.slice(offset, offset + length);
     const arrayBuffer = await blob.arrayBuffer();
+
+    // Track disk read stats
+    if (this.readStartTime === 0) {
+      this.readStartTime = Date.now();
+      this.lastSpeedTime = this.readStartTime;
+    }
+    this.totalBytesRead += arrayBuffer.byteLength;
+    const now = Date.now();
+    const elapsed = (now - this.lastSpeedTime) / 1000;
+    if (elapsed >= 0.5) {
+      this.currentReadSpeed = (this.totalBytesRead - this.lastSpeedBytes) / elapsed;
+      this.lastSpeedBytes = this.totalBytesRead;
+      this.lastSpeedTime = now;
+    }
+
     return arrayBuffer;
   }
 

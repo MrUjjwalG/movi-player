@@ -35,14 +35,14 @@ export default defineConfig({
       { text: "🔌 API", link: "/api/player" },
       { text: "🎮 Examples", link: "https://movi-player-examples.vercel.app/" },
       {
-        text: "v0.1.4",
+        text: "v0.2.0",
         items: [
           {
             text: "Versions",
             items: [
-              { text: "v0.1.4 (Latest)", link: "/changelog#0-1-4" },
-              { text: "v0.1.3", link: "/changelog#0-1-3" },
-              { text: "v0.1.2", link: "/changelog#0-1-2" },
+              { text: "v0.2.0 (Latest)", link: "/changelog#0-2-0" },
+              { text: "v0.1.5", link: "/changelog#0-1-5" },
+              { text: "v0.1.4", link: "/changelog#0-1-4" },
             ],
           },
           {
@@ -116,7 +116,7 @@ export default defineConfig({
     ],
 
     footer: {
-      message: "Released under the Apache-2.0 License.",
+      message: 'Released under the Apache-2.0 License. <a href="/movi-player/privacy-policy">Privacy Policy</a>',
       copyright: "Copyright © 2024-present Ujjwal Kashyap",
     },
 

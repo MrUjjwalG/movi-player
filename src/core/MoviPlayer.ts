@@ -11,7 +11,10 @@ import type {
   MediaInfo,
   VideoTrack,
   AudioTrack,
+  AudioSourceEntry,
   SubtitleTrack,
+  SubtitleSourceEntry,
+  SubtitleCue,
 } from "../types";
 import { EventEmitter } from "../events/EventEmitter";
 import {
@@ -43,6 +46,17 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
   private source: SourceAdapter | null = null;
   private cache: LRUCache;
   private demuxer: Demuxer | null = null;
+
+  // Separate audio source — uses native <audio> element (zero WASM overhead)
+  private nativeAudioEl: HTMLAudioElement | null = null;
+  private _audioTracks: AudioSourceEntry[] = [];
+  private _activeAudioLang: string = "";
+
+  // External subtitle tracks (VTT/SRT)
+  private _subtitleTracks: SubtitleSourceEntry[] = [];
+  private _activeSubtitleLang: string = "";
+  private _externalSubCues: SubtitleCue[] = [];
+  private _externalSubTimer: number | null = null;
   public trackManager: TrackManager;
   private clock: Clock;
   private stateManager: PlayerStateManager;
@@ -71,9 +85,13 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
   private disableAudio: boolean = false; // Set to true to disable audio for debugging
   private muted: boolean = false; // Mute state
   private wasPlayingBeforeRebuffer: boolean = false; // Track if we were playing before entering rebuffering state
+  private _stallStartTime: number = 0; // When stall was first detected
+  private _bufferingEntryTime: number = 0; // When we entered buffering state
 
   // Playback Loop
   private animationFrameId: number | null = null;
+  private backgroundIntervalId: number | null = null;
+  private backgroundWorker: Worker | null = null; // Worker-based timer for Safari
 
   // WakeLock to prevent screen sleep during playback
   private wakeLock: WakeLockSentinel | null = null;
@@ -177,6 +195,13 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
     // Setup decoder outputs
     if (this.videoDecoder) {
       this.videoDecoder.setOnFrame((frame) => {
+        // Background mode: drop video frames silently (audio keeps playing)
+        // But keep frames if PiP is active (canvas is visible in PiP window)
+        if (document.hidden && !this.isPiPActive) {
+          frame.close();
+          return;
+        }
+
         // Queue frames for smooth presentation with A/V sync
         // Allow processing if playing OR if we are seeking (waiting for sync)
         if (
@@ -299,6 +324,9 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
 
     // Handle visibility changes to re-acquire WakeLock if lost
     document.addEventListener("visibilitychange", this.handleVisibilityChange);
+
+    // Handle network recovery: re-seek to current position to restart cleanly
+    window.addEventListener("online", this.handleNetworkOnline);
   }
 
   /**
@@ -404,6 +432,31 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
         }
       }
 
+      // Separate audio source: use native <audio> element (zero WASM overhead)
+      // Supports single audioSource or multi-language audioTracks
+      let audioUrl: string | null = null;
+
+      if (this.config.audioTracks && this.config.audioTracks.length > 0) {
+        // Multi-language mode — store all tracks, pick first as default
+        this._audioTracks = [...this.config.audioTracks];
+        this._activeAudioLang = this._audioTracks[0].lang;
+        audioUrl = this._audioTracks[0].url;
+        Logger.info(TAG, `Multi-language audio: ${this._audioTracks.length} tracks, default=${this._activeAudioLang}`);
+      } else if (this.config.audioSource?.type === "url" && this.config.audioSource.url) {
+        // Single separate audio source
+        audioUrl = this.config.audioSource.url;
+      }
+
+      if (audioUrl) {
+        this.setupNativeAudio(audioUrl);
+      }
+
+      // Store external subtitle tracks
+      if (this.config.subtitleTracks && this.config.subtitleTracks.length > 0) {
+        this._subtitleTracks = [...this.config.subtitleTracks];
+        Logger.info(TAG, `External subtitles: ${this._subtitleTracks.length} tracks`);
+      }
+
       // Set tracks
       this.trackManager.setTracks(this.mediaInfo.tracks);
 
@@ -450,6 +503,14 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
   private async createSource(config: SourceConfig): Promise<SourceAdapter> {
     if (config.type === "file" && config.file) {
       return new FileSource(config.file, this.cache);
+    }
+
+    if (config.type === "encrypted" && config.encrypted) {
+      const { EncryptedHttpSource } = await import("../source/EncryptedHttpSource");
+      return new EncryptedHttpSource({
+        ...config.encrypted,
+        headers: config.headers,
+      });
     }
 
     if (config.type === "url" && config.url) {
@@ -511,6 +572,7 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
     }
 
     // Configure audio decoder (skip if disabled for debugging)
+    // Configure audio decoder (skip if disabled for debugging or native audio)
     const audioTrack = this.trackManager.getActiveAudioTrack();
     if (audioTrack && !this.disableAudio) {
       const extradata = this.demuxer.getExtradata(audioTrack.id) ?? undefined;
@@ -594,6 +656,14 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
     }
 
     const currentState = this.stateManager.getState();
+
+    // During buffering, just mark intent to resume when ready
+    if (currentState === "buffering") {
+      this.wasPlayingBeforeRebuffer = true;
+      Logger.info(TAG, "Play requested during buffering — will resume when ready");
+      return;
+    }
+
     const wasEnded = currentState === "ended";
 
     // If ended, seek to start (0) to replay from beginning
@@ -622,6 +692,7 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
 
         // Seek demuxer to start (initial media startTime)
         await this.demuxer.seek(this.startTime);
+        if (this.nativeAudioEl) this.nativeAudioEl.currentTime = this.startTime;
         this.clock.seek(this.startTime);
 
         // Reset EOF flag
@@ -686,6 +757,16 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
       this.videoRenderer.startPresentationLoop();
     }
 
+    // Start native audio BEFORE clock so it becomes master immediately
+    if (this.nativeAudioEl) {
+      this.nativeAudioEl.playbackRate = this.clock.getPlaybackRate();
+      try {
+        await this.nativeAudioEl.play();
+      } catch {
+        Logger.warn(TAG, "Native audio play failed (autoplay blocked?)");
+      }
+    }
+
     this.clock.start();
 
     // Transition to playing state
@@ -738,12 +819,31 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
       return;
     }
 
+    // During buffering, transition to paused and stop auto-resume
+    if (this.stateManager.getState() === "buffering") {
+      this.wasPlayingBeforeRebuffer = false;
+      if (!this.disableAudio) this.audioRenderer.pause();
+      if (this.nativeAudioEl) this.nativeAudioEl.pause();
+      if (this.videoRenderer) this.videoRenderer.stopPresentationLoop();
+      this.stateManager.setState("paused");
+      if (this.animationFrameId !== null) {
+        cancelAnimationFrame(this.animationFrameId);
+        this.animationFrameId = null;
+      }
+      this.stopBackgroundTimer();
+      Logger.info(TAG, "Paused during buffering");
+      return;
+    }
+
     // Release WakeLock when pausing
     this.releaseWakeLock();
 
     this.clock.pause();
     if (!this.disableAudio) {
       this.audioRenderer.pause();
+    }
+    if (this.nativeAudioEl) {
+      this.nativeAudioEl.pause();
     }
 
     // Stop video presentation loop
@@ -757,6 +857,7 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
       cancelAnimationFrame(this.animationFrameId);
       this.animationFrameId = null;
     }
+    this.stopBackgroundTimer();
 
     Logger.info(TAG, "Paused");
   }
@@ -855,7 +956,7 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
       }
     } else {
       Logger.info(TAG, "Seek completed in paused state");
-      this.stateManager.setState("ready");
+      this.stateManager.setState("paused");
       // Don't start clock or audio
     }
 
@@ -892,22 +993,34 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
       const currentState = this.stateManager.getState();
       if (currentState === "playing") {
         this.wasPlayingBeforeRebuffer = true;
+        this._bufferingEntryTime = performance.now();
         this.stateManager.setState("buffering");
         this.clock.pause();
+        if (this.videoRenderer) this.videoRenderer.stopPresentationLoop();
         Logger.debug(TAG, "Entered buffering state for playback rate change");
       }
       // Continue processing to allow new audio to be decoded and scheduled
     } else if (this.stateManager.getState() === "buffering" && this.wasPlayingBeforeRebuffer) {
-      // Rebuffering complete, resume playback only if we were playing before
-      // Transition to paused first, then let play() method handle the transition to playing
-      this.stateManager.setState("paused");
-      this.wasPlayingBeforeRebuffer = false;
-      Logger.debug(TAG, "Exited buffering state, resuming playback");
-
-      // Resume playback by calling play() method (proper state machine transition)
-      this.play().catch((err) => {
-        Logger.error(TAG, "Failed to resume playback after rebuffering:", err);
-      });
+      // Resume after minimum dwell time to accumulate enough data
+      const hasAudioTrack = !!this.trackManager.getActiveAudioTrack();
+      const audioReady = this.disableAudio || !hasAudioTrack || this.audioRenderer.getBufferedDuration() > 0.1;
+      const videoReady = !this.videoRenderer || this.videoRenderer.getQueueSize() > 0;
+      const dwellMs = performance.now() - this._bufferingEntryTime;
+      const minDwell = 1500; // Wait at least 1.5s to accumulate buffer
+      // Resume if: (1) both ready after minDwell, or (2) audio ready after longer wait
+      // Video decoder output is async — don't block forever if frames are delayed
+      const canResume = dwellMs >= minDwell && (
+        (audioReady && videoReady) ||
+        (audioReady && dwellMs >= 3000)
+      );
+      if (canResume) {
+        this.stateManager.setState("paused");
+        this.wasPlayingBeforeRebuffer = false;
+        Logger.info(TAG, "Buffers refilled, resuming playback");
+        this.play().catch((err) => {
+          Logger.error(TAG, "Failed to resume playback after rebuffering:", err);
+        });
+      }
     }
 
     // Update FileSource preload position based on current time
@@ -921,6 +1034,35 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
 
     // Emit periodic time update for UI
     this.emit("timeUpdate", this.getCurrentTime());
+
+    // Stall detection: if playing but both video and audio buffers are critically low
+    // Skip near end of video to avoid false stall at EOF
+    const nearEnd = this.mediaInfo && this.clock.getTime() >= (this.mediaInfo.duration + this.startTime) - 3;
+    if (this.stateManager.getState() === "playing" && !this.eofReached && !this.waitingForVideoSync && !nearEnd) {
+      const videoEmpty = this.videoRenderer ? this.videoRenderer.getQueueSize() === 0 : false;
+      const hasAudio = !!this.trackManager.getActiveAudioTrack() && !this.disableAudio;
+      const audioLow = !hasAudio || this.audioRenderer.getBufferedDuration() < 0.05;
+      if (videoEmpty && audioLow) {
+        if (!this._stallStartTime) {
+          this._stallStartTime = performance.now();
+        } else if (performance.now() - this._stallStartTime > 500) {
+          // Only enter buffering after 500ms of continuous stall
+          Logger.warn(TAG, "Stall detected: buffers empty for 500ms, entering buffering state");
+          this.wasPlayingBeforeRebuffer = true;
+          this._bufferingEntryTime = performance.now();
+          this.stateManager.setState("buffering");
+          this.clock.pause();
+          // Stop presentation loop so decoded frames accumulate in queue
+          // (otherwise it keeps consuming them and videoReady never becomes true)
+          if (this.videoRenderer) this.videoRenderer.stopPresentationLoop();
+          this._stallStartTime = 0;
+        }
+      } else {
+        this._stallStartTime = 0;
+      }
+    } else {
+      this._stallStartTime = 0;
+    }
 
     // Prevent concurrent async WASM operations (Asyncify limitation)
     // Add timeout safeguard - if demux has been in flight too long, reset it
@@ -939,30 +1081,20 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
 
     // Check if we've reached EOF and decoders are empty - transition to ended
     if (this.eofReached) {
-      // Check if all decoders have finished processing (with tolerance for queued frames)
-      // Allow up to 5 frames in decoder queue as normal processing lag
-      if (
-        this.videoDecoder.queueSize <= 5 &&
-        this.audioDecoder.queueSize === 0
-      ) {
-        // Check time to see if we are done
-        const currentTime = this.clock.getTime();
-        const duration = this.mediaInfo?.duration ?? 0;
-        const timeDone =
-          currentTime >= duration + this.startTime - 0.2 || duration === 0;
+      const currentTime = this.clock.getTime();
+      const duration = this.mediaInfo?.duration ?? 0;
+      const timeDone =
+        currentTime >= duration + this.startTime - 0.5 || duration === 0;
 
-        // Also check if video renderer has shown all frames
-        // BUT if we reached duration (timeDone), we should end regardless of queue
-        // (handles case where last frames are slightly beyond clamped clock)
-        const videoDone =
-          !this.videoRenderer || this.videoRenderer.getQueueSize() === 0;
+      const videoDone =
+        !this.videoRenderer || this.videoRenderer.getQueueSize() === 0;
+      const decodersDone =
+        this.videoDecoder.queueSize === 0 && this.audioDecoder.queueSize === 0;
 
-        if (videoDone || timeDone) {
-          if (timeDone) {
-            this.handleEnded();
-            return;
-          }
-        }
+      // End if: time reached duration, or all queues empty, or decoders done + video done
+      if (timeDone || (decodersDone && videoDone)) {
+        this.handleEnded();
+        return;
       }
       return; // Don't demux more, just wait for playback to finish
     }
@@ -1098,6 +1230,7 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
           }
         }
 
+        // When separate audio demuxer exists, primary demuxer only provides video/subtitle
         const packet = await this.demuxer.readPacket();
 
         // Check again after async readPacket - seek may have started during read
@@ -1181,15 +1314,10 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
             // Skip audio processing if disabled for debugging or muted
             if (!this.disableAudio && !this.muted) {
               // IMPORTANT: Skip audio packets before the seek target time
-              // This prevents A/V sync from being based on the keyframe time (e.g., 0s)
-              // instead of the actual seek target (e.g., 2s)
-              // CRITICAL: Check seekTargetTime !== -1 to support negative start times
               if (
                 this.seekTargetTime !== -1 &&
                 packet.timestamp < this.seekTargetTime
               ) {
-                // Skip this audio packet, it's before our target time
-                // Continue to next packet (audio will start when we reach target time)
                 continue;
               }
 
@@ -1202,10 +1330,6 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
                 continue;
               }
 
-              // Note: We don't clear seekTargetTime here anymore!
-              // With B-frame videos, video frames arrive asynchronously and may still need
-              // to be filtered after audio catches up. The seekTargetTime will be cleared
-              // after POST_SEEK_THROTTLE_MS when justSeeked becomes false, or on next seek.
               if (
                 this.seekTargetTime !== -1 &&
                 packet.timestamp >= this.seekTargetTime
@@ -1214,7 +1338,6 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
                   TAG,
                   `Audio reached seek target: ${packet.timestamp.toFixed(3)}s (target: ${this.seekTargetTime.toFixed(3)}s)`,
                 );
-                // If there is no video track, audio completion triggers state transition
                 if (!this.trackManager.getActiveVideoTrack()) {
                   this.notifySeekCompletion(packet.timestamp);
                 }
@@ -1234,13 +1357,8 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
               activeSubtitle.id === packet.streamIndex &&
               this.subtitleDecoder
             ) {
-              // Decode subtitle packet
-              // For SRT files, FFmpeg might not always extract duration correctly from timestamp lines
-              // Use packet duration if available, otherwise pass 0 and let C code use fallback
               let duration = packet.duration;
               if (!duration || duration <= 0) {
-                // FFmpeg didn't extract duration - C code will use fallback mechanism
-                // The fallback will use minimum duration or calculate from next packet
                 duration = 0;
                 Logger.debug(
                   TAG,
@@ -1261,23 +1379,9 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
                 .catch((error) => {
                   Logger.error(TAG, "Subtitle decode error", error);
                 });
-            } else {
-              if (
-                activeSubtitle &&
-                activeSubtitle.id === packet.streamIndex &&
-                !this.subtitleDecoder
-              ) {
-                Logger.warn(
-                  TAG,
-                  `Subtitle packet received but decoder not initialized for track ${packet.streamIndex}`,
-                );
-              }
             }
           }
         }
-
-        // Assuming packet.data is copied by bindings, we don't need to manually free JS side
-        // unless bindings exposed a pointer. bindings.ts returns `result.data` which is `new Uint8Array(copy)`.
       }
     } catch (e) {
       Logger.error(TAG, "Demux error", e);
@@ -1349,10 +1453,11 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
     }
 
     const currentState = this.stateManager.getState();
+    Logger.info(TAG, `seek(${seconds.toFixed(2)}): state=${currentState}, waitingForVideoSync=${this.waitingForVideoSync}, demuxInFlight=${this.demuxInFlight}, seekSessionId=${this.seekSessionId}`);
 
     // Safety check - though PlayerState now permits it
     if (!this.stateManager.canSeek()) {
-      Logger.warn(TAG, "Cannot seek in current state");
+      Logger.warn(TAG, `seek blocked: canSeek=false, state=${currentState}`);
       return;
     }
 
@@ -1361,8 +1466,9 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
     }
 
     // Track intent: if we were playing (or already seeking but originally playing), we want to resume
+    // During buffering, preserve the pre-buffering play/pause intent
     if (currentState !== "seeking") {
-      this.wasPlayingBeforeSeek = currentState === "playing";
+      this.wasPlayingBeforeSeek = currentState === "playing" || (currentState === "buffering" && this.wasPlayingBeforeRebuffer);
     }
 
     // Pause clock so UI time doesn't advance during seek while in loading state
@@ -1399,8 +1505,11 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
       if (this.seekSessionId !== mySessionId) return; // Superceded
 
       // Flush decoders
+      Logger.info(TAG, `seek: flushing video decoder...`);
       await this.videoDecoder.flush();
+      Logger.info(TAG, `seek: flushing audio decoder...`);
       await this.audioDecoder.flush();
+      Logger.info(TAG, `seek: decoders flushed`);
 
       // Clear video frame queue to prevent old frames from being displayed
       if (this.videoRenderer) {
@@ -1413,7 +1522,13 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
       if (this.seekSessionId !== mySessionId) return; // Superceded
 
       // Seek relative to start time (time 0 in UI = startTime in media)
+      Logger.info(TAG, `seek: demuxer.seek(${(seconds + this.startTime).toFixed(2)}) starting...`);
       await this.demuxer.seek(seconds + this.startTime);
+      // Seek native audio element (separate audio source)
+      if (this.nativeAudioEl) {
+        this.nativeAudioEl.currentTime = seconds;
+      }
+      Logger.info(TAG, `seek: demuxer.seek done`);
       this.clock.seek(seconds + this.startTime);
 
       // Reset EOF flag after seek - we're now at a new position
@@ -1441,12 +1556,29 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
 
       // Start processing loop to find and decode the target frame/packet.
       // notifySeekCompletion will be called once the first valid frame is received.
+      Logger.info(TAG, `seek: starting processLoop, waitingForVideoSync=${this.waitingForVideoSync}, state=${this.stateManager.getState()}`);
       this.processLoop();
 
       // Ensure the video renderer loop is running to actually draw frames as they arrive
       if (this.videoRenderer) {
         this.videoRenderer.startPresentationLoop();
       }
+
+      // Safety timeout: if seek doesn't complete in 3s, force completion
+      // This prevents loading state from hanging forever on slow devices
+      const seekTimeout = setTimeout(() => {
+        if (this.seekSessionId === mySessionId && this.waitingForVideoSync) {
+          Logger.warn(TAG, `Seek timeout after 3s, forcing completion at ${seconds}s`);
+          this.notifySeekCompletion(seconds + this.startTime);
+        }
+      }, 3000);
+
+      // Clear timeout if seek completes or is superseded
+      const clearSeekTimeout = () => {
+        clearTimeout(seekTimeout);
+        this.off("seeked", clearSeekTimeout);
+      };
+      this.on("seeked", clearSeekTimeout);
 
       Logger.info(TAG, `Seek initiated to ${seconds}s, waiting for sync...`);
     } catch (error) {
@@ -1483,11 +1615,22 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
       if (!this.thumbnailBindings) {
         if (this.previewInitPromise) {
           Logger.debug(TAG, "Waiting for existing preview initialization...");
-          await this.previewInitPromise;
-        } else {
-          Logger.debug(TAG, "Initializing thumbnail pipeline (lazy)...");
+          try {
+            await this.previewInitPromise;
+          } catch {
+            // Init failed, clear promise so retry can work
+            this.previewInitPromise = null;
+          }
+        }
+        // If still no bindings (init failed or promise was cleared), retry
+        if (!this.thumbnailBindings) {
+          Logger.debug(TAG, "Initializing thumbnail pipeline (retry)...");
           this.previewInitPromise = this.initPreviewPipeline();
-          await this.previewInitPromise;
+          try {
+            await this.previewInitPromise;
+          } catch {
+            this.previewInitPromise = null;
+          }
         }
       }
 
@@ -1687,8 +1830,17 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
             }
           }
 
-          // Render using WebGL if available, otherwise fall back to 2D
+          // When rotated, ensure 2D context exists (WebGL path doesn't handle rotation)
+          if (rotation !== 0 && !this.thumbnailContext && this.thumbnailCanvas) {
+            this.thumbnailContext = this.thumbnailCanvas.getContext("2d", {
+              alpha: false,
+              willReadFrequently: true,
+            }) as any;
+          }
+
+          // Render using WebGL if available (skip WebGL when rotated — 2D handles rotation)
           if (
+            rotation === 0 &&
             this.thumbnailGL &&
             this.thumbnailGLProgram &&
             this.thumbnailGLTexture &&
@@ -1864,6 +2016,34 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
         (this.thumbnailSource as any).clearBuffer();
       }
     }
+  }
+
+  /**
+   * Generate timeline thumbnails at regular intervals
+   * @param count Number of thumbnails to generate (default 8)
+   * @param onProgress Callback for each generated thumbnail
+   * @returns Array of { time, blob } objects
+   */
+  async generateTimeline(
+    count: number = 8,
+    onProgress?: (index: number, total: number, blob: Blob, time: number) => void
+  ): Promise<Array<{ time: number; blob: Blob }>> {
+    const duration = this.mediaInfo?.duration ?? 0;
+    if (duration <= 0) return [];
+
+    const results: Array<{ time: number; blob: Blob }> = [];
+    const interval = duration / (count + 1); // Avoid first/last frames
+
+    for (let i = 1; i <= count; i++) {
+      const time = interval * i;
+      const blob = await this.getPreviewFrame(time);
+      if (blob) {
+        results.push({ time, blob });
+        onProgress?.(i, count, blob, time);
+      }
+    }
+
+    return results;
   }
 
   private async initPreviewPipeline() {
@@ -2095,6 +2275,11 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
               Logger.warn(TAG, "Subtitle cue callback: videoRenderer is null!");
             }
           });
+
+          // TODO: Seek to re-read subtitle packets causes playback disruption
+          // const currentTime = this.getCurrentTime();
+          // Logger.debug(TAG, `Seeking to ${currentTime.toFixed(2)}s to pick up subtitle packets`);
+          // this.seek(currentTime).catch(() => {});
         } else {
           Logger.warn(
             TAG,
@@ -2206,8 +2391,43 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
   /**
    * Get media info
    */
+  /**
+   * Load an encrypted video source
+   * Reconfigures the player with an EncryptedHttpSource
+   */
+  async loadEncrypted(config: {
+    videoUrl: string;
+    tokenUrl: string;
+    videoId: string;
+    fingerprint: string;
+    sessionToken: string;
+    tokenRefreshInterval?: number;
+    onAuthFailed?: (reason: string) => void;
+  }): Promise<void> {
+    this.config.source = {
+      type: "encrypted",
+      encrypted: config,
+    };
+    await this.load();
+  }
+
   getMediaInfo(): MediaInfo | null {
     return this.mediaInfo;
+  }
+
+  /**
+   * Get HLS video element (DRM mode) for direct DOM insertion
+   */
+  getHLSVideoElement(): HTMLVideoElement | null {
+    return this.hlsWrapper?.getVideoElement() ?? null;
+  }
+
+
+  /**
+   * Get chapters from the media (empty array if none)
+   */
+  getChapters(): Array<{ title: string; start: number; end: number }> {
+    return this.mediaInfo?.chapters ?? [];
   }
 
   resizeCanvas(width: number, height: number): void {
@@ -2256,12 +2476,48 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
     }
   }
 
+  /**
+   * Set extra bottom padding for subtitles when controls are visible
+   */
+  setSubtitleControlsPadding(padding: number): void {
+    if (this.videoRenderer) {
+      this.videoRenderer.setSubtitleControlsPadding(padding);
+    }
+  }
+
+  /**
+   * Rotate video 90 degrees clockwise
+   */
+  rotateVideo(): number {
+    if (this.videoRenderer) {
+      return this.videoRenderer.rotate90();
+    }
+    return 0;
+  }
+
+  /**
+   * Get current video rotation
+   */
+  getVideoRotation(): number {
+    return this.videoRenderer?.getRotation() ?? 0;
+  }
+
+  setVideoRotation(deg: number): void {
+    this.videoRenderer?.setManualRotation(deg);
+  }
+
   setFitMode(mode: "contain" | "cover" | "fill" | "zoom" | "control"): void {
     if (this.hlsWrapper) {
       this.hlsWrapper.setFitMode(mode);
     }
     if (this.videoRenderer) {
       this.videoRenderer.setFitMode(mode);
+    }
+  }
+
+  setLetterboxColor(r: number, g: number, b: number): void {
+    if (this.videoRenderer) {
+      this.videoRenderer.setLetterboxColor(r, g, b);
     }
   }
 
@@ -2284,6 +2540,244 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
     if (this.videoRenderer) {
       this.videoRenderer.setPlaybackRate(rate);
     }
+    if (this.nativeAudioEl) {
+      this.nativeAudioEl.playbackRate = rate;
+    }
+  }
+
+  /**
+   * Setup native <audio> element for separate audio source.
+   * Shared by single audioSource and multi-language audioTracks.
+   */
+  private setupNativeAudio(url: string): void {
+    const wasPlaying = this.nativeAudioEl && !this.nativeAudioEl.paused;
+    const currentTime = this.nativeAudioEl?.currentTime ?? 0;
+
+    // Reuse or create element
+    if (!this.nativeAudioEl) {
+      this.nativeAudioEl = new Audio();
+    }
+    this.nativeAudioEl.src = url;
+    this.nativeAudioEl.preload = "auto";
+    this.nativeAudioEl.volume = this.muted ? 0 : this.audioRenderer.getVolume();
+    this.nativeAudioEl.muted = this.muted;
+    this.disableAudio = true;
+
+    // Wire up clock + video renderer to native audio
+    const audioEl = this.nativeAudioEl;
+    const self = this;
+    this.clock.setAudioProvider({
+      getAudioClock: () => audioEl.currentTime + self.startTime,
+      hasHealthyBuffer: () => audioEl.readyState >= 3,
+      isAudioPlaying: () => !audioEl.paused,
+    });
+    if (this.videoRenderer) {
+      this.videoRenderer.setAudioTimeProvider(
+        () => audioEl.currentTime + self.startTime,
+        () => audioEl.readyState >= 3,
+      );
+    }
+
+    // Restore position and playback state when switching tracks
+    if (currentTime > 0) {
+      audioEl.currentTime = currentTime;
+    }
+    if (wasPlaying) {
+      audioEl.play().catch(() => {});
+    }
+  }
+
+  /**
+   * Get available audio language tracks (multi-language mode)
+   */
+  getAudioLangs(): { lang: string; label: string; active: boolean }[] {
+    return this._audioTracks.map((t) => ({
+      lang: t.lang,
+      label: t.label,
+      active: t.lang === this._activeAudioLang,
+    }));
+  }
+
+  /**
+   * Switch audio to an external language track (native <audio> element).
+   * Disables WASM audio if it was active. Preserves position & playback.
+   */
+  selectAudioLang(lang: string): boolean {
+    const track = this._audioTracks.find((t) => t.lang === lang);
+    if (!track) {
+      Logger.warn(TAG, `Audio track not found for lang: ${lang}`);
+      return false;
+    }
+    if (lang === this._activeAudioLang && this.nativeAudioEl) return true;
+
+    // Mute WASM audio if it was active (don't destroy — keep decodable for switch-back)
+    if (!this.disableAudio) {
+      this.audioRenderer.mute();
+      this.disableAudio = true;
+    }
+
+    this._activeAudioLang = lang;
+    this.setupNativeAudio(track.url);
+    Logger.info(TAG, `Audio switched to external: ${track.label} (${track.lang})`);
+    this.emit("audioTrackChange" as any, { lang, label: track.label });
+    return true;
+  }
+
+  /**
+   * Switch back to muxed (WASM) audio, disabling native <audio> element.
+   * Called when user selects a demuxer audio track while external is active.
+   */
+  useMuxedAudio(): void {
+    if (!this.nativeAudioEl) return;
+
+    // Stop native audio
+    this.nativeAudioEl.pause();
+    this.nativeAudioEl.src = "";
+    this.nativeAudioEl = null;
+    this._activeAudioLang = "";
+
+    // Re-enable WASM audio
+    this.disableAudio = false;
+    this.muted = false;
+    this.audioRenderer.unmute().catch(() => {});
+
+    // Restore WASM audio as clock provider
+    this.clock.setAudioProvider(this.audioRenderer);
+    if (this.videoRenderer) {
+      this.videoRenderer.setAudioTimeProvider(
+        () => this.audioRenderer.getAudioClock(),
+        () => this.audioRenderer.hasHealthyBuffer(),
+      );
+    }
+
+    Logger.info(TAG, "Switched back to muxed (WASM) audio");
+  }
+
+  /** Check if native audio is currently active */
+  isNativeAudioActive(): boolean {
+    return this.nativeAudioEl !== null && this._activeAudioLang !== "";
+  }
+
+  /**
+   * Get available external subtitle tracks
+   */
+  getSubtitleLangs(): { lang: string; label: string; active: boolean }[] {
+    return this._subtitleTracks.map((t) => ({
+      lang: t.lang,
+      label: t.label,
+      active: t.lang === this._activeSubtitleLang,
+    }));
+  }
+
+  /**
+   * Select an external subtitle track by language.
+   * Fetches the VTT/SRT file, parses cues, and starts rendering.
+   * Pass empty string or null to disable.
+   */
+  async selectSubtitleLang(lang: string | null): Promise<boolean> {
+    // Disable current external subtitles
+    this.stopExternalSubtitles();
+
+    if (!lang) {
+      this._activeSubtitleLang = "";
+      if (this.videoRenderer) this.videoRenderer.clearSubtitles();
+      this.emit("subtitleTrackChange" as any, { lang: null, label: null });
+      return true;
+    }
+
+    const track = this._subtitleTracks.find((t) => t.lang === lang);
+    if (!track) {
+      Logger.warn(TAG, `Subtitle track not found for lang: ${lang}`);
+      return false;
+    }
+
+    try {
+      // Fetch subtitle file
+      const res = await fetch(track.url);
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      const text = await res.text();
+
+      // Detect format
+      const fmt = track.format || (track.url.includes(".srt") ? "srt" : "vtt");
+
+      // Parse into cues
+      this._externalSubCues = fmt === "srt"
+        ? this.parseSRT(text)
+        : this.parseVTT(text);
+
+      this._activeSubtitleLang = lang;
+
+      // Disable muxed subtitles if active
+      this.selectSubtitleTrack(null);
+
+      // Start cue timer
+      this.startExternalSubtitles();
+
+      Logger.info(TAG, `Subtitle loaded: ${track.label} (${this._externalSubCues.length} cues)`);
+      this.emit("subtitleTrackChange" as any, { lang, label: track.label });
+      return true;
+    } catch (e) {
+      Logger.error(TAG, `Failed to load subtitle: ${track.url}`, e);
+      return false;
+    }
+  }
+
+  /** Parse VTT text into SubtitleCue[] */
+  private parseVTT(text: string): SubtitleCue[] {
+    const cues: SubtitleCue[] = [];
+    const blocks = text.split(/\n\n+/);
+    for (const block of blocks) {
+      const lines = block.trim().split("\n");
+      for (let i = 0; i < lines.length; i++) {
+        const match = lines[i].match(
+          /(\d{2}):(\d{2}):(\d{2})[.,](\d{3})\s*-->\s*(\d{2}):(\d{2}):(\d{2})[.,](\d{3})/
+        );
+        if (match) {
+          const start = +match[1] * 3600 + +match[2] * 60 + +match[3] + +match[4] / 1000;
+          const end = +match[5] * 3600 + +match[6] * 60 + +match[7] + +match[8] / 1000;
+          const cueText = lines.slice(i + 1).join("\n").trim();
+          if (cueText) cues.push({ start, end, text: cueText });
+          break;
+        }
+      }
+    }
+    return cues;
+  }
+
+  /** Parse SRT text into SubtitleCue[] */
+  private parseSRT(text: string): SubtitleCue[] {
+    // SRT has same timestamp format but with comma instead of dot — parseVTT handles both
+    return this.parseVTT(text);
+  }
+
+  /** Start rendering external subtitle cues based on playback time */
+  private startExternalSubtitles(): void {
+    this.stopExternalSubtitles();
+    let lastIdx = -1;
+    this._externalSubTimer = window.setInterval(() => {
+      if (!this.videoRenderer) return;
+      const time = this.clock.getTime();
+      // Find active cue
+      const idx = this._externalSubCues.findIndex(
+        (c) => time >= c.start && time <= c.end
+      );
+      if (idx !== lastIdx) {
+        lastIdx = idx;
+        if (idx >= 0) {
+          this.videoRenderer.setSubtitleCues([this._externalSubCues[idx]]);
+        } else {
+          this.videoRenderer.setSubtitleCues([]);
+        }
+      }
+    }, 100); // 10Hz check — enough for subtitle timing
+  }
+
+  /** Stop external subtitle rendering */
+  private stopExternalSubtitles(): void {
+    if (this._externalSubTimer !== null) {
+      clearInterval(this._externalSubTimer);
+      this._externalSubTimer = null;
+    }
   }
 
   /**
@@ -2304,6 +2798,9 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
       this.hlsWrapper.setVolume(volume);
     }
     this.audioRenderer.setVolume(volume);
+    if (this.nativeAudioEl) {
+      this.nativeAudioEl.volume = volume;
+    }
   }
 
   /**
@@ -2338,6 +2835,9 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
         Logger.error("MoviPlayer", "Failed to unmute", err);
       });
     }
+    if (this.nativeAudioEl) {
+      this.nativeAudioEl.muted = muted;
+    }
   }
 
   /**
@@ -2345,6 +2845,182 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
    */
   getMuted(): boolean {
     return this.muted;
+  }
+
+  /**
+   * Enable/disable stable audio mode
+   * Stable audio provides: smooth gain transitions, auto-recovery,
+   * gap filling on underrun, starvation detection, and fade on seek/reset
+   */
+  setStableAudio(enabled: boolean): void {
+    this.audioRenderer.setStableAudio(enabled);
+  }
+
+  /**
+   * Get stable audio mode state
+   */
+  getStableAudio(): boolean {
+    return this.audioRenderer.getStableAudio();
+  }
+
+  /**
+   * Get comprehensive player stats for "Stats for nerds" overlay
+   */
+  getStats(): Record<string, string | number | boolean> {
+    // HLS mode: delegate to HLS wrapper
+    if (this.hlsWrapper) {
+      return this.hlsWrapper.getStats();
+    }
+
+    const mediaInfo = this.mediaInfo;
+    const videoTrack = this.trackManager.getActiveVideoTrack() as VideoTrack | null;
+    const audioTrack = this.trackManager.getActiveAudioTrack() as AudioTrack | null;
+    const videoDecoderStats = this.videoDecoder.getStats();
+    const audioDecoderStats = this.audioDecoder.getStats();
+    const rendererStats = this.videoRenderer?.getStats();
+    const audioBuffered = this.audioRenderer.getBufferedDuration();
+
+    const stats: Record<string, string | number | boolean> = {};
+
+    // Video info
+    if (videoTrack) {
+      stats["Video Codec"] = videoTrack.codec ?? "N/A";
+      stats["Resolution"] = `${videoTrack.width}x${videoTrack.height}`;
+      // Quality label
+      const h = videoTrack.height;
+      stats["Quality"] = h >= 2160 ? "4K" : h >= 1440 ? "2K" : h >= 1080 ? "1080p" : h >= 720 ? "720p" : h >= 480 ? "480p" : "SD";
+      stats["Frame Rate"] = `${videoTrack.frameRate} fps`;
+      stats["Video Bitrate"] = videoTrack.bitRate
+        ? `${(videoTrack.bitRate / 1000).toFixed(0)} kbps`
+        : "N/A";
+      if (videoTrack.pixelFormat) stats["Pixel Format"] = videoTrack.pixelFormat;
+      stats["Color Space"] = videoTrack.colorSpace ?? "N/A";
+      if (videoTrack.colorRange) stats["Color Range"] = videoTrack.colorRange;
+      if (videoTrack.colorPrimaries && videoTrack.colorPrimaries !== "unknown") {
+        stats["Color Primaries"] = videoTrack.colorPrimaries;
+      }
+      if (videoTrack.colorTransfer && videoTrack.colorTransfer !== "unknown") {
+        stats["Color Transfer"] = videoTrack.colorTransfer;
+      }
+      stats["HDR"] = videoTrack.isHDR ? "Yes" : "No";
+      if (videoTrack.rotation) stats["Rotation"] = `${videoTrack.rotation}°`;
+      stats["Video Decoder"] = videoDecoderStats.decoderType;
+    }
+
+    // Audio info
+    if (audioTrack) {
+      stats["Audio Codec"] = audioTrack.codec ?? "N/A";
+      if (audioTrack.language && audioTrack.language !== "und") {
+        stats["Language"] = audioTrack.language.toUpperCase();
+      }
+      stats["Sample Rate"] = `${audioTrack.sampleRate} Hz`;
+      stats["Channels"] = audioTrack.channels === 1 ? "Mono" :
+                          audioTrack.channels === 2 ? "Stereo" :
+                          audioTrack.channels === 6 ? "5.1 Surround" :
+                          audioTrack.channels === 8 ? "7.1 Surround" :
+                          `${audioTrack.channels}ch`;
+      stats["Audio Bitrate"] = audioTrack.bitRate
+        ? `${(audioTrack.bitRate / 1000).toFixed(0)} kbps`
+        : "N/A";
+      stats["Audio Decoder"] = audioDecoderStats.decoderType;
+    }
+
+    // Subtitle info
+    const subtitleTrack = this.trackManager.getActiveSubtitleTrack();
+    if (subtitleTrack) {
+      stats["Subtitle"] = `${subtitleTrack.codec ?? "text"}${subtitleTrack.language ? ` (${subtitleTrack.language.toUpperCase()})` : ""}`;
+    }
+
+    // Container
+    if (mediaInfo) {
+      stats["Container"] = mediaInfo.formatName ?? "N/A";
+      stats["Total Bitrate"] = mediaInfo.bitRate
+        ? `${(mediaInfo.bitRate / 1000).toFixed(0)} kbps`
+        : "N/A";
+    }
+
+    // Playback
+    stats["Playback State"] = this.stateManager.getState();
+    stats["Playback Rate"] = `${this.clock.getPlaybackRate()}x`;
+    stats["A/V Sync"] = this.clock.isSyncedToAudio() ? "Audio Master" : "Wall Clock";
+    stats["Stable Volume"] = this.audioRenderer.getStableAudio() ? "On" : "Off";
+
+    // Buffers
+    stats["Audio Buffer"] = `${audioBuffered.toFixed(2)}s`;
+    stats["Video Queue"] = `${rendererStats?.frameQueueSize ?? 0} frames`;
+    stats["Frames Rendered"] = rendererStats?.framesPresented ?? 0;
+    stats["Video Decoder Queue"] = videoDecoderStats.queueSize;
+    stats["Audio Decoder Queue"] = audioDecoderStats.queueSize;
+
+    // Memory usage (Chrome only)
+    const mem = (performance as any).memory;
+    if (mem) {
+      stats["Memory Used"] = `${(mem.usedJSHeapSize / 1048576).toFixed(0)} MB`;
+      stats["Memory Limit"] = `${(mem.jsHeapSizeLimit / 1048576).toFixed(0)} MB`;
+    }
+
+    // File
+    if (this.fileSize > 0) {
+      stats["File Size"] = this.fileSize > 1048576
+        ? `${(this.fileSize / 1048576).toFixed(1)} MB`
+        : `${(this.fileSize / 1024).toFixed(1)} KB`;
+    }
+
+    // Network (HttpSource) or Disk (FileSource) stats
+    if (this.source instanceof HttpSource) {
+      const net = this.source.getNetworkStats();
+      stats["Downloaded"] = net.totalBytes > 1048576
+        ? `${(net.totalBytes / 1048576).toFixed(1)} MB`
+        : `${(net.totalBytes / 1024).toFixed(1)} KB`;
+      stats["Network Speed"] = net.currentSpeed > 0
+        ? net.currentSpeed > 1048576
+          ? `${(net.currentSpeed / 1048576).toFixed(1)} MB/s`
+          : `${(net.currentSpeed / 1024).toFixed(0)} KB/s`
+        : "—";
+      stats["Connection Time"] = `${net.elapsed.toFixed(1)}s`;
+    } else if (this.source instanceof FileSource) {
+      const disk = this.source.getDiskStats();
+      stats["Disk Read"] = disk.totalBytes > 1048576
+        ? `${(disk.totalBytes / 1048576).toFixed(1)} MB`
+        : `${(disk.totalBytes / 1024).toFixed(1)} KB`;
+      stats["Read Speed"] = disk.currentSpeed > 0
+        ? disk.currentSpeed > 1048576
+          ? `${(disk.currentSpeed / 1048576).toFixed(1)} MB/s`
+          : `${(disk.currentSpeed / 1024).toFixed(0)} KB/s`
+        : "—";
+    }
+
+    return stats;
+  }
+
+  /**
+   * Get current I/O throughput in bytes/sec (for graph)
+   * Works for both network (HttpSource) and disk (FileSource)
+   */
+  getNetworkSpeed(): number {
+    // HLS mode: delegate to HLS wrapper
+    if (this.hlsWrapper) {
+      return this.hlsWrapper.getNetworkSpeed();
+    }
+    if (this.source instanceof HttpSource) {
+      return this.source.getNetworkStats().currentSpeed;
+    }
+    if (this.source instanceof FileSource) {
+      return this.source.getDiskStats().currentSpeed;
+    }
+    // EncryptedHttpSource (dynamic import, check duck-typed)
+    if (this.source && "getNetworkStats" in this.source && !(this.source instanceof HttpSource)) {
+      return (this.source as any).getNetworkStats().currentSpeed;
+    }
+    return 0;
+  }
+
+  /**
+   * Check if source is a local file
+   */
+  isFileSource(): boolean {
+    if (this.hlsWrapper) return false;
+    return this.source instanceof FileSource;
   }
 
   /**
@@ -2380,25 +3056,129 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
   }
 
   /**
-   * Handle visibility change
+   * Handle network recovery — re-seek to current position to restart cleanly
    */
-  private handleVisibilityChange = async (): Promise<void> => {
-    // If the page becomes visible again and we are playing, we MUST re-acquire the lock.
-    // The browser automatically releases the lock when visibility is lost (e.g. minimizing,
-    // switching tabs, or potentially during the "black screen" transition of a lid close).
-    if (
-      document.visibilityState === "visible" &&
-      this.stateManager.getState() === "playing"
-    ) {
-      // Small delay to ensure browser is ready
-      setTimeout(() => {
-        if (this.stateManager.getState() === "playing") {
-          Logger.debug(TAG, "Visibility restored, re-acquiring WakeLock");
-          this.requestWakeLock();
-        }
-      }, 1000);
+  private handleNetworkOnline = (): void => {
+    const state = this.stateManager.getState();
+    if (state === "buffering" || state === "playing") {
+      const currentTime = this.getCurrentTime();
+      Logger.info(TAG, `Network online — re-seeking to ${currentTime.toFixed(2)}s for clean recovery`);
+      this.seek(currentTime).catch((err) => {
+        Logger.error(TAG, "Network recovery seek failed", err);
+      });
     }
   };
+
+  /**
+   * Handle visibility change
+   */
+  /** Set by MoviElement when Document PiP is active */
+  public isPiPActive: boolean = false;
+
+  private handleVisibilityChange = async (): Promise<void> => {
+    const isPlaying = this.stateManager.getState() === "playing" || this.stateManager.getState() === "buffering";
+
+    if (document.visibilityState === "hidden" && isPlaying) {
+      // Tab went to background — use Worker timer (Safari throttles setInterval to 1s+)
+      this.startBackgroundTimer();
+
+      // Resume AudioContext if suspended
+      if (this.audioRenderer) {
+        (this.audioRenderer as any).audioContext?.resume?.().catch(() => {});
+      }
+    } else if (document.visibilityState === "visible") {
+      // Tab visible again — stop background timer, RAF takes over
+      this.stopBackgroundTimer();
+
+      if (isPlaying) {
+        // Only clear video queue if PiP is NOT active
+        // PiP window keeps rendering frames even when main tab is hidden
+        if (!this.isPiPActive && this.videoRenderer) {
+          this.videoRenderer.clearQueue();
+        }
+
+        // Re-sync clock to audio (audio was playing continuously)
+        this.clock.seek(this.clock.getTime());
+
+        // Resume AudioContext if needed
+        if (this.audioRenderer) {
+          (this.audioRenderer as any).audioContext?.resume?.().catch(() => {});
+        }
+
+        // Restart presentation loop
+        this.processLoop();
+
+        setTimeout(() => {
+          if (this.stateManager.getState() === "playing") {
+            this.requestWakeLock();
+          }
+        }, 500);
+      }
+    }
+  };
+
+  /**
+   * Start background timer using Web Worker (Safari-safe, not throttled)
+   */
+  private startBackgroundTimer(): void {
+    if (this.backgroundWorker || this.backgroundIntervalId) return;
+    Logger.debug(TAG, "Starting background playback timer");
+
+    try {
+      // Create inline Worker — not throttled in background tabs
+      const blob = new Blob([`
+        let id = null;
+        self.onmessage = (e) => {
+          if (e.data === 'start') {
+            id = setInterval(() => self.postMessage('tick'), 16);
+          } else if (e.data === 'stop') {
+            clearInterval(id);
+            id = null;
+          }
+        };
+      `], { type: "application/javascript" });
+      this.backgroundWorker = new Worker(URL.createObjectURL(blob));
+      this.backgroundWorker.onmessage = () => {
+        const state = this.stateManager.getState();
+        if (state === "playing" || state === "buffering") {
+          this.processLoop();
+          // In PiP mode, also drive video rendering since main window rAF is stopped
+          if (this.isPiPActive && this.videoRenderer) {
+            (this.videoRenderer as any).presentationLoop?.();
+          }
+        }
+      };
+      this.backgroundWorker.postMessage("start");
+    } catch {
+      // Worker not available — fallback to setInterval
+      Logger.debug(TAG, "Worker unavailable, using setInterval fallback");
+      this.backgroundIntervalId = window.setInterval(() => {
+        const state = this.stateManager.getState();
+        if (state === "playing" || state === "buffering") {
+          this.processLoop();
+          if (this.isPiPActive && this.videoRenderer) {
+            (this.videoRenderer as any).presentationLoop?.();
+          }
+        }
+      }, 16);
+    }
+  }
+
+  /**
+   * Stop background timer
+   */
+  private stopBackgroundTimer(): void {
+    if (this.backgroundWorker) {
+      this.backgroundWorker.postMessage("stop");
+      this.backgroundWorker.terminate();
+      this.backgroundWorker = null;
+      Logger.debug(TAG, "Background worker stopped");
+    }
+    if (this.backgroundIntervalId !== null) {
+      clearInterval(this.backgroundIntervalId);
+      this.backgroundIntervalId = null;
+    }
+  }
 
   /**
    * Release WakeLock
@@ -2451,6 +3231,15 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
     // For FileSource, the entire file is buffered
     if (this.source instanceof FileSource) {
       return duration;
+    }
+
+    // For EncryptedHttpSource, use getBufferedEnd() like HttpSource
+    if (this.source && "getBufferedEnd" in this.source && !(this.source instanceof HttpSource) && this.fileSize > 0) {
+      const bufferedBytes = (this.source as any).getBufferedEnd();
+      if (bufferedBytes > 0) {
+        const ratio = Math.min(1, bufferedBytes / this.fileSize);
+        return Math.max(ratio * duration, this.getCurrentTime());
+      }
     }
 
     return 0;
@@ -2558,6 +3347,7 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
     if (this.animationFrameId !== null) {
       cancelAnimationFrame(this.animationFrameId);
     }
+    this.stopBackgroundTimer();
 
     // Destroy HLS wrapper
     if (this.hlsWrapper) {
@@ -2580,6 +3370,18 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
       this.demuxer = null;
     }
 
+    // Cleanup native audio element (separate audio source)
+    if (this.nativeAudioEl) {
+      this.nativeAudioEl.pause();
+      this.nativeAudioEl.src = "";
+      this.nativeAudioEl = null;
+    }
+
+    // Cleanup external subtitles
+    this.stopExternalSubtitles();
+    this._externalSubCues = [];
+    this._subtitleTracks = [];
+
     // Close source
     if (this.source) {
       this.source.close();
@@ -2601,6 +3403,7 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
       "visibilitychange",
       this.handleVisibilityChange,
     );
+    window.removeEventListener("online", this.handleNetworkOnline);
     this.removeAllListeners();
 
     Logger.info(TAG, "Player destroyed");

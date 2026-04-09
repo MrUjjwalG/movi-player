@@ -1,0 +1,166 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Movi Player</title>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    html, body { width: 100%; height: 100%; background: #000; overflow: hidden; }
+    movi-player { width: 100%; height: 100%; display: block; }
+
+    .file-overlay {
+      position: fixed;
+      top: 0; left: 0; right: 0; bottom: 0;
+      z-index: 9999;
+      background: #000;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      gap: 16px;
+      font-family: -apple-system, sans-serif;
+      color: #fff;
+    }
+
+    .file-overlay.hidden { display: none; }
+
+    .drop-zone {
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      gap: 24px;
+      width: 100%;
+      height: 100%;
+      cursor: pointer;
+      transition: all 0.3s;
+    }
+
+    .drop-zone.dragover .drop-visual svg {
+      color: #8B5CF6;
+      opacity: 1;
+      transform: translateY(-4px);
+    }
+
+    .drop-visual {
+      color: #555;
+      transition: all 0.3s;
+    }
+
+    .drop-visual svg {
+      transition: all 0.3s;
+    }
+
+    .drop-text {
+      text-align: center;
+    }
+
+    .drop-text h2 {
+      font-size: 20px;
+      font-weight: 600;
+      color: #eee;
+      font-family: -apple-system, sans-serif;
+      margin-bottom: 6px;
+    }
+
+    .drop-text p {
+      font-size: 13px;
+      color: #444;
+      font-family: -apple-system, sans-serif;
+    }
+
+    .browse-btn {
+      background: #8B5CF6;
+      color: #fff;
+      border: none;
+      padding: 12px 40px;
+      border-radius: 12px;
+      font-size: 14px;
+      font-weight: 600;
+      cursor: pointer;
+      font-family: -apple-system, sans-serif;
+      transition: all 0.2s;
+    }
+
+    .browse-btn:hover { background: #7C3AED; transform: translateY(-2px); box-shadow: 0 8px 24px rgba(139,92,246,0.3); }
+
+    .drop-formats {
+      font-size: 11px;
+      color: #333;
+      font-family: -apple-system, sans-serif;
+      letter-spacing: 0.5px;
+    }
+
+    .promo-links {
+      position: absolute;
+      bottom: 20px;
+      display: flex;
+      gap: 16px;
+    }
+    .promo-links a {
+      color: #2a2a35;
+      text-decoration: none;
+      display: flex;
+      align-items: center;
+      gap: 5px;
+      font-size: 11px;
+      font-family: -apple-system, sans-serif;
+      transition: color 0.15s;
+    }
+    .promo-links a:hover { color: #8B5CF6; }
+    .promo-links a svg { width: 14px; height: 14px; }
+  </style>
+</head>
+<body>
+  <movi-player
+    id="player"
+    controls
+    autoplay
+    thumb
+    fastseek
+    showtitle
+    ambientmode
+    resume
+  ></movi-player>
+
+  <div class="file-overlay hidden" id="fileOverlay">
+    <div class="promo-links">
+      <a href="https://github.com/MrUjjwalG/movi-player" target="_blank">
+        <svg viewBox="0 0 24 24" fill="currentColor"><path d="M12 .3a12 12 0 00-3.8 23.4c.6.1.8-.3.8-.6v-2c-3.3.7-4-1.6-4-1.6-.6-1.4-1.4-1.8-1.4-1.8-1-.7.1-.7.1-.7 1.2.1 1.8 1.2 1.8 1.2 1 1.8 2.8 1.3 3.5 1 .1-.8.4-1.3.7-1.6-2.7-.3-5.5-1.3-5.5-6 0-1.2.5-2.3 1.3-3.1-.2-.4-.6-1.6.1-3.2 0 0 1-.3 3.4 1.2a11.5 11.5 0 016 0c2.3-1.5 3.3-1.2 3.3-1.2.7 1.6.3 2.8.2 3.2.7.8 1.2 1.9 1.2 3.1 0 4.6-2.8 5.6-5.5 5.9.5.4.9 1.2.9 2.4v3.5c0 .3.2.7.8.6A12 12 0 0012 .3"/></svg>
+        GitHub
+      </a>
+      <a href="https://www.npmjs.com/package/movi-player" target="_blank">
+        <svg viewBox="0 0 24 24" fill="currentColor"><path d="M0 7.334v8h6.666v1.332H12v-1.332h12v-8H0zm6.666 6.664H5.334v-4H3.999v4H1.335V8.667h5.331v5.331zm4 0v1.336H8.001V8.667h5.334v5.331h-2.669zm12.001 0h-1.33v-4h-1.336v4h-1.335v-4h-1.33v4h-2.671V8.667h8.002v5.331z"/></svg>
+        npm
+      </a>
+      <a href="https://mrujjwalg.github.io/movi-player/" target="_blank">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M2 3h6a4 4 0 0 1 4 4v14a3 3 0 0 0-3-3H2z"/><path d="M22 3h-6a4 4 0 0 0-4 4v14a3 3 0 0 1 3-3h7z"/></svg>
+        Docs
+      </a>
+    </div>
+    <div class="drop-zone" id="dropZone">
+      <div class="drop-visual">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" width="48" height="48">
+          <path d="M4 14.9A7 7 0 1 1 15.7 8h1.8a4.5 4.5 0 0 1 2.5 8.2" opacity="0.3"/>
+          <path d="M12 12v9"/><path d="m16 16-4-4-4 4"/>
+        </svg>
+      </div>
+      <div class="drop-text">
+        <h2>Drop video here</h2>
+        <p>or click to browse</p>
+      </div>
+      <label class="browse-btn">
+        Choose Video
+        <input type="file" id="filePicker" accept="video/*,.mkv,.ts,.avi,.flv,.wmv" style="display:none">
+      </label>
+      <div class="drop-formats">
+        MP4, MKV, HEVC, AV1, WebM, HDR, MOV, TS
+      </div>
+    </div>
+  </div>
+
+  <script src="dist/element.js" type="module"></script>
+  <script src="player.js"></script>
+</body>
+</html>

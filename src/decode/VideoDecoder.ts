@@ -40,6 +40,10 @@ export class MoviVideoDecoder {
   private isResurrecting: boolean = false;
   private forceSoftware: boolean = false;
   private targetFps: number = 0;
+  private lastKeyframeChunk: { data: Uint8Array; timestamp: number } | null =
+    null;
+  private isRecovering: boolean = false;
+  private consecutiveRecreations: number = 0;
 
   constructor(forceSoftware: boolean = false) {
     this.forceSoftware = forceSoftware;
@@ -392,7 +396,24 @@ export class MoviVideoDecoder {
     if (this.useSoftware) return false;
     if (!this.lastConfig) return false;
 
-    Logger.warn(TAG, "Recreating decoder to recover from error");
+    this.consecutiveRecreations++;
+
+    // If hardware keeps crashing after recreation, it can't handle this content — switch to software
+    if (this.consecutiveRecreations > 3) {
+      Logger.warn(
+        TAG,
+        `Hardware decoder failed ${this.consecutiveRecreations} consecutive times. Switching to software decoder.`,
+      );
+      this.consecutiveRecreations = 0;
+      this.lastKeyframeChunk = null;
+      this.initSoftwareDecoder();
+      return false;
+    }
+
+    Logger.warn(
+      TAG,
+      `Recreating decoder to recover from error (attempt ${this.consecutiveRecreations}/3)`,
+    );
 
     // Close existing
     try {
@@ -404,6 +425,7 @@ export class MoviVideoDecoder {
       output: (frame) => {
         this.openGopErrorCount = 0;
         this.errorCount = 0;
+        this.consecutiveRecreations = 0; // Hardware is working — reset
         this.isResurrecting = false; // Success!
         if (this.onFrame) {
           this.onFrame(frame);
@@ -422,8 +444,29 @@ export class MoviVideoDecoder {
     try {
       this.decoder.configure(this.lastConfig);
       this.isConfigured = true;
-      // Reset waiting for keyframe to ensure we resync
-      this.waitingForKeyframe = true;
+
+      // If we have a cached keyframe, re-feed it immediately to avoid
+      // dropping all frames until the next keyframe (which can be 2-6s away).
+      if (this.lastKeyframeChunk) {
+        Logger.info(
+          TAG,
+          `Re-feeding cached keyframe (ts=${this.lastKeyframeChunk.timestamp}) to new decoder for instant recovery`,
+        );
+        try {
+          const chunk = new EncodedVideoChunk({
+            type: "key",
+            timestamp: this.lastKeyframeChunk.timestamp * 1_000_000,
+            data: this.lastKeyframeChunk.data,
+          });
+          this.decoder.decode(chunk);
+          this.waitingForKeyframe = false;
+        } catch (e) {
+          Logger.warn(TAG, "Failed to re-feed cached keyframe, will wait for next one", e);
+          this.waitingForKeyframe = true;
+        }
+      } else {
+        this.waitingForKeyframe = true;
+      }
       return true;
     } catch (error) {
       Logger.error(TAG, "Failed to recreate decoder", error);
@@ -502,8 +545,10 @@ export class MoviVideoDecoder {
 
     // Check if decoder is in a valid state
     if (this.decoder.state === "closed") {
-      // Try to recover if closed unexpectedly
-      this.recoverFromError(new Error("Decoder closed unexpectedly"));
+      // Async error callback may have already triggered recovery — don't double-recover
+      if (!this.isRecovering) {
+        this.recoverFromError(new Error("Decoder closed unexpectedly"));
+      }
       return;
     }
 
@@ -515,6 +560,8 @@ export class MoviVideoDecoder {
     // Got a keyframe, reset recovery state
     if (keyframe) {
       this.waitingForKeyframe = false;
+      // Cache keyframe for instant recovery after decoder recreation
+      this.lastKeyframeChunk = { data: new Uint8Array(data), timestamp };
     }
 
     // Check if we've exceeded max errors
@@ -546,6 +593,18 @@ export class MoviVideoDecoder {
   }
 
   private recoverFromError(error: Error) {
+    // Guard against double-recovery (async error callback + synchronous closed detection)
+    if (this.isRecovering) return;
+    this.isRecovering = true;
+
+    try {
+      this._doRecover(error);
+    } finally {
+      this.isRecovering = false;
+    }
+  }
+
+  private _doRecover(error: Error) {
     const isKeyFrameError =
       error.message &&
       (error.message.includes("wasn't a key frame") ||
@@ -713,7 +772,23 @@ export class MoviVideoDecoder {
         Logger.warn(TAG, "Attempting fast reset recovery");
         this.decoder.reset();
         this.decoder.configure(this.lastConfig!);
-        this.waitingForKeyframe = true;
+
+        // Re-feed cached keyframe to resume instantly instead of waiting 2-6s for next one
+        if (this.lastKeyframeChunk) {
+          try {
+            const chunk = new EncodedVideoChunk({
+              type: "key",
+              timestamp: this.lastKeyframeChunk.timestamp * 1_000_000,
+              data: this.lastKeyframeChunk.data,
+            });
+            this.decoder.decode(chunk);
+            this.waitingForKeyframe = false;
+          } catch (e) {
+            this.waitingForKeyframe = true;
+          }
+        } else {
+          this.waitingForKeyframe = true;
+        }
         return;
       } catch (e) {
         Logger.warn(TAG, "Fast reset failed, trying full recreation");
@@ -861,16 +936,33 @@ export class MoviVideoDecoder {
    */
   async flush(): Promise<void> {
     this.openGopErrorCount = 0;
+    this.consecutiveRecreations = 0;
     this.pendingChunks = []; // Clear pending inputs
+    this.lastKeyframeChunk = null; // Invalidate cached keyframe — new position after seek
     if (this.swDecoder) {
       return this.swDecoder.flush();
     }
     if (!this.decoder) return;
 
     try {
-      await this.decoder.flush();
+      // Timeout flush — WebCodecs flush() can hang on slow devices
+      await Promise.race([
+        this.decoder.flush(),
+        new Promise<void>((_, reject) =>
+          setTimeout(() => reject(new Error("flush timeout")), 1000)
+        ),
+      ]);
     } catch (error) {
-      Logger.error(TAG, "Flush error", error);
+      Logger.warn(TAG, "Flush timeout or error, resetting decoder", error);
+      try {
+        this.decoder.reset();
+        // Reconfigure after reset
+        if (this.lastConfig) {
+          this.decoder.configure(this.lastConfig);
+        }
+      } catch (e) {
+        Logger.error(TAG, "Reset after flush timeout failed", e);
+      }
     }
   }
 
@@ -896,6 +988,8 @@ export class MoviVideoDecoder {
     }
     this.pendingFrames = [];
     this.pendingChunks = [];
+    this.lastKeyframeChunk = null;
+    this.consecutiveRecreations = 0;
   }
 
   /**
@@ -1009,5 +1103,16 @@ export class MoviVideoDecoder {
    */
   get isSoftware(): boolean {
     return this.useSoftware;
+  }
+
+  /**
+   * Get decoder stats for nerd stats overlay
+   */
+  getStats(): { decoderType: string; queueSize: number; errorCount: number } {
+    return {
+      decoderType: this.useSoftware ? "Software (FFmpeg)" : "Hardware (WebCodecs)",
+      queueSize: this.queueSize,
+      errorCount: this.errorCount,
+    };
   }
 }

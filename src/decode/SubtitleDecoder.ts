@@ -34,7 +34,7 @@ export class SubtitleDecoder {
   /**
    * Configure the decoder for a specific track
    */
-  async configure(track: SubtitleTrack, _extradata?: Uint8Array): Promise<boolean> {
+  async configure(track: SubtitleTrack, extradata?: Uint8Array): Promise<boolean> {
     Logger.debug(TAG, `configure called: track=${track.id}, codec=${track.codec}, type=${track.subtitleType}`);
     this.currentTrack = track;
     this.isConfigured = false;
@@ -45,9 +45,9 @@ export class SubtitleDecoder {
       return true; // Return true so we can configure later
     }
 
-    // Enable decoder for this subtitle track
-    Logger.debug(TAG, `Attempting to enable subtitle decoder for track ${track.id}, codec: ${track.codec}, type: ${track.subtitleType}`);
-    const result = await this.bindings.enableDecoder(track.id);
+    // Enable decoder for this subtitle track, passing any available extradata
+    Logger.debug(TAG, `Attempting to enable subtitle decoder for track ${track.id}, codec: ${track.codec}, type: ${track.subtitleType}, extradata=${extradata?.length ?? 0} bytes`);
+    const result = await this.bindings.enableDecoder(track.id, extradata);
     Logger.debug(TAG, `enableDecoder result: ${result}`);
     if (result !== 0) {
       // Error codes: -1=invalid context/stream, -2=codec not found, -3=alloc failed, -4=params failed, -5=open failed
@@ -78,7 +78,8 @@ export class SubtitleDecoder {
     try {
       // Decode subtitle packet
       const result = await this.bindings.decodeSubtitle(this.currentTrack.id, data, timestamp, duration);
-      Logger.debug(TAG, `Subtitle decode result: ${result} (0=success, -11=EAGAIN, other=error)`);
+      // WASI/Emscripten: EAGAIN=6, so AVERROR(EAGAIN)=-6 (not -11 like Linux)
+      Logger.debug(TAG, `Subtitle decode result: ${result} (0=success, -6=EAGAIN, other=error)`);
       
       if (result === 0) {
         // Successfully decoded, get subtitle times first (needed for both text and image)
@@ -161,7 +162,7 @@ export class SubtitleDecoder {
         
         // Free subtitle after reading
         await this.bindings.freeSubtitle();
-      } else if (result !== -11) { // -11 is AVERROR(EAGAIN) - not an error
+      } else if (result !== -6) { // -6 is AVERROR(EAGAIN) in WASI/Emscripten
         Logger.warn(TAG, `Subtitle decode returned: ${result}`);
       }
     } catch (error) {

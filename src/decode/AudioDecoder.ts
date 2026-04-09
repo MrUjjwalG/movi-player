@@ -444,4 +444,14 @@ export class MoviAudioDecoder {
     // Note: swDecoder is currently synchronous so its queue is effectively 0
     return this.decoder?.decodeQueueSize ?? 0;
   }
+
+  /**
+   * Get decoder stats for nerd stats overlay
+   */
+  getStats(): { decoderType: string; queueSize: number } {
+    return {
+      decoderType: this.useSoftware ? "Software (FFmpeg)" : "Hardware (WebCodecs)",
+      queueSize: this.queueSize,
+    };
+  }
 }

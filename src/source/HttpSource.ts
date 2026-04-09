@@ -15,6 +15,7 @@ const MIN_BUFFER_SIZE = 2 * 1024 * 1024; // 2MB minimum
 const DEFAULT_MAX_BUFFER_SIZE_MB = 520; // Default max buffer size in MB (matches default LRU cache)
 const BUFFER_PERCENTAGE = 0.03; // 3% of file size
 const MAX_STREAM_BUFFER_SIZE = 50 * 1024 * 1024; // 50MB max per streaming session (regardless of total buffer size)
+const CORS_DETECTION_THRESHOLD = 3; // Only treat "Failed to fetch" as CORS after N consecutive failures while online
 // IMPORTANT: Header size increased to 6 Int32 values (24 bytes) to support 64-bit buffer start offsets
 const HEADER_SIZE = 24; // Header bytes for atomics (6 Int32 values)
 
@@ -67,6 +68,13 @@ export class HttpSource implements SourceAdapter {
   // Dynamic buffer size (3% of file size, clamped)
   // Start with minimum size, will be resized when file size is known
   private bufferSize: number = MIN_BUFFER_SIZE;
+
+  // Network stats tracking
+  private totalBytesDownloaded: number = 0;
+  private streamStartTime: number = 0;
+  private lastSpeedBytes: number = 0;
+  private lastSpeedTime: number = 0;
+  private currentSpeed: number = 0; // bytes per second
 
   // Maximum buffer size (from cache config, defaults to DEFAULT_MAX_BUFFER_SIZE_MB)
   private maxBufferSizeMB: number;
@@ -350,6 +358,11 @@ export class HttpSource implements SourceAdapter {
     let windowInitialized = false;
     const MAX_RETRIES = 10;
     const BASE_DELAY = 1000;
+    const MAX_RANGE_RETRIES = 3; // Retries for CDN cache warming (first hit returns 200 instead of 206)
+    const RANGE_RETRY_DELAY = 1500; // ms between range retries
+    let rangeRetryCount = 0;
+    let consecutiveOnlineFetchFailures = 0;
+    let streamBaseOffset = startOffset;
 
     while (this.atomicIsStreaming()) {
       try {
@@ -391,20 +404,35 @@ export class HttpSource implements SourceAdapter {
           signal: this.abortController!.signal,
         });
 
-        // CRITICAL: Check for 206 Partial Content response
-        // If server returns 200, it's sending entire file instead of range!
+        // Check for 206 Partial Content response
+        // If server returns 200, it may be a CDN cache warming issue (e.g. Cloudflare first hit)
+        // Retry a few times before treating as fatal — CDN often supports range after caching the file
         if (response.status === 200) {
+          // Abort the 200 response body to prevent downloading entire file
+          try { response.body?.cancel(); } catch {}
+
+          rangeRetryCount++;
+          if (rangeRetryCount <= MAX_RANGE_RETRIES) {
+            Logger.warn(
+              TAG,
+              `Server returned 200 instead of 206 (attempt ${rangeRetryCount}/${MAX_RANGE_RETRIES}). ` +
+              `CDN may be caching — retrying in ${RANGE_RETRY_DELAY}ms...`
+            );
+            await new Promise(r => setTimeout(r, RANGE_RETRY_DELAY));
+            continue; // Retry the fetch loop
+          }
+
+          // Exhausted retries — fatal
           const rangeError = new Error("Server does not support range requests.");
-          Logger.error(
-            TAG,
-            `Server returned 200 instead of 206. Range requests not supported.`
-          );
-          // Abort the response to prevent downloading
+          Logger.error(TAG, `Server returned 200 after ${MAX_RANGE_RETRIES} retries. Range requests not supported.`);
           this.abortController?.abort();
           this.atomicSetStreaming(false);
-          this.streamError = rangeError; // Store for read() to pick up immediately
+          this.streamError = rangeError;
           throw rangeError;
         }
+
+        // Reset range retry counter on successful 206
+        rangeRetryCount = 0;
 
         if (!response.ok && response.status !== 206) {
           // If 4xx error (client error), maybe don't retry indefinitely
@@ -422,6 +450,7 @@ export class HttpSource implements SourceAdapter {
 
         this.reader = response.body!.getReader();
         retryCount = 0; // Reset retry on success
+        consecutiveOnlineFetchFailures = 0; // Successful fetch — not a CORS issue
 
         // Initialize buffer window if this is the first successful connection
         if (!windowInitialized) {
@@ -434,6 +463,12 @@ export class HttpSource implements SourceAdapter {
         let lastLogBytes = 0;
         const startTime = Date.now();
 
+        // Initialize network stats timing
+        if (this.streamStartTime === 0) {
+          this.streamStartTime = startTime;
+          this.lastSpeedTime = startTime;
+        }
+
         // Read Loop
         while (this.atomicIsStreaming()) {
           const { done, value } = await this.reader.read();
@@ -444,6 +479,18 @@ export class HttpSource implements SourceAdapter {
 
           if (value) {
             downloadedBytes += value.length;
+
+            // Track global network stats
+            this.totalBytesDownloaded += value.length;
+            const now = Date.now();
+            const speedElapsed = (now - this.lastSpeedTime) / 1000;
+            if (speedElapsed >= 0.5) {
+              const bytesSinceLast = this.totalBytesDownloaded - this.lastSpeedBytes;
+              this.currentSpeed = bytesSinceLast / speedElapsed;
+              this.lastSpeedBytes = this.totalBytesDownloaded;
+              this.lastSpeedTime = now;
+            }
+
             if (downloadedBytes - lastLogBytes > 1024 * 1024) {
               // Log every 1MB
               const elapsed = (Date.now() - startTime) / 1000;
@@ -479,26 +526,42 @@ export class HttpSource implements SourceAdapter {
                   this.maxBufferedEnd = currentEnd;
                 }
 
-                this.unlock();
-
-                // Stop if we've downloaded the bounded amount (prevents excessive downloading on seeks)
-                const downloadedBytes = currentEnd - startOffset;
+                // Check if buffer is getting full or download limit reached
+                const totalDownloaded = currentEnd - streamBaseOffset;
                 const maxDownload = Math.floor(Math.min(
                   MAX_STREAM_BUFFER_SIZE,
                   this.bufferSize * 0.9
                 ));
-                if (downloadedBytes >= maxDownload) {
-                  Logger.debug(TAG, `Downloaded ${(downloadedBytes / 1024 / 1024).toFixed(1)}MB (limit reached), stopping stream`);
+                const limitReached = totalDownloaded >= maxDownload;
+                const bufferAlmostFull = newWritePos >= buffer.length * 0.9;
+
+                if (limitReached || bufferAlmostFull) {
+                  // Try buffer compaction for continuous forward streaming
+                  const bufStart = this.atomicGetBufferStart();
+                  const consumed = this.position - bufStart;
+
+                  if (consumed > this.bufferSize * 0.25 &&
+                      this.size > 0 && currentEnd < this.size) {
+                    const shift = Math.floor(consumed);
+                    if (shift > 0 && newWritePos > shift) {
+                      buffer.copyWithin(0, shift, newWritePos);
+                      this.atomicSetBufferStart(bufStart + shift);
+                      this.atomicSetWritePos(newWritePos - shift);
+                      streamBaseOffset = bufStart + shift;
+                      this.unlock();
+                      Logger.debug(TAG, `Buffer compacted: reclaimed ${(shift / 1024 / 1024).toFixed(1)}MB`);
+                      break; // Continue with new fetch in outer loop
+                    }
+                  }
+
+                  // Can't compact - stop stream
+                  this.unlock();
+                  Logger.debug(TAG, `Downloaded ${(totalDownloaded / 1024 / 1024).toFixed(1)}MB (${limitReached ? 'limit reached' : 'buffer full'}), stopping stream`);
                   this.atomicSetStreaming(false);
                   break;
                 }
 
-                // Stop if buffer nearly full
-                if (newWritePos >= buffer.length * 0.9) {
-                  Logger.debug(TAG, `Buffer nearly full, stopping stream`);
-                  this.atomicSetStreaming(false);
-                  break;
-                }
+                this.unlock();
 
                 // Check EOF
                 if (this.size > 0 && currentEnd >= this.size) {
@@ -518,26 +581,43 @@ export class HttpSource implements SourceAdapter {
             }
           }
         }
+
+        // Clean up reader before potentially starting new fetch after compaction
+        try { await this.reader?.cancel(); } catch {}
+        this.reader = null;
       } catch (error) {
         if ((error as any).name === "AbortError") {
           break;
         }
 
         // Check for CORS errors (TypeError: Failed to fetch)
-        // CORS errors cannot be retried as they're a configuration issue
+        // IMPORTANT: "Failed to fetch" also happens on transient network drops
+        // where navigator.onLine still reports true (browser detection lags).
+        // Only classify as CORS after multiple consecutive failures while online.
         const errorMessage = (error as any).message || "";
-        const isCorsError =
+        const isFetchError =
           (error as any).name === "TypeError" &&
           errorMessage.includes("Failed to fetch");
+        const isOffline = typeof self !== "undefined" && self.navigator && !self.navigator.onLine;
 
-        if (isCorsError) {
-          const corsError = new Error(
-            "Failed to fetch video resource. Check your connection or CORS settings."
-          );
-          Logger.error(TAG, `CORS error accessing ${this.url}`);
-          this.atomicSetStreaming(false);
-          this.streamError = corsError; // Store for read() to pick up
-          throw corsError;
+        if (isFetchError) {
+          if (isOffline) {
+            // Clearly offline — not a CORS issue
+            consecutiveOnlineFetchFailures = 0;
+          } else {
+            // Online but fetch failed — could be transient network drop OR CORS
+            consecutiveOnlineFetchFailures++;
+            if (consecutiveOnlineFetchFailures >= CORS_DETECTION_THRESHOLD) {
+              const corsError = new Error(
+                "Failed to fetch video resource. Check your connection or CORS settings."
+              );
+              Logger.error(TAG, `CORS error accessing ${this.url} (${consecutiveOnlineFetchFailures} consecutive failures while online)`);
+              this.atomicSetStreaming(false);
+              this.streamError = corsError;
+              throw corsError;
+            }
+            Logger.warn(TAG, `Fetch failed while online (${consecutiveOnlineFetchFailures}/${CORS_DETECTION_THRESHOLD}), may be transient network issue`);
+          }
         }
 
         // Check for range request error - don't retry, it's a fatal server limitation
@@ -566,17 +646,33 @@ export class HttpSource implements SourceAdapter {
           !self.navigator.onLine
         ) {
           Logger.warn(TAG, "Network offline, waiting for connection...");
-          // Wait for online event
+          // Wait for online event, abort signal, or timeout — whichever comes first
+          const abortSignal = this.abortController?.signal;
           await new Promise<void>((resolve) => {
-            const onOnline = () => {
-              self.removeEventListener("online", onOnline);
+            let resolved = false;
+            const cleanup = () => {
+              if (resolved) return;
+              resolved = true;
+              clearTimeout(timeout);
+              if (typeof self !== "undefined") self.removeEventListener("online", onOnline);
+              abortSignal?.removeEventListener("abort", onAbort);
               resolve();
             };
-            self.addEventListener("online", onOnline);
+            const timeout = setTimeout(() => {
+              Logger.warn(TAG, "Offline wait timeout, retrying anyway...");
+              cleanup();
+            }, 30000);
+            const onOnline = () => {
+              Logger.info(TAG, "Network online, resuming...");
+              cleanup();
+            };
+            const onAbort = () => cleanup(); // Stream stopped, exit immediately
+            if (typeof self !== "undefined") self.addEventListener("online", onOnline);
+            abortSignal?.addEventListener("abort", onAbort);
           });
-          Logger.info(TAG, "Network online, resuming...");
+          // If stream was stopped (e.g. by a seek), bail out immediately
+          if (!this.atomicIsStreaming()) break;
           retryCount = 0; // Reset retries since we were offline
-          // Continue immediately ensuring we don't hit the backoff below
           continue;
         }
 
@@ -586,9 +682,32 @@ export class HttpSource implements SourceAdapter {
           this.atomicSetStreaming(false);
           break;
         }
-        // Backoff
+        // Backoff — listen for online event or abort signal to exit early
         const delay = Math.min(BASE_DELAY * Math.pow(1.5, retryCount), 10000);
-        await new Promise((r) => setTimeout(r, delay));
+        const backoffAbortSignal = this.abortController?.signal;
+        await new Promise<void>((resolve) => {
+          let resolved = false;
+          const cleanup = () => {
+            if (resolved) return;
+            resolved = true;
+            clearTimeout(timer);
+            if (typeof self !== "undefined") self.removeEventListener("online", onOnline);
+            backoffAbortSignal?.removeEventListener("abort", onAbort);
+            resolve();
+          };
+          const timer = setTimeout(cleanup, delay);
+          const onOnline = () => {
+            Logger.info(TAG, "Online event during backoff — retrying immediately");
+            retryCount = 0;
+            consecutiveOnlineFetchFailures = 0;
+            cleanup();
+          };
+          const onAbort = () => cleanup(); // Stream stopped, exit immediately
+          if (typeof self !== "undefined" && self.addEventListener) {
+            self.addEventListener("online", onOnline);
+          }
+          backoffAbortSignal?.addEventListener("abort", onAbort);
+        });
       }
     }
 
@@ -926,6 +1045,19 @@ export class HttpSource implements SourceAdapter {
    */
   getBufferStart(): number {
     return this.atomicGetBufferStart();
+  }
+
+  /**
+   * Get network stats for nerd stats overlay
+   */
+  getNetworkStats(): { totalBytes: number; currentSpeed: number; elapsed: number } {
+    const timeSinceLastRead = this.lastSpeedTime > 0 ? (Date.now() - this.lastSpeedTime) / 1000 : 0;
+    const speed = timeSinceLastRead > 1 ? 0 : this.currentSpeed;
+    return {
+      totalBytes: this.totalBytesDownloaded,
+      currentSpeed: speed,
+      elapsed: this.streamStartTime > 0 ? (Date.now() - this.streamStartTime) / 1000 : 0,
+    };
   }
 }
 

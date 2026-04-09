@@ -51,17 +51,25 @@ export class CanvasRenderer {
   // Frame rate for timing calculations
   private videoFrameRate: number = 60; // Default to 60fps
 
-  // Rotation (degrees: 0, 90, 180, 270)
+  // Rotation (degrees: 0, 90, 180, 270) - total = metadata + manual
   private rotation: number = 0;
+  private metadataRotation: number = 0; // From video metadata
+  private manualRotation: number = 0;   // User-applied rotation
+  private containerWidth: number = 0;   // Original container width (before any rotation)
+  private containerHeight: number = 0;  // Original container height
 
   // Fit mode for canvas rendering
   private fitMode: "contain" | "cover" | "fill" | "zoom" | "control" =
     "contain"; // Default to contain (maintain aspect ratio)
+  private letterboxColor: [number, number, number] = [0, 0, 0]; // Current smoothed RGB (0-255)
+  private letterboxTarget: [number, number, number] = [0, 0, 0]; // Target RGB from ambient sampling
+
 
   // Subtitle rendering
   private activeSubtitleCue: SubtitleCue | null = null;
   private subtitleCues: SubtitleCue[] = [];
   private subtitleOverlay: HTMLElement | null = null;
+  private subtitleControlsPadding: number = 0; // Extra padding when controls visible
 
   // Animation state for object-fit transitions
   private currentScaleX: number = 0;
@@ -162,14 +170,15 @@ export class CanvasRenderer {
       this.videoFrameRate = 60;
     }
 
-    // Set rotation
+    // Set rotation from metadata
     if (rotation !== undefined) {
-      this.rotation = rotation;
+      this.metadataRotation = rotation;
+      this.rotation = (this.metadataRotation + this.manualRotation) % 360;
       if (this.canvas instanceof HTMLCanvasElement) {
-        this.canvas.style.transform = `rotate(${rotation}deg)`;
+        this.canvas.style.transform = `rotate(${this.rotation}deg)`;
         this.canvas.style.transformOrigin = "center center";
       }
-      Logger.debug(TAG, `Rotation set to: ${rotation}° (CSS transform)`);
+      Logger.debug(TAG, `Rotation set to: ${this.rotation}° (metadata: ${this.metadataRotation}°, manual: ${this.manualRotation}°)`);
     }
 
     // Capture metadata for potential re-config (HDR toggle)
@@ -398,6 +407,7 @@ export class CanvasRenderer {
       gl.useProgram(this.program);
       gl.uniform1i(uImage, 0);
     }
+
   }
 
   /**
@@ -551,6 +561,7 @@ export class CanvasRenderer {
         `Set u_hdrEnabled uniform to: ${this.hdrEnabled ? 1.0 : 0.0}`,
       );
     }
+
   }
 
   private lastPrimaries?: string;
@@ -620,8 +631,14 @@ export class CanvasRenderer {
     return this.isHDRSource;
   }
 
-  resize(width: number, height: number): void {
+  resize(width: number, height: number, fromRotate: boolean = false): void {
     if (width > 0 && height > 0) {
+      // Store original container dimensions (only from external resize, not from rotate)
+      if (!fromRotate) {
+        this.containerWidth = width;
+        this.containerHeight = height;
+      }
+
       Logger.debug(
         TAG,
         `Resizing to: ${width}x${height} (Rotation: ${this.rotation}°)`,
@@ -677,14 +694,17 @@ export class CanvasRenderer {
           this.canvas.style.transform = `translate(-50%, -50%) rotate(${this.rotation}deg)`;
           this.canvas.style.transformOrigin = "center center";
         } else {
-          // Restore standard sizing
-          this.canvas.style.width = "100%";
-          this.canvas.style.height = "100%";
+          // Restore standard sizing (0° and 180°)
           this.canvas.style.position = "relative";
           this.canvas.style.top = "";
           this.canvas.style.left = "";
           this.canvas.style.margin = "";
-          this.canvas.style.transform = "none";
+          this.canvas.style.setProperty("width", "100%", "important");
+          this.canvas.style.setProperty("height", "100%", "important");
+          this.canvas.style.setProperty("max-width", "none", "important");
+          this.canvas.style.setProperty("max-height", "none", "important");
+          this.canvas.style.transformOrigin = "center center";
+          this.canvas.style.transform = this.rotation === 180 ? "rotate(180deg)" : "none";
         }
       }
 
@@ -740,7 +760,8 @@ export class CanvasRenderer {
         this.subtitleOverlay.style.height = `${canvasHeight}px`;
         this.subtitleOverlay.style.margin = "0";
         this.subtitleOverlay.style.padding = "0";
-        this.subtitleOverlay.style.paddingBottom = `${bottomPadding}px`; // Responsive space above controls
+        const effectivePadding = this.subtitleControlsPadding > 0 ? this.subtitleControlsPadding : bottomPadding;
+        this.subtitleOverlay.style.paddingBottom = `${effectivePadding}px`;
         this.subtitleOverlay.style.display = "flex";
         this.subtitleOverlay.style.flexDirection = "column";
         this.subtitleOverlay.style.justifyContent = "flex-end";
@@ -754,6 +775,14 @@ export class CanvasRenderer {
         }
       }
     }
+  }
+
+  /**
+   * Set letterbox/pillarbox color (for ambient background effect).
+   * Color is applied on the next frame draw via clearColor.
+   */
+  setLetterboxColor(r: number, g: number, b: number): void {
+    this.letterboxTarget = [r, g, b];
   }
 
   /**
@@ -1230,8 +1259,7 @@ export class CanvasRenderer {
       // Attempting to draw a closed frame causes "WebGL: INVALID_OPERATION: texImage2D: can't texture a closed VideoFrame"
       // Explicitly check display dimensions which are 0 on closed frames
       if (frame.displayWidth === 0 || frame.displayHeight === 0) {
-        Logger.warn(TAG, "Attempted to draw closed/invalid frame");
-        return;
+        return; // Silently skip closed/invalid frames (normal at EOF)
       }
 
       const contentWidth = frame.displayWidth;
@@ -1297,7 +1325,12 @@ export class CanvasRenderer {
 
       // GL Draw steps:
       gl.viewport(0, 0, this.width, this.height);
-      gl.clearColor(0, 0, 0, 1);
+      // Smooth letterbox color transition (lerp toward target every frame for ~60fps smooth)
+      const f = 0.08;
+      this.letterboxColor[0] += (this.letterboxTarget[0] - this.letterboxColor[0]) * f;
+      this.letterboxColor[1] += (this.letterboxTarget[1] - this.letterboxColor[1]) * f;
+      this.letterboxColor[2] += (this.letterboxTarget[2] - this.letterboxColor[2]) * f;
+      gl.clearColor(this.letterboxColor[0] / 255, this.letterboxColor[1] / 255, this.letterboxColor[2] / 255, 1);
       gl.clear(gl.COLOR_BUFFER_BIT);
 
       // WebGL viewport needs y from bottom
@@ -1336,6 +1369,57 @@ export class CanvasRenderer {
   setSubtitleOverlay(overlay: HTMLElement | null): void {
     this.subtitleOverlay = overlay;
     Logger.debug(TAG, `Subtitle overlay ${overlay ? "set" : "cleared"}`);
+  }
+
+  /**
+   * Rotate video by 90 degrees clockwise
+   */
+  rotate90(): number {
+    this.manualRotation = (this.manualRotation + 90) % 360;
+    this.rotation = (this.metadataRotation + this.manualRotation) % 360;
+    Logger.debug(TAG, `Rotation: ${this.rotation}° (metadata: ${this.metadataRotation}°, manual: ${this.manualRotation}°)`);
+
+    if (this.containerWidth > 0 && this.containerHeight > 0) {
+      this.resize(this.containerWidth, this.containerHeight, true);
+    }
+
+    return this.manualRotation;
+  }
+
+  /**
+   * Get manual rotation (user-applied, not metadata)
+   */
+  getRotation(): number {
+    return this.manualRotation;
+  }
+
+  /**
+   * Set manual rotation to a specific value (for save/restore in PiP)
+   */
+  setManualRotation(deg: number): void {
+    this.manualRotation = deg % 360;
+    this.rotation = (this.metadataRotation + this.manualRotation) % 360;
+    if (this.containerWidth > 0 && this.containerHeight > 0) {
+      this.resize(this.containerWidth, this.containerHeight, true);
+    }
+  }
+
+  /**
+   * Set extra bottom padding for subtitles when controls are visible
+   * 0 = use default padding, >0 = use this value instead
+   */
+  setSubtitleControlsPadding(padding: number): void {
+    this.subtitleControlsPadding = padding;
+    // Apply immediately if overlay exists
+    if (this.subtitleOverlay) {
+      if (padding > 0) {
+        this.subtitleOverlay.style.paddingBottom = `${padding}px`;
+      } else {
+        const h = this.height || 672;
+        const minPad = Math.min(80, h * 0.1);
+        this.subtitleOverlay.style.paddingBottom = `${Math.max(minPad, 60)}px`;
+      }
+    }
   }
 
   /**
@@ -1514,7 +1598,8 @@ export class CanvasRenderer {
       // Calculate responsive bottom padding for image subtitles
       const minPaddingImg = Math.min(80, canvasHeight * 0.1); // At least 10% of height, max 80px
       const bottomPaddingImg = Math.max(minPaddingImg, 60); // Minimum 60px
-      this.subtitleOverlay.style.paddingBottom = `${bottomPaddingImg}px`; // Responsive space above controls
+      const effectivePaddingImg = this.subtitleControlsPadding > 0 ? this.subtitleControlsPadding : bottomPaddingImg;
+      this.subtitleOverlay.style.paddingBottom = `${effectivePaddingImg}px`;
       this.subtitleOverlay.style.textAlign = "center";
       this.subtitleOverlay.style.boxSizing = "border-box";
       this.subtitleOverlay.style.margin = "0";
@@ -1736,7 +1821,8 @@ export class CanvasRenderer {
       this.subtitleOverlay.style.height = `${displayHeight}px`;
       this.subtitleOverlay.style.margin = "0";
       this.subtitleOverlay.style.padding = "0";
-      this.subtitleOverlay.style.paddingBottom = `${bottomPadding}px`;
+      const effectivePad = this.subtitleControlsPadding > 0 ? this.subtitleControlsPadding : bottomPadding;
+      this.subtitleOverlay.style.paddingBottom = `${effectivePad}px`;
       this.subtitleOverlay.style.transform = "none";
       this.subtitleOverlay.style.boxSizing = "border-box";
       this.subtitleOverlay.style.display = "flex";
@@ -1744,7 +1830,6 @@ export class CanvasRenderer {
       this.subtitleOverlay.style.justifyContent = "flex-end";
       this.subtitleOverlay.style.alignItems = "center";
       this.subtitleOverlay.style.textAlign = "center";
-      this.subtitleOverlay.style.pointerEvents = "none";
       this.subtitleOverlay.style.pointerEvents = "none";
       // zIndex controlled by CSS (.movi-subtitle-overlay)
 
@@ -1871,6 +1956,19 @@ export class CanvasRenderer {
    */
   getQueueSize(): number {
     return this.frameQueue.length;
+  }
+
+  /**
+   * Get video rendering stats for nerd stats overlay
+   */
+  getStats(): { framesPresented: number; frameQueueSize: number; colorSpace: string; resolution: string; syncedToAudio: boolean } {
+    return {
+      framesPresented: this.framesPresented,
+      frameQueueSize: this.frameQueue.length,
+      colorSpace: this.colorSpace,
+      resolution: this.width > 0 ? `${this.width}x${this.height}` : "N/A",
+      syncedToAudio: this.syncedToAudio,
+    };
   }
 
   /**

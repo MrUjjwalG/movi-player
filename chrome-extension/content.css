@@ -1,0 +1,32 @@
+.movi-ext-play-btn {
+  position: absolute;
+  top: 50%;
+  right: 4px;
+  transform: translateY(-50%);
+  width: 28px;
+  height: 28px;
+  background: rgba(139, 92, 246, 0.9);
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  z-index: 10000;
+  opacity: 0;
+  transition: opacity 0.2s;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.3);
+}
+
+*:hover > .movi-ext-play-btn,
+.movi-ext-play-btn:hover {
+  opacity: 1;
+}
+
+.movi-ext-play-btn:hover {
+  background: rgba(139, 92, 246, 1);
+  transform: translateY(-50%) scale(1.1);
+}
+
+.movi-ext-play-btn svg {
+  margin-left: 2px;
+}

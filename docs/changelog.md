@@ -1,76 +1,92 @@
 # Changelog
 
-All notable changes to Movi-Player will be documented in this file.
+All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [0.1.4] - 2026-02-10
+## [0.2.0] - 2026-04-09
 
 ### Added
-- **Documentation**: Added comprehensive CORS & Headers section to README and Getting Started guide
-- **Documentation**: Added Service Worker workaround for COI headers when server modification is not possible
-- Service Worker example code for injecting Cross-Origin-Isolation headers client-side
-- **New Property**: `gesturefs` attribute to restrict touch gestures (tap/swipe/pinch) to fullscreen mode only
-- **New Property**: `nohotkeys` attribute to disable all keyboard shortcuts for playback control
-- **New Property**: `startat` attribute to start playback at a specific timestamp (in seconds)
-- **New Property**: `fastseek` attribute to enable fast seek controls (±10s skip buttons, keyboard shortcuts, double-tap)
-- **New Property**: `doubletap` attribute to enable/disable double-tap to seek gesture
-- **New Property**: `themecolor` attribute to customize player UI primary color
-- **New Property**: `buffersize` attribute to set custom buffer size in seconds
-- Loop functionality with toggle button in control bar and context menu
+- **Ambient Mode**: Dynamic letterbox glow that samples video colors in real-time. Smooth 60fps color transitions via WebGL clearColor. Toggle with `G` key or context menu. Works in fullscreen (letterbox) and normal mode (external wrapper). `ambientmode` attribute.
+- **Split Source Support**: Separate video, audio, and subtitle file URLs via `videosrc`, `audiosrc`, `subtitlesrc` attributes.
+- **PGS Image Subtitles**: Bitmap subtitle decoding with zlib decompression support.
+- **Network Disconnect Recovery**: Intelligent CORS vs transient network failure detection (3-strike threshold). Online-event-aware backoff for instant retry on reconnection. Auto re-seek on recovery. 30s timeout on offline wait.
+- **Document Picture-in-Picture**: Floating video window with play/pause, seek, mute, progress bar, time display, keyboard shortcuts, and back-to-tab button. Portrait video sizing. Rotation save/restore on PiP enter/exit.
+- **DRM Support**: `drm` and `licenseurl` attributes for HLS streams with Widevine/FairPlay via EME API.
+- **HLS Quality Menu**: Duplicate resolutions show bitrate (e.g., "1080p · 5000 kbps").
+- **HLS Nerd Stats**: Video codec, resolution, quality, frame rate, bitrate, buffer, HLS level, bandwidth, live latency, frames decoded/dropped.
+- **VLC-style Shortcuts**: `V` subtitles, `B` audio, `+/-` speed, `L` loop, `U` stable volume, `H` HDR, `P` PiP, `G` ambient, `A` aspect ratio.
+- **Aspect Ratio Controls**: `A` key cycles contain/cover/fill/zoom. Sub-menu with icons in context menu and bottom controls.
+- **Stable Volume**: DynamicsCompressorNode for loudness normalization. Opt-in via `stablevolume` attribute.
+- **Nerd Stats**: Press `I` for codec, resolution, FPS, decoder type, buffer health, color info, and live network/disk activity graph.
+- **Timeline**: Press `T` for auto-generated thumbnail strip with chapter support. Arrow key navigation, click-to-seek.
+- **Chapter Support**: Extract chapters from video metadata. Chapter markers on progress bar, chapter titles in seek tooltip.
+- **Video Rotation**: Press `R` to rotate 90°. Metadata rotation auto-applied. Disabled during PiP.
+- **Keyboard Shortcuts Panel**: Press `?` to view all shortcuts.
+- **Resume Playback**: `resume` attribute saves position to localStorage with resume/start-over dialog.
+- **Encrypted Playback**: AES-256-GCM chunked encryption with HMAC-SHA256 signed requests.
+- **Background Audio**: Video keeps playing audio when tab is in background via Web Worker timer fallback.
+- **Chrome Extension**: Popup with "Paste & Play" and "Play from Computer", context menu on video links, play button overlay on detected URLs.
+- **Privacy Policy**: Published at docs site for Chrome Web Store compliance.
 
 ### Changed
-- Improved visibility of server requirements for WebAssembly and SharedArrayBuffer usage
+- Buffering state now stops presentation loop so frames accumulate for reliable recovery.
+- Buffering exit requires video frames ready (with 3s fallback for async decoder delays).
+- Pause during buffering allowed from all UI controls (click, keyboard, buttons, PiP, context menu).
+- `buffering → ended` state transition allowed for EOF during rebuffer.
+- Invalid packet size at EOF treated as EOF (not fatal error) for FFmpeg stale buffer data.
+- HDR icon changed to text badge style in OSD and context menu (matches bottom controls).
+- Extension description rewritten to remove excessive format keywords (Chrome Web Store compliance).
+- Console logs dropped in production build.
 
 ### Fixed
-- WebGL context loss handling on mobile minimize/restore
-- Touch control edges secured to prevent conflict with system gestures
-- Fast seek counter now correctly stops incrementing at video boundaries (0s and duration)
-- Seek OSD icons now consistent between buttons and keyboard shortcuts
-- Object fit changes now apply immediately when video is paused
-- Buffer visualization no longer shows gaps when seeking in HTTP sources
-- Buffer bar now displays continuous range from start instead of sliding window
-- Buffer bar never appears behind playback progress indicator
+- Hardware decoder error recovery with keyframe cache and software fallback.
+- Seek and play/pause during buffering state.
+- Network disconnect causing permanent CORS misclassification when `navigator.onLine` lags.
+- Stale stream loops from leaked online event listeners during backoff.
+- Multiple concurrent fetch loops after network recovery.
+- Clock advancing during buffering (presentation loop consuming frames).
+- PiP rotation clipping — rotation reset on PiP enter, restored on close.
+- PiP portrait video oversized — height-limited sizing for portrait aspect ratios.
+- Pause-seek loading stuck — `VideoDecoder.flush()` 1s timeout with reset+reconfigure fallback.
+- EOF not triggering — relaxed condition with 0.5s tolerance.
+- PiP canvas restore using `shadowRoot` directly.
+- PiP frame freeze on tab switch with `isPiPActive` guard.
+- EncryptedHttpSource network resilience matching HttpSource.
+- Nerd stats graph fullscreen positioning and CSS specificity.
 
-## [0.1.3] - 2025-01-XX
-
-### Fixed
-- Improved seek behavior and stabilized buffer visualization
-- Fixed hanging in seeking state
-- Deferred buffer window creation until network response in source handling
-- Updated fast seek icons and poster logic
+## [0.1.5] - 2026-02-15
 
 ### Added
-- Robust retry logic and buffering state for unstable network connections
-- Enhanced mobile experience with new control properties
+- Pitch preservation for playback rate changes
+- Pitch preservation support for HLS playback
+- MediaSession API integration for background playback and media controls
+- HTTPS support for local development environment
 
 ### Changed
-- Updated showcase GIF and documentation
-- Documented 'auto' decoder mode and seamless fallback UX
+- Simplified error messages to be more concise and consistent
+- Replaced all hardcoded purple colors with CSS variables (--movi-primary) for full theme customization
+- Enhanced center play button with theme color by default
+- Updated loading spinner with responsive sizing and theme-aware colors
 
-## [0.1.2] - 2024-12-XX
+### Fixed
+- Improved playback stability with enhanced error handling and timeout management
+- Resolved audio-video sync issues with hardware decoding
+- Distinguished 403/401/404 errors from CORS errors for better error reporting
+- CORS errors now propagate immediately instead of waiting for timeout
+- Title bar z-index now properly positioned below control menus in mobile view
+- Center play button backdrop blur now enabled on mobile/touch devices
+- Controls no longer auto-hide when menus are open on mobile
 
-### Added
-- Initial public release
-- WebCodecs + FFmpeg WASM decoding
-- HDR detection and rendering support
-- Modular design (demuxer, player, element)
-- Multi-track audio/subtitle support
-- Canvas-based rendering
-- Local file playback support
-- Professional UI with built-in controls
+## [0.1.4] - 2026-02-11
 
-### Supported Formats
-- **Containers**: MP4, MKV, WebM, MOV, MPEG-TS, AVI, FLV, OGG
-- **Video Codecs**: H.264, H.265/HEVC, VP8, VP9, AV1
-- **Audio Codecs**: AAC-LC, MP3, Opus, Vorbis, FLAC, PCM, AC-3, E-AC-3
-- **Subtitles**: WebVTT, SubRip (SRT), SubStation Alpha (ASS), HDMV PGS, DVD SUB, DVB SUB
+### Fixed
+- Resolved video stalling during playback and improved A/V sync
+- Playback speed changes now take immediate effect on audio
+- Auto-unmute when volume slider is moved while muted
+- Mute button now correctly toggles audio muting
 
----
+## Previous Versions
 
-## Version History
-
-- **0.1.4** - CORS documentation improvements
-- **0.1.3** - Seeking fixes and network stability
-- **0.1.2** - Initial public release
+See git commit history for changes in versions prior to 0.1.4.

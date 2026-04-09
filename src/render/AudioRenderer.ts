@@ -11,6 +11,7 @@ const TAG = "AudioRenderer";
 export class AudioRenderer {
   private audioContext: AudioContext | null = null;
   private gainNode: GainNode | null = null;
+  private compressorNode: DynamicsCompressorNode | null = null;
   private scheduledTime: number = 0;
   private isPlaying: boolean = false;
   private volume: number = 1.0;
@@ -36,6 +37,23 @@ export class AudioRenderer {
   private preservePitch: boolean = true;
   private soundTouch: SoundTouch | null = null;
 
+  // Stable audio: master toggle (off by default, opt-in via element attribute)
+  private _stableAudio: boolean = false;
+
+  // Stable audio: gain ramp duration for smooth transitions (prevents clicks/pops)
+  private static readonly GAIN_RAMP_TIME = 0.015; // 15ms ramp
+  private static readonly FADE_OUT_TIME = 0.03; // 30ms fade-out before seek/reset
+
+  // Stable audio: AudioContext state monitoring & auto-recovery
+  private contextStateHandler: (() => void) | null = null;
+  private recoveryAttempts: number = 0;
+  private static readonly MAX_RECOVERY_ATTEMPTS = 3;
+
+  // Stable audio: starvation detection
+  private starvationStartTime: number = 0;
+  private isStarved: boolean = false;
+  private static readonly STARVATION_THRESHOLD = 2000; // ms without new audio data before considered starved
+
   constructor() {
     Logger.debug(TAG, "Created");
   }
@@ -49,7 +67,27 @@ export class AudioRenderer {
         latencyHint: "playback",
       });
       this.gainNode = this.audioContext.createGain();
-      this.gainNode.connect(this.audioContext.destination);
+
+      // Create compressor for stable audio (loudness normalization)
+      this.compressorNode = this.audioContext.createDynamicsCompressor();
+      // YouTube-like stable volume settings:
+      // Compress loud parts (explosions, music) while keeping dialogue clear
+      this.compressorNode.threshold.value = -24;  // Start compressing above -24dB
+      this.compressorNode.knee.value = 30;         // Smooth transition into compression
+      this.compressorNode.ratio.value = 12;        // 12:1 compression ratio
+      this.compressorNode.attack.value = 0.003;    // Fast attack (3ms) to catch sudden loud sounds
+      this.compressorNode.release.value = 0.25;    // Smooth release (250ms)
+
+      // Wire audio chain based on stable audio state
+      if (this._stableAudio) {
+        // source -> compressor -> gain -> destination
+        this.gainNode.connect(this.compressorNode);
+        this.compressorNode.connect(this.audioContext.destination);
+      } else {
+        // source -> gain -> destination
+        this.gainNode.connect(this.audioContext.destination);
+      }
+
       // Apply muted state if set before initialization
       this.gainNode.gain.value = this._muted ? 0 : this.volume;
 
@@ -57,6 +95,11 @@ export class AudioRenderer {
       // When muted, we'll resume on first user interaction (unmute/play)
       if (this.audioContext.state === "suspended" && !this._muted) {
         await this.audioContext.resume();
+      }
+
+      // Stable audio: monitor AudioContext state for auto-recovery
+      if (this._stableAudio) {
+        this.setupContextStateMonitoring();
       }
 
       Logger.info(
@@ -100,6 +143,13 @@ export class AudioRenderer {
 
     // Track when we receive decoded audio
     this.lastDecodeTime = performance.now();
+
+    // Stable audio: recover from starvation state
+    if (this._stableAudio && this.isStarved) {
+      this.isStarved = false;
+      this.starvationStartTime = 0;
+      Logger.debug(TAG, "Recovered from audio starvation");
+    }
 
     // We do NOT drop frames here anymore to prevent A/V sync issues.
     // Instead, MoviPlayer checks getBufferedDuration() to apply backpressure.
@@ -146,6 +196,29 @@ export class AudioRenderer {
 
       // Detect buffer underrun
       if (this.scheduledTime < now) {
+        // Stable audio: fill the gap with a short silence buffer to prevent pops
+        if (this._stableAudio && this.hasFirstBuffer && this.audioContext) {
+          const gapDuration = now - this.scheduledTime;
+          if (gapDuration > 0.005 && gapDuration < 1.0) {
+            try {
+              const silenceFrames = Math.ceil(gapDuration * sampleRate);
+              const silenceBuffer = this.audioContext.createBuffer(
+                numberOfChannels, silenceFrames, sampleRate
+              );
+              const silenceSource = this.audioContext.createBufferSource();
+              silenceSource.buffer = silenceBuffer;
+              silenceSource.connect(this.gainNode);
+              silenceSource.start(this.scheduledTime);
+              silenceSource.onended = () => {
+                try { silenceSource.disconnect(); } catch { /* ignore */ }
+              };
+              Logger.debug(TAG, `Gap filled: ${(gapDuration * 1000).toFixed(1)}ms silence`);
+            } catch {
+              // Ignore gap fill errors
+            }
+          }
+        }
+
         this.scheduledTime = minTime;
 
         if (this.hasFirstBuffer) {
@@ -425,12 +498,16 @@ export class AudioRenderer {
   }
 
   /**
-   * Set volume (0-1)
+   * Set volume (0-1) with smooth ramping to prevent clicks/pops
    */
   setVolume(volume: number): void {
     this.volume = Math.max(0, Math.min(1, volume));
     if (this.gainNode && !this._muted) {
-      this.gainNode.gain.value = this.volume;
+      if (this._stableAudio) {
+        this.rampGain(this.volume);
+      } else {
+        this.gainNode.gain.value = this.volume;
+      }
     }
     Logger.debug(TAG, `Volume: ${this.volume} (muted: ${this._muted})`);
   }
@@ -545,18 +622,22 @@ export class AudioRenderer {
   }
 
   /**
-   * Mute
+   * Mute with smooth fade to prevent clicks/pops
    */
   mute(): void {
     this._muted = true;
     if (this.gainNode) {
-      this.gainNode.gain.value = 0;
+      if (this._stableAudio) {
+        this.rampGain(0);
+      } else {
+        this.gainNode.gain.value = 0;
+      }
     }
     Logger.debug(TAG, "Muted");
   }
 
   /**
-   * Unmute
+   * Unmute with smooth fade to prevent clicks/pops
    */
   async unmute(): Promise<void> {
     this._muted = false;
@@ -568,7 +649,11 @@ export class AudioRenderer {
     }
 
     if (this.gainNode) {
-      this.gainNode.gain.value = this.volume;
+      if (this._stableAudio) {
+        this.rampGain(this.volume);
+      } else {
+        this.gainNode.gain.value = this.volume;
+      }
     }
 
     // Resume AudioContext on unmute (user gesture) if it was suspended
@@ -587,9 +672,21 @@ export class AudioRenderer {
   }
 
   /**
-   * Reset timing and stop all scheduled audio
+   * Reset timing and stop all scheduled audio with smooth fade-out
    */
   reset(): void {
+    // Stable audio: fade out before stopping to prevent clicks
+    if (this._stableAudio && this.audioContext && this.gainNode && this.activeSources.length > 0) {
+      try {
+        const now = this.audioContext.currentTime;
+        this.gainNode.gain.cancelScheduledValues(now);
+        this.gainNode.gain.setValueAtTime(this.gainNode.gain.value, now);
+        this.gainNode.gain.linearRampToValueAtTime(0, now + AudioRenderer.FADE_OUT_TIME);
+      } catch {
+        // Ignore ramp errors
+      }
+    }
+
     for (const source of this.activeSources) {
       try {
         source.stop();
@@ -608,9 +705,27 @@ export class AudioRenderer {
     this.scheduledCount = 0;
     this.maxScheduledMediaTime = 0;
 
+    // Reset starvation tracking
+    this.isStarved = false;
+    this.starvationStartTime = 0;
+
     // Clear SoundTouch state
     if (this.soundTouch) {
       this.soundTouch.clear();
+    }
+
+    // Restore gain after fade-out (for next playback)
+    if (this._stableAudio && this.gainNode && this.audioContext) {
+      try {
+        const restoreTime = this.audioContext.currentTime + AudioRenderer.FADE_OUT_TIME + 0.005;
+        this.gainNode.gain.linearRampToValueAtTime(
+          this._muted ? 0 : this.volume,
+          restoreTime
+        );
+      } catch {
+        // Fallback: set directly
+        this.gainNode.gain.value = this._muted ? 0 : this.volume;
+      }
     }
   }
 
@@ -696,6 +811,9 @@ export class AudioRenderer {
     // Context must be running
     if (this.audioContext.state !== "running") return false;
 
+    // Stable audio: if starved, buffer is not healthy
+    if (this._stableAudio && this.isStarved) return false;
+
     // Check if decoder has stopped outputting
     const timeSinceLastDecode = performance.now() - this.lastDecodeTime;
     if (this.lastDecodeTime > 0 && timeSinceLastDecode > 500) return false;
@@ -731,6 +849,160 @@ export class AudioRenderer {
     return Math.max(0, this.scheduledTime - this.audioContext.currentTime);
   }
 
+  // ─── Stable Audio Methods ────────────────────────────────────────────
+
+  /**
+   * Enable/disable stable audio mode (dynamic range compression / loudness normalization)
+   */
+  setStableAudio(enabled: boolean): void {
+    this._stableAudio = enabled;
+    Logger.info(TAG, `Stable audio: ${enabled ? "enabled" : "disabled"}`);
+
+    // Dynamically rewire audio chain
+    if (this.audioContext && this.gainNode && this.compressorNode) {
+      try {
+        // Disconnect gainNode from current destination
+        this.gainNode.disconnect();
+
+        if (enabled) {
+          // source -> gain -> compressor -> destination
+          this.gainNode.connect(this.compressorNode);
+          this.compressorNode.connect(this.audioContext.destination);
+        } else {
+          // source -> gain -> destination (bypass compressor)
+          this.compressorNode.disconnect();
+          this.gainNode.connect(this.audioContext.destination);
+        }
+        Logger.debug(TAG, `Audio chain rewired: compressor ${enabled ? "active" : "bypassed"}`);
+      } catch {
+        Logger.warn(TAG, "Failed to rewire audio chain");
+      }
+    }
+
+    if (enabled && this.audioContext) {
+      this.setupContextStateMonitoring();
+    } else if (!enabled && this.audioContext && this.contextStateHandler) {
+      this.audioContext.removeEventListener("statechange", this.contextStateHandler);
+      this.contextStateHandler = null;
+    }
+  }
+
+  /**
+   * Get stable audio mode state
+   */
+  getStableAudio(): boolean {
+    return this._stableAudio;
+  }
+
+  /**
+   * Smoothly ramp gain to target value to prevent clicks/pops
+   */
+  private rampGain(targetValue: number): void {
+    if (!this.gainNode || !this.audioContext) {
+      return;
+    }
+    try {
+      const now = this.audioContext.currentTime;
+      this.gainNode.gain.cancelScheduledValues(now);
+      this.gainNode.gain.setValueAtTime(this.gainNode.gain.value, now);
+      this.gainNode.gain.linearRampToValueAtTime(
+        targetValue,
+        now + AudioRenderer.GAIN_RAMP_TIME
+      );
+    } catch {
+      // Fallback: set directly if ramping fails
+      this.gainNode.gain.value = targetValue;
+    }
+  }
+
+  /**
+   * Monitor AudioContext state changes and auto-recover from interruptions
+   * Handles cases like: phone calls, other audio sources, OS-level interruptions
+   */
+  private setupContextStateMonitoring(): void {
+    if (!this.audioContext) return;
+
+    // Remove old handler if any
+    if (this.contextStateHandler) {
+      this.audioContext.removeEventListener("statechange", this.contextStateHandler);
+    }
+
+    this.contextStateHandler = () => {
+      if (!this.audioContext) return;
+      const state = this.audioContext.state;
+
+      if (state === "interrupted" || (state === "suspended" && this.isPlaying && !this._muted)) {
+        Logger.warn(TAG, `AudioContext ${state} unexpectedly during playback, attempting recovery`);
+        this.attemptContextRecovery();
+      } else if (state === "running") {
+        // Successfully recovered
+        this.recoveryAttempts = 0;
+        Logger.debug(TAG, "AudioContext recovered to running state");
+      }
+    };
+
+    this.audioContext.addEventListener("statechange", this.contextStateHandler);
+  }
+
+  /**
+   * Attempt to recover AudioContext from interrupted/suspended state
+   */
+  private attemptContextRecovery(): void {
+    if (!this.audioContext || !this.isPlaying) return;
+    if (this.recoveryAttempts >= AudioRenderer.MAX_RECOVERY_ATTEMPTS) {
+      Logger.error(TAG, `AudioContext recovery failed after ${AudioRenderer.MAX_RECOVERY_ATTEMPTS} attempts`);
+      this.recoveryAttempts = 0;
+      return;
+    }
+
+    this.recoveryAttempts++;
+    Logger.debug(TAG, `AudioContext recovery attempt ${this.recoveryAttempts}/${AudioRenderer.MAX_RECOVERY_ATTEMPTS}`);
+
+    this.audioContext.resume().then(() => {
+      if (this.audioContext?.state === "running") {
+        Logger.info(TAG, "AudioContext recovered successfully");
+        this.recoveryAttempts = 0;
+      }
+    }).catch((err) => {
+      Logger.warn(TAG, "AudioContext recovery failed", err);
+      // Retry with exponential backoff
+      const delay = Math.min(1000 * Math.pow(2, this.recoveryAttempts - 1), 5000);
+      setTimeout(() => this.attemptContextRecovery(), delay);
+    });
+  }
+
+  /**
+   * Check if audio is in starvation state (no new data for extended period)
+   * Used by Clock/MoviPlayer to decide whether audio clock is reliable
+   */
+  isAudioStarved(): boolean {
+    if (!this.isPlaying || !this.hasFirstBuffer) return false;
+
+    // Only starve if buffer is actually empty (not just no new decodes)
+    const bufferAhead = this.getBufferedDuration();
+    if (bufferAhead > 0.1) return false; // Still have audio buffered, not starved
+
+    const timeSinceLastDecode = performance.now() - this.lastDecodeTime;
+    if (this.lastDecodeTime > 0 && timeSinceLastDecode > AudioRenderer.STARVATION_THRESHOLD) {
+      if (!this.isStarved) {
+        this.isStarved = true;
+        this.starvationStartTime = performance.now();
+        Logger.warn(TAG, `Audio starvation detected: ${timeSinceLastDecode.toFixed(0)}ms since last decode`);
+      }
+      return true;
+    }
+
+    return false;
+  }
+
+  /**
+   * Get duration of current starvation period in ms (0 if not starved)
+   */
+  getStarvationDuration(): number {
+    if (!this.isStarved || this.starvationStartTime === 0) return 0;
+    return performance.now() - this.starvationStartTime;
+  }
+
   /**
    * Destroy renderer
    */
@@ -738,13 +1010,21 @@ export class AudioRenderer {
     this.isPlaying = false;
     this.reset();
 
+    // Clean up context state monitoring
+    if (this.audioContext && this.contextStateHandler) {
+      this.audioContext.removeEventListener("statechange", this.contextStateHandler);
+      this.contextStateHandler = null;
+    }
+
     if (this.audioContext) {
       await this.audioContext.close();
       this.audioContext = null;
     }
 
     this.gainNode = null;
+    this.compressorNode = null;
     this.soundTouch = null;
+    this.recoveryAttempts = 0;
     Logger.debug(TAG, "Destroyed");
   }
 }

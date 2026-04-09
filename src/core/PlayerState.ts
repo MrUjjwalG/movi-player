@@ -20,7 +20,7 @@ const VALID_TRANSITIONS: Record<PlayerState, PlayerState[]> = {
   playing: ['paused', 'seeking', 'buffering', 'ended', 'error'],
   paused: ['playing', 'seeking', 'error'],
   seeking: ['ready', 'playing', 'paused', 'buffering', 'error', 'seeking'],
-  buffering: ['playing', 'paused', 'error', 'seeking'],
+  buffering: ['playing', 'paused', 'ended', 'error', 'seeking'],
   ended: ['seeking', 'idle'],
   error: ['idle'],
 };
@@ -66,14 +66,14 @@ export class PlayerStateManager extends EventEmitter<StateEvents> {
    * Check if can play
    */
   canPlay(): boolean {
-    return ['ready', 'paused', 'ended'].includes(this.state);
+    return ['ready', 'paused', 'ended', 'buffering'].includes(this.state);
   }
   
   /**
    * Check if can pause
    */
   canPause(): boolean {
-    return this.state === 'playing';
+    return this.state === 'playing' || this.state === 'buffering';
   }
   
   /**

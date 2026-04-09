@@ -44,6 +44,20 @@ The `<movi-player>` custom element is a drop-in replacement for the native `<vid
 | `renderer`    | `string`            | `canvas`, `mse`                    | Rendering mode                                    |
 | `sw`          | `boolean`, `string` | `auto`                             | Decoder mode (`auto`, `true`/`software`, `false`) |
 | `fps`         | `number`            | -                                  | Custom frame rate override                        |
+| `thumb`       | `boolean`           | -                                  | Enable seek preview thumbnails                    |
+| `fastseek`    | `boolean`           | -                                  | Enable skip buttons and gestures                  |
+| `showtitle`   | `boolean`           | -                                  | Show video title bar                              |
+| `resume`      | `boolean`           | -                                  | Resume from last position                         |
+| `stablevolume`| `boolean`           | -                                  | Loudness normalization                            |
+| `startat`     | `number`            | -                                  | Start at time (seconds)                           |
+| `gesturefs`   | `boolean`           | -                                  | Gestures only in fullscreen                       |
+| `nohotkeys`   | `boolean`           | -                                  | Disable keyboard shortcuts                        |
+| `encrypted`   | `boolean`           | -                                  | Encrypted playback mode                           |
+| `tokenurl`    | `string`            | -                                  | Token endpoint (encrypted mode)                   |
+| `videourl`    | `string`            | -                                  | Video endpoint (encrypted mode)                   |
+| `videoid`     | `string`            | -                                  | Video ID (encrypted mode)                         |
+| `drm`         | `boolean`           | -                                  | DRM mode for HLS (native video + EME)             |
+| `licenseurl`  | `string`            | -                                  | Widevine/FairPlay license server URL              |
 
 ## Examples
 
@@ -236,9 +250,16 @@ The player includes built-in gesture support:
 Right-click (or long-press on mobile) shows a context menu with:
 
 - Playback speed (0.25x - 2x)
+- Aspect ratio (contain/cover/fill/zoom)
+- Audio/subtitle track selection
+- HDR toggle
 - Picture-in-Picture
+- Fullscreen
+- Rotate video
 - Loop toggle
-- Download option
+- Stable volume
+- Snapshot
+- Timeline
 - Stats for nerds
 
 ## Styling

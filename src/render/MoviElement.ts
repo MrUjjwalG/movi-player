@@ -24,6 +24,22 @@ import { SettingsStorage } from "../utils/SettingsStorage";
 
 const TAG = "MoviElement";
 
+// OSD icon constants — shared across keyboard, button, and context menu handlers
+const OSD = {
+  loop: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M17 2l4 4-4 4"/><path d="M3 11v-1a4 4 0 0 1 4-4h14"/><path d="M7 22l-4-4 4-4"/><path d="M21 13v1a4 4 0 0 1-4 4H3"/></svg>`,
+  stableAudio: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="2" y="4" width="20" height="16" rx="2"/><path d="M6 15v-2M9 15v-4M12 15v-6M15 15v-4M18 15v-2"/></svg>`,
+  hdr: `<span style="font-weight:700;font-size:14px;letter-spacing:1px;padding:4px 10px;border:2px solid currentColor;border-radius:6px;">HDR</span>`,
+  speed: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polygon points="5 3 19 12 5 21 5 3"/><line x1="19" y1="3" x2="19" y2="21"/></svg>`,
+  audio: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M9 18V5l12-2v13"/><circle cx="6" cy="18" r="3"/><circle cx="18" cy="16" r="3"/></svg>`,
+  subOn: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect width="18" height="14" x="3" y="5" rx="2"/><path d="M7 15h4M13 15h4"/></svg>`,
+  subOff: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect width="18" height="14" x="3" y="5" rx="2"/><path d="M7 15h4M13 15h4"/><line x1="3" y1="5" x2="21" y2="19" stroke-width="2.5"/></svg>`,
+  snapshot: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M23 19a2 2 0 0 1-2 2H3a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h4l2-3h6l2 3h4a2 2 0 0 1 2 2z"></path><circle cx="12" cy="13" r="4"></circle></svg>`,
+  rotate: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 12a9 9 0 0 0-9-9 9.75 9.75 0 0 0-6.74 2.74L3 8"/><path d="M3 3v5h5"/></svg>`,
+  muted: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5"/><line x1="23" y1="9" x2="17" y2="15"/><line x1="17" y1="9" x2="23" y2="15"/></svg>`,
+  unmuted: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5"/><path d="M19.07 4.93a10 10 0 0 1 0 14.14"/><path d="M15.54 8.46a5 5 0 0 1 0 7.07"/></svg>`,
+  ambient: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="5"/><path d="M12 1v2M12 21v2M4.22 4.22l1.42 1.42M18.36 18.36l1.42 1.42M1 12h2M21 12h2M4.22 19.78l1.42-1.42M18.36 5.64l1.42-1.42"/></svg>`,
+} as const;
+
 export class MoviElement extends HTMLElement {
   private canvas: HTMLCanvasElement;
   private video: HTMLVideoElement;
@@ -54,8 +70,18 @@ export class MoviElement extends HTMLElement {
   private _contextMenuJustClosed: boolean = false;
   private lastTouchTime: number = 0;
 
+  // Nerd Stats
+  private _nerdStatsVisible: boolean = false;
+  private _currentManualRotation: number = 0; // Track for thumbnail margin re-apply
+  private nerdStatsInterval: number | null = null;
+  private networkSpeedHistory: number[] = []; // speed samples for graph
+  private static readonly GRAPH_MAX_SAMPLES = 60; // 30 seconds of data (500ms interval)
+
   // Internal state
   private _src: string | File | null = null;
+  private _audioSrc: string | null = null; // Separate audio source URL
+  private _audioTracks: { src: string; type?: string; lang: string; label: string }[] = []; // Multi-language audio
+  private _subtitleTracks: { src: string; lang: string; label: string; format?: string }[] = []; // External subtitles
   private _autoplay: boolean = false;
   private _controls: boolean = false;
   private _loop: boolean = false;
@@ -86,6 +112,13 @@ export class MoviElement extends HTMLElement {
   private _watermark: string | null = null; // Watermark image URL
   private _title: string | null = null; // Video title to display
   private _showTitle: boolean = false; // Show title at top if true
+  private _resume: boolean = false; // Resume playback from last position (opt-in)
+  private _stableVolume: boolean = false; // Stable volume / loudness normalization (opt-in)
+  private _encrypted: boolean = false;   // Encrypted source mode
+  private _tokenUrl: string = "";        // Token endpoint for encrypted playback
+  private _videoUrl: string = "";        // Video endpoint for encrypted playback
+  private _videoId: string = "";         // Video ID for encrypted playback
+  private _resumeSaveInterval: number | null = null; // Interval to save position
   private _titleAutoLoaded: boolean = false; // Track if title was auto-loaded from metadata
   private _lastDuration: number = 0; // Track duration changes for title auto-load
   private posterElement!: HTMLImageElement; // Poster image element
@@ -143,6 +176,14 @@ export class MoviElement extends HTMLElement {
       "watermark",
       "title",
       "showtitle",
+      "resume",
+      "stablevolume",
+      "encrypted",
+      "tokenurl",
+      "videourl",
+      "videoid",
+      "drm",
+      "licenseurl",
     ];
   }
 
@@ -347,29 +388,6 @@ export class MoviElement extends HTMLElement {
         <span class="movi-context-menu-label">Playback Speed</span>
         <span class="movi-context-menu-arrow">▶</span>
       </div>
-      <div class="movi-context-menu-item" data-action="fit">
-        <svg class="movi-context-menu-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-          <rect x="3" y="3" width="18" height="18" rx="2" ry="2"></rect>
-          <line x1="3" y1="9" x2="21" y2="9"></line>
-          <line x1="3" y1="15" x2="21" y2="15"></line>
-          <line x1="9" y1="3" x2="9" y2="21"></line>
-          <line x1="15" y1="3" x2="15" y2="21"></line>
-        </svg>
-        <span class="movi-context-menu-label">Aspect Ratio</span>
-        <span class="movi-context-menu-arrow">▶</span>
-      </div>
-      <div class="movi-context-menu-submenu" data-submenu="fit">
-        <div class="movi-context-menu-item movi-context-menu-back" data-action="back">
-          <svg class="movi-context-menu-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-            <path d="M15 18l-6-6 6-6"/>
-          </svg>
-          <span class="movi-context-menu-label">Back</span>
-        </div>
-        <div class="movi-context-menu-item" data-fit="contain">Contain</div>
-        <div class="movi-context-menu-item" data-fit="cover">Cover</div>
-        <div class="movi-context-menu-item" data-fit="fill">Stretch</div>
-        <div class="movi-context-menu-item" data-fit="zoom">Zoom</div>
-      </div>
       <div class="movi-context-menu-submenu" data-submenu="speed">
         <div class="movi-context-menu-item movi-context-menu-back" data-action="back">
           <svg class="movi-context-menu-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
@@ -385,6 +403,37 @@ export class MoviElement extends HTMLElement {
         <div class="movi-context-menu-item" data-speed="1.5">1.5x</div>
         <div class="movi-context-menu-item" data-speed="1.75">1.75x</div>
         <div class="movi-context-menu-item" data-speed="2">2x</div>
+      </div>
+      <div class="movi-context-menu-item" data-action="fit">
+        <svg class="movi-context-menu-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+          <rect x="3" y="3" width="18" height="18" rx="2"/><rect x="6" y="8" width="12" height="8" rx="1"/>
+        </svg>
+        <span class="movi-context-menu-label">Aspect Ratio</span>
+        <span class="movi-context-menu-arrow">▶</span>
+      </div>
+      <div class="movi-context-menu-submenu" data-submenu="fit">
+        <div class="movi-context-menu-item movi-context-menu-back" data-action="back">
+          <svg class="movi-context-menu-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M15 18l-6-6 6-6"/>
+          </svg>
+          <span class="movi-context-menu-label">Back</span>
+        </div>
+        <div class="movi-context-menu-item" data-fit="contain">
+          <svg class="movi-context-menu-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="18" height="18" rx="2"/><rect x="6" y="8" width="12" height="8" rx="1"/></svg>
+          <span class="movi-context-menu-label">Contain</span>
+        </div>
+        <div class="movi-context-menu-item" data-fit="cover">
+          <svg class="movi-context-menu-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="18" height="18" rx="2"/><rect x="1" y="7" width="22" height="10" rx="1"/></svg>
+          <span class="movi-context-menu-label">Cover</span>
+        </div>
+        <div class="movi-context-menu-item" data-fit="fill">
+          <svg class="movi-context-menu-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="18" height="18" rx="2"/><path d="M3 3h18v18H3z"/></svg>
+          <span class="movi-context-menu-label">Stretch</span>
+        </div>
+        <div class="movi-context-menu-item" data-fit="zoom">
+          <svg class="movi-context-menu-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="8"/><path d="M21 21l-4.35-4.35"/><path d="M11 8v6M8 11h6"/></svg>
+          <span class="movi-context-menu-label">Zoom</span>
+        </div>
       </div>
       <div class="movi-context-menu-divider movi-context-menu-divider-audio" style="display: none;"></div>
       <div class="movi-context-menu-item movi-context-menu-item-audio" data-action="audio-track" style="display: none;">
@@ -411,21 +460,19 @@ export class MoviElement extends HTMLElement {
       </div>
       <div class="movi-context-menu-submenu movi-context-menu-submenu-subtitle" data-submenu="subtitle-track" style="display: none;"></div>
       <div class="movi-context-menu-item" data-action="hdr-toggle" style="display: none;">
-        <svg class="movi-context-menu-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-          <path d="M12 2v2"></path>
-          <path d="M12 20v2"></path>
-          <path d="M4.93 4.93l1.41 1.41"></path>
-          <path d="M17.66 17.66l1.41 1.41"></path>
-          <path d="M2 12h2"></path>
-          <path d="M20 12h2"></path>
-          <path d="M6.34 17.66l-1.41 1.41"></path>
-          <path d="M19.07 4.93l-1.41 1.41"></path>
-          <circle cx="12" cy="12" r="4"></circle>
-        </svg>
+        <span class="movi-context-menu-icon" style="font-weight:700;font-size:10px;letter-spacing:0.5px;width:16px;text-align:center;overflow:visible;white-space:nowrap;display:inline-flex;align-items:center;justify-content:center;">HDR</span>
         <span class="movi-context-menu-label">HDR Mode</span>
         <span class="movi-context-menu-status movi-hdr-status">On</span>
+        <span class="movi-context-menu-shortcut">H</span>
       </div>
       <div class="movi-context-menu-divider movi-hdr-divider" style="display: none;"></div>
+      <div class="movi-context-menu-item movi-context-menu-pip" data-action="pip" style="display: none;">
+        <svg class="movi-context-menu-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+          <rect x="2" y="3" width="20" height="14" rx="2"/><rect x="12" y="9" width="8" height="6" rx="1"/>
+        </svg>
+        <span class="movi-context-menu-label">Picture in Picture</span>
+        <span class="movi-context-menu-shortcut">P</span>
+      </div>
       <div class="movi-context-menu-item" data-action="fullscreen">
         <svg class="movi-context-menu-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
           <path d="M8 3H5a2 2 0 0 0-2 2v3m18 0V5a2 2 0 0 0-2-2h-3m0 18h3a2 2 0 0 0 2-2v-3M3 16v3a2 2 0 0 0 2 2h3"></path>
@@ -433,15 +480,67 @@ export class MoviElement extends HTMLElement {
         <span class="movi-context-menu-label">Fullscreen</span>
         <span class="movi-context-menu-shortcut">F</span>
       </div>
-      <div class="movi-context-menu-item" data-action="loop-toggle">
+      <div class="movi-context-menu-item" data-action="rotate-video">
         <svg class="movi-context-menu-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+          <path d="M21 12a9 9 0 1 1-9-9 9.75 9.75 0 0 1 6.74 2.74L21 8"></path>
+          <path d="M21 3v5h-5"></path>
+        </svg>
+        <span class="movi-context-menu-label">Rotate Video</span>
+        <span class="movi-context-menu-status movi-rotate-status">0°</span>
+        <span class="movi-context-menu-shortcut">R</span>
+      </div>
+      <div class="movi-context-menu-item" data-action="loop-toggle">
+        <svg class="movi-context-menu-icon movi-context-menu-loop-outline" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
            <path d="M17 2l4 4-4 4"></path>
            <path d="M3 11v-1a4 4 0 0 1 4-4h14"></path>
            <path d="M7 22l-4-4 4-4"></path>
            <path d="M21 13v1a4 4 0 0 1-4 4H3"></path>
         </svg>
+        <svg class="movi-context-menu-icon movi-context-menu-loop-filled" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round" style="display: none;">
+          <path d="M17 2l4 4-4 4"></path><path d="M3 11v-1a4 4 0 0 1 4-4h14"></path><path d="M7 22l-4-4 4-4"></path><path d="M21 13v1a4 4 0 0 1-4 4H3"></path>
+        </svg>
         <span class="movi-context-menu-label">Loop</span>
         <span class="movi-context-menu-status movi-loop-status">Off</span>
+        <span class="movi-context-menu-shortcut">L</span>
+      </div>
+      <div class="movi-context-menu-item" data-action="stable-audio-toggle">
+        <svg class="movi-context-menu-icon movi-context-menu-stable-outline" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+          <rect x="2" y="4" width="20" height="16" rx="2"></rect>
+          <path d="M6 15v-2"></path>
+          <path d="M9 15v-4"></path>
+          <path d="M12 15v-6"></path>
+          <path d="M15 15v-4"></path>
+          <path d="M18 15v-2"></path>
+        </svg>
+        <svg class="movi-context-menu-icon movi-context-menu-stable-filled" viewBox="0 0 24 24" fill="currentColor" style="display: none;">
+          <path d="M4 4h16a2 2 0 0 1 2 2v12a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2zm1 9v2h2v-2H5zm3-2v4h2v-4H8zm3-2v6h2V9h-2zm3 2v4h2v-4h-2zm3 2v2h2v-2h-2z"></path>
+        </svg>
+        <span class="movi-context-menu-label">Stable Volume</span>
+        <span class="movi-context-menu-status movi-stable-audio-status">Off</span>
+        <span class="movi-context-menu-shortcut">U</span>
+      </div>
+      <div class="movi-context-menu-item" data-action="ambient-toggle">
+        <svg class="movi-context-menu-icon movi-context-menu-ambient-outline" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+          <circle cx="12" cy="12" r="5"></circle>
+          <path d="M12 1v2"></path><path d="M12 21v2"></path>
+          <path d="M4.22 4.22l1.42 1.42"></path><path d="M18.36 18.36l1.42 1.42"></path>
+          <path d="M1 12h2"></path><path d="M21 12h2"></path>
+          <path d="M4.22 19.78l1.42-1.42"></path><path d="M18.36 5.64l1.42-1.42"></path>
+        </svg>
+        <svg class="movi-context-menu-icon movi-context-menu-ambient-filled" viewBox="0 0 24 24" fill="currentColor" style="display: none;">
+          <circle cx="12" cy="12" r="5"></circle>
+          <path d="M12 1v2" stroke="currentColor" stroke-width="2" stroke-linecap="round"></path>
+          <path d="M12 21v2" stroke="currentColor" stroke-width="2" stroke-linecap="round"></path>
+          <path d="M4.22 4.22l1.42 1.42" stroke="currentColor" stroke-width="2" stroke-linecap="round"></path>
+          <path d="M18.36 18.36l1.42 1.42" stroke="currentColor" stroke-width="2" stroke-linecap="round"></path>
+          <path d="M1 12h2" stroke="currentColor" stroke-width="2" stroke-linecap="round"></path>
+          <path d="M21 12h2" stroke="currentColor" stroke-width="2" stroke-linecap="round"></path>
+          <path d="M4.22 19.78l1.42-1.42" stroke="currentColor" stroke-width="2" stroke-linecap="round"></path>
+          <path d="M18.36 5.64l1.42-1.42" stroke="currentColor" stroke-width="2" stroke-linecap="round"></path>
+        </svg>
+        <span class="movi-context-menu-label">Ambient Mode</span>
+        <span class="movi-context-menu-status movi-ambient-status">Off</span>
+        <span class="movi-context-menu-shortcut">G</span>
       </div>
       <div class="movi-context-menu-divider"></div>
       <div class="movi-context-menu-item" data-action="snapshot">
@@ -451,6 +550,29 @@ export class MoviElement extends HTMLElement {
         </svg>
         <span class="movi-context-menu-label">Snapshot</span>
         <span class="movi-context-menu-shortcut">S</span>
+      </div>
+      <div class="movi-context-menu-item" data-action="timeline">
+        <svg class="movi-context-menu-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+          <rect x="2" y="3" width="6" height="5" rx="1"></rect>
+          <rect x="9" y="3" width="6" height="5" rx="1"></rect>
+          <rect x="16" y="3" width="6" height="5" rx="1"></rect>
+          <rect x="2" y="10" width="6" height="5" rx="1"></rect>
+          <rect x="9" y="10" width="6" height="5" rx="1"></rect>
+          <rect x="16" y="10" width="6" height="5" rx="1"></rect>
+          <line x1="2" y1="19" x2="22" y2="19"></line>
+          <line x1="2" y1="21" x2="22" y2="21"></line>
+        </svg>
+        <span class="movi-context-menu-label">Timeline</span>
+        <span class="movi-context-menu-shortcut">T</span>
+      </div>
+      <div class="movi-context-menu-item" data-action="nerd-stats">
+        <svg class="movi-context-menu-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+          <path d="M12 20V10"></path>
+          <path d="M18 20V4"></path>
+          <path d="M6 20v-4"></path>
+        </svg>
+        <span class="movi-context-menu-label">Stats for nerds</span>
+        <span class="movi-context-menu-shortcut">I</span>
       </div>
     `;
     shadowRoot.appendChild(contextMenu);
@@ -470,16 +592,18 @@ export class MoviElement extends HTMLElement {
     container.className = "movi-controls-container";
     container.innerHTML = `
       <div class="movi-controls-overlay"></div>
-      <div class="movi-controls-bar" style="position: relative; z-index: 10;">
+      <div class="movi-controls-bar" style="position: relative;">
         <div class="movi-progress-container">
           <div class="movi-progress-bar">
             <div class="movi-progress-buffer"></div>
             <div class="movi-progress-filled"></div>
+            <div class="movi-chapter-markers"></div>
             <div class="movi-progress-handle"></div>
           </div>
           <div class="movi-seek-thumbnail" style="display: none;">
              <div class="movi-thumbnail-placeholder" style="display: none;"></div>
              <img class="movi-thumbnail-img" style="display: none;">
+             <span class="movi-seek-chapter-title"></span>
              <span class="movi-seek-time">0:00</span>
           </div>
         </div>
@@ -610,18 +734,38 @@ export class MoviElement extends HTMLElement {
                 </div>
               </div>
 
+              <div class="movi-stable-audio-container">
+                <button class="movi-btn movi-stable-audio-btn" aria-label="Toggle Stable Audio">
+                  <svg class="movi-icon-stable-audio-outline" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+                    <rect x="2" y="4" width="20" height="16" rx="2"></rect>
+                    <path d="M6 15v-2"></path>
+                    <path d="M9 15v-4"></path>
+                    <path d="M12 15v-6"></path>
+                    <path d="M15 15v-4"></path>
+                    <path d="M18 15v-2"></path>
+                  </svg>
+                  <svg class="movi-icon-stable-audio-filled" viewBox="0 0 24 24" fill="currentColor" style="display: none;">
+                    <path d="M4 4h16a2 2 0 0 1 2 2v12a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2zm1 9v2h2v-2H5zm3-2v4h2v-4H8zm3-2v6h2V9h-2zm3 2v4h2v-4h-2zm3 2v2h2v-2h-2z"></path>
+                  </svg>
+                </button>
+              </div>
+
               <button class="movi-btn movi-aspect-ratio-btn" aria-label="Aspect Ratio">
                 <svg class="movi-icon-aspect-ratio" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-                  <path class="movi-aspect-inner" d="M3 9h18M3 15h18M9 3v18M15 3v18"></path>
+                  <rect x="3" y="3" width="18" height="18" rx="2"/>
+                  <rect class="movi-aspect-inner" x="6" y="8" width="12" height="8" rx="1"/>
                 </svg>
               </button>
 
               <button class="movi-btn movi-loop-btn" aria-label="Toggle Loop">
-                <svg class="movi-icon-loop" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                <svg class="movi-icon-loop-outline" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
                   <path d="M17 2l4 4-4 4"></path>
                   <path d="M3 11v-1a4 4 0 0 1 4-4h14"></path>
                   <path d="M7 22l-4-4 4-4"></path>
                   <path d="M21 13v1a4 4 0 0 1-4 4H3"></path>
+                </svg>
+                <svg class="movi-icon-loop-filled" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round" style="display: none;">
+                  <path d="M17 2l4 4-4 4"></path><path d="M3 11v-1a4 4 0 0 1 4-4h14"></path><path d="M7 22l-4-4 4-4"></path><path d="M21 13v1a4 4 0 0 1-4 4H3"></path>
                 </svg>
               </button>
             </div>
@@ -635,6 +779,11 @@ export class MoviElement extends HTMLElement {
               </svg>
             </button>
             
+            <button class="movi-btn movi-pip-btn" aria-label="Picture in Picture" style="display:none">
+              <svg class="movi-icon-pip" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                <rect x="2" y="3" width="20" height="14" rx="2"/><rect x="12" y="9" width="8" height="6" rx="1" fill="currentColor" opacity="0.3"/>
+              </svg>
+            </button>
             <button class="movi-btn movi-fullscreen-btn" aria-label="Fullscreen">
               <svg class="movi-icon-fullscreen" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
                 <path d="M8 3H5a2 2 0 0 0-2 2v3m18 0V5a2 2 0 0 0-2-2h-3m0 18h3a2 2 0 0 0 2-2v-3M3 16v3a2 2 0 0 0 2 2h3"></path>
@@ -656,6 +805,122 @@ export class MoviElement extends HTMLElement {
     titleBar.style.display = "none";
     titleBar.innerHTML = `<span class="movi-title-text"></span>`;
     shadowRoot.appendChild(titleBar);
+
+    // Create Nerd Stats overlay
+    const nerdStats = document.createElement("div");
+    nerdStats.className = "movi-nerd-stats";
+    nerdStats.style.display = "none";
+    nerdStats.innerHTML = `
+      <div class="movi-nerd-stats-header">
+        <span class="movi-nerd-stats-title">Stats for nerds</span>
+        <button class="movi-nerd-stats-close" aria-label="Close stats">&times;</button>
+      </div>
+      <div class="movi-nerd-stats-body"></div>
+    `;
+    shadowRoot.appendChild(nerdStats);
+
+    // Nerd stats close button
+    nerdStats.querySelector(".movi-nerd-stats-close")?.addEventListener("click", (e) => {
+      e.stopPropagation();
+      this.toggleNerdStats(shadowRoot);
+    });
+
+    // Create Timeline panel (separate from nerd stats)
+    const timelinePanel = document.createElement("div");
+    timelinePanel.className = "movi-timeline-panel";
+    timelinePanel.style.display = "none";
+    timelinePanel.innerHTML = `
+      <div class="movi-timeline-header">
+        <span class="movi-timeline-title">Timeline</span>
+        <button class="movi-timeline-close" aria-label="Close timeline">&times;</button>
+      </div>
+      <div class="movi-timeline-strip"></div>
+      <div class="movi-timeline-status"></div>
+    `;
+    shadowRoot.appendChild(timelinePanel);
+
+    // Timeline close button
+    timelinePanel.querySelector(".movi-timeline-close")?.addEventListener("click", (e) => {
+      e.stopPropagation();
+      timelinePanel.style.display = "none";
+      this.focus();
+    });
+
+    // Create Resume Dialog
+    const resumeDialog = document.createElement("div");
+    resumeDialog.className = "movi-resume-dialog";
+    resumeDialog.style.display = "none";
+    resumeDialog.innerHTML = `
+      <div class="movi-resume-text">Resume from <span class="movi-resume-time">0:00</span>?</div>
+      <div class="movi-resume-buttons">
+        <button class="movi-resume-btn movi-resume-yes">Resume</button>
+        <button class="movi-resume-btn movi-resume-no">Start Over</button>
+      </div>
+    `;
+    shadowRoot.appendChild(resumeDialog);
+
+    resumeDialog.querySelector(".movi-resume-yes")?.addEventListener("click", (e) => {
+      e.stopPropagation();
+      const time = parseFloat(resumeDialog.dataset.time || "0");
+      resumeDialog.style.display = "none";
+      this.focus();
+      if (this.player && time > 0) {
+        this.player.seek(time).then(() => this.play()).catch(() => {});
+      }
+    });
+
+    resumeDialog.querySelector(".movi-resume-no")?.addEventListener("click", (e) => {
+      e.stopPropagation();
+      resumeDialog.style.display = "none";
+      this.clearResumePosition();
+      if (this.player) {
+        this.player.seek(0).catch(() => {});
+      }
+      this.focus();
+    });
+
+    // Create Keyboard Shortcuts Panel
+    const shortcutsPanel = document.createElement("div");
+    shortcutsPanel.className = "movi-shortcuts-panel";
+    shortcutsPanel.style.display = "none";
+    shortcutsPanel.innerHTML = `
+      <div class="movi-shortcuts-header">
+        <span class="movi-shortcuts-title">Keyboard Shortcuts</span>
+        <button class="movi-shortcuts-close" aria-label="Close">&times;</button>
+      </div>
+      <div class="movi-shortcuts-body">
+        <div class="movi-shortcuts-col">
+          <div class="movi-shortcut-row"><kbd>Space</kbd><span>Play / Pause</span></div>
+          <div class="movi-shortcut-row"><kbd>F</kbd><span>Fullscreen</span></div>
+          <div class="movi-shortcut-row"><kbd>P</kbd><span>Picture-in-Picture</span></div>
+          <div class="movi-shortcut-row"><kbd>M</kbd><span>Mute / Unmute</span></div>
+          <div class="movi-shortcut-row"><kbd>&uarr; / &darr;</kbd><span>Volume</span></div>
+          <div class="movi-shortcut-row"><kbd>&larr; / &rarr;</kbd><span>Seek ±10s</span></div>
+          <div class="movi-shortcut-row"><kbd>0</kbd><span>Seek to Start</span></div>
+          <div class="movi-shortcut-row"><kbd>Ctrl+&larr;/&rarr;</kbd><span>Frame Step</span></div>
+          <div class="movi-shortcut-row"><kbd>+/-</kbd><span>Speed Up/Down</span></div>
+          <div class="movi-shortcut-row"><kbd>V</kbd><span>Cycle Subtitles</span></div>
+          <div class="movi-shortcut-row"><kbd>B</kbd><span>Cycle Audio</span></div>
+        </div>
+        <div class="movi-shortcuts-col">
+          <div class="movi-shortcut-row"><kbd>A</kbd><span>Aspect Ratio</span></div>
+          <div class="movi-shortcut-row"><kbd>R</kbd><span>Rotate Video</span></div>
+          <div class="movi-shortcut-row"><kbd>L</kbd><span>Loop</span></div>
+          <div class="movi-shortcut-row"><kbd>U</kbd><span>Stable Volume</span></div>
+          <div class="movi-shortcut-row"><kbd>H</kbd><span>HDR Mode</span></div>
+          <div class="movi-shortcut-row"><kbd>S</kbd><span>Snapshot</span></div>
+          <div class="movi-shortcut-row"><kbd>I</kbd><span>Stats for Nerds</span></div>
+          <div class="movi-shortcut-row"><kbd>T</kbd><span>Timeline</span></div>
+          <div class="movi-shortcut-row"><kbd>?</kbd><span>This Panel</span></div>
+        </div>
+      </div>
+    `;
+    shadowRoot.appendChild(shortcutsPanel);
+
+    shortcutsPanel.querySelector(".movi-shortcuts-close")?.addEventListener("click", (e) => {
+      e.stopPropagation();
+      shortcutsPanel.style.display = "none";
+    });
 
     // Setup control handlers
     this.setupControlHandlers(shadowRoot);
@@ -696,7 +961,7 @@ export class MoviElement extends HTMLElement {
       e.stopPropagation(); // Prevent triggering overlay click
       if (this.player) {
         const state = this.player.getState();
-        if (state === "playing") {
+        if (state === "playing" || state === "buffering") {
           this.pause();
         } else {
           // Play if in ready, paused, ended, or any other non-playing state
@@ -780,12 +1045,35 @@ export class MoviElement extends HTMLElement {
     hdrBtn?.addEventListener("click", (e) => {
       e.stopPropagation();
       this.hdr = !this.hdr;
+      this.showOSD(
+        OSD.hdr,
+        this.hdr ? "HDR On" : "HDR Off",
+      );
     });
 
     // Loop Toggle
     loopBtn?.addEventListener("click", (e) => {
       e.stopPropagation();
       this.loop = !this.loop;
+      this.showOSD(
+        OSD.loop,
+        this.loop ? "Loop On" : "Loop Off",
+      );
+    });
+
+    // Stable Audio Toggle
+    const stableAudioBtn = shadowRoot.querySelector(".movi-stable-audio-btn") as HTMLElement;
+    stableAudioBtn?.addEventListener("click", (e) => {
+      e.stopPropagation();
+      if (this.player) {
+        const current = this.player.getStableAudio();
+        this.player.setStableAudio(!current);
+        this.updateStableAudioUI(shadowRoot);
+        this.showOSD(
+          OSD.stableAudio,
+          !current ? "Stable Volume On" : "Stable Volume Off",
+        );
+      }
     });
 
     // Center play/pause button
@@ -796,7 +1084,7 @@ export class MoviElement extends HTMLElement {
       e.stopPropagation(); // Prevent triggering overlay click
       if (this.player) {
         const state = this.player.getState();
-        if (state === "playing") {
+        if (state === "playing" || state === "buffering") {
           this.pause();
         } else {
           // Play if in ready, paused, ended, or any other non-playing state
@@ -853,6 +1141,9 @@ export class MoviElement extends HTMLElement {
           ) as HTMLElement;
           if (thumbnailPlaceholder) thumbnailPlaceholder.style.display = "none";
           thumbnailImg.style.display = "block";
+
+          // Re-apply rotation transform + margin on each preview load
+          this.applyThumbnailRotation(thumbnailImg);
         }
       } catch (e) {
         // Ignore aborts
@@ -920,6 +1211,22 @@ export class MoviElement extends HTMLElement {
 
       const time = percent * duration;
       thumbnailTime.textContent = this.formatTime(time);
+
+      // Show chapter title if hovering over a chapter
+      const chapterTitleEl = shadowRoot.querySelector(".movi-seek-chapter-title") as HTMLElement;
+      if (chapterTitleEl) {
+        const chapters = this.player?.getChapters() ?? [];
+        const chapter = chapters.find((ch, i) => {
+          const end = i < chapters.length - 1 ? chapters[i + 1].start : duration;
+          return time >= ch.start && time < end;
+        });
+        if (chapter) {
+          chapterTitleEl.textContent = chapter.title;
+          chapterTitleEl.style.display = "block";
+        } else {
+          chapterTitleEl.style.display = "none";
+        }
+      }
 
       if (this._thumb) {
         requestPreview(time);
@@ -1285,25 +1592,27 @@ export class MoviElement extends HTMLElement {
     document.addEventListener("click", closeSubtitleMenuHandler);
 
     // Aspect Ratio
-    // Aspect Ratio
     const aspectRatioBtn = shadowRoot.querySelector(
       ".movi-aspect-ratio-btn",
     ) as HTMLElement;
     aspectRatioBtn?.addEventListener("click", (e) => {
       e.stopPropagation();
-      const modes: Array<"contain" | "cover" | "fill" | "zoom"> = [
-        "contain",
-        "cover",
-        "fill",
-        "zoom",
-      ];
-      const currentIndex = modes.indexOf(this._currentFit);
-      const nextIndex = (currentIndex + 1) % modes.length;
-      this._currentFit = modes[nextIndex];
+      const fits = ["contain", "cover", "fill", "zoom"] as const;
+      const current = this._objectFit === "control" ? this._currentFit : this._objectFit;
+      const idx = fits.indexOf(current as any);
+      const next = fits[(idx + 1) % fits.length];
+      if (this._objectFit === "control") {
+        this._currentFit = next;
+      } else {
+        this._objectFit = next;
+      }
       this.updateFitMode();
-      this.updateAspectRatioIcon();
-
-      Logger.info(TAG, `Internal Aspect Ratio changed to: ${this._currentFit}`);
+      const labels: Record<string, string> = { contain: "Fit", cover: "Fill", fill: "Stretch", zoom: "Zoom" };
+      const osdSvg = MoviElement.ASPECT_ICONS[next] || MoviElement.ASPECT_ICONS.contain;
+      this.showOSD(
+        `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">${osdSvg}</svg>`,
+        labels[next],
+      );
     });
 
     // Playback Speed
@@ -1351,7 +1660,10 @@ export class MoviElement extends HTMLElement {
         e.stopPropagation();
         const speed = parseFloat((item as HTMLElement).dataset.speed || "1");
         this.playbackRate = speed;
-
+        this.showOSD(
+          OSD.speed,
+          `Speed ${speed}x`,
+        );
         if (speedMenu) speedMenu.style.display = "none";
       });
     });
@@ -1382,6 +1694,19 @@ export class MoviElement extends HTMLElement {
     fullscreenBtn?.addEventListener("click", (e) => {
       e.stopPropagation(); // Prevent triggering overlay click
       this.toggleFullscreen();
+    });
+
+    // Picture-in-Picture
+    const pipBtn = shadowRoot.querySelector(".movi-pip-btn") as HTMLElement;
+    // Show PiP button + context menu item only if Document PiP API is available
+    if ("documentPictureInPicture" in window) {
+      if (pipBtn) pipBtn.style.display = "";
+      const pipCtxItem = shadowRoot.querySelector(".movi-context-menu-pip") as HTMLElement;
+      if (pipCtxItem) pipCtxItem.style.display = "";
+    }
+    pipBtn?.addEventListener("click", (e) => {
+      e.stopPropagation();
+      this.togglePiP();
     });
 
     // More Settings (Mobile Horizontal Expansion)
@@ -1506,7 +1831,7 @@ export class MoviElement extends HTMLElement {
         // This means the click is on the video area (canvas/overlay), not on controls
         this.focus(); // Make sure it gets focus for keyboard shortcuts
         const state = this.player?.getState();
-        if (state === "playing") {
+        if (state === "playing" || state === "buffering") {
           this.pause();
         } else {
           this.play();
@@ -1532,8 +1857,6 @@ export class MoviElement extends HTMLElement {
     document.addEventListener("fullscreenchange", () => {
       const isFullscreen = !!document.fullscreenElement;
       this.updateFullscreenIcon(isFullscreen);
-      // Resize canvas when entering/exiting fullscreen
-      // Use requestAnimationFrame to ensure layout is complete
       requestAnimationFrame(() => {
         requestAnimationFrame(() => {
           this.updateCanvasSize();
@@ -1640,12 +1963,14 @@ export class MoviElement extends HTMLElement {
       return;
 
     const state = this.player.getState();
-    // Only allow seeking if player is ready, playing, paused, or ended
+    // Allow seeking in playable states + buffering/seeking
     if (
       state !== "ready" &&
       state !== "playing" &&
       state !== "paused" &&
-      state !== "ended"
+      state !== "ended" &&
+      state !== "buffering" &&
+      state !== "seeking"
     ) {
       return;
     }
@@ -1706,12 +2031,14 @@ export class MoviElement extends HTMLElement {
     if (!touch) return;
 
     const state = this.player.getState();
-    // Only allow seeking if player is ready, playing, paused, or ended
+    // Allow seeking in playable states + buffering/seeking
     if (
       state !== "ready" &&
       state !== "playing" &&
       state !== "paused" &&
-      state !== "ended"
+      state !== "ended" &&
+      state !== "buffering" &&
+      state !== "seeking"
     ) {
       return;
     }
@@ -1797,7 +2124,7 @@ export class MoviElement extends HTMLElement {
           this.showControls();
         } else {
           const state = this.player?.getState();
-          if (state === "playing") {
+          if (state === "playing" || state === "buffering") {
             this.pause();
           } else {
             this.play();
@@ -1821,10 +2148,16 @@ export class MoviElement extends HTMLElement {
         if (tapTimer) clearTimeout(tapTimer);
         tapTimer = null;
 
+        let didSeek = false;
+
         // Check if fast seek is enabled
         if (this._fastSeek) {
           if (xPos < width * 0.3) {
             // Rewind
+            this.cumulativeSeekAmount = (this.lastSeekSide === "left" && now - this.lastSeekTime < 1000)
+              ? this.cumulativeSeekAmount + 10 : 10;
+            this.lastSeekSide = "left";
+            this.lastSeekTime = now;
             this.currentTime = Math.max(0, this.currentTime - 10);
             this.showOSD(
               `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
@@ -1832,10 +2165,15 @@ export class MoviElement extends HTMLElement {
                 <path d="M3 3v5h5" />
                 <text x="50%" y="54%" font-size="7" font-family="sans-serif" font-weight="bold" fill="currentColor" text-anchor="middle" dominant-baseline="middle" stroke="none">10</text>
               </svg>`,
-              "- 10s",
+              `- ${this.cumulativeSeekAmount}s`,
             );
+            didSeek = true;
           } else if (xPos > width * 0.7) {
             // Forward
+            this.cumulativeSeekAmount = (this.lastSeekSide === "right" && now - this.lastSeekTime < 1000)
+              ? this.cumulativeSeekAmount + 10 : 10;
+            this.lastSeekSide = "right";
+            this.lastSeekTime = now;
             this.currentTime = Math.min(this.duration, this.currentTime + 10);
             this.showOSD(
               `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
@@ -1843,8 +2181,9 @@ export class MoviElement extends HTMLElement {
                 <path d="M21 3v5h-5" />
                 <text x="50%" y="54%" font-size="7" font-family="sans-serif" font-weight="bold" fill="currentColor" text-anchor="middle" dominant-baseline="middle" stroke="none">10</text>
               </svg>`,
-              "+ 10s",
+              `+ ${this.cumulativeSeekAmount}s`,
             );
+            didSeek = true;
           } else {
             this.toggleFullscreen();
           }
@@ -1852,7 +2191,9 @@ export class MoviElement extends HTMLElement {
           // If seek disabled, always treat double tap as fullscreen toggle
           this.toggleFullscreen();
         }
-        lastTap = 0;
+        // Keep lastTap alive for continuous tapping (like YouTube)
+        // If we seeked, next tap should immediately seek again
+        lastTap = didSeek ? now : 0;
       } else {
         // First tap
         lastTap = now;
@@ -1868,7 +2209,7 @@ export class MoviElement extends HTMLElement {
             this.showControls();
           } else {
             const state = this.player?.getState();
-            if (state === "playing") {
+            if (state === "playing" || state === "buffering") {
               this.pause();
             } else {
               this.play();
@@ -2102,6 +2443,73 @@ export class MoviElement extends HTMLElement {
       // Only handle if player exists (content loaded)
       if (!this.player) return;
 
+      // Resume dialog keyboard navigation
+      const resumeDialog = this.shadowRoot?.querySelector(".movi-resume-dialog") as HTMLElement;
+      if (resumeDialog && resumeDialog.style.display !== "none") {
+        const yesBtn = resumeDialog.querySelector(".movi-resume-yes") as HTMLElement;
+        const noBtn = resumeDialog.querySelector(".movi-resume-no") as HTMLElement;
+        if (e.key === "ArrowLeft" || e.key === "ArrowRight") {
+          e.preventDefault();
+          // Toggle focus between Resume and Start Over
+          // Toggle visual selection
+          const yesSelected = yesBtn?.classList.contains("movi-resume-focused");
+          yesBtn?.classList.toggle("movi-resume-focused", !yesSelected);
+          noBtn?.classList.toggle("movi-resume-focused", yesSelected);
+          return;
+        } else if (e.key === "Enter" || e.key === " ") {
+          e.preventDefault();
+          const focused = resumeDialog.querySelector(".movi-resume-focused") as HTMLElement;
+          (focused || yesBtn)?.click();
+          return;
+        } else if (e.key === "Escape") {
+          e.preventDefault();
+          noBtn?.click();
+          return;
+        }
+      }
+
+      // Timeline navigation — intercept when timeline is open
+      const timelinePanel = this.shadowRoot?.querySelector(".movi-timeline-panel") as HTMLElement;
+      if (timelinePanel && timelinePanel.style.display !== "none") {
+        if (e.key === "Escape") {
+          e.preventDefault();
+          this.toggleTimeline();
+          return;
+        }
+        if (e.key === "ArrowLeft" || e.key === "ArrowRight" || e.key === "Enter") {
+          e.preventDefault();
+          const items = timelinePanel.querySelectorAll(".movi-timeline-item");
+          if (items.length === 0) return;
+
+          // Find currently selected item
+          let selectedIdx = -1;
+          items.forEach((item, i) => {
+            if ((item as HTMLElement).classList.contains("movi-timeline-selected")) {
+              selectedIdx = i;
+            }
+          });
+
+          if (e.key === "ArrowRight") {
+            selectedIdx = Math.min(selectedIdx + 1, items.length - 1);
+          } else if (e.key === "ArrowLeft") {
+            selectedIdx = Math.max(selectedIdx - 1, 0);
+          } else if (e.key === "Enter" && selectedIdx >= 0) {
+            // Seek to selected item
+            (items[selectedIdx] as HTMLElement).click();
+            return;
+          }
+
+          // Update selection
+          items.forEach((item) => (item as HTMLElement).classList.remove("movi-timeline-selected"));
+          if (selectedIdx >= 0) {
+            const selected = items[selectedIdx] as HTMLElement;
+            selected.classList.add("movi-timeline-selected");
+            selected.scrollIntoView({ behavior: "smooth", block: "nearest", inline: "center" });
+          }
+          return;
+        }
+      }
+
       switch (e.key) {
         case " ":
         case "k":
@@ -2109,7 +2517,7 @@ export class MoviElement extends HTMLElement {
           // Space or K: Play/Pause
           e.preventDefault();
           const state = this.player?.getState();
-          if (state === "playing") {
+          if (state === "playing" || state === "buffering") {
             this.pause();
           } else {
             this.play();
@@ -2252,6 +2660,12 @@ export class MoviElement extends HTMLElement {
           // M: Mute/Unmute
           e.preventDefault();
           this.muted = !this.muted;
+          this.showOSD(
+            this.muted
+              ? OSD.muted
+              : OSD.unmuted,
+            this.muted ? "Muted" : "Unmuted",
+          );
           break;
         case "s":
         case "S":
@@ -2259,7 +2673,7 @@ export class MoviElement extends HTMLElement {
           e.preventDefault();
           this.takeSnapshot();
           this.showOSD(
-            `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M23 19a2 2 0 0 1-2 2H3a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h4l2-3h6l2 3h4a2 2 0 0 1 2 2z"></path><circle cx="12" cy="13" r="4"></circle></svg>`,
+            OSD.snapshot,
             "Snapshot",
           );
           break;
@@ -2268,6 +2682,242 @@ export class MoviElement extends HTMLElement {
           // F: Fullscreen
           e.preventDefault();
           this.toggleFullscreen();
+          break;
+        case "p":
+        case "P":
+          // P: Picture-in-Picture
+          e.preventDefault();
+          this.togglePiP();
+          break;
+        case "i":
+        case "I":
+          // I: Toggle nerd stats
+          e.preventDefault();
+          this.toggleNerdStats();
+          break;
+        case "t":
+        case "T":
+          // T: Toggle timeline
+          e.preventDefault();
+          this.toggleTimeline();
+          break;
+        case "r":
+        case "R":
+          // R: Rotate video 90° (disabled during PiP)
+          e.preventDefault();
+          if (this.player && !this._pipWindow) {
+            const deg = this.player.rotateVideo();
+            this.showOSD(
+              `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12a9 9 0 1 1-9-9 9.75 9.75 0 0 1 6.74 2.74L21 8"/><path d="M21 3v5h-5"/></svg>`,
+              `${deg}°`,
+            );
+            const statusEl = this.shadowRoot?.querySelector(".movi-rotate-status");
+            if (statusEl) statusEl.textContent = `${deg}°`;
+            this.syncThumbnailRotation(deg);
+          }
+          break;
+        case "a":
+        case "A":
+          // A: Cycle aspect ratio (contain → cover → fill)
+          e.preventDefault();
+          {
+            const fits = ["contain", "cover", "fill", "zoom"] as const;
+            const current = this._objectFit === "control" ? this._currentFit : this._objectFit;
+            const idx = fits.indexOf(current as any);
+            const next = fits[(idx + 1) % fits.length];
+            if (this._objectFit === "control") {
+              this._currentFit = next;
+            } else {
+              this._objectFit = next;
+            }
+            this.updateFitMode();
+            this.updateAspectRatioIcon();
+            const labels: Record<string, string> = { contain: "Fit", cover: "Fill", fill: "Stretch", zoom: "Zoom" };
+            const osdSvg = MoviElement.ASPECT_ICONS[next] || MoviElement.ASPECT_ICONS.contain;
+            this.showOSD(
+              `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">${osdSvg}</svg>`,
+              labels[next],
+            );
+          }
+          break;
+        case "l":
+        case "L":
+          // L: Toggle loop
+          e.preventDefault();
+          this.loop = !this.loop;
+          this.showOSD(
+            OSD.loop,
+            this.loop ? "Loop On" : "Loop Off",
+          );
+          break;
+        case "v":
+        case "V":
+          // V: Cycle subtitle track (VLC standard) — external then muxed
+          e.preventDefault();
+          if (this.player) {
+            const extSubs = this.player.getSubtitleLangs();
+            const muxedSubs = this.player.getSubtitleTracks();
+            const subOsdOn = OSD.subOn;
+            const subOsdOff = OSD.subOff;
+
+            if (extSubs.length > 0) {
+              // Cycle through external subtitle tracks: off → lang1 → lang2 → ... → off
+              const activeIdx = extSubs.findIndex((t) => t.active);
+              if (activeIdx === -1) {
+                // Currently off → select first
+                this.player.selectSubtitleLang(extSubs[0].lang);
+                this.showOSD(subOsdOn, `${extSubs[0].label} (1/${extSubs.length})`);
+              } else if (activeIdx + 1 < extSubs.length) {
+                // Next track
+                const next = extSubs[activeIdx + 1];
+                this.player.selectSubtitleLang(next.lang);
+                this.showOSD(subOsdOn, `${next.label} (${activeIdx + 2}/${extSubs.length})`);
+              } else {
+                // Last → off
+                this.player.selectSubtitleLang(null);
+                this.showOSD(subOsdOff, "Subtitles Off");
+              }
+              this.updateSubtitleTrackMenu();
+            } else if (muxedSubs.length > 0) {
+              // Fallback: muxed subtitle tracks
+              const active = this.player.trackManager.getActiveSubtitleTrack();
+              const activeIdx = active ? muxedSubs.findIndex(t => t.id === active.id) : -1;
+              const nextIdx = activeIdx + 1;
+              if (nextIdx >= muxedSubs.length) {
+                this.player.selectSubtitleTrack(null);
+                this.showOSD(subOsdOff, "Subtitles Off");
+              } else {
+                const next = muxedSubs[nextIdx];
+                this.player.selectSubtitleTrack(next.id);
+                this.showOSD(subOsdOn, `${next.language?.toUpperCase() || "Sub"} (${nextIdx + 1}/${muxedSubs.length})`);
+              }
+              this.updateSubtitleTrackMenu();
+            }
+          }
+          break;
+        case "b":
+        case "B":
+          // B: Cycle audio track — muxed + external combined
+          e.preventDefault();
+          if (this.player) {
+            const bMuxed = this.player.getAudioTracks();
+            const bExternal = this.player.getAudioLangs();
+            const bIcon = OSD.audio;
+
+            // Build unified list: muxed first, then external
+            type AudioEntry = { type: "muxed"; id: number; label: string } | { type: "ext"; lang: string; label: string };
+            const allAudio: AudioEntry[] = [
+              ...bMuxed.map((t) => ({ type: "muxed" as const, id: t.id, label: t.label || t.language || `Audio ${t.id}` })),
+              ...bExternal.map((t) => ({ type: "ext" as const, lang: t.lang, label: t.label })),
+            ];
+
+            if (allAudio.length > 1) {
+              // Find current active index
+              const isNative = this.player.isNativeAudioActive();
+              let curIdx = -1;
+              if (isNative) {
+                const activeLang = bExternal.find((t) => t.active)?.lang;
+                curIdx = allAudio.findIndex((a) => a.type === "ext" && a.lang === activeLang);
+              } else {
+                const activeId = this.player.trackManager.getActiveAudioTrack()?.id;
+                curIdx = allAudio.findIndex((a) => a.type === "muxed" && a.id === activeId);
+              }
+              const nextIdx = (curIdx + 1) % allAudio.length;
+              const next = allAudio[nextIdx];
+
+              if (next.type === "ext") {
+                this.player.selectAudioLang(next.lang);
+              } else {
+                if (this.player.isNativeAudioActive()) this.player.useMuxedAudio();
+                this.player.selectAudioTrack(next.id);
+              }
+              this.showOSD(bIcon, `${next.label} (${nextIdx + 1}/${allAudio.length})`);
+              this.updateAudioTrackMenu();
+            }
+          }
+          break;
+        case "h":
+        case "H":
+          // H: Toggle HDR mode (only if content is HDR)
+          e.preventDefault();
+          {
+            const hdrItem = this.shadowRoot?.querySelector('.movi-context-menu-item[data-action="hdr-toggle"]') as HTMLElement;
+            if (hdrItem && hdrItem.style.display !== "none") {
+              this.hdr = !this.hdr;
+              this.showOSD(
+                OSD.hdr,
+                this.hdr ? "HDR On" : "HDR Off",
+              );
+            }
+          }
+          break;
+        case "u":
+        case "U":
+          // U: Toggle stable volume
+          e.preventDefault();
+          if (this.player) {
+            const current = this.player.getStableAudio();
+            this.player.setStableAudio(!current);
+            this.updateStableAudioUI(this.shadowRoot!);
+            this.showOSD(
+              OSD.stableAudio,
+              !current ? "Stable Volume On" : "Stable Volume Off",
+            );
+          }
+          break;
+        case "g":
+        case "G":
+          // G: Toggle ambient mode
+          e.preventDefault();
+          this._ambientMode = !this._ambientMode;
+          if (this._ambientMode) {
+            this.setAttribute("ambientmode", "");
+          } else {
+            this.removeAttribute("ambientmode");
+          }
+          this.updateAmbientMode();
+          this.updateAmbientUI();
+          this.showOSD(
+            OSD.ambient,
+            this._ambientMode ? "Ambient Mode On" : "Ambient Mode Off",
+          );
+          break;
+        case "=":
+        case "+":
+          // +: Speed up (VLC standard)
+          e.preventDefault();
+          {
+            const speeds = [0.25, 0.5, 0.75, 1, 1.25, 1.5, 1.75, 2];
+            const curIdx = speeds.findIndex(s => s >= this._playbackRate);
+            const nextIdx = Math.min((curIdx === -1 ? 3 : curIdx) + 1, speeds.length - 1);
+            this.playbackRate = speeds[nextIdx];
+            this.showOSD(
+              OSD.speed,
+              `Speed ${this._playbackRate}x`,
+            );
+          }
+          break;
+        case "-":
+          // -: Speed down (VLC standard)
+          e.preventDefault();
+          {
+            const speeds = [0.25, 0.5, 0.75, 1, 1.25, 1.5, 1.75, 2];
+            const curIdx = speeds.findIndex(s => s >= this._playbackRate);
+            const nextIdx = Math.max((curIdx === -1 ? 3 : curIdx) - 1, 0);
+            this.playbackRate = speeds[nextIdx];
+            this.showOSD(
+              OSD.speed,
+              `Speed ${this._playbackRate}x`,
+            );
+          }
+          break;
+        case "?":
+          // ?: Show keyboard shortcuts
+          e.preventDefault();
+          {
+            const panel = this.shadowRoot?.querySelector(".movi-shortcuts-panel") as HTMLElement;
+            if (panel) panel.style.display = panel.style.display === "none" ? "flex" : "none";
+          }
           break;
         case "0":
           // 0: Seek to start
@@ -2294,6 +2944,11 @@ export class MoviElement extends HTMLElement {
     if (!this.hasAttribute("tabindex")) {
       this.setAttribute("tabindex", "0");
     }
+
+    // Auto-focus on mouse enter so keyboard shortcuts work without clicking
+    this.addEventListener("mouseenter", () => {
+      this.focus();
+    });
   }
 
   private setupContextMenu(shadowRoot: ShadowRoot): void {
@@ -2633,13 +3288,6 @@ export class MoviElement extends HTMLElement {
       true,
     );
 
-    // Hide context menu on escape
-    document.addEventListener("keydown", (e) => {
-      if (e.key === "Escape" && this._contextMenuVisible) {
-        hideContextMenu(); // Used new local method
-      }
-    });
-
     // Handle backdrop click to close menu
     const backdrop = shadowRoot.querySelector(
       ".movi-context-menu-backdrop",
@@ -2674,12 +3322,14 @@ export class MoviElement extends HTMLElement {
 
       const speed = item.dataset.speed;
       const audioTrackId = item.dataset.audioTrackId;
+      const audioLang = item.dataset.audioLang;
       const subtitleTrackId = item.dataset.subtitleTrackId;
+      const subtitleLang = item.dataset.subtitleLang;
 
       if (action === "play-pause") {
         if (this.player) {
           const state = this.player.getState();
-          if (state === "playing") {
+          if (state === "playing" || state === "buffering") {
             this.pause();
           } else {
             this.play();
@@ -2696,10 +3346,7 @@ export class MoviElement extends HTMLElement {
           submenu.classList.add("movi-context-menu-submenu-visible");
         }
       } else if (action === "fit") {
-        // Show fit submenu (changed from toggle to add)
-        const submenu = shadowRoot.querySelector(
-          '.movi-context-menu-submenu[data-submenu="fit"]',
-        ) as HTMLElement;
+        const submenu = shadowRoot.querySelector('.movi-context-menu-submenu[data-submenu="fit"]') as HTMLElement;
         if (submenu) {
           contextMenu.scrollTop = 0;
           submenu.classList.add("movi-context-menu-submenu-visible");
@@ -2713,11 +3360,32 @@ export class MoviElement extends HTMLElement {
           contextMenu.scrollTop = 0;
           submenu.classList.add("movi-context-menu-submenu-visible");
         }
+      } else if (audioLang !== undefined) {
+        // Select native audio language track
+        if (this.player) {
+          const langTrack = this.player.getAudioLangs().find(t => t.lang === audioLang);
+          this.player.selectAudioLang(audioLang);
+          this.updateAudioTrackMenu();
+          this.showOSD(
+            OSD.audio,
+            langTrack?.label || audioLang,
+          );
+        }
+        hideContextMenu();
       } else if (audioTrackId !== undefined) {
-        // Select audio track
+        // Select muxed audio track
         const trackId = parseInt(audioTrackId);
         if (this.player) {
+          if (this.player.isNativeAudioActive()) {
+            this.player.useMuxedAudio();
+          }
           this.player.selectAudioTrack(trackId);
+          this.updateAudioTrackMenu();
+          const trk = this.player.getAudioTracks().find(t => t.id === trackId);
+          this.showOSD(
+            OSD.audio,
+            trk?.label || trk?.language || `Audio ${trackId}`,
+          );
         }
         hideContextMenu();
       } else if (action === "subtitle-track") {
@@ -2729,14 +3397,35 @@ export class MoviElement extends HTMLElement {
           contextMenu.scrollTop = 0;
           submenu.classList.add("movi-context-menu-submenu-visible");
         }
+      } else if (subtitleLang !== undefined) {
+        // Select external subtitle language
+        if (this.player) {
+          const subTrack = this.player.getSubtitleLangs().find(t => t.lang === subtitleLang);
+          this.player.selectSubtitleLang(subtitleLang);
+          this.updateSubtitleTrackMenu();
+          this.showOSD(
+            OSD.subOn,
+            subTrack?.label || subtitleLang,
+          );
+        }
+        hideContextMenu();
       } else if (subtitleTrackId !== undefined) {
-        // Select subtitle track
+        // Select muxed subtitle track
         const trackId = parseInt(subtitleTrackId);
         if (this.player) {
+          const subOsdIcon = OSD.subOn;
           if (trackId === -1) {
             this.player.selectSubtitleTrack(null);
+            this.player.selectSubtitleLang(null);
+            this.showOSD(
+              OSD.subOff,
+              "Subtitles Off",
+            );
           } else {
+            this.player.selectSubtitleLang(null);
             this.player.selectSubtitleTrack(trackId);
+            const trk = this.player.getSubtitleTracks().find(t => t.id === trackId);
+            this.showOSD(subOsdIcon, trk?.label || trk?.language || `Subtitle ${trackId}`);
           }
         }
         hideContextMenu();
@@ -2757,45 +3446,100 @@ export class MoviElement extends HTMLElement {
           });
         item.classList.add("movi-context-menu-active");
 
+        this.showOSD(
+          OSD.speed,
+          `Speed ${playbackSpeed}x`,
+        );
         hideContextMenu();
       } else if (item.dataset.fit) {
-        // Set object fit mode
-        const fitMode = item.dataset.fit as
-          | "contain"
-          | "cover"
-          | "fill"
-          | "zoom";
-
+        const fitMode = item.dataset.fit as "contain" | "cover" | "fill" | "zoom";
         if (this._objectFit === "control") {
-          // If in control mode, just update the current choice so button stays visible
           this._currentFit = fitMode;
-          this.updateFitMode();
-          this.updateAspectRatioIcon();
         } else {
-          // Otherwise update the main property (which might be a fixed mode)
-          this.objectFit = fitMode;
+          this._objectFit = fitMode;
         }
-
-        // Update active state
-        contextMenu
-          .querySelectorAll(".movi-context-menu-item[data-fit]")
-          .forEach((el) => {
-            el.classList.remove("movi-context-menu-active");
-          });
+        this.updateFitMode();
+        this.updateAspectRatioIcon();
+        contextMenu.querySelectorAll(".movi-context-menu-item[data-fit]").forEach((el) => {
+          el.classList.remove("movi-context-menu-active");
+        });
         item.classList.add("movi-context-menu-active");
-
+        // Update the new context menu status too
+        const aspectStatus = shadowRoot.querySelector(".movi-aspect-status");
+        if (aspectStatus) {
+          const labels: Record<string, string> = { contain: "Fit", cover: "Fill", fill: "Stretch", zoom: "Zoom" };
+          aspectStatus.textContent = labels[fitMode] || fitMode;
+        }
         hideContextMenu();
       } else if (action === "hdr-toggle") {
         this.hdr = !this.hdr;
+        this.showOSD(
+          OSD.hdr,
+          this.hdr ? "HDR On" : "HDR Off",
+        );
+        hideContextMenu();
+      } else if (action === "rotate-video") {
+        if (this.player && !this._pipWindow) {
+          const deg = this.player.rotateVideo();
+          const statusEl = shadowRoot.querySelector(".movi-rotate-status");
+          if (statusEl) statusEl.textContent = `${deg}°`;
+          this.syncThumbnailRotation(deg);
+          this.showOSD(
+            OSD.rotate,
+            `Rotate ${deg}°`,
+          );
+        }
         hideContextMenu();
       } else if (action === "loop-toggle") {
         this.loop = !this.loop;
+        this.showOSD(
+          OSD.loop,
+          this.loop ? "Loop On" : "Loop Off",
+        );
+        hideContextMenu();
+      } else if (action === "stable-audio-toggle") {
+        if (this.player) {
+          const current = this.player.getStableAudio();
+          this.player.setStableAudio(!current);
+          this.updateStableAudioUI(shadowRoot);
+          this.showOSD(
+            OSD.stableAudio,
+            !current ? "Stable Volume On" : "Stable Volume Off",
+          );
+        }
+        hideContextMenu();
+      } else if (action === "ambient-toggle") {
+        this._ambientMode = !this._ambientMode;
+        if (this._ambientMode) {
+          this.setAttribute("ambientmode", "");
+        } else {
+          this.removeAttribute("ambientmode");
+        }
+        this.updateAmbientMode();
+        this.updateAmbientUI();
+        this.showOSD(
+          OSD.ambient,
+          this._ambientMode ? "Ambient Mode On" : "Ambient Mode Off",
+        );
+        hideContextMenu();
+      } else if (action === "nerd-stats") {
+        this.toggleNerdStats(shadowRoot);
+        hideContextMenu();
+      } else if (action === "timeline") {
+        this.toggleTimeline();
+        hideContextMenu();
+      } else if (action === "pip") {
+        this.togglePiP();
         hideContextMenu();
       } else if (action === "fullscreen") {
         this.toggleFullscreen();
         hideContextMenu();
       } else if (action === "snapshot") {
         this.takeSnapshot();
+        this.showOSD(
+          OSD.snapshot,
+          "Snapshot",
+        );
         hideContextMenu();
       }
     });
@@ -2859,13 +3603,15 @@ export class MoviElement extends HTMLElement {
       ".movi-context-menu-submenu-audio",
     ) as HTMLElement;
 
-    if (audioTracks.length > 1 && audioDivider && audioItem && audioSubmenu) {
+    const nativeLangs = this.player.getAudioLangs();
+    const ctxIsNativeActive = this.player.isNativeAudioActive();
+    const totalAudioTracks = audioTracks.length + nativeLangs.length;
+
+    if (totalAudioTracks > 1 && audioDivider && audioItem && audioSubmenu) {
       audioDivider.style.display = "block";
       audioItem.style.display = "flex";
-      // Remove inline display:none so CSS visibility can work
       audioSubmenu.style.removeProperty("display");
 
-      // Populate audio track submenu
       let html = "";
       if (
         window.innerWidth <= 1024 ||
@@ -2879,31 +3625,36 @@ export class MoviElement extends HTMLElement {
         </div>`;
       }
 
-      html += audioTracks
-        .map((track) => {
-          const isActive = activeAudioTrack?.id === track.id;
-          const label = track.label || `Audio ${track.id}`;
-          const infoParts: string[] = [];
-
-          if (track.language) {
-            const langCode =
-              track.language.length >= 2
+      // Muxed audio tracks
+      if (audioTracks.length > 0) {
+        html += audioTracks
+          .map((track) => {
+            const isActive = !ctxIsNativeActive && activeAudioTrack?.id === track.id;
+            const label = track.label || `Audio ${track.id}`;
+            const infoParts: string[] = [];
+            if (track.language) {
+              const langCode = track.language.length >= 2
                 ? track.language.substring(0, 3).toUpperCase()
                 : track.language.toUpperCase();
-            infoParts.push(langCode);
-          }
+              infoParts.push(langCode);
+            }
+            if (track.channels) infoParts.push(`${track.channels}ch`);
+            const info = infoParts.length > 0 ? ` (${infoParts.join(" • ")})` : "";
+            const activeClass = isActive ? " movi-context-menu-active" : "";
+            return `<div class="movi-context-menu-item${activeClass}" data-audio-track-id="${track.id}">${label}${info}</div>`;
+          })
+          .join("");
+      }
 
-          if (track.channels) {
-            infoParts.push(`${track.channels}ch`);
-          }
-
-          const info =
-            infoParts.length > 0 ? ` (${infoParts.join(" • ")})` : "";
-          const activeClass = isActive ? " movi-context-menu-active" : "";
-
-          return `<div class="movi-context-menu-item${activeClass}" data-audio-track-id="${track.id}">${label}${info}</div>`;
-        })
-        .join("");
+      // External audio tracks
+      if (nativeLangs.length > 0) {
+        html += nativeLangs
+          .map((t) => {
+            const activeClass = t.active ? " movi-context-menu-active" : "";
+            return `<div class="movi-context-menu-item${activeClass}" data-audio-lang="${t.lang}">${t.label} (${t.lang.toUpperCase()})</div>`;
+          })
+          .join("");
+      }
 
       audioSubmenu.innerHTML = html;
 
@@ -2919,6 +3670,8 @@ export class MoviElement extends HTMLElement {
     const subtitleTracks = this.player.getSubtitleTracks();
     const activeSubtitleTrack =
       this.player.trackManager.getActiveSubtitleTrack();
+    const ctxExternalSubs = this.player.getSubtitleLangs();
+    const ctxAnyExternalSubActive = ctxExternalSubs.some((t) => t.active);
     const subtitleDivider = contextMenu.querySelector(
       ".movi-context-menu-divider-subtitle",
     ) as HTMLElement;
@@ -2930,17 +3683,16 @@ export class MoviElement extends HTMLElement {
     ) as HTMLElement;
 
     if (
-      subtitleTracks.length > 0 &&
+      (subtitleTracks.length > 0 || ctxExternalSubs.length > 0) &&
       subtitleDivider &&
       subtitleItem &&
       subtitleSubmenu
     ) {
       subtitleDivider.style.display = "block";
       subtitleItem.style.display = "flex";
-      // Remove inline display:none so CSS visibility can work
       subtitleSubmenu.style.removeProperty("display");
 
-      // Update Context Menu Icon (Toggle Filled/Outline)
+      // Update Context Menu Icon
       const contextMenuSubtitleIcon = subtitleItem.querySelector(
         "svg:not(.movi-context-menu-subtitle-filled)",
       ) as HTMLElement;
@@ -2948,20 +3700,16 @@ export class MoviElement extends HTMLElement {
         ".movi-context-menu-subtitle-filled",
       ) as HTMLElement;
 
-      if (activeSubtitleTrack) {
-        if (contextMenuSubtitleIcon)
-          contextMenuSubtitleIcon.style.display = "none";
-        if (contextMenuSubtitleFilledIcon)
-          contextMenuSubtitleFilledIcon.style.display = "block";
+      const ctxSubActive = activeSubtitleTrack !== null || ctxAnyExternalSubActive;
+      if (ctxSubActive) {
+        if (contextMenuSubtitleIcon) contextMenuSubtitleIcon.style.display = "none";
+        if (contextMenuSubtitleFilledIcon) contextMenuSubtitleFilledIcon.style.display = "block";
       } else {
-        if (contextMenuSubtitleIcon)
-          contextMenuSubtitleIcon.style.display = "block";
-        if (contextMenuSubtitleFilledIcon)
-          contextMenuSubtitleFilledIcon.style.display = "none";
+        if (contextMenuSubtitleIcon) contextMenuSubtitleIcon.style.display = "block";
+        if (contextMenuSubtitleFilledIcon) contextMenuSubtitleFilledIcon.style.display = "none";
       }
 
-      // Add "Off" option for subtitles
-      const offActive = !activeSubtitleTrack;
+      const ctxOffActive = !activeSubtitleTrack && !ctxAnyExternalSubActive;
       let html = "";
       if (
         window.innerWidth <= 1024 ||
@@ -2974,9 +3722,9 @@ export class MoviElement extends HTMLElement {
           <span class="movi-context-menu-label">Back</span>
         </div>`;
       }
-      html += `<div class="movi-context-menu-item${offActive ? " movi-context-menu-active" : ""}" data-subtitle-track-id="-1">Off</div>`;
+      html += `<div class="movi-context-menu-item${ctxOffActive ? " movi-context-menu-active" : ""}" data-subtitle-track-id="-1">Off</div>`;
 
-      // Populate subtitle track submenu
+      // Muxed subtitle tracks
       html += subtitleTracks
         .map((track) => {
           const isActive = activeSubtitleTrack?.id === track.id;
@@ -2999,9 +3747,16 @@ export class MoviElement extends HTMLElement {
         })
         .join("");
 
+      // External subtitle tracks
+      html += ctxExternalSubs
+        .map((t) => {
+          const activeClass = t.active ? " movi-context-menu-active" : "";
+          return `<div class="movi-context-menu-item${activeClass}" data-subtitle-lang="${t.lang}">${t.label} (${t.lang.toUpperCase()})</div>`;
+        })
+        .join("");
+
       subtitleSubmenu.innerHTML = html;
 
-      // Setup hover handlers for subtitle track submenu
       this.setupSubmenuHover(subtitleItem, subtitleSubmenu);
     } else {
       if (subtitleDivider) subtitleDivider.style.display = "none";
@@ -3026,6 +3781,12 @@ export class MoviElement extends HTMLElement {
         item.classList.remove("movi-context-menu-active");
       }
     });
+
+    // Disable rotate during PiP
+    const rotateItem = contextMenu.querySelector('.movi-context-menu-item[data-action="rotate-video"]');
+    if (rotateItem) {
+      rotateItem.classList.toggle("movi-context-menu-disabled", !!this._pipWindow);
+    }
   }
 
   private setupSubmenuHover(item: HTMLElement, submenu: HTMLElement): void {
@@ -3198,6 +3959,313 @@ export class MoviElement extends HTMLElement {
     }
   }
 
+  private _pipWindow: Window | null = null;
+
+  private restorePiPCanvas(): void {
+    Logger.info(TAG, `restorePiPCanvas called — _pipWindow: ${!!this._pipWindow}, canvas: ${!!this.canvas}, shadowRoot: ${!!this.shadowRoot}`);
+    if (!this._pipWindow) {
+      Logger.info(TAG, "restorePiPCanvas: already restored, skipping");
+      return;
+    }
+    this._pipWindow = null;
+    if (this.player) this.player.isPiPActive = false;
+
+    const canvas = this.canvas;
+    const sr = this.shadowRoot;
+    if (!canvas || !sr) {
+      Logger.warn(TAG, `restorePiPCanvas: missing canvas=${!!canvas} shadowRoot=${!!sr}`);
+      return;
+    }
+
+    // Always move canvas back to shadowRoot as first child (original position)
+    if (canvas.parentNode !== sr) {
+      sr.insertBefore(canvas, sr.firstChild);
+      Logger.info(TAG, "restorePiPCanvas: moved canvas back to shadowRoot");
+    } else {
+      Logger.info(TAG, "restorePiPCanvas: canvas already in shadowRoot");
+    }
+
+    Logger.info(TAG, `restorePiPCanvas: canvas isConnected=${canvas.isConnected}`);
+
+    // Restore original size
+    requestAnimationFrame(() => {
+      this.updateCanvasSize();
+      Logger.info(TAG, `restorePiPCanvas: after resize — ${this.canvas?.width}x${this.canvas?.height}`);
+    });
+    Logger.info(TAG, "PiP closed, canvas restored");
+  }
+
+  private async togglePiP(): Promise<void> {
+    if (!this.player || !this.canvas) return;
+
+    const docPiP = (window as any).documentPictureInPicture;
+    if (!docPiP) return;
+
+    // If already in PiP, close it and restore immediately
+    if (this._pipWindow) {
+      Logger.info(TAG, "togglePiP: closing PiP, restoring canvas first");
+      const win = this._pipWindow;
+      this.restorePiPCanvas();
+      try { win.close(); } catch (_) {}
+      Logger.info(TAG, "togglePiP: PiP window closed");
+      return;
+    }
+
+    try {
+      const videoTrack = this.player.getVideoTracks()?.[0];
+      const vw = videoTrack?.width || 640;
+      const vh = videoTrack?.height || 360;
+      const savedRotation = this.player.getVideoRotation();
+      // PiP always shows original (unrotated) video
+      const aspect = vw / vh;
+      const maxW = Math.min(400, window.innerWidth * 0.35);
+      const maxH = Math.min(500, window.innerHeight * 0.5);
+      let pipWidth: number, pipHeight: number;
+      if (aspect >= 1) {
+        pipWidth = maxW;
+        pipHeight = Math.round(maxW / aspect);
+      } else {
+        pipHeight = maxH;
+        pipWidth = Math.round(maxH * aspect);
+      }
+      // Reset rotation for PiP (restore on close)
+      if (savedRotation !== 0) {
+        this.player.setVideoRotation(0);
+      }
+
+      const pipWindow: Window = await docPiP.requestWindow({
+        width: Math.round(pipWidth),
+        height: Math.round(pipHeight),
+      });
+      this._pipWindow = pipWindow;
+
+      // Chrome may ignore requestWindow size (remembers last PiP size), force resize
+      try {
+        const chromeW = pipWindow.outerWidth - pipWindow.innerWidth;
+        const chromeH = pipWindow.outerHeight - pipWindow.innerHeight;
+        pipWindow.resizeTo(Math.round(pipWidth) + chromeW, Math.round(pipHeight) + chromeH);
+      } catch {};
+
+      // Style the PiP window
+      const style = pipWindow.document.createElement("style");
+      style.textContent = `
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body { background: #000; overflow: hidden; width: 100%; height: 100%; position: relative; }
+        canvas { width: 100%; height: 100%; object-fit: contain; display: block; }
+        .pip-controls {
+          position: absolute; bottom: 0; left: 0; right: 0;
+          background: linear-gradient(transparent, rgba(0,0,0,0.85));
+          padding: 8px 10px 6px; display: flex; flex-direction: column; gap: 4px;
+          opacity: 0; transition: opacity 0.2s;
+        }
+        body:hover .pip-controls, body.show-controls .pip-controls { opacity: 1; }
+        .pip-progress-row { display: flex; flex-direction: column; gap: 4px; }
+        .pip-progress-bar {
+          width: 100%; height: 3px; background: rgba(255,255,255,0.2);
+          border-radius: 2px; cursor: pointer; position: relative;
+        }
+        .pip-progress-bar:hover { height: 5px; }
+        .pip-progress-fill {
+          height: 100%; background: #8B5CF6; border-radius: 2px;
+          width: 0%; pointer-events: none;
+        }
+        .pip-time { font: 500 10px/1 -apple-system, sans-serif; color: rgba(255,255,255,0.7); white-space: nowrap; }
+        .pip-time-row { display: flex; justify-content: space-between; padding: 0 2px; }
+        .pip-btn-row { display: flex; align-items: center; justify-content: center; gap: 16px; position: relative; }
+        .pip-btn {
+          background: none; border: none; cursor: pointer; padding: 4px;
+          color: #fff; opacity: 0.85; display: flex; align-items: center; justify-content: center;
+        }
+        .pip-btn:hover { opacity: 1; }
+        .pip-btn svg { width: 20px; height: 20px; }
+        .pip-btn.play-pause svg { width: 26px; height: 26px; }
+        .pip-btn.mute-toggle { position: absolute; left: 0; }
+        .pip-btn.mute-toggle svg { width: 18px; height: 18px; }
+        .pip-btn.back-to-tab { position: absolute; right: 0; }
+        .pip-btn.back-to-tab svg { width: 18px; height: 18px; }
+      `;
+      pipWindow.document.head.appendChild(style);
+
+      // Move canvas to PiP window
+      pipWindow.document.body.appendChild(this.canvas);
+      Logger.info(TAG, `PiP: canvas moved to PiP window, isConnected=${this.canvas.isConnected}`);
+
+      // Build PiP controls
+      const controls = pipWindow.document.createElement("div");
+      controls.className = "pip-controls";
+
+      // Progress row
+      const progressRow = pipWindow.document.createElement("div");
+      progressRow.className = "pip-progress-row";
+      const timeRow = pipWindow.document.createElement("div");
+      timeRow.className = "pip-time-row";
+      const timeCurrent = pipWindow.document.createElement("div");
+      timeCurrent.className = "pip-time";
+      timeCurrent.textContent = "00:00";
+      const timeDuration = pipWindow.document.createElement("div");
+      timeDuration.className = "pip-time";
+      timeDuration.textContent = "00:00";
+      timeRow.appendChild(timeCurrent);
+      timeRow.appendChild(timeDuration);
+      const progressBar = pipWindow.document.createElement("div");
+      progressBar.className = "pip-progress-bar";
+      const progressFill = pipWindow.document.createElement("div");
+      progressFill.className = "pip-progress-fill";
+      progressBar.appendChild(progressFill);
+      progressRow.appendChild(timeRow);
+      progressRow.appendChild(progressBar);
+
+      // Button row
+      const btnRow = pipWindow.document.createElement("div");
+      btnRow.className = "pip-btn-row";
+
+      const makeBtn = (cls: string, svg: string) => {
+        const btn = pipWindow.document.createElement("button");
+        btn.className = `pip-btn ${cls}`;
+        btn.innerHTML = svg;
+        return btn;
+      };
+
+      const seekBackBtn = makeBtn("seek-back", `<svg viewBox="0 0 24 24" fill="currentColor"><path d="M12.5 3C7.81 3 4.01 6.54 3.58 11H1l3.5 4L8 11H5.59c.42-3.35 3.33-6 6.91-6 3.87 0 7 3.13 7 7s-3.13 7-7 7c-1.93 0-3.68-.79-4.94-2.06l-1.42 1.42A8.96 8.96 0 0012.5 21c4.97 0 9-4.03 9-9s-4.03-9-9-9z"/><text x="12.5" y="15.5" text-anchor="middle" font-size="7.5" font-weight="700" font-family="-apple-system,sans-serif">10</text></svg>`);
+      const playPauseBtn = makeBtn("play-pause", this.player.getState() === "playing"
+        ? `<svg viewBox="0 0 24 24" fill="currentColor"><rect x="6" y="4" width="4" height="16" rx="1"/><rect x="14" y="4" width="4" height="16" rx="1"/></svg>`
+        : `<svg viewBox="0 0 24 24" fill="currentColor"><path d="M8 5v14l11-7z"/></svg>`);
+      const seekFwdBtn = makeBtn("seek-fwd", `<svg viewBox="0 0 24 24" fill="currentColor"><path d="M11.5 3c4.69 0 8.49 3.54 8.92 8H23l-3.5 4L16 11h2.41c-.42-3.35-3.33-6-6.91-6-3.87 0-7 3.13-7 7s3.13 7 7 7c1.93 0 3.68-.79 4.94-2.06l1.42 1.42A8.96 8.96 0 0111.5 21c-4.97 0-9-4.03-9-9s4.03-9 9-9z"/><text x="11.5" y="15.5" text-anchor="middle" font-size="7.5" font-weight="700" font-family="-apple-system,sans-serif">10</text></svg>`);
+      const backToTabBtn = makeBtn("back-to-tab", `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="15 3 21 3 21 9"/><polyline points="9 21 3 21 3 15"/><line x1="21" y1="3" x2="14" y2="10"/><line x1="3" y1="21" x2="10" y2="14"/></svg>`);
+      const isMuted = this._muted;
+      const muteBtn = makeBtn("mute-toggle", isMuted
+        ? `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M11 5L6 9H2v6h4l5 4V5z"/><line x1="23" y1="9" x2="17" y2="15"/><line x1="17" y1="9" x2="23" y2="15"/></svg>`
+        : `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M11 5L6 9H2v6h4l5 4V5z"/><path d="M19.07 4.93a10 10 0 0 1 0 14.14"/><path d="M15.54 8.46a5 5 0 0 1 0 7.07"/></svg>`);
+
+      btnRow.appendChild(muteBtn);
+      btnRow.appendChild(seekBackBtn);
+      btnRow.appendChild(playPauseBtn);
+      btnRow.appendChild(seekFwdBtn);
+      btnRow.appendChild(backToTabBtn);
+
+      controls.appendChild(progressRow);
+      controls.appendChild(btnRow);
+      pipWindow.document.body.appendChild(controls);
+
+      // PiP control handlers
+      const updatePlayPauseIcon = () => {
+        if (!this.player) return;
+        const isPlaying = this.player.getState() === "playing";
+        playPauseBtn.innerHTML = isPlaying
+          ? `<svg viewBox="0 0 24 24" fill="currentColor"><rect x="6" y="4" width="4" height="16" rx="1"/><rect x="14" y="4" width="4" height="16" rx="1"/></svg>`
+          : `<svg viewBox="0 0 24 24" fill="currentColor"><path d="M8 5v14l11-7z"/></svg>`;
+      };
+
+      playPauseBtn.addEventListener("click", () => {
+        if (!this.player) return;
+        const pipPlayState = this.player.getState();
+        if (pipPlayState === "playing" || pipPlayState === "buffering") this.pause();
+        else this.play();
+      });
+
+      seekBackBtn.addEventListener("click", () => {
+        if (!this.player) return;
+        this.currentTime = Math.max(0, this.currentTime - 10);
+      });
+
+      seekFwdBtn.addEventListener("click", () => {
+        if (!this.player) return;
+        this.currentTime = Math.min(this.duration, this.currentTime + 10);
+      });
+
+      backToTabBtn.addEventListener("click", () => {
+        this.togglePiP();
+      });
+
+      muteBtn.addEventListener("click", () => {
+        this.muted = !this.muted;
+        this.showOSD(
+          this.muted
+            ? `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5"/><line x1="23" y1="9" x2="17" y2="15"/><line x1="17" y1="9" x2="23" y2="15"/></svg>`
+            : `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5"/><path d="M19.07 4.93a10 10 0 0 1 0 14.14"/><path d="M15.54 8.46a5 5 0 0 1 0 7.07"/></svg>`,
+          this.muted ? "Muted" : "Unmuted",
+        );
+      });
+
+      // Progress bar seek
+      progressBar.addEventListener("click", (e: MouseEvent) => {
+        if (!this.player || !this.duration) return;
+        const rect = progressBar.getBoundingClientRect();
+        const pct = Math.max(0, Math.min(1, (e.clientX - rect.left) / rect.width));
+        this.currentTime = pct * this.duration;
+      });
+
+      // Update progress + time on interval
+      const pipUpdateInterval = setInterval(() => {
+        if (!this._pipWindow || !this.player) { clearInterval(pipUpdateInterval); return; }
+        const cur = this.currentTime;
+        const dur = this.duration || 0;
+        const pct = dur > 0 ? (cur / dur) * 100 : 0;
+        progressFill.style.width = `${pct}%`;
+        timeCurrent.textContent = this.formatTime(cur);
+        timeDuration.textContent = this.formatTime(dur);
+        updatePlayPauseIcon();
+        const muted = this._muted;
+        muteBtn.innerHTML = muted
+          ? `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M11 5L6 9H2v6h4l5 4V5z"/><line x1="23" y1="9" x2="17" y2="15"/><line x1="17" y1="9" x2="23" y2="15"/></svg>`
+          : `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M11 5L6 9H2v6h4l5 4V5z"/><path d="M19.07 4.93a10 10 0 0 1 0 14.14"/><path d="M15.54 8.46a5 5 0 0 1 0 7.07"/></svg>`;
+      }, 250);
+
+      // Show controls briefly on open
+      pipWindow.document.body.classList.add("show-controls");
+      setTimeout(() => pipWindow.document.body.classList.remove("show-controls"), 2000);
+
+      // Keyboard shortcuts in PiP window
+      pipWindow.document.addEventListener("keydown", (e: KeyboardEvent) => {
+        if (!this.player) return;
+        if (e.key === " " || e.key === "k") {
+          e.preventDefault();
+          const pipState = this.player.getState();
+          if (pipState === "playing" || pipState === "buffering") this.pause();
+          else this.play();
+        } else if (e.key === "ArrowLeft") {
+          this.currentTime = Math.max(0, this.currentTime - 10);
+        } else if (e.key === "ArrowRight") {
+          this.currentTime = Math.min(this.duration, this.currentTime + 10);
+        } else if (e.key === "m") {
+          muteBtn.click();
+        } else if (e.key === "Escape" || e.key === "p") {
+          this.togglePiP();
+        }
+      });
+
+      // Mark PiP active so background handler doesn't drop frames
+      this.player.isPiPActive = true;
+
+      // Resize canvas to fit PiP window
+      const resizeInPiP = () => {
+        if (this._pipWindow && this.player) {
+          this.player.resizeCanvas(pipWindow.innerWidth, pipWindow.innerHeight);
+        }
+      };
+      pipWindow.addEventListener("resize", resizeInPiP);
+      resizeInPiP();
+
+      // Handle PiP window close — move canvas back
+      const restore = (e: Event) => {
+        Logger.info(TAG, `PiP event: ${e.type} fired`);
+        clearInterval(pipUpdateInterval);
+        this.restorePiPCanvas();
+        // Restore rotation
+        if (savedRotation !== 0 && this.player) {
+          requestAnimationFrame(() => this.player?.setVideoRotation(savedRotation));
+        }
+      };
+      pipWindow.addEventListener("pagehide", restore);
+      pipWindow.addEventListener("unload", restore);
+
+      Logger.info(TAG, `PiP opened: ${Math.round(pipWidth)}x${pipHeight}`);
+    } catch (error) {
+      Logger.error(TAG, "Failed to open PiP", error);
+      this._pipWindow = null;
+    }
+  }
+
   private updateFullscreenIcon(isFullscreen: boolean): void {
     const fullscreenIcon = this.shadowRoot?.querySelector(
       ".movi-icon-fullscreen",
@@ -3215,39 +4283,20 @@ export class MoviElement extends HTMLElement {
     }
   }
 
+  private static readonly ASPECT_ICONS: Record<string, string> = {
+    contain: `<rect x="3" y="3" width="18" height="18" rx="2"/><rect x="6" y="8" width="12" height="8" rx="1"/>`,
+    cover: `<rect x="3" y="3" width="18" height="18" rx="2"/><rect x="1" y="7" width="22" height="10" rx="1"/>`,
+    fill: `<rect x="3" y="3" width="18" height="18" rx="2"/><path d="M3 3h18v18H3z"/>`,
+    zoom: `<circle cx="11" cy="11" r="8"/><path d="M21 21l-4.35-4.35"/><path d="M11 8v6M8 11h6"/>`,
+  };
+
   private updateAspectRatioIcon(): void {
-    const icon = this.shadowRoot?.querySelector(
-      ".movi-icon-aspect-ratio",
-    ) as HTMLElement;
-    const inner = icon?.querySelector(".movi-aspect-inner") as HTMLElement;
+    const icon = this.shadowRoot?.querySelector(".movi-icon-aspect-ratio") as SVGElement;
+    if (!icon) return;
 
-    if (!inner) return;
-
-    const fit =
-      this._objectFit === "control"
-        ? this._currentFit
-        : (this._objectFit as any);
-
-    if (fit === "contain") {
-      // Fit inside (Standard wide frame)
-      inner.setAttribute("d", "M3 7h18v10H3z");
-      inner.style.opacity = "1";
-    } else if (fit === "cover") {
-      // Expand to cover (Corners)
-      inner.setAttribute("d", "M15 3h6v6 M21 3l-7 7 M9 21H3v-6 M3 21l7-7");
-      inner.style.opacity = "1";
-    } else if (fit === "fill") {
-      // Stretch to fill (Full box with crosshair)
-      inner.setAttribute("d", "M3 3h18v18H3z M12 3v18 M3 12h18");
-      inner.style.opacity = "1";
-    } else if (fit === "zoom") {
-      // Zoom (Brackets with center plus)
-      inner.setAttribute(
-        "d",
-        "M10 3H3v7 M14 3h7v7 M3 14v7h10 M21 14v7h-7 M12 9v6 M9 12h6",
-      );
-      inner.style.opacity = "1";
-    }
+    const fit = this._objectFit === "control" ? this._currentFit : (this._objectFit as any);
+    const svg = MoviElement.ASPECT_ICONS[fit] || MoviElement.ASPECT_ICONS.contain;
+    icon.innerHTML = svg;
   }
 
   private updateAudioTrackMenu(): void {
@@ -3264,52 +4313,47 @@ export class MoviElement extends HTMLElement {
     ) as HTMLElement;
     if (!audioTrackList || !audioTrackBtn || !audioTrackContainer) return;
 
+    const nativeLangs = this.player.getAudioLangs();
     const audioTracks = this.player.getAudioTracks();
     const activeTrack = this.player.trackManager.getActiveAudioTrack();
+    const isNativeActive = this.player.isNativeAudioActive();
+    const totalTracks = audioTracks.length + nativeLangs.length;
 
-    // Hide container if only one or no audio tracks
-    if (audioTracks.length <= 1) {
-      audioTrackContainer.style.display = "none";
-    } else {
-      audioTrackContainer.style.display = "flex";
-    }
-
-    // Hide volume control if no audio tracks (length === 0)
+    // Volume is always visible when any audio exists
     const volumeContainer = this.shadowRoot?.querySelector(
       ".movi-volume-container",
     ) as HTMLElement;
     if (volumeContainer) {
-      volumeContainer.style.display = audioTracks.length > 0 ? "flex" : "none";
+      volumeContainer.style.display = totalTracks > 0 ? "flex" : "none";
     }
 
-    // If we only hid the container because checks matched but actually have 0 tracks, ensure consistency
-    if (audioTracks.length === 0) {
+    // Show audio selector only if multiple tracks total
+    if (totalTracks <= 1) {
       audioTrackContainer.style.display = "none";
       return;
     }
 
-    // If not returned, we have > 0 tracks (so volume is visible) and > 1 track (so audio menu is visible)
+    audioTrackContainer.style.display = "flex";
     audioTrackBtn.style.display = "flex";
 
-    // Build menu
-    audioTrackList.innerHTML = audioTracks
+    // Build combined menu — muxed tracks first, then external
+    let menuHTML = "";
+
+    // Muxed audio tracks (from MKV/MP4 demuxer)
+    menuHTML += audioTracks
       .map((track) => {
-        const isActive = activeTrack?.id === track.id;
+        // Muxed track is active only when native audio is NOT active
+        const isActive = !isNativeActive && activeTrack?.id === track.id;
         const label = track.label || `Audio ${track.id}`;
         const infoParts: string[] = [];
 
-        // Add language code if available
         if (track.language) {
-          // Language might be in ISO 639-2 format (3 chars) or ISO 639-1 (2 chars)
-          // Convert to uppercase and show first 2-3 characters
           const langCode =
             track.language.length >= 2
               ? track.language.substring(0, 3).toUpperCase()
               : track.language.toUpperCase();
           infoParts.push(langCode);
         }
-
-        // Add channel count
         if (track.channels) {
           infoParts.push(`${track.channels}ch`);
         }
@@ -3317,14 +4361,25 @@ export class MoviElement extends HTMLElement {
         const info = infoParts.length > 0 ? infoParts.join(" • ") : "";
 
         return `
-        <div class="movi-audio-track-item ${isActive ? "movi-audio-track-active" : ""}" 
+        <div class="movi-audio-track-item ${isActive ? "movi-audio-track-active" : ""}"
              data-track-id="${track.id}">
           <span class="movi-audio-track-label">${label}</span>
           ${info ? `<span class="movi-audio-track-info">${info}</span>` : ""}
-        </div>
-      `;
+        </div>`;
       })
       .join("");
+
+    // External audio tracks (native <audio> element)
+    menuHTML += nativeLangs
+      .map((t) => `
+        <div class="movi-audio-track-item ${t.active ? "movi-audio-track-active" : ""}"
+             data-audio-lang="${t.lang}">
+          <span class="movi-audio-track-label">${t.label}</span>
+          <span class="movi-audio-track-info">${t.lang.toUpperCase()}</span>
+        </div>`)
+      .join("");
+
+    audioTrackList.innerHTML = menuHTML;
 
     // Add click handlers
     audioTrackList
@@ -3332,18 +4387,32 @@ export class MoviElement extends HTMLElement {
       .forEach((item) => {
         item.addEventListener("click", (e) => {
           e.stopPropagation();
-          const trackId = parseInt(
-            (item as HTMLElement).dataset.trackId || "0",
-          );
+          const el = item as HTMLElement;
+          const lang = el.dataset.audioLang;
+          const trackIdStr = el.dataset.trackId;
+
           if (this.player) {
-            this.player.selectAudioTrack(trackId);
-            // Close menu
+            const audioIcon = OSD.audio;
+            if (lang) {
+              // External audio track — switch to native <audio>
+              this.player.selectAudioLang(lang);
+              const t = this.player.getAudioLangs().find(a => a.lang === lang);
+              this.showOSD(audioIcon, t?.label || lang);
+            } else if (trackIdStr) {
+              // Muxed audio track — switch back to WASM if needed
+              if (this.player.isNativeAudioActive()) {
+                this.player.useMuxedAudio();
+              }
+              const tid = parseInt(trackIdStr);
+              this.player.selectAudioTrack(tid);
+              const trk = this.player.getAudioTracks().find(a => a.id === tid);
+              this.showOSD(audioIcon, trk?.label || trk?.language || `Audio ${tid}`);
+            }
+            this.updateAudioTrackMenu();
             const menu = this.shadowRoot?.querySelector(
               ".movi-audio-track-menu",
             ) as HTMLElement;
-            if (menu) {
-              menu.style.display = "none";
-            }
+            if (menu) menu.style.display = "none";
           }
         });
       });
@@ -3558,15 +4627,20 @@ export class MoviElement extends HTMLElement {
 
     const subtitleTracks = this.player.getSubtitleTracks();
     const activeTrack = this.player.trackManager.getActiveSubtitleTrack();
+    const externalSubs = this.player.getSubtitleLangs();
+    const hasExternalSubs = externalSubs.length > 0;
 
-    // Hide container if no subtitle tracks
-    if (subtitleTracks.length === 0) {
+    // Hide container if no subtitle tracks (muxed or external)
+    if (subtitleTracks.length === 0 && !hasExternalSubs) {
       subtitleTrackContainer.style.display = "none";
       return;
     }
 
     subtitleTrackContainer.style.display = "flex";
     subtitleTrackBtn.style.display = "flex";
+
+    const anyExternalActive = externalSubs.some((t) => t.active);
+    const offActive = activeTrack === null && !anyExternalActive;
 
     // Toggle icons based on active state
     const subtitleIcon = this.shadowRoot?.querySelector(
@@ -3576,7 +4650,8 @@ export class MoviElement extends HTMLElement {
       ".movi-icon-subtitle-filled",
     ) as HTMLElement;
 
-    if (activeTrack) {
+    const subtitleActive = activeTrack !== null || anyExternalActive;
+    if (subtitleActive) {
       if (subtitleIcon) subtitleIcon.style.display = "none";
       if (subtitleIconFilled) subtitleIconFilled.style.display = "block";
     } else {
@@ -3586,20 +4661,19 @@ export class MoviElement extends HTMLElement {
 
     // Build menu - start with "Off" option
     let menuHTML = `
-      <div class="movi-subtitle-track-item ${activeTrack === null ? "movi-subtitle-track-active" : ""}" 
+      <div class="movi-subtitle-track-item ${offActive ? "movi-subtitle-track-active" : ""}"
            data-track-id="null">
         <span class="movi-subtitle-track-label">Off</span>
       </div>
     `;
 
-    // Add subtitle tracks
+    // Add muxed subtitle tracks
     menuHTML += subtitleTracks
       .map((track) => {
         const isActive = activeTrack?.id === track.id;
         const label = track.label || `Subtitle ${track.id}`;
         const infoParts: string[] = [];
 
-        // Add language code if available
         if (track.language) {
           const langCode =
             track.language.length >= 2
@@ -3608,7 +4682,6 @@ export class MoviElement extends HTMLElement {
           infoParts.push(langCode);
         }
 
-        // Add subtitle type
         if (track.subtitleType) {
           infoParts.push(track.subtitleType === "image" ? "Image" : "Text");
         }
@@ -3616,13 +4689,24 @@ export class MoviElement extends HTMLElement {
         const info = infoParts.length > 0 ? infoParts.join(" • ") : "";
 
         return `
-        <div class="movi-subtitle-track-item ${isActive ? "movi-subtitle-track-active" : ""}" 
+        <div class="movi-subtitle-track-item ${isActive ? "movi-subtitle-track-active" : ""}"
              data-track-id="${track.id}">
           <span class="movi-subtitle-track-label">${label}</span>
           ${info ? `<span class="movi-subtitle-track-info">${info}</span>` : ""}
         </div>
       `;
       })
+      .join("");
+
+    // Add external subtitle tracks
+    menuHTML += externalSubs
+      .map((t) => `
+        <div class="movi-subtitle-track-item ${t.active ? "movi-subtitle-track-active" : ""}"
+             data-subtitle-lang="${t.lang}">
+          <span class="movi-subtitle-track-label">${t.label}</span>
+          <span class="movi-subtitle-track-info">${t.lang.toUpperCase()}</span>
+        </div>
+      `)
       .join("");
 
     subtitleTrackList.innerHTML = menuHTML;
@@ -3634,36 +4718,36 @@ export class MoviElement extends HTMLElement {
         item.addEventListener("click", (e) => {
           e.stopPropagation();
           const trackIdStr = (item as HTMLElement).dataset.trackId;
-          Logger.debug(TAG, `Subtitle track item clicked: ${trackIdStr}`);
+          const subtitleLang = (item as HTMLElement).dataset.subtitleLang;
+
           if (this.player) {
-            if (trackIdStr === "null") {
-              // Disable subtitles
-              Logger.debug(TAG, "Disabling subtitles");
-              this.player.selectSubtitleTrack(null).catch((error) => {
-                Logger.error(TAG, "Failed to disable subtitles", error);
-              });
+            const subIconOn = OSD.subOn;
+            const subIconOff = OSD.subOff;
+            if (subtitleLang !== undefined) {
+              // External subtitle track
+              const st = this.player.getSubtitleLangs().find(t => t.lang === subtitleLang);
+              this.player.selectSubtitleLang(subtitleLang);
+              this.updateSubtitleTrackMenu();
+              this.showOSD(subIconOn, st?.label || subtitleLang);
+            } else if (trackIdStr === "null") {
+              // Disable all subtitles (muxed + external)
+              this.player.selectSubtitleTrack(null).catch(() => {});
+              this.player.selectSubtitleLang(null);
+              this.updateSubtitleTrackMenu();
+              this.showOSD(subIconOff, "Subtitles Off");
             } else {
+              // Muxed subtitle track
               const trackId = parseInt(trackIdStr || "0");
-              Logger.debug(TAG, `Selecting subtitle track: ${trackId}`);
-              this.player
-                .selectSubtitleTrack(trackId)
-                .then((result) => {
-                  Logger.debug(
-                    TAG,
-                    `Subtitle track selection result: ${result}`,
-                  );
-                })
-                .catch((error) => {
-                  Logger.error(TAG, "Failed to select subtitle track", error);
-                });
+              this.player.selectSubtitleLang(null);
+              this.player.selectSubtitleTrack(trackId).catch(() => {});
+              const trk = this.player.getSubtitleTracks().find(t => t.id === trackId);
+              this.showOSD(subIconOn, trk?.label || trk?.language || `Subtitle ${trackId}`);
             }
             // Close menu
             const menu = this.shadowRoot?.querySelector(
               ".movi-subtitle-track-menu",
             ) as HTMLElement;
-            if (menu) {
-              menu.style.display = "none";
-            }
+            if (menu) menu.style.display = "none";
           }
         });
       });
@@ -3679,6 +4763,25 @@ export class MoviElement extends HTMLElement {
       // Update cursor
       if (this.canvas) this.canvas.style.cursor = "default";
       if (this.video) this.video.style.cursor = "default";
+    }
+
+    // Shift timeline panel up above controls
+    const bar = this.shadowRoot?.querySelector(".movi-controls-bar") as HTMLElement;
+    const barHeight = bar?.offsetHeight ?? 80;
+    const timelinePanel = this.shadowRoot?.querySelector(".movi-timeline-panel") as HTMLElement;
+    let subtitlePadding = barHeight + 20;
+
+    if (timelinePanel && timelinePanel.style.display !== "none") {
+      timelinePanel.style.bottom = `${barHeight + 20}px`;
+      // Subtitle above timeline
+      requestAnimationFrame(() => {
+        const tlHeight = timelinePanel.offsetHeight || 0;
+        if (tlHeight > 0 && this.player) {
+          this.player.setSubtitleControlsPadding(barHeight + tlHeight + 30);
+        }
+      });
+    } else if (this.player) {
+      this.player.setSubtitleControlsPadding(subtitlePadding);
     }
 
     // Show title bar if showtitle is enabled
@@ -3755,6 +4858,24 @@ export class MoviElement extends HTMLElement {
       // Hide cursor
       if (this.canvas) this.canvas.style.cursor = "none";
       if (this.video) this.video.style.cursor = "none";
+    }
+
+    // Shift timeline panel down when controls hide
+    const timelinePanel = this.shadowRoot?.querySelector(".movi-timeline-panel") as HTMLElement;
+    if (timelinePanel) {
+      timelinePanel.style.bottom = "12px";
+    }
+
+    // Shift subtitles — if timeline open, keep above it
+    if (this.player) {
+      if (timelinePanel && timelinePanel.style.display !== "none") {
+        requestAnimationFrame(() => {
+          const tlHeight = timelinePanel.offsetHeight || 0;
+          this.player?.setSubtitleControlsPadding(tlHeight + 24);
+        });
+      } else {
+        this.player.setSubtitleControlsPadding(0);
+      }
     }
 
     // Hide title bar when controls are hidden
@@ -4141,7 +5262,7 @@ export class MoviElement extends HTMLElement {
       }
 
       /* Ensure canvas fills fullscreen */
-      :host(:fullscreen) canvas,
+      :host(:fullscreen) canvas:not(.movi-nerd-stats-graph),
       :host(:fullscreen) video {
         width: 100vw !important;
         max-width: 100vw !important;
@@ -4189,6 +5310,16 @@ export class MoviElement extends HTMLElement {
         cursor: default !important;
       }
       
+      /* Move timeline panel above controls bar when visible */
+      :host:has(.movi-controls-container.movi-controls-visible) .movi-timeline-panel {
+        bottom: 125px;
+      }
+
+      /* Hide seek thumbnail when timeline is open — prevents z-index overlap */
+      :host:has(.movi-timeline-panel[style*="flex"]) .movi-seek-thumbnail {
+        display: none !important;
+      }
+
       /* Force enable pointer events on all interactive controls */
       .movi-controls-container.movi-controls-visible .movi-controls-bar,
       .movi-controls-container.movi-controls-visible .movi-controls-bar *,
@@ -4416,6 +5547,34 @@ export class MoviElement extends HTMLElement {
         border-radius: 100px;
         width: 0%;
         transition: width 0.1s linear;
+      }
+
+      .movi-chapter-markers {
+        position: absolute;
+        top: 0;
+        left: 0;
+        right: 0;
+        height: 100%;
+        z-index: 3;
+        pointer-events: none;
+      }
+
+      .movi-chapter-marker {
+        position: absolute;
+        top: 0;
+        width: 3px;
+        height: 100%;
+        background: rgba(0, 0, 0, 0.7);
+        transform: translateX(-1.5px);
+        border-radius: 1px;
+        z-index: 3;
+      }
+
+      .movi-chapter-segment {
+        position: absolute;
+        top: 0;
+        height: 100%;
+        pointer-events: none;
       }
 
       .movi-progress-buffer {
@@ -4860,15 +6019,672 @@ export class MoviElement extends HTMLElement {
         color: var(--movi-primary);
       }
 
-      .movi-loop-btn.active svg {
+      .movi-loop-btn.active .movi-icon-loop-outline {
+        display: none;
+      }
+
+      .movi-loop-btn.active .movi-icon-loop-filled {
+        display: block !important;
+      }
+
+      .movi-stable-audio-container {
+        position: relative;
+      }
+
+      .movi-stable-audio-btn.active .movi-icon-stable-audio-outline {
+        display: none;
+      }
+
+      .movi-stable-audio-btn.active .movi-icon-stable-audio-filled {
+        display: block !important;
+      }
+
+      /* ========================================
+         NERD STATS OVERLAY
+      ======================================== */
+      .movi-nerd-stats {
+        position: absolute;
+        top: 12px;
+        left: 12px;
+        z-index: 9;
+        background: rgba(0, 0, 0, 0.82);
+        backdrop-filter: blur(12px);
+        -webkit-backdrop-filter: blur(12px);
+        border: 1px solid rgba(255, 255, 255, 0.1);
+        border-radius: 8px;
+        padding: 0;
+        min-width: 280px;
+        max-width: 380px;
+        overflow: hidden;
+        display: flex;
+        flex-direction: column;
+        font-family: 'SF Mono', 'Fira Code', 'Cascadia Code', 'Consolas', monospace;
+        font-size: 11px;
+        color: rgba(255, 255, 255, 0.9);
+        pointer-events: auto;
+        user-select: text;
+        box-shadow: 0 8px 32px rgba(0, 0, 0, 0.4);
+      }
+
+      .movi-nerd-stats::-webkit-scrollbar {
+        width: 4px;
+      }
+
+      .movi-nerd-stats::-webkit-scrollbar-track {
+        background: transparent;
+      }
+
+      .movi-nerd-stats::-webkit-scrollbar-thumb {
+        background: rgba(255, 255, 255, 0.15);
+        border-radius: 2px;
+      }
+
+      .movi-nerd-stats-header {
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        padding: 8px 12px;
+        border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+        flex-shrink: 0;
+        position: relative;
+        z-index: 5;
+      }
+
+      .movi-nerd-stats-title {
+        font-weight: 700;
+        font-size: 11px;
+        text-transform: uppercase;
+        letter-spacing: 1px;
+        color: rgba(255, 255, 255, 0.6);
+      }
+
+      .movi-nerd-stats-close {
+        background: none;
+        border: none;
+        color: rgba(255, 255, 255, 0.5);
+        font-size: 20px;
+        cursor: pointer;
+        pointer-events: auto;
+        padding: 4px 8px;
+        line-height: 1;
+        padding: 0 2px;
+        line-height: 1;
+        transition: color 0.15s;
+      }
+
+      .movi-nerd-stats-close:hover {
+        color: #fff;
+      }
+
+      .movi-nerd-stats-body {
+        padding: 6px 12px 10px;
+        overflow-y: auto;
+        flex: 1;
+        min-height: 0;
+      }
+
+      .movi-nerd-stats-row {
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        padding: 3px 0;
+        gap: 16px;
+        border-bottom: 1px solid rgba(255, 255, 255, 0.04);
+      }
+
+      .movi-nerd-stats-row:last-child {
+        border-bottom: none;
+      }
+
+      .movi-nerd-stats-key {
+        color: rgba(255, 255, 255, 0.45);
+        white-space: nowrap;
+        font-size: 10.5px;
+      }
+
+      .movi-nerd-stats-value {
+        color: rgba(255, 255, 255, 0.95);
+        font-weight: 600;
+        text-align: right;
+        word-break: break-all;
+        font-size: 10.5px;
+      }
+
+      .movi-nerd-stats-graph-section {
+        border-top: 1px solid rgba(255, 255, 255, 0.08);
+        margin-top: 6px;
+        padding: 8px 0 0;
+      }
+
+      .movi-nerd-stats-graph-header {
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        margin-bottom: 6px;
+      }
+
+      .movi-nerd-stats-graph-title {
+        font-size: 10px;
+        font-weight: 600;
+        text-transform: uppercase;
+        letter-spacing: 0.5px;
+        color: rgba(255, 255, 255, 0.45);
+      }
+
+      .movi-nerd-stats-graph-speed {
+        font-size: 11px;
+        font-weight: 700;
+        color: #00ff88;
+        font-variant-numeric: tabular-nums;
+      }
+
+      .movi-nerd-stats-graph {
+        width: 100%;
+        height: 80px;
+        border-radius: 4px;
+        display: block;
+        position: static;
+        z-index: auto;
+        object-fit: unset;
+      }
+
+      @media (max-width: 640px) {
+        .movi-nerd-stats {
+          top: 4px;
+          left: 4px;
+          right: 4px;
+          min-width: unset;
+          max-width: unset;
+          font-size: 9px;
+          border-radius: 6px;
+        }
+
+        .movi-nerd-stats-header {
+          padding: 8px 10px;
+        }
+
+        .movi-nerd-stats-close {
+          font-size: 24px;
+          padding: 6px 10px;
+          pointer-events: auto;
+        }
+
+        .movi-nerd-stats-title {
+          font-size: 9px;
+        }
+
+        .movi-nerd-stats-body {
+          padding: 4px 10px 6px;
+        }
+
+        .movi-nerd-stats-row {
+          padding: 2px 0;
+          gap: 8px;
+        }
+
+        .movi-nerd-stats-key,
+        .movi-nerd-stats-value {
+          font-size: 8.5px;
+        }
+
+        .movi-nerd-stats-graph-section {
+          padding: 6px 10px 8px;
+        }
+
+        .movi-nerd-stats-graph {
+          height: 50px;
+          width: 100%;
+          display: block;
+          position: static;
+          z-index: auto;
+          object-fit: unset;
+        }
+
+        .movi-nerd-stats-graph-header {
+          margin-bottom: 4px;
+        }
+
+        .movi-nerd-stats-graph-title {
+          font-size: 8px;
+        }
+
+        .movi-nerd-stats-graph-speed {
+          font-size: 9px;
+        }
+      }
+
+      /* ========================================
+         TIMELINE PANEL
+      ======================================== */
+      .movi-timeline-panel {
+        position: absolute;
+        bottom: 125px;
+        left: 12px;
+        transition: bottom 0.3s ease;
+        right: 12px;
+        z-index: 11;
+        background: rgba(0, 0, 0, 0.88);
+        backdrop-filter: blur(16px);
+        -webkit-backdrop-filter: blur(16px);
+        border: 1px solid rgba(255, 255, 255, 0.1);
+        border-radius: 10px;
+        padding: 0;
+        flex-direction: column;
+        box-shadow: 0 8px 32px rgba(0, 0, 0, 0.5);
+        font-family: 'Inter', -apple-system, sans-serif;
+        max-height: 240px;
+        overflow: hidden;
+      }
+
+      .movi-timeline-header {
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        padding: 10px 14px;
+        border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+        flex-shrink: 0;
+      }
+
+      .movi-timeline-title {
+        font-size: 12px;
+        font-weight: 700;
+        text-transform: uppercase;
+        letter-spacing: 1px;
+        color: rgba(255, 255, 255, 0.6);
+      }
+
+      .movi-timeline-actions {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+      }
+
+      .movi-timeline-generate-btn {
+        background: var(--movi-primary);
+        border: none;
+        color: #fff;
+        font-size: 11px;
+        font-weight: 600;
+        padding: 5px 12px;
+        border-radius: 6px;
+        cursor: pointer;
+        transition: opacity 0.2s;
+        font-family: inherit;
+      }
+
+      .movi-timeline-generate-btn:hover {
+        opacity: 0.85;
+      }
+
+      .movi-timeline-generate-btn:disabled {
+        opacity: 0.5;
+        cursor: not-allowed;
+      }
+
+      .movi-timeline-close {
+        background: none;
+        border: none;
+        color: rgba(255, 255, 255, 0.5);
+        font-size: 20px;
+        cursor: pointer;
+        padding: 0 4px;
+        line-height: 1;
+        transition: color 0.15s;
+      }
+
+      .movi-timeline-close:hover {
+        color: #fff;
+      }
+
+      .movi-timeline-strip {
+        display: flex;
+        gap: 4px;
+        padding: 10px 14px;
+        overflow-x: auto;
+        overflow-y: hidden;
+        flex: 1;
+        min-height: 0;
+      }
+
+      .movi-timeline-strip::-webkit-scrollbar {
+        height: 4px;
+      }
+
+      .movi-timeline-strip::-webkit-scrollbar-track {
+        background: transparent;
+      }
+
+      .movi-timeline-strip::-webkit-scrollbar-thumb {
+        background: rgba(255, 255, 255, 0.15);
+        border-radius: 2px;
+      }
+
+      .movi-timeline-item {
+        flex-shrink: 0;
+        cursor: pointer;
+        position: relative;
+        border-radius: 6px;
+        overflow: hidden;
+        border: 1px solid rgba(255, 255, 255, 0.08);
+        transition: border-color 0.2s, transform 0.2s;
+      }
+
+      .movi-timeline-item:hover,
+      .movi-timeline-item.movi-timeline-selected {
+        border-color: var(--movi-primary);
+        transform: scale(1.05);
+      }
+
+      .movi-timeline-item img {
+        display: block;
+        height: 90px;
+        width: auto;
+        object-fit: contain;
+      }
+
+      .movi-timeline-portrait .movi-timeline-item {
+        min-width: auto;
+      }
+
+      .movi-timeline-portrait .movi-timeline-item img {
+        height: auto;
+        width: 55px;
+      }
+
+      .movi-timeline-time {
+        position: absolute;
+        bottom: 0;
+        left: 0;
+        right: 0;
+        text-align: center;
+        font-size: 10px;
+        font-weight: 600;
+        color: #fff;
+        background: linear-gradient(transparent, rgba(0, 0, 0, 0.8));
+        padding: 12px 4px 4px;
+        font-variant-numeric: tabular-nums;
+      }
+
+      .movi-timeline-chapter {
+        min-width: 130px;
+      }
+
+      .movi-timeline-chapter-label {
+        position: absolute;
+        bottom: 0;
+        left: 0;
+        right: 0;
+        background: linear-gradient(transparent, rgba(0, 0, 0, 0.85));
+        padding: 16px 6px 5px;
+        display: flex;
+        flex-direction: column;
+        gap: 1px;
+      }
+
+      .movi-timeline-chapter-title {
+        font-size: 10px;
+        font-weight: 600;
+        color: #fff;
+        white-space: nowrap;
+        overflow: hidden;
+        text-overflow: ellipsis;
+      }
+
+      .movi-timeline-chapter .movi-timeline-time {
+        position: static;
+        background: none;
+        padding: 0;
+        font-size: 9px;
+        color: rgba(255, 255, 255, 0.5);
+      }
+
+      .movi-timeline-status {
+        padding: 0 14px 8px;
+        font-size: 10px;
+        color: rgba(255, 255, 255, 0.4);
+        text-align: center;
+        flex-shrink: 0;
+      }
+
+      @media (max-width: 640px) {
+        .movi-timeline-panel {
+          left: 8px;
+          right: 8px;
+          bottom: 70px;
+        }
+
+        .movi-timeline-item img {
+          height: 65px;
+        }
+      }
+
+      /* ========================================
+         KEYBOARD SHORTCUTS PANEL
+      ======================================== */
+      .movi-shortcuts-panel {
+        position: absolute;
+        top: 50%;
+        left: 50%;
+        transform: translate(-50%, -50%);
+        z-index: 100;
+        background: rgba(0, 0, 0, 0.92);
+        backdrop-filter: blur(20px);
+        -webkit-backdrop-filter: blur(20px);
+        border: 1px solid rgba(255, 255, 255, 0.1);
+        border-radius: 12px;
+        padding: 0;
+        flex-direction: column;
+        min-width: 420px;
+        max-width: 520px;
+        box-shadow: 0 16px 48px rgba(0, 0, 0, 0.6);
+        font-family: 'Inter', -apple-system, sans-serif;
+        color: rgba(255, 255, 255, 0.9);
+        pointer-events: auto;
+      }
+
+      .movi-shortcuts-header {
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        padding: 14px 18px;
+        border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+      }
+
+      .movi-shortcuts-title {
+        font-size: 14px;
+        font-weight: 700;
+        letter-spacing: 0.02em;
+      }
+
+      .movi-shortcuts-close {
+        background: none;
+        border: none;
+        color: rgba(255, 255, 255, 0.5);
+        font-size: 22px;
+        cursor: pointer;
+        padding: 0 4px;
+        line-height: 1;
+        transition: color 0.15s;
+      }
+
+      .movi-shortcuts-close:hover {
+        color: #fff;
+      }
+
+      .movi-shortcuts-body {
+        display: flex;
+        gap: 24px;
+        padding: 14px 18px 18px;
+      }
+
+      .movi-shortcuts-col {
+        flex: 1;
+        display: flex;
+        flex-direction: column;
+        gap: 8px;
+      }
+
+      .movi-shortcut-row {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 12px;
+      }
+
+      .movi-shortcut-row kbd {
+        background: rgba(255, 255, 255, 0.1);
+        border: 1px solid rgba(255, 255, 255, 0.15);
+        border-radius: 5px;
+        padding: 3px 8px;
+        font-size: 11px;
+        font-family: 'SF Mono', 'Fira Code', 'Consolas', monospace;
+        font-weight: 600;
+        min-width: 28px;
+        text-align: center;
+        color: rgba(255, 255, 255, 0.85);
+        white-space: nowrap;
+      }
+
+      .movi-shortcut-row span {
+        font-size: 12px;
+        color: rgba(255, 255, 255, 0.6);
+        text-align: right;
+        flex: 1;
+      }
+
+      @media (max-width: 640px) {
+        .movi-shortcuts-panel {
+          min-width: unset;
+          max-width: unset;
+          left: 8px;
+          right: 8px;
+          top: 50%;
+          transform: translateY(-50%);
+          width: auto;
+        }
+
+        .movi-shortcuts-body {
+          flex-direction: column;
+          gap: 8px;
+          padding: 10px 14px 14px;
+        }
+
+        .movi-shortcut-row kbd {
+          font-size: 10px;
+        }
+
+        .movi-shortcut-row span {
+          font-size: 11px;
+        }
+      }
+
+      /* ========================================
+         RESUME DIALOG
+      ======================================== */
+      .movi-resume-dialog {
+        position: absolute;
+        bottom: 90px;
+        right: 16px;
+        z-index: 50;
+        background: rgba(0, 0, 0, 0.9);
+        backdrop-filter: blur(16px);
+        -webkit-backdrop-filter: blur(16px);
+        border: 1px solid rgba(255, 255, 255, 0.12);
+        border-radius: 10px;
+        padding: 14px 20px;
+        display: flex;
+        align-items: center;
+        gap: 16px;
+        box-shadow: 0 8px 32px rgba(0, 0, 0, 0.5);
+        font-family: 'Inter', -apple-system, sans-serif;
+        pointer-events: auto;
+        animation: movi-resume-slide-up 0.3s ease;
+      }
+
+      @keyframes movi-resume-slide-up {
+        from { opacity: 0; transform: translateY(10px); }
+        to { opacity: 1; transform: translateY(0); }
+      }
+
+      @keyframes movi-resume-fade-out {
+        from { opacity: 1; transform: translateY(0); }
+        to { opacity: 0; transform: translateY(10px); }
+      }
+
+      .movi-resume-text {
+        font-size: 13px;
+        font-weight: 500;
+        color: rgba(255, 255, 255, 0.9);
+        white-space: nowrap;
+      }
+
+      .movi-resume-time {
+        font-weight: 700;
         color: var(--movi-primary);
-        filter: drop-shadow(0 0 8px var(--movi-primary-glow));
+      }
+
+      .movi-resume-buttons {
+        display: flex;
+        gap: 8px;
+      }
+
+      .movi-resume-btn {
+        border: none;
+        border-radius: 6px;
+        padding: 7px 16px;
+        font-size: 12px;
+        font-weight: 600;
+        font-family: inherit;
+        cursor: pointer;
+        transition: opacity 0.15s, transform 0.1s;
+        white-space: nowrap;
+      }
+
+      .movi-resume-btn:hover {
+        opacity: 0.85;
+      }
+
+      .movi-resume-btn:active {
+        transform: scale(0.97);
+      }
+
+      .movi-resume-btn.movi-resume-focused {
+        outline: 2px solid var(--movi-primary);
+        outline-offset: 2px;
+        transform: scale(1.05);
+      }
+
+      .movi-resume-yes {
+        background: var(--movi-primary);
+        color: #fff;
+      }
+
+      .movi-resume-no {
+        background: rgba(255, 255, 255, 0.12);
+        color: rgba(255, 255, 255, 0.8);
+      }
+
+      @media (max-width: 640px) {
+        .movi-resume-dialog {
+          bottom: 80px;
+          padding: 10px 14px;
+          gap: 10px;
+        }
+
+        .movi-resume-text {
+          font-size: 12px;
+        }
+
+        .movi-resume-btn {
+          padding: 6px 12px;
+          font-size: 11px;
+        }
       }
 
       /* ========================================
          RESPONSIVE STYLES - Mobile First
       ======================================== */
-      
+
       /* Mobile devices (up to 640px) */
       @media (max-width: 640px) {
         :host {
@@ -4930,26 +6746,33 @@ export class MoviElement extends HTMLElement {
         }
         
         .movi-time {
-          font-size: 11px;
+          font-size: 10px;
         }
-        
+
         .movi-controls-bar {
-          padding: 6px 16px 10px;
+          padding: 4px 10px 6px;
+          gap: 2px;
+          min-height: var(--movi-controls-height-mobile);
+        }
+
+        .movi-buttons-row {
           gap: 4px;
         }
-        
+
         .movi-controls-left,
         .movi-controls-right {
-          gap: 4px;
+          gap: 2px;
         }
-        
+
         .movi-btn {
-          padding: 8px;
+          padding: 6px;
+          width: 34px;
+          height: 34px;
         }
-        
+
         .movi-btn svg {
-          width: 20px;
-          height: 20px;
+          width: 18px;
+          height: 18px;
         }
         
         /* Show volume slider on mobile - user request */
@@ -4957,8 +6780,12 @@ export class MoviElement extends HTMLElement {
           /* display: none !important; REMOVED */
         }
         
+        .movi-volume-slider-container {
+          max-width: 50px;
+        }
+
         .movi-progress-container {
-          padding: 8px 0 2px;
+          padding: 6px 0 2px;
         }
         
         .movi-progress-bar {
@@ -5368,7 +7195,10 @@ export class MoviElement extends HTMLElement {
         display: none;
         text-align: center;
         padding: 0 5%;
+        transition: padding-bottom 0.3s ease;
       }
+
+      /* Subtitle shift is handled via JS in showControls/hideControls */
 
       .movi-subtitle-line {
         color: #FFFFFF;
@@ -5472,6 +7302,11 @@ export class MoviElement extends HTMLElement {
         background-color: rgba(255, 255, 255, 0.12);
         transform: scale(0.98);
         transition: transform 0.1s ease;
+      }
+
+      .movi-context-menu-item.movi-context-menu-disabled {
+        opacity: 0.3;
+        pointer-events: none;
       }
 
       .movi-context-menu-item.movi-context-menu-active {
@@ -5618,13 +7453,14 @@ export class MoviElement extends HTMLElement {
         -webkit-backdrop-filter: blur(var(--movi-glass-blur));
         border: 1px solid var(--movi-glass-border);
         border-radius: 12px;
-        min-width: 140px;
+        min-width: 200px;
         max-height: 280px;
         overflow-y: auto;
         box-shadow: var(--movi-shadow-lg);
         z-index: 1001;
         pointer-events: auto !important;
         padding: 8px 0;
+        white-space: nowrap;
       }
       
       .movi-quality-item {
@@ -5708,7 +7544,7 @@ export class MoviElement extends HTMLElement {
       .movi-seek-thumbnail {
         position: absolute;
         bottom: 25px;
-        left: 0; 
+        left: 0;
         transform: translateX(-50%);
         background-color: rgba(28, 28, 28, 0.9);
         color: white;
@@ -5721,6 +7557,7 @@ export class MoviElement extends HTMLElement {
         opacity: 0;
         transition: opacity 0.1s ease;
         box-shadow: 0 4px 8px rgba(0,0,0,0.6);
+        overflow: hidden;
         z-index: 20;
         display: none;
         flex-direction: column;
@@ -5729,19 +7566,45 @@ export class MoviElement extends HTMLElement {
         text-align: center;
       }
       .movi-thumbnail-img {
+        display: block;
         width: auto;
         height: auto;
         max-width: 180px;
-        max-height: 160px;
+        max-height: 200px;
         object-fit: contain;
         margin-bottom: 4px;
-        background-color: #000;
         border: 1px solid #333;
         border-radius: 2px;
         pointer-events: none;
       }
       .movi-seek-thumbnail.visible {
         opacity: 1;
+      }
+
+      .movi-seek-chapter-title {
+        display: none;
+        font-size: 11px;
+        font-weight: 600;
+        color: #fff;
+        text-align: center;
+        max-width: 180px;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+        padding: 0 4px;
+        margin-bottom: 2px;
+        position: relative;
+        z-index: 2;
+      }
+
+      .movi-seek-time {
+        position: relative;
+        z-index: 2;
+      }
+
+      .movi-thumbnail-img {
+        position: relative;
+        z-index: 1;
       }
       
       @keyframes movi-shimmer-anim {
@@ -6271,8 +8134,41 @@ export class MoviElement extends HTMLElement {
     // Check for required security headers
     this.checkSecurityHeaders();
 
-    // Automatically initialize player if src is set
-    if (this._src) {
+    // Read encrypted attributes
+    this._encrypted = this.hasAttribute("encrypted");
+    this._tokenUrl = this.getAttribute("tokenurl") || "";
+    this._videoUrl = this.getAttribute("videourl") || "";
+    this._videoId = this.getAttribute("videoid") || "";
+    this._resume = this.hasAttribute("resume");
+    this._stableVolume = this.hasAttribute("stablevolume");
+
+    // If no src attribute, check for <source> child elements (Video.js-style)
+    if (!this._src && !this._encrypted) {
+      const sourceEls = this.querySelectorAll("source");
+      if (sourceEls.length > 0) {
+        const allSources = Array.from(sourceEls).map((el) => ({
+          src: el.getAttribute("src") || "",
+          type: el.getAttribute("type") || undefined,
+          kind: el.getAttribute("kind") || undefined,
+        })).filter((s) => s.src);
+
+        // Separate audio sources (kind="audio") from video sources
+        const audioSources = allSources.filter((s) => s.kind === "audio");
+        const videoSources = allSources.filter((s) => s.kind !== "audio");
+
+        if (videoSources.length > 0) {
+          const picked = this.pickSource(videoSources);
+          this._src = picked ? picked.src : videoSources[0].src;
+        }
+
+        if (audioSources.length > 0) {
+          this._audioSrc = audioSources[0].src;
+        }
+      }
+    }
+
+    // Automatically initialize player if src is set or encrypted mode
+    if (this._src || (this._encrypted && this._tokenUrl && this._videoUrl)) {
       this.initializePlayer();
     }
 
@@ -6325,6 +8221,16 @@ export class MoviElement extends HTMLElement {
       "webglcontextrestored",
       this.handleContextRestored,
     );
+    // Cleanup nerd stats interval
+    if (this.nerdStatsInterval) {
+      clearInterval(this.nerdStatsInterval);
+      this.nerdStatsInterval = null;
+    }
+
+    // Save position and stop resume saving
+    if (this._resume) this.saveResumePosition();
+    this.stopResumeSaving();
+
     // Cleanup event handlers
     this.eventHandlers.forEach((unsubscribe) => unsubscribe());
     this.eventHandlers.clear();
@@ -6415,6 +8321,28 @@ export class MoviElement extends HTMLElement {
       case "showtitle":
         this._showTitle = newValue !== null;
         this.updateTitle();
+        break;
+      case "resume":
+        this._resume = newValue !== null;
+        break;
+      case "stablevolume":
+        this._stableVolume = newValue !== null;
+        if (this.player) {
+          this.player.setStableAudio(this._stableVolume);
+          this.updateStableAudioUI();
+        }
+        break;
+      case "encrypted":
+        this._encrypted = newValue !== null;
+        break;
+      case "tokenurl":
+        this._tokenUrl = newValue || "";
+        break;
+      case "videourl":
+        this._videoUrl = newValue || "";
+        break;
+      case "videoid":
+        this._videoId = newValue || "";
         break;
       case "src":
         // Only handle string src attributes, File objects are handled via setter
@@ -6682,22 +8610,32 @@ export class MoviElement extends HTMLElement {
       }
     }
 
-    // Update button visibility - move outside of player check
-    const aspectRatioBtn = this.shadowRoot?.querySelector(
-      ".movi-aspect-ratio-btn",
-    ) as HTMLElement;
-    if (aspectRatioBtn) {
-      aspectRatioBtn.style.display =
-        this._objectFit === "control" ? "flex" : "none";
-      // Ensure icon matches the state immediately
-      this.updateAspectRatioIcon();
-    }
+    // Ensure icon matches the state immediately
+    this.updateAspectRatioIcon();
   }
 
   /**
    * Automatically create and initialize MoviPlayer
    */
   private async initializePlayer(): Promise<void> {
+    // If encrypted mode, use loadEncrypted instead
+    if (this._encrypted && this._tokenUrl && this._videoUrl && !this.isLoading && !this.player) {
+      try {
+        const { generateFingerprint } = await import("../utils/Fingerprint");
+        const fingerprint = await generateFingerprint();
+        await this.loadEncrypted({
+          videoUrl: this._videoUrl,
+          tokenUrl: this._tokenUrl,
+          videoId: this._videoId || "default",
+          fingerprint,
+          sessionToken: "session-" + Date.now(),
+        });
+      } catch (e) {
+        Logger.error("MoviElement", "Failed to initialize encrypted source", e);
+      }
+      return;
+    }
+
     if (!this._src || this.isLoading || this.player || this._isUnsupported) {
       return;
     }
@@ -6745,17 +8683,65 @@ export class MoviElement extends HTMLElement {
         ...(this._fps > 0 && { frameRate: this._fps }),
       };
 
-      // Use canvas mode
-      playerConfig.renderer = "canvas";
-      playerConfig.canvas = this.canvas;
+      // Separate audio source — multi-language or single
+      if (this._audioTracks.length > 0) {
+        playerConfig.audioTracks = this._audioTracks.map((t) => ({
+          url: t.src,
+          type: t.type,
+          lang: t.lang,
+          label: t.label,
+        }));
+      } else if (this._audioSrc) {
+        playerConfig.audioSource = { type: "url", url: this._audioSrc } as SourceConfig;
+      }
 
-      // Update visibility
-      this.canvas.style.display = "block";
-      this.video.style.display = "none";
+      // External subtitle tracks
+      if (this._subtitleTracks.length > 0) {
+        playerConfig.subtitleTracks = this._subtitleTracks.map((t) => ({
+          url: t.src,
+          lang: t.lang,
+          label: t.label,
+          format: (t.format as "vtt" | "srt" | undefined),
+        }));
+      }
+
+      // DRM mode: use native video element for HLS (EME requires <video>)
+      const isDrm = this.hasAttribute("drm");
+      const isHLS = typeof this._src === "string" &&
+        (this._src.includes(".m3u8") || this._src.toLowerCase().endsWith("m3u8"));
+
+      if (isDrm && isHLS) {
+        playerConfig.renderer = "video";
+        playerConfig.drm = true;
+        playerConfig.licenseUrl = this.getAttribute("licenseurl") || "";
+        this.canvas.style.display = "none";
+        this.video.style.display = "block";
+      } else {
+        playerConfig.renderer = "canvas";
+        playerConfig.canvas = this.canvas;
+        this.canvas.style.display = "block";
+        this.video.style.display = "none";
+      }
 
       // Create Player instance
-      Logger.info(TAG, "Initializing MoviPlayer (Canvas Renderer Mode)");
+      const mode = playerConfig.drm ? "DRM/Native Video" : "Canvas Renderer";
+      Logger.info(TAG, `Initializing MoviPlayer (${mode} Mode)`);
       this.player = new MoviPlayer(playerConfig);
+
+      // In DRM mode, use HLS wrapper's video element directly
+      if (playerConfig.drm) {
+        const hlsVideo = this.player.getHLSVideoElement();
+        if (hlsVideo && this.video) {
+          // Replace our video element with HLS's video element
+          hlsVideo.style.width = "100%";
+          hlsVideo.style.height = "100%";
+          hlsVideo.style.display = "block";
+          hlsVideo.style.objectFit = "contain";
+          this.video.replaceWith(hlsVideo);
+          this.video = hlsVideo;
+          Logger.info(TAG, "DRM: Swapped in HLS native video element");
+        }
+      }
 
       // Reset unsupported state
       this._isUnsupported = false;
@@ -6807,6 +8793,8 @@ export class MoviElement extends HTMLElement {
       this.updateFitMode();
       if (this.player) {
         this.player.setHDREnabled(this._hdr);
+        this.player.setStableAudio(this._stableVolume);
+        this.updateStableAudioUI();
       }
       this.updateHDRVisibility();
       this.updateControlsVisibility();
@@ -6821,6 +8809,17 @@ export class MoviElement extends HTMLElement {
         await this.player.seek(this._startAt).catch((e: unknown) => {
           Logger.warn(TAG, "Failed to seek to start time", e);
         });
+      } else if (this._resume && this.player) {
+        // Show resume dialog if saved position exists
+        const savedTime = this.getResumePosition();
+        if (savedTime > 2 && savedTime < this.duration - 5) {
+          this.showResumeDialog(savedTime);
+        }
+      }
+
+      // Start saving position periodically if resume enabled
+      if (this._resume) {
+        this.startResumeSaving();
       }
 
       // Auto-play if requested
@@ -6840,6 +8839,7 @@ export class MoviElement extends HTMLElement {
 
       // Initialize ambient mode if enabled
       this.updateAmbientMode();
+      this.updateAmbientUI();
 
       // Dispatch load event
       this.dispatchEvent(new Event("loadeddata"));
@@ -6935,6 +8935,7 @@ export class MoviElement extends HTMLElement {
       this.updateAudioTrackMenu();
       this.updateSubtitleTrackMenu();
       this.updateQualityMenu();
+      this.renderChapterMarkers();
     };
     this.player.trackManager.on("tracksChange", tracksChangeHandler);
     this.eventHandlers.set("tracksChange", () =>
@@ -6943,6 +8944,7 @@ export class MoviElement extends HTMLElement {
 
     // Forward player events to element
     const stateChangeHandler = (state: PlayerState) => {
+      Logger.info(TAG, `stateChange: ${state}`);
       // Hide poster on state change to playing
       if (state === "playing" && this.posterElement) {
         this.posterElement.style.display = "none";
@@ -6959,9 +8961,12 @@ export class MoviElement extends HTMLElement {
       } else if (state === "paused") {
         this.dispatchEvent(new Event("pause"));
         this.showControls();
+        if (this._resume) this.saveResumePosition();
       } else if (state === "ended") {
         this.dispatchEvent(new Event("ended"));
         this.showControls();
+        // Clear resume position when video ends (start fresh next time)
+        if (this._resume) this.clearResumePosition();
       }
     };
     this.player.on("stateChange", stateChangeHandler);
@@ -7016,6 +9021,14 @@ export class MoviElement extends HTMLElement {
     // Reset auto-loaded title flag and duration tracker for new video
     this._titleAutoLoaded = false;
     this._lastDuration = 0;
+
+    this.resetTimeline();
+
+    // Clear chapter markers
+    if (this.shadowRoot) {
+      const markers = this.shadowRoot.querySelector(".movi-chapter-markers") as HTMLElement;
+      if (markers) markers.innerHTML = "";
+    }
 
     if (this.player) {
       // If player exists, destroy and recreate
@@ -7189,6 +9202,55 @@ export class MoviElement extends HTMLElement {
     }
   }
 
+  /**
+   * Render chapter markers on the progress bar (YouTube-style)
+   */
+  private renderChapterMarkers(): void {
+    const shadowRoot = this.shadowRoot;
+    if (!shadowRoot || !this.player) return;
+
+    const container = shadowRoot.querySelector(".movi-chapter-markers") as HTMLElement;
+    if (!container) return;
+
+    container.innerHTML = "";
+
+    const chapters = this.player.getChapters();
+    const duration = this.player.getDuration();
+    if (chapters.length === 0 || duration <= 0) return;
+
+    // Add chapter dividers (gaps between chapters)
+    for (let i = 1; i < chapters.length; i++) {
+      const ch = chapters[i];
+      const percent = (ch.start / duration) * 100;
+
+      const marker = document.createElement("div");
+      marker.className = "movi-chapter-marker";
+      marker.style.left = `${percent}%`;
+
+      // Tooltip with chapter title
+      marker.setAttribute("data-title", ch.title);
+
+      container.appendChild(marker);
+    }
+
+    // Add chapter segment hover labels
+    for (let i = 0; i < chapters.length; i++) {
+      const ch = chapters[i];
+      const startPct = (ch.start / duration) * 100;
+      const endPct = i < chapters.length - 1
+        ? (chapters[i + 1].start / duration) * 100
+        : 100;
+
+      const segment = document.createElement("div");
+      segment.className = "movi-chapter-segment";
+      segment.style.left = `${startPct}%`;
+      segment.style.width = `${endPct - startPct}%`;
+      segment.setAttribute("data-title", ch.title);
+
+      container.appendChild(segment);
+    }
+  }
+
   private updateProgressBar(): void {
     // Don't update visuals if user is scrubbing or seeking
     if (this.isDragging || this.isTouchDragging || this.isSeeking) return;
@@ -7315,12 +9377,16 @@ export class MoviElement extends HTMLElement {
   }
 
   private handleUnsupportedVideo(title?: string, message?: string): void {
-    const isDecoderError =
+    const msgLower = message?.toLowerCase() || "";
+    const isNetworkError = msgLower.includes("http 4") || msgLower.includes("http 5") ||
+      msgLower.includes("stream unavailable") || msgLower.includes("network error") ||
+      msgLower.includes("hls error");
+    const isDecoderError = !isNetworkError && (
       title === "Format Unsupported" ||
       title === "Codec Unsupported" ||
       title === "Playback Error" ||
-      message?.toLowerCase().includes("decoder") ||
-      message?.toLowerCase().includes("codec");
+      msgLower.includes("decoder") ||
+      msgLower.includes("codec"));
 
     // Silent fallback if sw="auto" is set
     if (
@@ -7505,7 +9571,7 @@ export class MoviElement extends HTMLElement {
 
     // Controls to disable (everything except volume)
     const controlsToDisableSelector =
-      ".movi-play-pause, .movi-progress-container, .movi-audio-track-btn, .movi-subtitle-track-btn, .movi-hdr-btn, .movi-speed-btn, .movi-aspect-ratio-btn, .movi-loop-btn, .movi-fullscreen-btn, .movi-more-btn, .movi-center-play-pause, .movi-seek-backward, .movi-seek-forward";
+      ".movi-play-pause, .movi-progress-container, .movi-audio-track-btn, .movi-subtitle-track-btn, .movi-hdr-btn, .movi-speed-btn, .movi-stable-audio-btn, .movi-aspect-ratio-btn, .movi-loop-btn, .movi-pip-btn, .movi-fullscreen-btn, .movi-more-btn, .movi-center-play-pause, .movi-seek-backward, .movi-seek-forward";
     const controlsToDisable = shadowRoot.querySelectorAll(
       controlsToDisableSelector,
     );
@@ -7596,6 +9662,8 @@ export class MoviElement extends HTMLElement {
       if (this.ambientWrapperElement) {
         this.ambientWrapperElement.style.opacity = "0";
       }
+      // Reset letterbox to black
+      this.player?.setLetterboxColor(0, 0, 0);
       this.stopAmbientColorSampling();
     }
   }
@@ -7759,22 +9827,87 @@ export class MoviElement extends HTMLElement {
       ${color4} 100%
     )`;
 
-    // Apply to external ambient wrapper element
-    if (this.ambientWrapperElement && this._ambientMode) {
-      this.ambientWrapperElement.style.background = gradient;
+    if (this._ambientMode) {
+      const isFullscreen = document.fullscreenElement === this;
 
-      // For light mode, we might also want to add a subtle box shadow to help it pop
-      if (this._theme === "light") {
-        this.ambientWrapperElement.style.filter =
-          "saturate(1.5) brightness(1.1)";
+      if (this.ambientWrapperElement && !isFullscreen) {
+        // External wrapper in normal mode — wrapper handles ambient, letterbox stays black
+        this.ambientWrapperElement.style.background = gradient;
+        this.player?.setLetterboxColor(0, 0, 0);
+
+        if (this._theme === "light") {
+          this.ambientWrapperElement.style.filter =
+            "saturate(1.5) brightness(1.1)";
+        } else {
+          this.ambientWrapperElement.style.filter = "none";
+        }
       } else {
-        this.ambientWrapperElement.style.filter = "none";
+        // Fullscreen or no wrapper — letterbox color on canvas
+        const maxBrightness = 80;
+        const peak = Math.max(r, g, b, 1);
+        const scale = Math.min(maxBrightness / peak, 0.45);
+        this.player?.setLetterboxColor(
+          Math.floor(r * scale),
+          Math.floor(g * scale),
+          Math.floor(b * scale),
+        );
       }
     }
   }
 
   get src(): string | File | null {
     return this._src;
+  }
+
+  /**
+   * Separate audio source URL (for split video+audio files)
+   */
+  get audioSrc(): string | null {
+    return this._audioSrc;
+  }
+
+  set audioSrc(value: string | null) {
+    this._audioSrc = value;
+  }
+
+  /**
+   * Get available audio language tracks
+   */
+  getAudioLangs(): { lang: string; label: string; active: boolean }[] {
+    if (this.player) return this.player.getAudioLangs();
+    return this._audioTracks.map((t, i) => ({
+      lang: t.lang,
+      label: t.label,
+      active: i === 0,
+    }));
+  }
+
+  /**
+   * Switch audio to a different language
+   */
+  selectAudioLang(lang: string): boolean {
+    if (this.player) return this.player.selectAudioLang(lang);
+    return false;
+  }
+
+  /**
+   * Get available external subtitle tracks
+   */
+  getSubtitleLangs(): { lang: string; label: string; active: boolean }[] {
+    if (this.player) return this.player.getSubtitleLangs();
+    return this._subtitleTracks.map((t) => ({
+      lang: t.lang,
+      label: t.label,
+      active: false,
+    }));
+  }
+
+  /**
+   * Select an external subtitle track by language (null to disable)
+   */
+  async selectSubtitleLang(lang: string | null): Promise<boolean> {
+    if (this.player) return this.player.selectSubtitleLang(lang);
+    return false;
   }
 
   set src(value: string | File | null) {
@@ -7785,6 +9918,18 @@ export class MoviElement extends HTMLElement {
     }
     this._titleAutoLoaded = false;
     this._lastDuration = 0;
+
+    // Save position before switching source, then stop saving
+    if (this._resume) this.saveResumePosition();
+    this.stopResumeSaving();
+
+    // Reset timeline and rotation on source change
+    this.resetTimeline();
+    this.syncThumbnailRotation(0);
+    if (this.shadowRoot) {
+      const statusEl = this.shadowRoot.querySelector(".movi-rotate-status");
+      if (statusEl) statusEl.textContent = "0°";
+    }
 
     if (value instanceof File) {
       // For File objects, store in memory (can't store in attributes)
@@ -7827,6 +9972,253 @@ export class MoviElement extends HTMLElement {
    */
   setFile(file: File | null): void {
     this.src = file;
+  }
+
+  /**
+   * Video.js-style source API
+   *
+   * Usage:
+   *   // Single source as string
+   *   player.source('video.mp4');
+   *
+   *   // Single source as object
+   *   player.source({ src: 'video.mp4', type: 'video/mp4' });
+   *
+   *   // Multiple sources (first playable source wins)
+   *   player.source([
+   *     { src: 'video.mp4', type: 'video/mp4' },
+   *     { src: 'video.webm', type: 'video/webm' },
+   *   ]);
+   *
+   *   // Separate video + audio (DASH-style split)
+   *   player.source({
+   *     video: { src: 'video-only.mp4', type: 'video/mp4' },
+   *     audio: { src: 'audio.m4a', type: 'audio/mp4' },
+   *   });
+   *
+   *   // Multi-language audio
+   *   player.source({
+   *     video: { src: 'video.mp4', type: 'video/mp4' },
+   *     audio: [
+   *       { src: 'en.m4a', type: 'audio/mp4', lang: 'en', label: 'English' },
+   *       { src: 'hi.m4a', type: 'audio/mp4', lang: 'hi', label: 'Hindi' },
+   *     ],
+   *   });
+   *
+   *   // Get current source
+   *   const current = player.source();
+   */
+  source(
+    value?:
+      | string
+      | { src: string; type?: string }
+      | { src: string; type?: string }[]
+      | {
+          video: { src: string; type?: string };
+          audio?:
+            | { src: string; type?: string }
+            | { src: string; type?: string; lang: string; label: string }[];
+          subtitles?: { src: string; lang: string; label: string; format?: string }[];
+        }
+  ): { src: string | File | null; type: string; audioSrc?: string | null } | void {
+    // Getter
+    if (value === undefined) {
+      const currentSrc = this._src;
+      if (!currentSrc) return { src: null, type: "", audioSrc: this._audioSrc };
+      if (currentSrc instanceof File) return { src: currentSrc, type: currentSrc.type, audioSrc: this._audioSrc };
+      return { src: currentSrc, type: this.guessMediaType(currentSrc), audioSrc: this._audioSrc };
+    }
+
+    // Setter — string
+    if (typeof value === "string") {
+      this._audioSrc = null;
+      this.src = value;
+      return;
+    }
+
+    // Setter — array (pick first playable)
+    if (Array.isArray(value)) {
+      this._audioSrc = null;
+      const picked = this.pickSource(value);
+      if (picked) {
+        this.src = picked.src;
+      } else if (value.length > 0) {
+        this.src = value[0].src;
+      }
+      return;
+    }
+
+    // Setter — separate video + audio/subtitles { video, audio?, subtitles? }
+    if ("video" in value) {
+      if (value.audio) {
+        if (Array.isArray(value.audio)) {
+          this._audioTracks = value.audio;
+          this._audioSrc = value.audio[0]?.src || null;
+        } else {
+          this._audioTracks = [];
+          this._audioSrc = value.audio.src;
+        }
+      } else {
+        this._audioTracks = [];
+        this._audioSrc = null;
+      }
+      this._subtitleTracks = value.subtitles || [];
+      this.src = value.video.src;
+      return;
+    }
+
+    // Setter — single object { src, type }
+    this._audioSrc = null;
+    this.src = (value as { src: string }).src;
+  }
+
+  /**
+   * Pick the first source whose MIME type the browser can play.
+   * Falls back to null if none are supported.
+   */
+  private pickSource(
+    sources: { src: string; type?: string }[]
+  ): { src: string; type?: string } | null {
+    const testVideo = document.createElement("video");
+    for (const s of sources) {
+      if (!s.type) return s; // No type hint → try it
+      const can = testVideo.canPlayType(s.type);
+      if (can === "probably" || can === "maybe") return s;
+    }
+    return null;
+  }
+
+  /**
+   * Guess MIME type from a URL string extension.
+   */
+  private guessMediaType(url: string): string {
+    const ext = url.split("?")[0].split(".").pop()?.toLowerCase();
+    const map: Record<string, string> = {
+      mp4: "video/mp4",
+      webm: "video/webm",
+      ogg: "video/ogg",
+      ogv: "video/ogg",
+      m3u8: "application/x-mpegURL",
+      mpd: "application/dash+xml",
+      mkv: "video/x-matroska",
+      avi: "video/x-msvideo",
+      mov: "video/quicktime",
+      ts: "video/mp2t",
+      m4v: "video/mp4",
+    };
+    return (ext && map[ext]) || "";
+  }
+
+  /**
+   * Load an encrypted video source (programmatic API)
+   *
+   * Usage:
+   *   const player = document.querySelector('movi-player');
+   *   player.loadEncrypted({
+   *     videoUrl: '/api/video',
+   *     tokenUrl: '/api/token',
+   *     videoId: 'my-video',
+   *     fingerprint: await generateFingerprint(),
+   *     sessionToken: 'jwt-token',
+   *   });
+   */
+  async loadEncrypted(config: {
+    videoUrl: string;
+    tokenUrl: string;
+    videoId: string;
+    fingerprint: string;
+    sessionToken: string;
+    tokenRefreshInterval?: number;
+    onAuthFailed?: (reason: string) => void;
+  }): Promise<void> {
+    // Reset existing player
+    this.resetTimeline();
+    this.syncThumbnailRotation(0);
+
+    if (this.player) {
+      this.player.destroy();
+      this.player = null;
+    }
+
+    this.isLoading = true;
+    if (this.emptyStateIndicator) {
+      this.emptyStateIndicator.style.display = "none";
+    }
+
+    try {
+      // Create player with encrypted source (respecting element properties)
+      this.player = new MoviPlayer({
+        source: {
+          type: "encrypted",
+          encrypted: config,
+        },
+        renderer: "canvas",
+        decoder: this._sw,
+        canvas: this.canvas,
+        enablePreviews: this._thumb,
+        frameRate: this._fps || undefined,
+      });
+
+      this.setupEventHandlers();
+      await this.player.load();
+
+      // Apply all element properties (same as initializePlayer)
+      this.updateVolume();
+      this.updateMuted();
+      this.updatePlaybackRate();
+      this.updateCanvasSize();
+      this.updateFitMode();
+      this.updateTimeDisplay();
+      if (this.player) {
+        this.player.setHDREnabled(this._hdr);
+        this.player.setStableAudio(this._stableVolume);
+        this.player.setSubtitleOverlay(this.subtitleOverlay);
+        this.updateStableAudioUI();
+      }
+      this.updateHDRVisibility();
+      this.updateControlsVisibility();
+      this.updateControlsState();
+      this.updateLoadingIndicator();
+      this.renderChapterMarkers();
+      this.startUIUpdates();
+
+      // Seek to start position or resume
+      if (this._startAt > 0 && this.player) {
+        await this.player.seek(this._startAt).catch(() => {});
+      } else if (this._resume && this.player) {
+        const savedTime = this.getResumePosition();
+        if (savedTime > 2 && savedTime < this.duration - 5) {
+          this.showResumeDialog(savedTime);
+        }
+      }
+
+      // Start resume saving if enabled
+      if (this._resume) {
+        this.startResumeSaving();
+      }
+
+      // Autoplay or render first frame
+      if (this._autoplay && this.player) {
+        await this.player.play().catch(() => {});
+      } else if (this.player) {
+        if (this._startAt === 0) {
+          this.player.seek(0).catch(() => {});
+        }
+      }
+
+      // Ambient mode
+      this.updateAmbientMode();
+
+      // Dispatch load event
+      this.dispatchEvent(new Event("loadeddata"));
+
+      this.isLoading = false;
+      Logger.info("MoviElement", "Encrypted source loaded");
+    } catch (e) {
+      this.isLoading = false;
+      Logger.error("MoviElement", "Failed to load encrypted source", e);
+      throw e;
+    }
   }
 
   get autoplay(): boolean {
@@ -7877,15 +10269,664 @@ export class MoviElement extends HTMLElement {
     );
     const loopStatus = shadowRoot.querySelector(".movi-loop-status");
 
+    // Context menu icons
+    const ctxOutline = shadowRoot.querySelector(".movi-context-menu-loop-outline") as HTMLElement;
+    const ctxFilled = shadowRoot.querySelector(".movi-context-menu-loop-filled") as HTMLElement;
+
     if (this._loop) {
       loopBtn?.classList.add("active");
       loopMenuItem?.classList.add("movi-context-menu-active");
       if (loopStatus) loopStatus.textContent = "On";
+      if (ctxOutline) ctxOutline.style.display = "none";
+      if (ctxFilled) ctxFilled.style.display = "block";
     } else {
       loopBtn?.classList.remove("active");
       loopMenuItem?.classList.remove("movi-context-menu-active");
       if (loopStatus) loopStatus.textContent = "Off";
+      if (ctxOutline) ctxOutline.style.display = "block";
+      if (ctxFilled) ctxFilled.style.display = "none";
     }
+  }
+
+  private updateAmbientUI(): void {
+    const shadowRoot = this.shadowRoot;
+    if (!shadowRoot) return;
+
+    const menuItem = shadowRoot.querySelector('.movi-context-menu-item[data-action="ambient-toggle"]');
+    const status = shadowRoot.querySelector(".movi-ambient-status");
+    const ctxOutline = shadowRoot.querySelector(".movi-context-menu-ambient-outline") as HTMLElement;
+    const ctxFilled = shadowRoot.querySelector(".movi-context-menu-ambient-filled") as HTMLElement;
+
+    if (this._ambientMode) {
+      menuItem?.classList.add("movi-context-menu-active");
+      if (status) status.textContent = "On";
+      if (ctxOutline) ctxOutline.style.display = "none";
+      if (ctxFilled) ctxFilled.style.display = "block";
+    } else {
+      menuItem?.classList.remove("movi-context-menu-active");
+      if (status) status.textContent = "Off";
+      if (ctxOutline) ctxOutline.style.display = "block";
+      if (ctxFilled) ctxFilled.style.display = "none";
+    }
+  }
+
+  private updateStableAudioUI(shadowRoot: ShadowRoot | null = this.shadowRoot): void {
+    if (!shadowRoot) return;
+    const isEnabled = this.player?.getStableAudio() ?? true;
+
+    const stableBtn = shadowRoot.querySelector(".movi-stable-audio-btn");
+    const stableMenuItem = shadowRoot.querySelector(
+      '.movi-context-menu-item[data-action="stable-audio-toggle"]',
+    );
+    const stableStatus = shadowRoot.querySelector(".movi-stable-audio-status");
+
+    // Context menu icons
+    const ctxOutline = shadowRoot.querySelector(".movi-context-menu-stable-outline") as HTMLElement;
+    const ctxFilled = shadowRoot.querySelector(".movi-context-menu-stable-filled") as HTMLElement;
+
+    if (isEnabled) {
+      stableBtn?.classList.add("active");
+      stableMenuItem?.classList.add("movi-context-menu-active");
+      if (stableStatus) stableStatus.textContent = "On";
+      if (ctxOutline) ctxOutline.style.display = "none";
+      if (ctxFilled) ctxFilled.style.display = "block";
+    } else {
+      stableBtn?.classList.remove("active");
+      stableMenuItem?.classList.remove("movi-context-menu-active");
+      if (stableStatus) stableStatus.textContent = "Off";
+      if (ctxOutline) ctxOutline.style.display = "block";
+      if (ctxFilled) ctxFilled.style.display = "none";
+    }
+  }
+
+  /**
+   * Toggle nerd stats overlay
+   */
+  private toggleNerdStats(shadowRoot: ShadowRoot | null = this.shadowRoot): void {
+    if (!shadowRoot) return;
+    const overlay = shadowRoot.querySelector(".movi-nerd-stats") as HTMLElement;
+    if (!overlay) return;
+
+    this._nerdStatsVisible = !this._nerdStatsVisible;
+
+    if (this._nerdStatsVisible) {
+      overlay.style.display = "flex";
+      this.networkSpeedHistory = [];
+      this.updateNerdStats(shadowRoot);
+      // Update every 500ms
+      this.nerdStatsInterval = window.setInterval(() => {
+        this.updateNerdStats(shadowRoot);
+      }, 500);
+    } else {
+      overlay.style.display = "none";
+      if (this.nerdStatsInterval) {
+        clearInterval(this.nerdStatsInterval);
+        this.nerdStatsInterval = null;
+      }
+      this.focus();
+    }
+  }
+
+  /**
+   * Update nerd stats content and network graph
+   */
+  private updateNerdStats(shadowRoot: ShadowRoot): void {
+    if (!this.player || !this._nerdStatsVisible) return;
+    const overlay = shadowRoot.querySelector(".movi-nerd-stats") as HTMLElement;
+    const body = shadowRoot.querySelector(".movi-nerd-stats-body");
+    if (!body || !overlay) return;
+
+    // Recalculate max-height every update (fullscreen/resize)
+    const hostHeight = (this as HTMLElement).offsetHeight || (this as HTMLElement).clientHeight || 400;
+    const bar = shadowRoot.querySelector(".movi-controls-bar") as HTMLElement;
+    const controlsHeight = (bar?.offsetHeight ?? 60) + 8;
+    const topGap = hostHeight < 400 ? 4 : 12;
+    overlay.style.maxHeight = `${hostHeight - controlsHeight - topGap}px`;
+
+    const stats = this.player.getStats();
+    let html = "";
+    for (const [key, value] of Object.entries(stats)) {
+      html += `<div class="movi-nerd-stats-row">
+        <span class="movi-nerd-stats-key">${key}</span>
+        <span class="movi-nerd-stats-value">${value}</span>
+      </div>`;
+    }
+    // Append graph section at the end of stats body
+    const speed = this.player.getNetworkSpeed();
+    this.networkSpeedHistory.push(speed);
+    if (this.networkSpeedHistory.length > MoviElement.GRAPH_MAX_SAMPLES) {
+      this.networkSpeedHistory.shift();
+    }
+
+    const graphLabel = this.player.isFileSource() ? "Disk Activity" : "Network Activity";
+    const speedText = speed > 1048576
+      ? `${(speed / 1048576).toFixed(1)} MB/s`
+      : speed > 0
+        ? `${(speed / 1024).toFixed(0)} KB/s`
+        : "—";
+
+    html += `<div class="movi-nerd-stats-graph-section">
+      <div class="movi-nerd-stats-graph-header">
+        <span class="movi-nerd-stats-graph-title">${graphLabel}</span>
+        <span class="movi-nerd-stats-graph-speed">${speedText}</span>
+      </div>
+      <canvas class="movi-nerd-stats-graph" width="300" height="80"></canvas>
+    </div>`;
+
+    body.innerHTML = html;
+
+    // Draw graph
+    this.drawNetworkGraph(shadowRoot);
+  }
+
+  /**
+   * Draw network throughput graph on canvas
+   */
+  private drawNetworkGraph(shadowRoot: ShadowRoot): void {
+    const body = shadowRoot.querySelector(".movi-nerd-stats-body");
+    const canvas = body?.querySelector(".movi-nerd-stats-graph") as HTMLCanvasElement;
+    if (!canvas) return;
+    const ctx = canvas.getContext("2d");
+    if (!ctx) return;
+
+    // Auto-resize canvas to match CSS layout size (HiDPI aware)
+    const rect = canvas.getBoundingClientRect();
+    const dpr = window.devicePixelRatio || 1;
+    const cssW = Math.round(rect.width);
+    const cssH = Math.round(rect.height);
+    if (cssW <= 0 || cssH <= 0) return;
+    const bufW = Math.round(cssW * dpr);
+    const bufH = Math.round(cssH * dpr);
+    if (canvas.width !== bufW || canvas.height !== bufH) {
+      canvas.width = bufW;
+      canvas.height = bufH;
+    }
+
+    // Use CSS dimensions for drawing, scale context each frame
+    const w = cssW;
+    const h = cssH;
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    const data = this.networkSpeedHistory;
+    const maxSamples = MoviElement.GRAPH_MAX_SAMPLES;
+
+    // Clear
+    ctx.clearRect(0, 0, w, h);
+
+    // Background
+    ctx.fillStyle = "rgba(0, 0, 0, 0.3)";
+    ctx.fillRect(0, 0, w, h);
+
+    if (data.length < 2) return;
+
+    // Find max for scale (minimum 100KB/s for visual stability)
+    const maxSpeed = Math.max(102400, ...data);
+
+    // Grid lines (horizontal)
+    ctx.strokeStyle = "rgba(255, 255, 255, 0.06)";
+    ctx.lineWidth = 1;
+    for (let i = 1; i <= 3; i++) {
+      const y = Math.round(h * (i / 4)) + 0.5;
+      ctx.beginPath();
+      ctx.moveTo(0, y);
+      ctx.lineTo(w, y);
+      ctx.stroke();
+    }
+
+    // Draw filled area
+    const stepX = w / (maxSamples - 1);
+    const startIdx = maxSamples - data.length;
+
+    ctx.beginPath();
+    ctx.moveTo(startIdx * stepX, h);
+    for (let i = 0; i < data.length; i++) {
+      const x = (startIdx + i) * stepX;
+      const y = h - (data[i] / maxSpeed) * (h - 4);
+      if (i === 0) {
+        ctx.lineTo(x, y);
+      } else {
+        // Smooth curve
+        const prevX = (startIdx + i - 1) * stepX;
+        const prevY = h - (data[i - 1] / maxSpeed) * (h - 4);
+        const cpX = (prevX + x) / 2;
+        ctx.bezierCurveTo(cpX, prevY, cpX, y, x, y);
+      }
+    }
+    ctx.lineTo((startIdx + data.length - 1) * stepX, h);
+    ctx.closePath();
+
+    // Gradient fill
+    const gradient = ctx.createLinearGradient(0, 0, 0, h);
+    gradient.addColorStop(0, "rgba(0, 200, 120, 0.35)");
+    gradient.addColorStop(1, "rgba(0, 200, 120, 0.02)");
+    ctx.fillStyle = gradient;
+    ctx.fill();
+
+    // Draw line on top
+    ctx.beginPath();
+    for (let i = 0; i < data.length; i++) {
+      const x = (startIdx + i) * stepX;
+      const y = h - (data[i] / maxSpeed) * (h - 4);
+      if (i === 0) {
+        ctx.moveTo(x, y);
+      } else {
+        const prevX = (startIdx + i - 1) * stepX;
+        const prevY = h - (data[i - 1] / maxSpeed) * (h - 4);
+        const cpX = (prevX + x) / 2;
+        ctx.bezierCurveTo(cpX, prevY, cpX, y, x, y);
+      }
+    }
+    ctx.strokeStyle = "rgba(0, 220, 130, 0.9)";
+    ctx.lineWidth = 1.5;
+    ctx.stroke();
+
+    // Current value dot
+    if (data.length > 0) {
+      const lastX = (startIdx + data.length - 1) * stepX;
+      const lastY = h - (data[data.length - 1] / maxSpeed) * (h - 4);
+      ctx.beginPath();
+      ctx.arc(lastX, lastY, 3, 0, Math.PI * 2);
+      ctx.fillStyle = "#00ff88";
+      ctx.fill();
+      ctx.strokeStyle = "rgba(0, 255, 136, 0.4)";
+      ctx.lineWidth = 4;
+      ctx.stroke();
+    }
+  }
+
+  /**
+   * Reset timeline panel (clear thumbnails, hide panel)
+   */
+  /**
+   * Apply rotation transform + margin to a seek thumbnail image
+   */
+  private applyThumbnailRotation(img: HTMLImageElement): void {
+    const deg = this._currentManualRotation;
+    if (deg === 0) {
+      img.style.transform = "none";
+      img.style.margin = "";
+      return;
+    }
+    img.style.transform = `rotate(${deg}deg)`;
+    if (deg % 180 === 0) {
+      img.style.margin = "";
+      return;
+    }
+    // 90/270: need margin fix after image has dimensions
+    const fixMargin = () => {
+      img.style.margin = "0";
+      const w = img.offsetWidth;
+      const h = img.offsetHeight;
+      if (w > 0 && h > 0) {
+        const diff = (w - h) / 2;
+        img.style.margin = `${diff}px ${-diff}px ${diff + 6}px ${-diff}px`;
+      }
+    };
+    if (img.complete && img.naturalWidth > 0 && img.offsetWidth > 0) {
+      fixMargin();
+    } else {
+      img.addEventListener("load", fixMargin, { once: true });
+    }
+  }
+
+  /**
+   * Sync thumbnail and timeline rotation with video rotation
+   */
+  private syncThumbnailRotation(deg: number): void {
+    if (!this.shadowRoot) return;
+    this._currentManualRotation = deg;
+
+    // Get video aspect ratio to determine if portrait
+    const videoTrack = this.player?.getVideoTracks()?.[0];
+    const isPortraitVideo = videoTrack && videoTrack.height > videoTrack.width;
+    const is90 = deg % 180 !== 0;
+    // After 90° rotation: portrait becomes landscape, landscape becomes portrait
+    const resultIsPortrait = is90 ? !isPortraitVideo : isPortraitVideo;
+
+    // Seek thumbnail
+    const thumbImg = this.shadowRoot.querySelector(".movi-thumbnail-img") as HTMLImageElement;
+    if (thumbImg) {
+      this.applyThumbnailRotation(thumbImg);
+    }
+
+    // Timeline — update portrait/landscape class based on result after rotation
+    const strip = this.shadowRoot.querySelector(".movi-timeline-strip");
+    if (strip) {
+      if (resultIsPortrait) {
+        strip.classList.add("movi-timeline-portrait");
+      } else {
+        strip.classList.remove("movi-timeline-portrait");
+      }
+    }
+
+    // Timeline items — apply rotation + margin fix
+    const timelineImgs = this.shadowRoot.querySelectorAll(".movi-timeline-item img") as NodeListOf<HTMLImageElement>;
+    timelineImgs.forEach((el) => {
+      if (deg === 0) {
+        el.style.transform = "none";
+        el.style.margin = "";
+        el.style.width = "auto";
+        el.style.height = "90px";
+      } else if (is90) {
+        el.style.width = "90px";
+        el.style.height = "auto";
+        el.style.transform = `rotate(${deg}deg)`;
+        // Use naturalWidth/Height — works even when element is hidden
+        const nw = el.naturalWidth;
+        const nh = el.naturalHeight;
+        if (nw > 0 && nh > 0) {
+          // After setting width:90px, rendered height = 90 * (nh/nw)
+          const renderedH = 90 * (nh / nw);
+          const diff = (90 - renderedH) / 2;
+          el.style.margin = `${diff}px ${-diff}px`;
+        } else {
+          el.style.margin = "0";
+        }
+      } else {
+        // 180°
+        el.style.transform = `rotate(${deg}deg)`;
+        el.style.margin = "";
+        el.style.width = "auto";
+        el.style.height = "90px";
+      }
+    });
+  }
+
+  /**
+   * Show resume dialog with saved position
+   */
+  private showResumeDialog(savedTime: number): void {
+    const shadowRoot = this.shadowRoot;
+    if (!shadowRoot) return;
+
+    const dialog = shadowRoot.querySelector(".movi-resume-dialog") as HTMLElement;
+    if (!dialog) return;
+
+    const timeEl = dialog.querySelector(".movi-resume-time");
+    if (timeEl) timeEl.textContent = this.formatTime(savedTime);
+    dialog.dataset.time = savedTime.toString();
+    dialog.style.display = "flex";
+
+    // Highlight Resume button for keyboard navigation
+    dialog.querySelectorAll(".movi-resume-btn").forEach(b => b.classList.remove("movi-resume-focused"));
+    const yesBtn = dialog.querySelector(".movi-resume-yes") as HTMLElement;
+    yesBtn?.classList.add("movi-resume-focused");
+
+    // Auto-hide after 10 seconds with fade-out
+    setTimeout(() => {
+      if (dialog.style.display !== "none") {
+        dialog.style.animation = "movi-resume-fade-out 0.4s ease forwards";
+        setTimeout(() => {
+          dialog.style.display = "none";
+          dialog.style.animation = "";
+        }, 400);
+      }
+    }, 10000);
+  }
+
+  // ─── Resume Playback ────────────────────────────────────────────
+
+  /**
+   * Get a unique key for the current source (for localStorage)
+   */
+  private getResumeKey(): string {
+    const src = this._src;
+    if (src instanceof File) {
+      return `movi-resume:${src.name}:${src.size}`;
+    }
+    if (typeof src === "string") {
+      return `movi-resume:${src}`;
+    }
+    return "";
+  }
+
+  /**
+   * Get saved resume position from localStorage
+   */
+  private getResumePosition(): number {
+    const key = this.getResumeKey();
+    if (!key) return 0;
+    try {
+      const val = localStorage.getItem(key);
+      return val ? parseFloat(val) : 0;
+    } catch {
+      return 0;
+    }
+  }
+
+  /**
+   * Save current position to localStorage
+   */
+  private saveResumePosition(): void {
+    const key = this.getResumeKey();
+    if (!key || !this.player) return;
+    const time = this.currentTime;
+    if (time <= 0) return;
+    try {
+      localStorage.setItem(key, time.toFixed(2));
+    } catch {
+      // localStorage full or unavailable
+    }
+  }
+
+  /**
+   * Start periodically saving playback position
+   */
+  private startResumeSaving(): void {
+    this.stopResumeSaving();
+    // Save every 5 seconds
+    this._resumeSaveInterval = window.setInterval(() => {
+      if (this.player && this.player.getState() === "playing") {
+        this.saveResumePosition();
+      }
+    }, 5000);
+  }
+
+  /**
+   * Stop saving playback position
+   */
+  private stopResumeSaving(): void {
+    if (this._resumeSaveInterval) {
+      clearInterval(this._resumeSaveInterval);
+      this._resumeSaveInterval = null;
+    }
+  }
+
+  /**
+   * Clear saved position for current source
+   */
+  private clearResumePosition(): void {
+    const key = this.getResumeKey();
+    if (!key) return;
+    try {
+      localStorage.removeItem(key);
+    } catch {
+      // ignore
+    }
+  }
+
+  private resetTimeline(): void {
+    if (!this.shadowRoot) return;
+    const strip = this.shadowRoot.querySelector(".movi-timeline-strip") as HTMLElement;
+    const status = this.shadowRoot.querySelector(".movi-timeline-status") as HTMLElement;
+    const panel = this.shadowRoot.querySelector(".movi-timeline-panel") as HTMLElement;
+    if (strip) strip.innerHTML = "";
+    if (status) status.textContent = "";
+    if (panel) panel.style.display = "none";
+  }
+
+  /**
+   * Toggle timeline panel visibility
+   */
+  private toggleTimeline(): void {
+    const shadowRoot = this.shadowRoot;
+    if (!shadowRoot) return;
+    const panel = shadowRoot.querySelector(".movi-timeline-panel") as HTMLElement;
+    if (!panel) return;
+
+    if (panel.style.display === "none") {
+      panel.style.display = "flex";
+      // Auto-generate if strip is empty or previous attempt failed
+      const strip = shadowRoot.querySelector(".movi-timeline-strip") as HTMLElement;
+      const status = shadowRoot.querySelector(".movi-timeline-status") as HTMLElement;
+      const failed = status?.textContent?.includes("Failed");
+      if (strip && (strip.children.length === 0 || failed)) {
+        requestAnimationFrame(() => this.generateTimelineStrip(shadowRoot));
+      }
+    } else {
+      panel.style.display = "none";
+      this.focus();
+    }
+  }
+
+  /**
+   * Generate timeline thumbnail strip
+   */
+  private async generateTimelineStrip(shadowRoot: ShadowRoot): Promise<void> {
+    if (!this.player) return;
+
+    const strip = shadowRoot.querySelector(".movi-timeline-strip") as HTMLElement;
+    const status = shadowRoot.querySelector(".movi-timeline-status") as HTMLElement;
+    const titleEl = shadowRoot.querySelector(".movi-timeline-title") as HTMLElement;
+    if (!strip || !status) return;
+
+    strip.innerHTML = "";
+
+    // Detect portrait video — consider metadata rotation
+    const videoTrack = this.player.getVideoTracks()?.[0];
+    const metadataRotation = videoTrack?.rotation || 0;
+    const metaIs90 = metadataRotation % 180 !== 0;
+    // After metadata rotation, is the video portrait?
+    const isPortraitAfterMeta = videoTrack
+      ? (metaIs90 ? videoTrack.width > videoTrack.height : videoTrack.height > videoTrack.width)
+      : false;
+    const deg = this._currentManualRotation;
+    const is90 = deg % 180 !== 0;
+    // Manual rotation flips orientation again
+    const resultIsPortrait = is90 ? !isPortraitAfterMeta : isPortraitAfterMeta;
+
+    if (resultIsPortrait) {
+      strip.classList.add("movi-timeline-portrait");
+    } else {
+      strip.classList.remove("movi-timeline-portrait");
+    }
+
+    // Helper to apply rotation to a single image element
+    const applyRotationToImg = (el: HTMLElement) => {
+      if (deg === 0) return;
+      if (is90) {
+        el.style.width = "90px";
+        el.style.height = "auto";
+        el.style.transform = `rotate(${deg}deg)`;
+        el.style.margin = "0";
+        requestAnimationFrame(() => {
+          const w = el.offsetWidth;
+          const h = el.offsetHeight;
+          if (w > 0 && h > 0) {
+            const diff = (w - h) / 2;
+            el.style.margin = `${diff}px ${-diff}px`;
+          }
+        });
+      } else {
+        el.style.transform = `rotate(${deg}deg)`;
+      }
+    };
+
+    const formatTime = (s: number) => {
+      const h = Math.floor(s / 3600);
+      const m = Math.floor((s % 3600) / 60);
+      const sec = Math.floor(s % 60);
+      return h > 0
+        ? `${h}:${m.toString().padStart(2, "0")}:${sec.toString().padStart(2, "0")}`
+        : `${m}:${sec.toString().padStart(2, "0")}`;
+    };
+
+    const chapters = this.player.getChapters();
+    const hasChapters = chapters.length > 0;
+
+    if (hasChapters) {
+      // Chapter-based timeline
+      if (titleEl) titleEl.textContent = `Chapters (${chapters.length})`;
+      status.textContent = "Generating...";
+
+      for (let i = 0; i < chapters.length; i++) {
+        const ch = chapters[i];
+        // Generate thumbnail at chapter start time
+        const blob = await this.player.getPreviewFrame(ch.start);
+
+        const item = document.createElement("div");
+        item.className = "movi-timeline-item movi-timeline-chapter";
+
+        if (blob) {
+          const img = document.createElement("img");
+          img.src = URL.createObjectURL(blob);
+          img.alt = ch.title;
+          item.appendChild(img);
+        }
+
+        const labelContainer = document.createElement("div");
+        labelContainer.className = "movi-timeline-chapter-label";
+
+        const titleSpan = document.createElement("span");
+        titleSpan.className = "movi-timeline-chapter-title";
+        titleSpan.textContent = ch.title;
+
+        const timeSpan = document.createElement("span");
+        timeSpan.className = "movi-timeline-time";
+        timeSpan.textContent = formatTime(ch.start);
+
+        labelContainer.appendChild(titleSpan);
+        labelContainer.appendChild(timeSpan);
+        item.appendChild(labelContainer);
+
+        // Click to seek to chapter
+        item.addEventListener("click", (e) => {
+          e.stopPropagation();
+          this.currentTime = ch.start;
+        });
+
+        strip.appendChild(item);
+        const chImg = item.querySelector("img") as HTMLElement;
+        if (chImg) applyRotationToImg(chImg);
+        status.textContent = `${i + 1} / ${chapters.length}`;
+      }
+
+      status.textContent = `${chapters.length} chapters`;
+    } else {
+      // Regular interval-based timeline
+      if (titleEl) titleEl.textContent = "Timeline";
+      status.textContent = "Generating...";
+      const count = 20;
+
+      await this.player.generateTimeline(count, (_i, _total, blob, time) => {
+        const item = document.createElement("div");
+        item.className = "movi-timeline-item";
+
+        const img = document.createElement("img");
+        img.src = URL.createObjectURL(blob);
+        img.alt = `Timeline ${formatTime(time)}`;
+
+        const label = document.createElement("span");
+        label.className = "movi-timeline-time";
+        label.textContent = formatTime(time);
+
+        item.appendChild(img);
+        item.appendChild(label);
+
+        item.addEventListener("click", (e) => {
+          e.stopPropagation();
+          this.currentTime = time;
+        });
+
+        strip.appendChild(item);
+        applyRotationToImg(img);
+        status.textContent = `${strip.children.length} / ${count}`;
+      });
+
+      status.textContent = strip.children.length > 0
+        ? `${strip.children.length} thumbnails`
+        : "Failed to generate — try again";
+    }
+
   }
 
   get muted(): boolean {
@@ -7983,25 +11024,30 @@ export class MoviElement extends HTMLElement {
 
   set currentTime(value: number) {
     if (this.player) {
-      // Only allow seeking if player is ready, playing, or paused
       const state = this.player.getState();
+      Logger.info(TAG, `currentTime setter: value=${value.toFixed(2)}, state=${state}, isSeeking=${this.isSeeking}`);
       if (
         state === "ready" ||
         state === "playing" ||
         state === "paused" ||
-        state === "ended"
+        state === "ended" ||
+        state === "seeking" ||
+        state === "buffering"
       ) {
         this.isSeeking = true;
         this.player
           .seek(value)
+          .then(() => {
+            Logger.info(TAG, `Seek resolved: value=${value.toFixed(2)}, newState=${this.player?.getState()}`);
+          })
           .catch((error) => {
-            Logger.error(TAG, "Seek error", error);
+            Logger.error(TAG, `Seek error: value=${value.toFixed(2)}`, error);
           })
           .finally(() => {
-            // Note: In rapid seeking (frame-by-frame), we don't clear isSeeking immediately
-            // if we want to avoid progress bar jumps, but we must allow next seek to proceed.
             this.isSeeking = false;
           });
+      } else {
+        Logger.warn(TAG, `Seek blocked — state=${state} not allowed`);
       }
     }
   }
@@ -8275,11 +11321,19 @@ export class MoviElement extends HTMLElement {
 
         // Remove file extension from filename
         if (filename) {
-          const lastDotIndex = filename.lastIndexOf(".");
-          if (lastDotIndex > 0) {
-            // Only remove extension if dot is not at the start (hidden files)
-            this._title = filename.substring(0, lastDotIndex);
-          } else {
+          // Remove all extensions (e.g., "video.m3u8" → "video", ".m3u8" → "")
+          filename = filename.replace(/\.[^.\/]+$/, "");
+          // If filename is empty or non-descriptive, try parent path segment
+          if (!filename || filename === "index" || filename === "master" || filename === "playlist") {
+            try {
+              const url = new URL(this._src as string, window.location.href);
+              const segments = url.pathname.split("/").filter(s => s && !s.includes("."));
+              if (segments.length > 0) {
+                filename = decodeURIComponent(segments[segments.length - 1]).replace(/[-_]/g, " ");
+              }
+            } catch { /* ignore */ }
+          }
+          if (filename) {
             this._title = filename;
           }
         }

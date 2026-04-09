@@ -221,7 +221,7 @@ export class WasmBindings {
         }
 
         const data = await self.dataSource.read(offsetNum, size);
-        self.fulfillRead(data, data.byteLength);
+        self.fulfillRead(new Uint8Array(data), data.byteLength);
       } catch (error) {
         // Store error message for better error reporting
         self.lastError = (error as any).message || String(error);
@@ -552,6 +552,50 @@ export class WasmBindings {
   }
 
   /**
+   * Get number of chapters in the media
+   */
+  getChapterCount(): number {
+    if (!this.contextPtr) return 0;
+    return this.module._movi_get_chapter_count(this.contextPtr);
+  }
+
+  /**
+   * Get all chapters from the media
+   */
+  getChapters(): Array<{ title: string; start: number; end: number }> {
+    if (!this.contextPtr) return [];
+    const count = this.getChapterCount();
+    if (count <= 0) return [];
+
+    const chapters: Array<{ title: string; start: number; end: number }> = [];
+    const titleBufPtr = this.module._malloc(256);
+
+    try {
+      for (let i = 0; i < count; i++) {
+        const start = this.module._movi_get_chapter_start(this.contextPtr, i);
+        const end = this.module._movi_get_chapter_end(this.contextPtr, i);
+
+        // Get title
+        this.module.HEAPU8.fill(0, titleBufPtr, titleBufPtr + 256);
+        this.module._movi_get_chapter_title(this.contextPtr, i, titleBufPtr, 256);
+        const titleBytes = this.module.HEAPU8.subarray(titleBufPtr, titleBufPtr + 256);
+        const nullIdx = titleBytes.indexOf(0);
+        const title = new TextDecoder().decode(titleBytes.subarray(0, nullIdx > 0 ? nullIdx : 256));
+
+        chapters.push({
+          title: title || `Chapter ${i + 1}`,
+          start: start >= 0 ? start : 0,
+          end: end >= 0 ? end : 0,
+        });
+      }
+    } finally {
+      this.module._free(titleBufPtr);
+    }
+
+    return chapters;
+  }
+
+  /**
    * Seek to timestamp (async due to Asyncify)
    */
   async seek(
@@ -617,12 +661,13 @@ export class WasmBindings {
       const info = parsePacketInfo(this.module, infoPtr);
 
       // Validate packet size to prevent corrupted state from creating invalid arrays
+      // Near EOF, FFmpeg's demuxer may produce corrupted packets from stale internal buffer data — treat as EOF
       if (info.size < 0 || info.size > this.packetBufferSize) {
-        Logger.error(
+        Logger.warn(
           TAG,
-          `Invalid packet size: ${info.size} (buffer size: ${this.packetBufferSize}). State may be corrupted.`,
+          `Invalid packet size: ${info.size} (buffer size: ${this.packetBufferSize}), treating as EOF`,
         );
-        throw new Error(`Invalid packet size: ${info.size}`);
+        return null;
       }
 
       // Copy packet data
@@ -656,9 +701,19 @@ export class WasmBindings {
   }
 
   // Decoding support
-  enableDecoder(streamIndex: number): number {
+  enableDecoder(streamIndex: number, extradata?: Uint8Array): number {
     if (!this.contextPtr) return -1;
-    return this.module._movi_enable_decoder(this.contextPtr, streamIndex);
+    if (!extradata || extradata.length === 0) {
+      return this.module._movi_enable_decoder(this.contextPtr, streamIndex, 0, 0);
+    }
+    const ptr = this.module._malloc(extradata.length);
+    if (!ptr) return -1;
+    try {
+      this.module.HEAPU8.set(extradata, ptr);
+      return this.module._movi_enable_decoder(this.contextPtr, streamIndex, ptr, extradata.length);
+    } finally {
+      this.module._free(ptr);
+    }
   }
 
   sendPacket(
@@ -1112,8 +1167,6 @@ export class ThumbnailBindings {
       if (self.dataSource) {
         const offsetNum = typeof offset === "bigint" ? Number(offset) : offset;
         self.dataSource.read(offsetNum, size).then((data) => {
-          // dataSource.read returns ArrayBuffer for ThumbnailHttpSource
-          // but we need Uint8Array for subarray operation
           const view = data instanceof Uint8Array ? data : new Uint8Array(data);
           self.fulfillRead(view, view.byteLength);
         });

@@ -23,7 +23,7 @@ const entries = [
 
 const terserConfig = {
   compress: {
-    drop_console: false,
+    drop_console: true,
     drop_debugger: false,
     passes: 5,
     unsafe: false,
