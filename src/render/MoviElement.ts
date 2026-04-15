@@ -1067,12 +1067,10 @@ export class MoviElement extends HTMLElement {
     stableAudioBtn?.addEventListener("click", (e) => {
       e.stopPropagation();
       if (this.player) {
-        const current = this.player.getStableAudio();
-        this.player.setStableAudio(!current);
-        this.updateStableAudioUI(shadowRoot);
+        this.stableVolume = !this._stableVolume;
         this.showOSD(
           OSD.stableAudio,
-          !current ? "Stable Volume On" : "Stable Volume Off",
+          this._stableVolume ? "Stable Volume On" : "Stable Volume Off",
         );
       }
     });
@@ -2861,12 +2859,10 @@ export class MoviElement extends HTMLElement {
           // U: Toggle stable volume
           e.preventDefault();
           if (this.player) {
-            const current = this.player.getStableAudio();
-            this.player.setStableAudio(!current);
-            this.updateStableAudioUI(this.shadowRoot!);
+            this.stableVolume = !this._stableVolume;
             this.showOSD(
               OSD.stableAudio,
-              !current ? "Stable Volume On" : "Stable Volume Off",
+              this._stableVolume ? "Stable Volume On" : "Stable Volume Off",
             );
           }
           break;
@@ -2874,13 +2870,7 @@ export class MoviElement extends HTMLElement {
         case "G":
           // G: Toggle ambient mode
           e.preventDefault();
-          this._ambientMode = !this._ambientMode;
-          if (this._ambientMode) {
-            this.setAttribute("ambientmode", "");
-          } else {
-            this.removeAttribute("ambientmode");
-          }
-          this.updateAmbientMode();
+          this.ambientMode = !this._ambientMode;
           this.updateAmbientUI();
           this.showOSD(
             OSD.ambient,
@@ -3509,23 +3499,15 @@ export class MoviElement extends HTMLElement {
         hideContextMenu();
       } else if (action === "stable-audio-toggle") {
         if (this.player) {
-          const current = this.player.getStableAudio();
-          this.player.setStableAudio(!current);
-          this.updateStableAudioUI(shadowRoot);
+          this.stableVolume = !this._stableVolume;
           this.showOSD(
             OSD.stableAudio,
-            !current ? "Stable Volume On" : "Stable Volume Off",
+            this._stableVolume ? "Stable Volume On" : "Stable Volume Off",
           );
         }
         hideContextMenu();
       } else if (action === "ambient-toggle") {
-        this._ambientMode = !this._ambientMode;
-        if (this._ambientMode) {
-          this.setAttribute("ambientmode", "");
-        } else {
-          this.removeAttribute("ambientmode");
-        }
-        this.updateAmbientMode();
+        this.ambientMode = !this._ambientMode;
         this.updateAmbientUI();
         this.showOSD(
           OSD.ambient,
@@ -8300,6 +8282,48 @@ export class MoviElement extends HTMLElement {
           changed = true;
         }
 
+        // User-toggled opt-in preferences ALWAYS win over the HTML default.
+        // Rationale: the attribute is an integrator-set default; once the user
+        // has toggled something via the UI their choice should stick across
+        // reloads, even if the page still declares the attribute.
+
+        // Apply stable volume preference
+        if (settings.stableVolume !== undefined) {
+          this._stableVolume = settings.stableVolume;
+          if (settings.stableVolume) {
+            this.setAttribute("stablevolume", "");
+          } else {
+            this.removeAttribute("stablevolume");
+          }
+          if (this.player) {
+            this.player.setStableAudio(this._stableVolume);
+            this.updateStableAudioUI();
+          }
+        }
+
+        // Apply ambient mode preference
+        if (settings.ambientMode !== undefined) {
+          this._ambientMode = settings.ambientMode;
+          if (settings.ambientMode) {
+            this.setAttribute("ambientmode", "");
+          } else {
+            this.removeAttribute("ambientmode");
+          }
+          this.updateAmbientMode();
+        }
+
+        // Apply HDR preference (defaults to true)
+        if (settings.hdr !== undefined) {
+          this._hdr = settings.hdr;
+          if (settings.hdr) {
+            this.setAttribute("hdr", "");
+          } else {
+            this.removeAttribute("hdr");
+          }
+          this.updateHDRUI();
+          if (this.player) this.player.setHDREnabled(this._hdr);
+        }
+
         if (changed) {
           this.updateVolumeIcon();
           // Update external attributes to reflect loaded state
@@ -11124,6 +11148,25 @@ export class MoviElement extends HTMLElement {
       this.removeAttribute("ambientmode");
     }
     this.updateAmbientMode();
+    SettingsStorage.getInstance().save({ ambientMode: this._ambientMode });
+  }
+
+  get stableVolume(): boolean {
+    return this._stableVolume;
+  }
+
+  set stableVolume(value: boolean) {
+    this._stableVolume = !!value;
+    if (this._stableVolume) {
+      this.setAttribute("stablevolume", "");
+    } else {
+      this.removeAttribute("stablevolume");
+    }
+    if (this.player) {
+      this.player.setStableAudio(this._stableVolume);
+      this.updateStableAudioUI();
+    }
+    SettingsStorage.getInstance().save({ stableVolume: this._stableVolume });
   }
 
   get currentTime(): number {
@@ -11566,6 +11609,8 @@ export class MoviElement extends HTMLElement {
     if (this.player) {
       this.player.setHDREnabled(this._hdr);
     }
+
+    SettingsStorage.getInstance().save({ hdr: this._hdr });
   }
 
   private updateHDRUI(): void {

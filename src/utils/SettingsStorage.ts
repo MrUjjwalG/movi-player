@@ -3,6 +3,9 @@ interface PlayerSettings {
   volume?: number;
   muted?: boolean;
   playbackRate?: number;
+  stableVolume?: boolean;
+  ambientMode?: boolean;
+  hdr?: boolean;
 }
 
 const SETTINGS_FILE = 'movi_settings.json';
