@@ -120,6 +120,7 @@ export class MoviElement extends HTMLElement {
   private _videoId: string = "";         // Video ID for encrypted playback
   private _resumeSaveInterval: number | null = null; // Interval to save position
   private _titleAutoLoaded: boolean = false; // Track if title was auto-loaded from metadata
+  private _stripTitleAttr: boolean = false; // Guard for suppressing native title tooltip
   private _lastDuration: number = 0; // Track duration changes for title auto-load
   private posterElement!: HTMLImageElement; // Poster image element
 
@@ -3023,11 +3024,11 @@ export class MoviElement extends HTMLElement {
 
       // Show custom context menu
       const rect = this.getBoundingClientRect();
-      const isMobile =
-        window.innerWidth <= 1024 ||
-        window.matchMedia("(pointer: coarse)").matches;
+      // Touch-only: narrow desktop windows still get the hover-based menu,
+      // because slide-panel submenus require tap-to-open semantics.
+      const isTouchDevice = window.matchMedia("(pointer: coarse)").matches;
 
-      if (isMobile) {
+      if (isTouchDevice) {
         contextMenu.classList.add("movi-context-menu-mobile");
         contextMenu.style.left = "";
         contextMenu.style.top = "";
@@ -3063,6 +3064,10 @@ export class MoviElement extends HTMLElement {
           rectWidth: rect.width,
           rectHeight: rect.height,
         });
+
+        // Clamp menu height to the player so it scrolls when too tall
+        const maxMenuHeight = Math.max(120, rect.height - 20);
+        contextMenu.style.maxHeight = `${maxMenuHeight}px`;
 
         // Temporarily show menu to get its dimensions
         contextMenu.style.display = "block";
@@ -3139,11 +3144,9 @@ export class MoviElement extends HTMLElement {
       ) as HTMLElement;
       if (backdrop) backdrop.style.display = "none";
 
-      // On mobile, let transition finish before display none
-      const isMobile =
-        window.innerWidth <= 1024 ||
-        window.matchMedia("(pointer: coarse)").matches;
-      if (isMobile) {
+      // On touch devices, let slide-out transition finish before display none
+      const isTouchDevice = window.matchMedia("(pointer: coarse)").matches;
+      if (isTouchDevice) {
         setTimeout(() => {
           if (!this._contextMenuVisible) contextMenu.style.display = "none";
         }, 400);
@@ -3914,12 +3917,10 @@ export class MoviElement extends HTMLElement {
       }, 150); // 150ms delay
     };
 
-    // Setup listeners - ONLY on desktop (hover doesn't make sense on mobile and causes double-tap issues)
-    const isMobile =
-      window.innerWidth <= 1024 ||
-      window.matchMedia("(pointer: coarse)").matches;
+    // Setup listeners - ONLY on hover-capable devices (touch uses tap-to-open)
+    const isTouchDevice = window.matchMedia("(pointer: coarse)").matches;
 
-    if (!isMobile) {
+    if (!isTouchDevice) {
       item.addEventListener("mouseenter", showSubmenu);
 
       item.addEventListener("mouseleave", (e) => {
@@ -4326,12 +4327,14 @@ export class MoviElement extends HTMLElement {
     const isNativeActive = this.player.isNativeAudioActive();
     const totalTracks = audioTracks.length + nativeLangs.length;
 
-    // Volume is always visible when any audio exists
+    // Volume is always visible when any audio exists (muxed, multi-lang native,
+    // or single split-source native <audio>).
+    const hasAudio = totalTracks > 0 || this.player.hasNativeAudio();
     const volumeContainer = this.shadowRoot?.querySelector(
       ".movi-volume-container",
     ) as HTMLElement;
     if (volumeContainer) {
-      volumeContainer.style.display = totalTracks > 0 ? "flex" : "none";
+      volumeContainer.style.display = hasAudio ? "flex" : "none";
     }
 
     // Show audio selector only if multiple tracks total
@@ -4992,8 +4995,9 @@ export class MoviElement extends HTMLElement {
       :host {
         /* Premium Color Palette */
         --movi-primary: #8B5CF6;
-        --movi-primary-light: #A78BFA;
-        --movi-primary-dark: #7C3AED;
+        /* Derived so themecolor attribute cascades to light/dark variants */
+        --movi-primary-light: color-mix(in srgb, var(--movi-primary) 70%, white);
+        --movi-primary-dark: color-mix(in srgb, var(--movi-primary) 70%, black);
         --movi-accent: #06B6D4;
         --movi-accent-light: #22D3EE;
         /* Use solid color instead of gradient */
@@ -7249,10 +7253,28 @@ export class MoviElement extends HTMLElement {
         font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
         font-size: 14px;
         color: var(--movi-controls-color);
-        overflow: visible;
+        overflow-y: auto;
+        overflow-x: hidden;
+        overscroll-behavior: contain;
+        scrollbar-width: thin;
+        scrollbar-color: rgba(255, 255, 255, 0.25) transparent;
         letter-spacing: 0.01em;
         transition: transform 0.2s ease, opacity 0.2s ease, visibility 0.2s;
         box-sizing: border-box;
+      }
+
+      .movi-context-menu::-webkit-scrollbar {
+        width: 6px;
+      }
+      .movi-context-menu::-webkit-scrollbar-track {
+        background: transparent;
+      }
+      .movi-context-menu::-webkit-scrollbar-thumb {
+        background: rgba(255, 255, 255, 0.2);
+        border-radius: 3px;
+      }
+      .movi-context-menu::-webkit-scrollbar-thumb:hover {
+        background: rgba(255, 255, 255, 0.35);
       }
 
       .movi-context-menu-backdrop {
@@ -7822,9 +7844,31 @@ export class MoviElement extends HTMLElement {
         color: white;
         font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
         text-align: center;
-        padding: 40px;
+        padding: 40px 40px calc(var(--movi-controls-height) + 20px);
+        box-sizing: border-box;
         opacity: 0;
         animation: movi-fade-in 0.4s ease forwards;
+      }
+
+      /* Short / narrow players: shrink the placeholder so it fits above
+         the controls bar without clipping into it. */
+      @media (max-width: 640px) {
+        .movi-empty-state {
+          padding: 16px 16px calc(var(--movi-controls-height) + 12px);
+        }
+        .movi-empty-container {
+          gap: 8px !important;
+        }
+        .movi-empty-icon-wrapper {
+          width: 56px !important;
+          height: 56px !important;
+        }
+        .movi-empty-title {
+          font-size: 14px !important;
+        }
+        .movi-empty-message {
+          font-size: 11px !important;
+        }
       }
 
       .movi-empty-container {
@@ -7872,7 +7916,7 @@ export class MoviElement extends HTMLElement {
       }
 
       /* Mobile Responsiveness for Context Menu - Side Panel Mode */
-      @media (max-width: 1024px), (pointer: coarse) {
+      @media (pointer: coarse) {
         .movi-context-menu.movi-context-menu-mobile {
           position: absolute;
           top: 0 !important;
@@ -7962,6 +8006,45 @@ export class MoviElement extends HTMLElement {
         :host([theme="light"]) .movi-context-menu-submenu-audio,
         :host([theme="light"]) .movi-context-menu-submenu-subtitle {
           background: rgba(255, 255, 255, 0.98) !important;
+        }
+      }
+
+      /* Narrow viewports (≤ iPhone 12 Pro ≈ 390px) — prevent controls bar overflow
+         and stop the center play button from overlapping the controls bar on
+         short 16:9 players. */
+      @media (max-width: 480px) {
+        .movi-btn {
+          width: 30px !important;
+          height: 30px !important;
+          padding: 4px !important;
+        }
+        .movi-btn svg {
+          width: 16px !important;
+          height: 16px !important;
+        }
+        .movi-controls-left,
+        .movi-controls-right {
+          gap: 1px !important;
+        }
+        .movi-buttons-row {
+          gap: 2px !important;
+        }
+        .movi-controls-bar {
+          padding: 4px 6px 6px !important;
+        }
+        .movi-time {
+          font-size: 9px !important;
+        }
+
+        /* Center play button sized so it doesn't clip into controls bar
+           on narrow 16:9 players (~183px height). */
+        .movi-center-play-pause {
+          width: 52px !important;
+          height: 52px !important;
+        }
+        .movi-center-play-pause svg {
+          width: 26px !important;
+          height: 26px !important;
         }
       }
 
@@ -8330,8 +8413,18 @@ export class MoviElement extends HTMLElement {
         this.updateWatermark();
         break;
       case "title":
+        if (this._stripTitleAttr) {
+          this._stripTitleAttr = false;
+          break;
+        }
         this._title = newValue;
         this.updateTitle();
+        // Strip attribute from host so the browser's native tooltip
+        // doesn't appear on hover — title is shown via the overlay instead.
+        if (newValue !== null) {
+          this._stripTitleAttr = true;
+          this.removeAttribute("title");
+        }
         break;
       case "showtitle":
         this._showTitle = newValue !== null;
@@ -11233,11 +11326,8 @@ export class MoviElement extends HTMLElement {
     this._title = value || null;
     // Reset auto-load flag when user explicitly sets title
     this._titleAutoLoaded = false;
-    if (value) {
-      this.setAttribute("title", value);
-    } else {
-      this.removeAttribute("title");
-    }
+    // Do NOT reflect to the host `title` attribute — it would trigger the
+    // browser's native tooltip on hover. The overlay reads `_title` directly.
     this.updateTitle();
   }
 

@@ -2797,6 +2797,11 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
     return this.nativeAudioEl !== null && this._activeAudioLang !== "";
   }
 
+  /** True whenever a native <audio> element is loaded (single split-source or multi-lang). */
+  hasNativeAudio(): boolean {
+    return this.nativeAudioEl !== null;
+  }
+
   /**
    * Get available external subtitle tracks
    */
