@@ -165,6 +165,28 @@ Mutes audio by default.
 
 ---
 
+#### `volume`
+
+Sets the initial audio volume (0.0 to 1.0). User preference persists across reloads via OPFS and overrides this default on subsequent loads.
+
+```html
+<movi-player src="video.mp4" volume="0.5"></movi-player>
+```
+
+---
+
+#### `playbackrate`
+
+Sets the initial playback speed. Persists across reloads like `volume`.
+
+```html
+<movi-player src="video.mp4" playbackrate="1.5"></movi-player>
+```
+
+**Note:** Attribute name is all lowercase (`playbackrate`). The JS property is camelCase (`player.playbackRate`).
+
+---
+
 #### `playsinline`
 
 Prevents fullscreen on iOS (plays inline instead).
@@ -198,6 +220,42 @@ Displays an image before playback starts.
 ```html
 <movi-player src="video.mp4" poster="thumbnail.jpg"></movi-player>
 ```
+
+---
+
+#### `title`
+
+Sets the video title shown in the in-player overlay. Unlike the global HTML `title` attribute, this does **not** trigger a native browser tooltip on hover.
+
+```html
+<movi-player src="video.mp4" title="My Vacation Video" showtitle></movi-player>
+```
+
+Use together with `showtitle` to render the title bar. Auto-filled from metadata/filename if not provided.
+
+---
+
+#### `showtitle`
+
+Shows the title bar overlay at the top of the player.
+
+```html
+<movi-player src="video.mp4" title="Intro" showtitle></movi-player>
+```
+
+Auto-hides with the controls.
+
+---
+
+#### `watermark`
+
+Displays a watermark image over the video (e.g. brand logo). Embedded into the canvas so it's preserved in screen recordings and snapshots.
+
+```html
+<movi-player src="video.mp4" watermark="/logo.png"></movi-player>
+```
+
+**Value:** URL to an image (PNG with alpha recommended).
 
 ---
 
@@ -504,6 +562,39 @@ Video endpoint URL for encrypted playback. Chunks are served with token + HMAC v
 #### `videoid`
 
 Video identifier sent to the token server. Maps to a specific encrypted file on the server.
+
+---
+
+#### `drm`
+
+Enables DRM playback mode for HLS streams. When set, the player switches to a native `<video>` element + EME API instead of the canvas pipeline. Canvas-only features (rotation, watermark, snapshots) are disabled in this mode.
+
+```html
+<movi-player
+  src="https://example.com/stream.m3u8"
+  drm
+  licenseurl="https://license.pallycon.com/ri/licenseManager.do"
+  controls autoplay
+></movi-player>
+```
+
+Works with Widevine (Chrome/Edge/Firefox) and FairPlay (Safari).
+
+---
+
+#### `licenseurl`
+
+Widevine/FairPlay license server URL for DRM playback. Required when `drm` is set.
+
+```html
+<movi-player
+  src="stream.m3u8"
+  drm
+  licenseurl="https://license.example.com/wv"
+></movi-player>
+```
+
+Supported providers: PallyCon, EZDRM, BuyDRM, AWS Media Services, custom.
 
 ---
 
@@ -1028,24 +1119,16 @@ player.addEventListener("error", (event) => {
 
 Press `?` during playback to view the shortcuts panel.
 
-| Key | Action |
-|---|---|
-| `Space` / `K` | Play / Pause |
-| `F` | Fullscreen |
-| `M` | Mute / Unmute |
-| `R` | Rotate video 90 |
-| `I` | Stats for nerds |
-| `T` | Timeline thumbnails |
-| `S` | Snapshot |
-| `?` | Shortcuts panel |
-| `0` / `Home` | Seek to start |
-| `End` | Seek to end |
-| `Left` | Seek -10s |
-| `Right` | Seek +10s |
-| `Ctrl+Left` | Previous frame (when paused) |
-| `Ctrl+Right` | Next frame (when paused) |
-| `Up` | Volume up |
-| `Down` | Volume down |
+| Key | Action | Key | Action |
+|---|---|---|---|
+| `Space` / `K` | Play / Pause | `0` / `Home` | Seek to start |
+| `F` | Fullscreen | `End` | Seek to end |
+| `M` | Mute / Unmute | `Left` | Seek -10s |
+| `R` | Rotate video 90 | `Right` | Seek +10s |
+| `I` | Stats for nerds | `Ctrl+Left` | Previous frame (when paused) |
+| `T` | Timeline thumbnails | `Ctrl+Right` | Next frame (when paused) |
+| `S` | Snapshot | `Up` | Volume up |
+| `?` | Shortcuts panel | `Down` | Volume down |
 
 ---
 
