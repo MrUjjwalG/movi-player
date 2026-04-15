@@ -159,6 +159,8 @@ Use cases: video validators, asset management, HDR detection pipelines, search i
 
 **UI** -- Controls, context menu, keyboard shortcuts (`?` to view all), themes (dark/light), gestures, ambient mode.
 
+**Persistent Preferences** -- Volume, mute, playback rate, stable volume, ambient mode, and HDR toggles persist across reloads via OPFS. User choices override HTML attribute defaults.
+
 **Picture-in-Picture** -- Document PiP with play/pause, seek, mute, progress bar. Press `P`.
 
 **Aspect Ratio** -- Press `A` to cycle contain/cover/fill/zoom. Context menu sub-menu with icons.

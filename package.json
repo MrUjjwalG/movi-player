@@ -1,6 +1,6 @@
 {
   "name": "movi-player",
-  "version": "0.2.0",
+  "version": "0.2.1",
   "description": "Play MKV, HEVC, AV1, HDR videos in the browser. WebCodecs + FFmpeg WASM player with encrypted playback, chapters, subtitles, multi-audio tracks. No server transcoding needed.",
   "type": "module",
   "main": "dist/index.js",
