@@ -109,7 +109,6 @@ export class MoviElement extends HTMLElement {
   private _doubleTap: boolean = true; // Enable/disable double tap to seek
   private _themeColor: string | null = null; // Custom theme color
   private _bufferSize: number = 0; // Custom buffer size in seconds
-  private _watermark: string | null = null; // Watermark image URL
   private _title: string | null = null; // Video title to display
   private _showTitle: boolean = false; // Show title at top if true
   private _resume: boolean = false; // Resume playback from last position (opt-in)
@@ -174,7 +173,6 @@ export class MoviElement extends HTMLElement {
       "doubletap",
       "themecolor",
       "buffersize",
-      "watermark",
       "title",
       "showtitle",
       "resume",
@@ -8164,9 +8162,6 @@ export class MoviElement extends HTMLElement {
       this.style.setProperty("--movi-primary", this._themeColor);
     }
 
-    this._watermark = this.getAttribute("watermark");
-    this.updateWatermark();
-
     // Update controls visibility based on initial attributes
     this.updateControlsVisibility();
 
@@ -8431,10 +8426,6 @@ export class MoviElement extends HTMLElement {
       case "buffersize":
         this._bufferSize = newValue ? parseFloat(newValue) : 0;
         // Propagate to player if possible
-        break;
-      case "watermark":
-        this._watermark = newValue;
-        this.updateWatermark();
         break;
       case "title":
         if (this._stripTitleAttr) {
@@ -11349,19 +11340,6 @@ export class MoviElement extends HTMLElement {
     this.setAttribute("buffersize", value.toString());
   }
 
-  get watermark(): string | null {
-    return this._watermark;
-  }
-  set watermark(value: string | null) {
-    this._watermark = value;
-    if (value) {
-      this.setAttribute("watermark", value);
-    } else {
-      this.removeAttribute("watermark");
-    }
-    this.updateWatermark();
-  }
-
   get title(): string {
     return this._title || "";
   }
@@ -11385,41 +11363,6 @@ export class MoviElement extends HTMLElement {
       this.removeAttribute("showtitle");
     }
     this.updateTitle();
-  }
-
-  private updateWatermark() {
-    const shadowRoot = this.shadowRoot;
-    if (!shadowRoot) return;
-
-    let watermarkEl = shadowRoot.querySelector(
-      ".movi-watermark",
-    ) as HTMLImageElement;
-
-    if (!this._watermark) {
-      if (watermarkEl) watermarkEl.style.display = "none";
-      return;
-    }
-
-    if (!watermarkEl) {
-      watermarkEl = document.createElement("img");
-      watermarkEl.className = "movi-watermark";
-      // Basic styling for watermark
-      watermarkEl.style.position = "absolute";
-      watermarkEl.style.top = "20px";
-      watermarkEl.style.right = "20px";
-      watermarkEl.style.height = "30px"; // Default height
-      watermarkEl.style.opacity = "0.8";
-      watermarkEl.style.pointerEvents = "none";
-      watermarkEl.style.zIndex = "10";
-
-      const container = shadowRoot.querySelector(".movi-player-container");
-      if (container) {
-        container.appendChild(watermarkEl);
-      }
-    }
-
-    watermarkEl.src = this._watermark;
-    watermarkEl.style.display = "block";
   }
 
   private updateTitle() {

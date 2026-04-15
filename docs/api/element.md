@@ -247,18 +247,6 @@ Auto-hides with the controls.
 
 ---
 
-#### `watermark`
-
-Displays a watermark image over the video (e.g. brand logo). Embedded into the canvas so it's preserved in screen recordings and snapshots.
-
-```html
-<movi-player src="video.mp4" watermark="/logo.png"></movi-player>
-```
-
-**Value:** URL to an image (PNG with alpha recommended).
-
----
-
 ### Advanced Attributes
 
 #### `renderer`
@@ -567,7 +555,7 @@ Video identifier sent to the token server. Maps to a specific encrypted file on 
 
 #### `drm`
 
-Enables DRM playback mode for HLS streams. When set, the player switches to a native `<video>` element + EME API instead of the canvas pipeline. Canvas-only features (rotation, watermark, snapshots) are disabled in this mode.
+Enables DRM playback mode for HLS streams. When set, the player switches to a native `<video>` element + EME API instead of the canvas pipeline. Canvas-only features (rotation, snapshots) are disabled in this mode.
 
 ```html
 <movi-player

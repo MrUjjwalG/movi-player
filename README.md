@@ -18,7 +18,7 @@ Play any video format directly in the browser. No transcoding, no server process
 - **Drop-in replacement** -- `<movi-player src="video.mp4" controls>` works like `<video>` but plays everything.
 - **Content protection** -- Built-in encrypted playback with AES-256-GCM, token auth, HMAC signing. No DRM license server needed.
 - **HDR rendering** -- Detects and renders BT.2020/PQ/HLG content on supported displays. Other players can't.
-- **Canvas-based** -- No `<video>` element exposed. Right-click save disabled. Screen recording gets watermarked.
+- **Canvas-based** -- No `<video>` element exposed. Right-click save disabled.
 - **Picture-in-Picture** -- Document PiP with controls (play/pause, seek, mute, progress). Chromium 116+.
 - **Ambient mode** -- Dynamic letterbox glow that samples video colors in real-time. Press `G` or use context menu.
 - **Split sources** -- Separate video, audio, and subtitle file URLs via `videosrc`, `audiosrc`, `subtitlesrc` attributes.
@@ -105,7 +105,7 @@ See [encrypted-server/](encrypted-server/) for the server example.
 ></movi-player>
 ```
 
-Requires a DRM license server (PallyCon, EZDRM, BuyDRM, etc.). In DRM mode, native `<video>` element is used (canvas features like rotation/watermark are disabled).
+Requires a DRM license server (PallyCon, EZDRM, BuyDRM, etc.). In DRM mode, native `<video>` element is used (canvas features like rotation are disabled).
 
 ### Demuxer Only (50KB)
 
@@ -202,7 +202,6 @@ Use cases: video validators, asset management, HDR detection pipelines, search i
   doubletap="true"          <!-- Double-tap to seek ±10s -->
   title="My Video"          <!-- Video title (in-player overlay only) -->
   showtitle                 <!-- Show title overlay at top -->
-  watermark="/logo.png"     <!-- Watermark image URL -->
   startat="30"              <!-- Start at time (seconds) -->
   resume                    <!-- Resume from last position -->
   stablevolume              <!-- Loudness normalization -->
