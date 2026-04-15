@@ -11314,30 +11314,31 @@ export class MoviElement extends HTMLElement {
         this._title = metaTitle;
         this._titleAutoLoaded = true;
       } else if (this._src) {
-        // Fallback to filename if no metadata title
         let filename = "";
-        if (this._src instanceof File) {
-          // For File objects, use the file name
+
+        // Priority 1: Content-Disposition filename from HTTP header
+        const dispositionName = this.player.getContentDispositionFilename();
+        if (dispositionName) {
+          filename = dispositionName;
+        } else if (this._src instanceof File) {
+          // Priority 2: File object name
           filename = this._src.name;
         } else if (typeof this._src === "string") {
-          // For URL strings, extract filename from path
+          // Priority 3: Extract filename from URL path
           try {
             const url = new URL(this._src, window.location.href);
             const pathname = url.pathname;
             filename = pathname.substring(pathname.lastIndexOf("/") + 1);
             if (filename) {
-              // Decode URI component and remove query params
               filename = decodeURIComponent(filename.split("?")[0]);
             }
           } catch {
-            // If URL parsing fails, just use the string as-is
             filename = this._src;
           }
         }
 
         // Remove file extension from filename
         if (filename) {
-          // Remove all extensions (e.g., "video.m3u8" → "video", ".m3u8" → "")
           filename = filename.replace(/\.[^.\/]+$/, "");
           // If filename is empty or non-descriptive, try parent path segment
           if (!filename || filename === "index" || filename === "master" || filename === "playlist") {
@@ -11385,7 +11386,7 @@ export class MoviElement extends HTMLElement {
     title = title.replace(/\s*-\s*\w+\s*$/, "");
 
     // Truncate at quality/codec markers
-    const cutPatterns = /\b(2160p|1080p|720p|480p|4K|UHD|WEB[ -]?DL|WEB[ -]?Rip|BluRay|BDRip|BRRip|HDRip|DVDRip|HDTV|AMZN|NF|DSNP|HMAX|ATVP|PCOK|PMTP|MA |DDP?\d|AAC|AC3|FLAC|Atmos|TrueHD|DTS|HEVC|H[ .]?26[45]|x26[45]|AV1|VP9|HDR|HDR10|DV|DoVi|Dolby|REMUX|PROPER|REPACK|iNTERNAL|EXTENDED|UNRATED|DC |10bit|8bit)\b/i;
+    const cutPatterns = /\b(2160p|1080p|720p|480p|4K|UHD|HD|HQ|WEB[ -]?DL|WEB[ -]?Rip|BluRay|BDRip|BRRip|HDRip|DVDRip|HDTV|AMZN|NF|DSNP|HMAX|ATVP|PCOK|PMTP|MA |DDP?\d|AAC|AC3|FLAC|Atmos|TrueHD|DTS|HEVC|H[ .]?26[45]|x26[45]|AV1|VP9|HDR|HDR10|DV|DoVi|Dolby|REMUX|PROPER|REPACK|iNTERNAL|EXTENDED|UNRATED|DC |10bit|8bit)\b/i;
     const match = title.match(cutPatterns);
     if (match && match.index && match.index > 5) {
       title = title.substring(0, match.index);

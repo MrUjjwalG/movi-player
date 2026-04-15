@@ -37,6 +37,7 @@ export class HttpSource implements SourceAdapter {
   private headers: Record<string, string>;
   private size: number = -1;
   private position: number = 0;
+  private _contentDispositionFilename: string | null = null;
 
   // Persistent Cache
   private headBuffer: Uint8Array | null = null;
@@ -263,6 +264,31 @@ export class HttpSource implements SourceAdapter {
       this.size = parseInt(contentLength, 10);
       Logger.debug(TAG, `File size: ${this.size} bytes`);
 
+      // Extract filename from Content-Disposition header (e.g., "attachment; filename=\"video.mp4\"")
+      const disposition = response.headers.get("Content-Disposition");
+      if (disposition) {
+        // Try filename*= (RFC 5987 encoded) first, then filename=
+        let filenameMatch = disposition.match(/filename\*\s*=\s*(?:UTF-8''|utf-8'')([^;\s]+)/i);
+        if (filenameMatch) {
+          try {
+            this._contentDispositionFilename = decodeURIComponent(filenameMatch[1]);
+          } catch { /* ignore decode error */ }
+        }
+        if (!this._contentDispositionFilename) {
+          filenameMatch = disposition.match(/filename\s*=\s*"?([^";\s]+)"?/i);
+          if (filenameMatch) {
+            try {
+              this._contentDispositionFilename = decodeURIComponent(filenameMatch[1]);
+            } catch {
+              this._contentDispositionFilename = filenameMatch[1];
+            }
+          }
+        }
+        if (this._contentDispositionFilename) {
+          Logger.debug(TAG, `Content-Disposition filename: ${this._contentDispositionFilename}`);
+        }
+      }
+
       // Resize buffer to 3% of file size (clamped to min/max)
       const calculatedBufferSize = Math.floor(this.size * BUFFER_PERCENTAGE);
       this.resizeBuffer(calculatedBufferSize);
@@ -292,6 +318,10 @@ export class HttpSource implements SourceAdapter {
       // Re-throw other errors (403, 404, etc.)
       throw error;
     }
+  }
+
+  getContentDispositionFilename(): string | null {
+    return this._contentDispositionFilename;
   }
 
   private get bufferEnd(): number {

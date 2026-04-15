@@ -2427,6 +2427,13 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
     return this.mediaInfo;
   }
 
+  getContentDispositionFilename(): string | null {
+    if (this.source instanceof HttpSource) {
+      return this.source.getContentDispositionFilename();
+    }
+    return null;
+  }
+
   /**
    * Get HLS video element (DRM mode) for direct DOM insertion
    */
