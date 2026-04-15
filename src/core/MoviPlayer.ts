@@ -102,6 +102,14 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
   private seekingToKeyframeStartTime: number = 0;
   private static readonly KEYFRAME_SEEK_TIMEOUT = 5000; // 5 seconds timeout
 
+  // Prebuffer targets — accumulate this much before reporting "ready" so
+  // play() doesn't immediately stall on short videos where the demux burst
+  // outruns the HTTP stream.
+  private static readonly PREBUFFER_AUDIO_SECONDS = 0.5;
+  private static readonly PREBUFFER_VIDEO_FRAMES = 2;
+  private static readonly PREBUFFER_MAX_WALL_MS = 5000;
+  private static readonly PREBUFFER_MAX_PACKETS = 400;
+
   // Seek target time - skip packets before this time to ensure accurate seeking
   // When seeking, FFmpeg seeks to the nearest keyframe BEFORE the target time
   // We need to decode but not display/play packets before the target time
@@ -473,6 +481,10 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
       // Emit duration
       this.emit("durationChange", this.mediaInfo.duration);
 
+      // Prebuffer a small amount of media so play() doesn't immediately
+      // stall on short videos (see prebuffer() for details).
+      await this.prebuffer();
+
       this.stateManager.setState("ready");
       this.emit("loadEnd", undefined);
 
@@ -641,6 +653,114 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
         );
       }
     }
+  }
+
+  /**
+   * Demux + decode a small amount of media before reporting "ready".
+   * On short videos the normal demux burst can drain the entire file faster
+   * than the HTTP source delivers bytes, causing the stall detector to trip
+   * the moment play() starts. Filling the renderer queues up-front avoids it.
+   */
+  private async prebuffer(): Promise<void> {
+    if (!this.demuxer) return;
+
+    const hasVideoTrack = !!this.trackManager.getActiveVideoTrack();
+    // If a separate <audio> element handles audio, the in-file audio track
+    // isn't fed to our audio decoder — skip its target so we don't hang.
+    const hasInFileAudio =
+      !!this.trackManager.getActiveAudioTrack() &&
+      !this.disableAudio &&
+      !this.nativeAudioEl;
+
+    if (!hasVideoTrack && !hasInFileAudio) return;
+
+    const startWall = performance.now();
+    let packetsRead = 0;
+    let eof = false;
+
+    const targetMet = (): boolean => {
+      const videoOk =
+        !hasVideoTrack ||
+        !this.videoRenderer ||
+        this.videoRenderer.getQueueSize() >= MoviPlayer.PREBUFFER_VIDEO_FRAMES;
+      const audioOk =
+        !hasInFileAudio ||
+        this.audioRenderer.getBufferedDuration() >=
+          MoviPlayer.PREBUFFER_AUDIO_SECONDS;
+      return videoOk && audioOk;
+    };
+
+    while (
+      !targetMet() &&
+      !eof &&
+      packetsRead < MoviPlayer.PREBUFFER_MAX_PACKETS
+    ) {
+      if (performance.now() - startWall > MoviPlayer.PREBUFFER_MAX_WALL_MS) {
+        Logger.warn(
+          TAG,
+          `Prebuffer wall-clock timeout after ${MoviPlayer.PREBUFFER_MAX_WALL_MS}ms`,
+        );
+        break;
+      }
+
+      let packet;
+      try {
+        packet = await this.demuxer.readPacket();
+      } catch (err) {
+        Logger.warn(TAG, "Prebuffer demux error, aborting prebuffer", err);
+        break;
+      }
+
+      if (!packet) {
+        eof = true;
+        break;
+      }
+
+      packetsRead++;
+
+      if (!this.trackManager.isActiveStream(packet.streamIndex)) continue;
+
+      const activeVideo = this.trackManager.getActiveVideoTrack();
+      const activeAudio = this.trackManager.getActiveAudioTrack();
+
+      if (
+        hasVideoTrack &&
+        activeVideo &&
+        activeVideo.id === packet.streamIndex
+      ) {
+        this.videoDecoder.decode(
+          packet.data,
+          packet.timestamp,
+          packet.keyframe,
+          packet.dts,
+        );
+      } else if (
+        hasInFileAudio &&
+        activeAudio &&
+        activeAudio.id === packet.streamIndex
+      ) {
+        this.audioDecoder.decode(
+          packet.data,
+          packet.timestamp,
+          packet.keyframe,
+        );
+      }
+
+      // Yield periodically so async decoder callbacks can land in the
+      // renderer queues we're polling against.
+      if (packetsRead % 8 === 0) {
+        await new Promise((r) => setTimeout(r, 0));
+      }
+    }
+
+    // Final yield to drain any in-flight decoder callbacks before we flip
+    // to "ready" — otherwise the queue check above can underreport.
+    await new Promise((r) => setTimeout(r, 0));
+
+    Logger.info(
+      TAG,
+      `Prebuffer complete: ${packetsRead} packets, audioBuf=${this.audioRenderer.getBufferedDuration().toFixed(2)}s, videoFrames=${this.videoRenderer?.getQueueSize() ?? 0}, eof=${eof}`,
+    );
   }
 
   /**
