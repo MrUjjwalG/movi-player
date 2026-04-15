@@ -88,34 +88,72 @@ User files are never uploaded to any server. All processing happens locally.
 
 ### From video.js
 
-```diff
-- import videojs from 'video.js';
-- const player = videojs('my-video');
-+ import 'movi-player';
-+ // Just use the element directly!
-```
+**Before** — video.js requires the script, the stylesheet, the placeholder `<video>` element, and a JS call to attach the player:
 
 ```html
-<!-- Before: video.js -->
-<video id="my-video" class="video-js">
+<link href="https://vjs.zencdn.net/8.10.0/video-js.css" rel="stylesheet" />
+
+<video id="my-video" class="video-js" controls preload="auto" data-setup="{}">
   <source src="video.mp4" type="video/mp4" />
 </video>
-
-<!-- After: Movi-Player -->
-<movi-player src="video.mp4" controls></movi-player>
 ```
+
+```js
+import videojs from "video.js";
+import "video.js/dist/video-js.css";
+
+const player = videojs("my-video", {
+  controls: true,
+  autoplay: false,
+  preload: "auto",
+});
+
+player.on("ended", () => console.log("done"));
+```
+
+**After** — Movi Player ships as a custom element. Side-effect import registers `<movi-player>`; no stylesheet, no `videojs()` call, no placeholder `<video>`:
+
+```html
+<movi-player id="my-video" src="video.mp4" controls preload="auto"></movi-player>
+```
+
+```js
+import "movi-player";
+
+const player = document.getElementById("my-video");
+player.addEventListener("ended", () => console.log("done"));
+```
+
+The element implements the same `play()` / `pause()` / `currentTime` / events surface as `<video>`, so most existing logic carries over with a `getElementById` instead of a `videojs()` factory call.
 
 ### From hls.js
 
-```diff
-- import Hls from 'hls.js';
-- const hls = new Hls();
-- hls.loadSource('stream.m3u8');
-- hls.attachMedia(video);
-+ import 'movi-player';
-```
+**Before** — hls.js wires up MSE manually on a `<video>` element:
 
 ```html
-<!-- HLS just works out of the box -->
-<movi-player src="stream.m3u8" controls></movi-player>
+<video id="my-video" controls></video>
 ```
+
+```js
+import Hls from "hls.js";
+
+const video = document.getElementById("my-video");
+if (Hls.isSupported()) {
+  const hls = new Hls();
+  hls.loadSource("https://example.com/stream.m3u8");
+  hls.attachMedia(video);
+  hls.on(Hls.Events.MANIFEST_PARSED, () => video.play());
+}
+```
+
+**After** — Movi Player handles HLS internally via hls.js; just point `src` at the manifest:
+
+```html
+<movi-player src="https://example.com/stream.m3u8" controls autoplay></movi-player>
+```
+
+```js
+import "movi-player";
+```
+
+For DRM-protected HLS streams, add the `drm` and `licenseurl` attributes — Movi switches to the native `<video>` + EME pipeline automatically.
