@@ -11481,8 +11481,9 @@ export class MoviElement extends HTMLElement {
     // Replace dots and underscores with spaces
     let title = filename.replace(/[._]/g, " ");
 
-    // Remove common release group / site suffixes (e.g., "-4kHdHub Com", "-YIFY")
-    title = title.replace(/\s*-\s*\w+\s*$/, "");
+    // Remove common release group / site suffixes (e.g., "-4kHdHub Com", "-YIFY", "-HDHub4u Ms")
+    // Only strip if the part after dash looks like a release group (contains digits, dots, or known groups)
+    title = title.replace(/\s*-\s*(?:\w*\d\w*[\w ]*|YIFY|RARBG|YTS|ETRG|SPARKS|GECKOS|EVO|FGT|CMRG|NTb|SiGMA|FLUX|ION10|PECULATE|PSA|QxR|TiGOLE|MeGusta|PAHE|HDHub\w*)\s*$/i, "");
 
     // Truncate at quality/codec markers
     const cutPatterns = /\b(2160p|1080p|720p|480p|4K|UHD|HD|HQ|WEB[ -]?DL|WEB[ -]?Rip|BluRay|BDRip|BRRip|HDRip|DVDRip|HDTV|AMZN|NF|DSNP|HMAX|ATVP|PCOK|PMTP|MA |DDP?\d|AAC|AC3|FLAC|Atmos|TrueHD|DTS|HEVC|H[ .]?26[45]|x26[45]|AV1|VP9|HDR|HDR10|DV|DoVi|Dolby|REMUX|PROPER|REPACK|iNTERNAL|EXTENDED|UNRATED|DC |10bit|8bit)\b/i;
