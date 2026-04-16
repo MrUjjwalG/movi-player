@@ -86,6 +86,14 @@ export class CodecParser {
       return this.getVp8CodecString(extradata);
     }
 
+    if (
+      codecLower === "vvc" ||
+      codecLower === "vvc1" ||
+      codecLower === "vvi1"
+    ) {
+      return this.getVvcCodecString(extradata);
+    }
+
     return null;
   }
 
@@ -312,6 +320,49 @@ export class CodecParser {
     const toTwoDigit = (n: number) => n.toString().padStart(2, "0");
 
     return `vp09.${toTwoDigit(profile)}.${toTwoDigit(level)}.${toTwoDigit(bitDepth)}.${toTwoDigit(chromaSubsampling)}.${toTwoDigit(colorPrimaries)}.${toTwoDigit(transferCharacteristics)}.${toTwoDigit(matrixCoefficients)}.${toTwoDigit(videoFullRangeFlag)}`;
+  }
+
+  /**
+   * Parse VVC (H.266) vvcC configuration record.
+   * Layout: configVersion(8) | flags(16) | ptl_present(1) ...
+   * If ptl_present: ols_idx(9) | num_sublayers(3) | constant_frame_rate(2) | chroma(2)
+   *   | bit_depth_minus8(3) | reserved(5) | ... native_ptl: reserved(2) |
+   *   num_bytes_constraint_info(6) | general_profile_idc(7) | general_tier_flag(1) |
+   *   general_level_idc(8)
+   */
+  private static getVvcCodecString(data: Uint8Array): string | null {
+    if (data.length < 10) {
+      Logger.warn(TAG, `VVC extradata too small: ${data.length}`);
+      return null;
+    }
+
+    const reader = new BitReader(data);
+
+    reader.skipBits(8); // configurationVersion
+    reader.skipBits(16); // lengthSizeMinusOne + flags
+    const ptlPresent = reader.readBits(1);
+    reader.skipBits(7); // reserved
+
+    if (!ptlPresent) {
+      return "vvc1.1.L51"; // fallback
+    }
+
+    reader.skipBits(9); // ols_idx
+    reader.skipBits(3); // num_sublayers
+    reader.skipBits(2); // constant_frame_rate
+    reader.skipBits(2); // chroma_format_idc
+    reader.skipBits(3); // bit_depth_minus8
+    reader.skipBits(5); // reserved
+
+    // native_ptl
+    reader.skipBits(2); // reserved
+    reader.skipBits(6); // num_bytes_constraint_info
+    const profileIdc = reader.readBits(7);
+    const tierFlag = reader.readBits(1);
+    const levelIdc = reader.readBits(8);
+
+    const tierStr = tierFlag ? "H" : "L";
+    return `vvc1.${profileIdc}.${tierStr}${levelIdc}`;
   }
 
   /**

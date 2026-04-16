@@ -891,6 +891,11 @@ export class MoviVideoDecoder {
       return "av01.0.01M.08"; // Main profile, level 2.1, 8-bit
     }
 
+    // VVC / H.266
+    if (codecLower === "vvc" || codecLower === "vvc1" || codecLower === "vvi1") {
+      return "vvc1.1.L51"; // Main profile, Level 5.1
+    }
+
     // H.263 (legacy codec - browser support varies)
     if (codecLower === "h263" || codecLower === "h263p") {
       return "h263"; // May not be supported by most browsers
@@ -1083,6 +1088,16 @@ export class MoviVideoDecoder {
         // Types 16-21 are IRAP (Intra Random Access Point)
         // 19/20 are IDR, 21 is CRA (Clean Random Access)
         return type >= 16 && type <= 21;
+      }
+
+      // H.266 (VVC) — 2-byte NAL header
+      // Byte 1: nal_unit_type(5) | nuh_temporal_id_plus1(3)
+      // IDR_W_RADL=7, IDR_N_LP=8, CRA=9, GDR=10
+      if (codec.includes("vvc1") || codec.includes("vvi1")) {
+        if (headerPos + 1 < data.length) {
+          const type = (data[headerPos + 1] >> 3) & 0x1f;
+          return type >= 7 && type <= 9;
+        }
       }
     } catch (e) {}
 

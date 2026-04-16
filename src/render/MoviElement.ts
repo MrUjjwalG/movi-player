@@ -11555,7 +11555,9 @@ export class MoviElement extends HTMLElement {
   }
 
   set hdr(value: boolean) {
-    this._hdr = !!value;
+    const v = !!value;
+    if (this._hdr === v) return;
+    this._hdr = v;
     if (this._hdr) {
       this.setAttribute("hdr", "");
     } else {
