@@ -15,6 +15,7 @@ import type {
   SubtitleTrack,
   SubtitleSourceEntry,
   SubtitleCue,
+  Packet,
 } from "../types";
 import { EventEmitter } from "../events/EventEmitter";
 import {
@@ -122,6 +123,13 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
     timestamp: number;
     keyframe: boolean;
   }> = [];
+
+  // Packets read during prebuffer — stashed unmodified so that normal
+  // playback consumes them before resuming demux. We cannot decode during
+  // prebuffer because (a) video frames would be dropped by the "playing"
+  // state gate in setOnFrame and (b) the audio renderer eagerly schedules
+  // buffers on AudioContext which would start audio playback early.
+  private pendingPrebufferPackets: Packet[] = [];
 
   // Post-seek throttling to prevent stuttering on low-end devices
   private justSeeked: boolean = false;
@@ -656,17 +664,21 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
   }
 
   /**
-   * Demux + decode a small amount of media before reporting "ready".
-   * On short videos the normal demux burst can drain the entire file faster
-   * than the HTTP source delivers bytes, causing the stall detector to trip
-   * the moment play() starts. Filling the renderer queues up-front avoids it.
+   * Pre-read a small amount of media before reporting "ready" and stash the
+   * packets for the normal demux loop to consume. On short videos the demux
+   * burst can drain the file faster than the HTTP source delivers bytes,
+   * tripping the stall detector the moment play() starts; reading ahead
+   * gives the source layer more time to buffer bytes.
+   *
+   * We deliberately do NOT decode here — the video decoder's onFrame
+   * callback drops frames whenever state !== "playing", and the audio
+   * renderer starts AudioContext playback the moment samples arrive. Both
+   * break if we decode during prebuffer.
    */
   private async prebuffer(): Promise<void> {
     if (!this.demuxer) return;
 
     const hasVideoTrack = !!this.trackManager.getActiveVideoTrack();
-    // If a separate <audio> element handles audio, the in-file audio track
-    // isn't fed to our audio decoder — skip its target so we don't hang.
     const hasInFileAudio =
       !!this.trackManager.getActiveAudioTrack() &&
       !this.disableAudio &&
@@ -675,25 +687,21 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
     if (!hasVideoTrack && !hasInFileAudio) return;
 
     const startWall = performance.now();
-    let packetsRead = 0;
+    let videoPacketsStashed = 0;
+    let audioDurationStashed = 0;
     let eof = false;
 
-    const targetMet = (): boolean => {
-      const videoOk =
-        !hasVideoTrack ||
-        !this.videoRenderer ||
-        this.videoRenderer.getQueueSize() >= MoviPlayer.PREBUFFER_VIDEO_FRAMES;
-      const audioOk =
-        !hasInFileAudio ||
-        this.audioRenderer.getBufferedDuration() >=
-          MoviPlayer.PREBUFFER_AUDIO_SECONDS;
-      return videoOk && audioOk;
-    };
+    const videoTargetMet = () =>
+      !hasVideoTrack ||
+      videoPacketsStashed >= MoviPlayer.PREBUFFER_VIDEO_FRAMES;
+    const audioTargetMet = () =>
+      !hasInFileAudio ||
+      audioDurationStashed >= MoviPlayer.PREBUFFER_AUDIO_SECONDS;
 
     while (
-      !targetMet() &&
+      (!videoTargetMet() || !audioTargetMet()) &&
       !eof &&
-      packetsRead < MoviPlayer.PREBUFFER_MAX_PACKETS
+      this.pendingPrebufferPackets.length < MoviPlayer.PREBUFFER_MAX_PACKETS
     ) {
       if (performance.now() - startWall > MoviPlayer.PREBUFFER_MAX_WALL_MS) {
         Logger.warn(
@@ -703,7 +711,7 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
         break;
       }
 
-      let packet;
+      let packet: Packet | null;
       try {
         packet = await this.demuxer.readPacket();
       } catch (err) {
@@ -716,7 +724,7 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
         break;
       }
 
-      packetsRead++;
+      this.pendingPrebufferPackets.push(packet);
 
       if (!this.trackManager.isActiveStream(packet.streamIndex)) continue;
 
@@ -728,38 +736,19 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
         activeVideo &&
         activeVideo.id === packet.streamIndex
       ) {
-        this.videoDecoder.decode(
-          packet.data,
-          packet.timestamp,
-          packet.keyframe,
-          packet.dts,
-        );
+        videoPacketsStashed++;
       } else if (
         hasInFileAudio &&
         activeAudio &&
         activeAudio.id === packet.streamIndex
       ) {
-        this.audioDecoder.decode(
-          packet.data,
-          packet.timestamp,
-          packet.keyframe,
-        );
-      }
-
-      // Yield periodically so async decoder callbacks can land in the
-      // renderer queues we're polling against.
-      if (packetsRead % 8 === 0) {
-        await new Promise((r) => setTimeout(r, 0));
+        audioDurationStashed += packet.duration > 0 ? packet.duration : 0.02;
       }
     }
 
-    // Final yield to drain any in-flight decoder callbacks before we flip
-    // to "ready" — otherwise the queue check above can underreport.
-    await new Promise((r) => setTimeout(r, 0));
-
     Logger.info(
       TAG,
-      `Prebuffer complete: ${packetsRead} packets, audioBuf=${this.audioRenderer.getBufferedDuration().toFixed(2)}s, videoFrames=${this.videoRenderer?.getQueueSize() ?? 0}, eof=${eof}`,
+      `Prebuffer complete: stashed=${this.pendingPrebufferPackets.length}, video=${videoPacketsStashed}, audio=${audioDurationStashed.toFixed(2)}s, eof=${eof}`,
     );
   }
 
@@ -1355,17 +1344,24 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
           }
         }
 
-        // When separate audio demuxer exists, primary demuxer only provides video/subtitle
-        const packet = await this.demuxer.readPacket();
+        // Drain prebuffered packets first so play() doesn't re-read them
+        // from the source. Stashed packets are pre-seek and always safe.
+        let packet: Packet | null;
+        if (this.pendingPrebufferPackets.length > 0) {
+          packet = this.pendingPrebufferPackets.shift()!;
+        } else {
+          // When separate audio demuxer exists, primary demuxer only provides video/subtitle
+          packet = await this.demuxer.readPacket();
 
-        // Check again after async readPacket - seek may have started during read
-        if (this.seekSessionId !== currentSessionId) {
-          Logger.debug(
-            TAG,
-            "ProcessLoop aborted after readPacket: new seek started",
-          );
-          this.demuxInFlight = false; // Reset flag so new seek can proceed
-          return;
+          // Check again after async readPacket - seek may have started during read
+          if (this.seekSessionId !== currentSessionId) {
+            Logger.debug(
+              TAG,
+              "ProcessLoop aborted after readPacket: new seek started",
+            );
+            this.demuxInFlight = false; // Reset flag so new seek can proceed
+            return;
+          }
         }
 
         if (!packet) {
@@ -1679,6 +1675,8 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
       this.seekTargetTime = seconds + this.startTime;
       this.waitingForVideoSync = true;
       this.pendingAudioPackets = [];
+      // Stashed prebuffer packets are pre-seek and now stale
+      this.pendingPrebufferPackets = [];
 
       // Enable post-seek throttling to prevent overwhelming low-end devices
       this.justSeeked = true;
@@ -3510,6 +3508,8 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
       this.hlsWrapper.destroy();
       this.hlsWrapper = null;
     }
+
+    this.pendingPrebufferPackets = [];
 
     // Close resources
     this.videoDecoder.close();
