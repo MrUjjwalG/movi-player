@@ -39,6 +39,7 @@ export class MoviVideoDecoder {
   private lastHardwareRetryTime: number = 0;
   private isResurrecting: boolean = false;
   private forceSoftware: boolean = false;
+  private requiresSoftware: boolean = false; // True for 4:2:2/4:4:4 content that HW can't decode
   private targetFps: number = 0;
   private lastKeyframeChunk: { data: Uint8Array; timestamp: number } | null =
     null;
@@ -68,6 +69,7 @@ export class MoviVideoDecoder {
 
     // Reset fallback state on new configuration
     this.useSoftware = false;
+    this.requiresSoftware = false;
     this.openGopErrorCount = 0;
     this.hardwareRetryCount = 0;
     this.lastHardwareRetryTime = 0;
@@ -80,6 +82,18 @@ export class MoviVideoDecoder {
     if (this.forceSoftware) {
       Logger.info(TAG, "Force software decoding enabled, using WASM decoder");
       this.useSoftware = true;
+      return this.initSoftwareDecoder();
+    }
+
+    // HEVC Rext 4:2:2/4:4:4 at 4K+: Chrome's hardware HEVC decoder handles
+    // 4:2:2 up to 1080p but not at 4K. VP9/AV1 handle 4:2:2 at 4K fine.
+    const pf = track.pixelFormat?.toLowerCase() ?? "";
+    const is422or444 = pf && !pf.includes("420") && (pf.includes("422") || pf.includes("444"));
+    const isHevc = track.codec.toLowerCase() === "hevc" || track.codec.toLowerCase() === "h265";
+    if (is422or444 && track.width > 1920 && isHevc) {
+      Logger.info(TAG, `${track.pixelFormat} at ${track.width}x${track.height} exceeds hardware 4:2:2 limit, using software decoder`);
+      this.useSoftware = true;
+      this.requiresSoftware = true;
       return this.initSoftwareDecoder();
     }
 
@@ -201,28 +215,47 @@ export class MoviVideoDecoder {
         // This handles cases where the container/extradata specifies a very high/specific profile (e.g. H153)
         // that the browser rejects, but a generic compatible profile (L93) might work.
 
-        // Special strict fallback for HEVC Rext (Profile 4) based on user report
+        // Special fallback for HEVC Rext (Profile 4): many 8-bit/10-bit files are
+        // tagged Rext by FFmpeg but actually decode fine as Main10 or Main profile.
+        // Try Main10 first (profile 2) with the actual level, then Main (profile 1).
         if (codecString && codecString.startsWith("hvc1.4")) {
-          const rextFallback = "hvc1.4.10.L93.B0";
-          if (codecString !== rextFallback) {
-            Logger.info(
-              TAG,
-              `HEVC Rext detected. Retrying with compatible fallback string: ${rextFallback}`,
-            );
-            const rextConfig = { ...config, codec: rextFallback };
-            if (rextConfig.colorSpace) delete rextConfig.colorSpace; // Also strip color for fallback
+          const levelStr = track.level ? `L${track.level}` : "L120";
+          // Try profile-4 strings first (Chrome accepts these for Rext content),
+          // then Main10 (profile 2) with extradata patching as last resort.
+          const rextFallbacks = [
+            `hvc1.4.10.${levelStr}.B0`,  // Rext with actual level (best match)
+            "hvc1.4.10.L93.B0",          // Rext with safe low level
+            `hvc1.2.4.${levelStr}.B0`,   // Main10 with actual level (needs extradata patch)
+          ];
+          for (const fallback of rextFallbacks) {
+            if (fallback === codecString) continue;
+            Logger.info(TAG, `HEVC Rext: trying fallback ${fallback}`);
+            const rextConfig = { ...config, codec: fallback };
+            if (rextConfig.colorSpace) delete rextConfig.colorSpace;
 
-            const rextSupport =
-              await VideoDecoder.isConfigSupported(rextConfig);
+            // If switching to Main10 (profile 2), patch extradata to match —
+            // hardware decoders cross-check codec string vs hvcC header.
+            if (fallback.startsWith("hvc1.2") && rextConfig.description) {
+              const descBytes = rextConfig.description instanceof Uint8Array
+                ? rextConfig.description
+                : new Uint8Array(rextConfig.description as ArrayBuffer);
+              if (descBytes.length > 5 && (descBytes[1] & 0x1f) === 4) {
+                const patched = new Uint8Array(descBytes);
+                patched[1] = (patched[1] & 0xe0) | 2; // Profile IDC 4 → 2
+                rextConfig.description = patched;
+                Logger.info(TAG, `Patched extradata: Profile IDC 4 → 2 (Main10)`);
+              }
+            }
+
+            const rextSupport = await VideoDecoder.isConfigSupported(rextConfig);
             if (rextSupport.supported) {
-              Logger.info(
-                TAG,
-                `HEVC Rext fallback string IS supported. Switching to ${rextFallback}`,
-              );
-              config.codec = rextFallback;
+              Logger.info(TAG, `HEVC Rext fallback ${fallback} IS supported. Switching.`);
+              config.codec = fallback;
+              config.description = rextConfig.description;
               if (config.colorSpace) delete config.colorSpace;
-              codecString = rextFallback;
+              codecString = fallback;
               support = rextSupport;
+              break;
             }
           }
         }
@@ -495,8 +528,8 @@ export class MoviVideoDecoder {
 
     if (this.useSoftware && this.swDecoder) {
       // RESURRECTION LOGIC: Periodically try to switch back to hardware only on a TRUE IDR keyframe
-      // DISABLED if software is explicitly forced
-      if (keyframe && !this.forceSoftware && this.shouldRetryHardware(data)) {
+      // DISABLED if software is explicitly forced or content needs software (4:2:2/4:4:4)
+      if (keyframe && !this.forceSoftware && !this.requiresSoftware && this.shouldRetryHardware(data)) {
         Logger.info(
           TAG,
           `Found a sync frame! Attempting hardware resurrection (Attempt ${this.hardwareRetryCount + 1})...`,
@@ -702,45 +735,24 @@ export class MoviVideoDecoder {
     // We will attempt to reset/reconfigure the hardware decoder instead.
     if (
       this.currentProfile === 4 &&
-      this.lastConfig?.codec.startsWith("hvc1.4.")
+      this.lastConfig?.codec.startsWith("hvc1.")
     ) {
       Logger.warn(TAG, "HEVC Rext profile error.");
 
-      const fallbackStr = "hvc1.4.10.L93.B0";
+      // Use Rext (profile 4) with actual level from the track
+      const levelStr = this.currentTrack?.level ? `L${this.currentTrack.level}` : "L120";
+      const fallbackStr = `hvc1.4.10.${levelStr}.B0`;
       // If we aren't already using the fallback string, try switching to it
       if (this.lastConfig.codec !== fallbackStr) {
         Logger.info(
           TAG,
-          `Attempting recovery by switching to compatible fallback string: ${fallbackStr}`,
+          `Attempting recovery by switching to Rext fallback: ${fallbackStr}`,
         );
 
         this.lastConfig.codec = fallbackStr;
+        // No extradata patching needed — staying on profile 4 (Rext)
 
-        // CRITICAL: Patch extradata (description) to match the fallback profile (Main10) to avoid profile mismatch errors.
-        // Browser decoder might cross-check codec string vs extradata headers.
-        // By changing Profile IDC in extradata from 4 (Rext) to 2 (Main 10), we align them.
-        if (
-          this.lastConfig.description &&
-          this.lastConfig.description.length > 5
-        ) {
-          const patched = new Uint8Array(this.lastConfig.description);
-          // hvcC header:
-          // Byte 0: Configuration Version
-          // Byte 1: ProfileIndication (Space(2) + Tier(1) + ProfileIdc(5))
-          // Mask out profile (0x1F) and set to 2 (Main 10)
-          const originalProfile = patched[1] & 0x1f;
-          if (originalProfile === 4) {
-            // Only patch if it is Rext
-            patched[1] = (patched[1] & 0xe0) | 2;
-            Logger.warn(
-              TAG,
-              `Patched HEVC extradata: Spoofed Profile IDC from ${originalProfile} to 2 (Main 10) to bypass strict hardware checks.`,
-            );
-            this.lastConfig.description = patched;
-          }
-        }
-
-        this.openGopErrorCount = 0; // Added as per instruction
+        this.openGopErrorCount = 0;
         // Reconfigure with new string
         try {
           if (this.decoder && this.decoder.state !== "closed") {
@@ -825,12 +837,14 @@ export class MoviVideoDecoder {
     ) {
       // Handle HEVC profiles
       if (profile === 4) {
-        // FF_PROFILE_HEVC_REXT
+        // FF_PROFILE_HEVC_REXT — Chrome accepts hvc1.4 codec strings for Rext.
+        // Use actual level from the stream for correct resolution/fps support.
+        const levelStr = _level ? `L${_level}` : "L120";
         Logger.info(
           TAG,
-          "Detected HEVC Rext profile. Trying compatible Main10 string map.",
+          `Detected HEVC Rext profile. Using hvc1.4.10.${levelStr}.B0`,
         );
-        return "hvc1.4.10.L93.B0";
+        return `hvc1.4.10.${levelStr}.B0`;
       }
 
       // Main 10 Profile (Profile 2)
@@ -863,27 +877,33 @@ export class MoviVideoDecoder {
     }
 
     // VP9
+    // vp09.{profile}.{level}.{bitDepth}.{chromaSub}.{primaries}.{transfer}.{matrix}.{range}
+    // Chroma: 00=4:4:4, 01=4:2:0, 02=4:2:2, 03=4:2:0 colocated
     if (codecLower === "vp9") {
-      // Handle Profile 2 (10-bit / HDR)
+      // Determine level from resolution: 4K→51, 1080p→41, 720p→31
+      const level = _width && _width > 1920 ? 51 : _width && _width > 1280 ? 41 : 31;
+      const levelStr = level.toString().padStart(2, "0");
+
+      // Profile 1: 8-bit 4:2:2/4:4:4
+      if (profile === 1) {
+        // Chroma: 02 for 4:2:2 (most common for Profile 1)
+        Logger.info(TAG, `Mapping VP9 Profile 1 to vp09.01.${levelStr}.08.02 (4:2:2 8-bit)`);
+        return `vp09.01.${levelStr}.08.02.01.01.01.00`;
+      }
+
+      // Profile 2: 10-bit 4:2:0 (HDR)
       if (profile === 2) {
-        // vp09.profile.level.bitDepth.chroma.primaries.transfer.matrix.range
-        // Profile 2, Level 5.1 (51), 10-bit (10), 4:2:0 (01)
-        // Color: BT.2020 (09), PQ (16), BT.2020nc (09), TV Range (00)
-        // Note: Browser might override color based on bitstream, but setting 10-bit profile is critical.
-        Logger.info(
-          TAG,
-          "Mapping VP9 Profile 2 to vp09.02.51.10.01.09.16.09.00 (HDR)",
-        );
-        return "vp09.02.51.10.01.09.16.09.00";
+        Logger.info(TAG, `Mapping VP9 Profile 2 to vp09.02.${levelStr}.10 (HDR)`);
+        return `vp09.02.${levelStr}.10.01.09.16.09.00`;
       }
 
-      // Handle Profile 3 (10/12-bit 4:2:2 / HDR) - Rare but possible
+      // Profile 3: 10/12-bit 4:2:2/4:4:4 (HDR)
       if (profile === 3) {
-        return "vp09.03.51.10.01.09.16.09.00";
+        return `vp09.03.${levelStr}.10.02.09.16.09.00`;
       }
 
-      // Generic fallback: Profile 0, Level 4.1, 8-bit, 4:2:0
-      return "vp09.00.41.08.01.01.01.01.00";
+      // Profile 0: 8-bit 4:2:0 (default)
+      return `vp09.00.${levelStr}.08.01.01.01.01.00`;
     }
 
     // AV1

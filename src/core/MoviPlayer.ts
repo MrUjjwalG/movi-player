@@ -137,6 +137,15 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
   private startTime: number = 0; // Media start time (PTS offset)
   private static readonly POST_SEEK_THROTTLE_MS = 1000; // Throttle aggressive buffering for 1000ms after seek to stabilize playback
 
+  // Pause-time buffering: continue demuxing while paused so seek within buffered
+  // area is instant and playback resumes without stall (like YouTube).
+  // YouTube buffers ~2-5 minutes ahead while paused, then stops.
+  private pauseBufferTimerId: number | null = null;
+  private static readonly PAUSE_BUFFER_INTERVAL_MS = 100; // Demux every 100ms while paused
+  private static readonly PAUSE_BUFFER_MAX_PACKETS = 3000; // Safety cap on packet count
+  private static readonly PAUSE_BUFFER_AUDIO_SECONDS = 180; // ~3 minutes audio ahead (YouTube-like)
+  private static readonly PAUSE_BUFFER_VIDEO_FRAMES = 5400; // ~3 minutes @ 30fps
+
   constructor(config: PlayerConfig) {
     super();
 
@@ -760,6 +769,9 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
       return this.hlsWrapper.play();
     }
 
+    // Stop pause-time buffering — we're resuming active playback
+    this.stopPauseBuffering();
+
     if (!this.stateManager.canPlay()) {
       Logger.warn(TAG, "Cannot play in current state");
       return;
@@ -941,6 +953,7 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
         this.animationFrameId = null;
       }
       this.stopBackgroundTimer();
+      this.startPauseBuffering();
       Logger.info(TAG, "Paused during buffering");
       return;
     }
@@ -968,6 +981,9 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
       this.animationFrameId = null;
     }
     this.stopBackgroundTimer();
+
+    // Continue buffering ahead while paused (YouTube-like behavior)
+    this.startPauseBuffering();
 
     Logger.info(TAG, "Paused");
   }
@@ -1067,7 +1083,8 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
     } else {
       Logger.info(TAG, "Seek completed in paused state");
       this.stateManager.setState("paused");
-      // Don't start clock or audio
+      // Don't start clock or audio — but continue buffering ahead
+      this.startPauseBuffering();
     }
 
     // Emit seeked event now that we are actually ready
@@ -1593,6 +1610,9 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
       throw new Error("Demuxer not initialized");
     }
 
+    // Stop pause-time buffering — seek invalidates stashed packets
+    this.stopPauseBuffering();
+
     // Track intent: if we were playing (or already seeking but originally playing), we want to resume
     // During buffering, preserve the pre-buffering play/pause intent
     if (currentState !== "seeking") {
@@ -1679,7 +1699,15 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
       this.pendingPrebufferPackets = [];
 
       // Enable post-seek throttling to prevent overwhelming low-end devices
-      this.justSeeked = true;
+      // BUT skip throttling when seeking within already-buffered data — the bytes
+      // are already local so aggressive bursting won't cause network stalls.
+      const seekInBufferedRange = this.isSeekTargetBuffered(seconds);
+      if (seekInBufferedRange) {
+        this.justSeeked = false;
+        Logger.info(TAG, "Seek within buffered range — skipping post-seek throttle");
+      } else {
+        this.justSeeked = true;
+      }
       this.seekTime = performance.now();
 
       if (this.seekSessionId !== mySessionId) return; // Superceded
@@ -1694,14 +1722,15 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
         this.videoRenderer.startPresentationLoop();
       }
 
-      // Safety timeout: if seek doesn't complete in 3s, force completion
-      // This prevents loading state from hanging forever on slow devices
+      // Safety timeout: force seek completion if frames don't arrive in time.
+      // Shorter timeout for buffered seeks since data is already local.
+      const seekTimeoutMs = seekInBufferedRange ? 1500 : 3000;
       const seekTimeout = setTimeout(() => {
         if (this.seekSessionId === mySessionId && this.waitingForVideoSync) {
-          Logger.warn(TAG, `Seek timeout after 3s, forcing completion at ${seconds}s`);
+          Logger.warn(TAG, `Seek timeout after ${seekTimeoutMs}ms, forcing completion at ${seconds}s`);
           this.notifySeekCompletion(seconds + this.startTime);
         }
-      }, 3000);
+      }, seekTimeoutMs);
 
       // Clear timeout if seek completes or is superseded
       const clearSeekTimeout = () => {
@@ -1721,6 +1750,44 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
       }
       throw error;
     }
+  }
+
+  /**
+   * Check if seek target time falls within the already-buffered byte range.
+   * Uses linear byte→time estimation (same as getBufferedTime).
+   */
+  private isSeekTargetBuffered(seekSeconds: number): boolean {
+    if (!this.mediaInfo || !this.source || this.fileSize <= 0) return false;
+    const duration = this.mediaInfo.duration;
+    if (duration <= 0) return false;
+
+    if (this.source instanceof FileSource) return true;
+
+    if (this.source instanceof HttpSource) {
+      // Entire file is in memory — every seek is local
+      if (this.source.isFullyCached()) return true;
+
+      const bufferStartBytes = this.source.getBufferStart();
+      const bufferEndBytes = this.source.getBufferedEnd();
+      // Convert seek target to estimated byte offset
+      const seekRatio = Math.min(1, (seekSeconds + this.startTime) / (duration + this.startTime));
+      const seekByteEstimate = seekRatio * this.fileSize;
+      // Check if estimated byte position is within buffered window (with margin for keyframe before)
+      const margin = this.fileSize * 0.02; // 2% margin for keyframe before target
+      return seekByteEstimate >= bufferStartBytes - margin && seekByteEstimate <= bufferEndBytes;
+    }
+
+    // For other sources with getBufferedEnd
+    if ("getBufferedEnd" in this.source) {
+      const bufferEndBytes = (this.source as any).getBufferedEnd();
+      if (bufferEndBytes > 0) {
+        const seekRatio = Math.min(1, (seekSeconds + this.startTime) / (duration + this.startTime));
+        const seekByteEstimate = seekRatio * this.fileSize;
+        return seekByteEstimate <= bufferEndBytes;
+      }
+    }
+
+    return false;
   }
 
   /**
@@ -3335,6 +3402,100 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
   }
 
   /**
+   * Start pause-time buffering: demux packets while paused so that
+   * resume/seek within buffered area is near-instant (YouTube-like behavior).
+   * Stashes packets into pendingPrebufferPackets without decoding.
+   */
+  private startPauseBuffering(): void {
+    if (this.pauseBufferTimerId !== null) return;
+    if (!this.demuxer || this.eofReached) return;
+    // Only for HTTP sources — local files are already fully available
+    if (this.source instanceof FileSource) return;
+
+    Logger.debug(TAG, "Starting pause-time buffering");
+    this.pauseBufferTimerId = window.setInterval(() => {
+      this.pauseBufferTick();
+    }, MoviPlayer.PAUSE_BUFFER_INTERVAL_MS);
+  }
+
+  private stopPauseBuffering(): void {
+    if (this.pauseBufferTimerId !== null) {
+      clearInterval(this.pauseBufferTimerId);
+      this.pauseBufferTimerId = null;
+      Logger.debug(TAG, "Stopped pause-time buffering");
+    }
+  }
+
+  private pauseBufferTick = async () => {
+    // Guard: only buffer while actually paused
+    if (this.stateManager.getState() !== "paused") {
+      this.stopPauseBuffering();
+      return;
+    }
+    // Don't interfere with active WASM operations
+    if (this.demuxInFlight || !this.demuxer) return;
+    if (this.eofReached) {
+      this.stopPauseBuffering();
+      return;
+    }
+
+    // Check if we've buffered enough
+    const stashedCount = this.pendingPrebufferPackets.length;
+    if (stashedCount >= MoviPlayer.PAUSE_BUFFER_MAX_PACKETS) {
+      Logger.debug(TAG, `Pause buffer full: ${stashedCount} packets stashed`);
+      this.stopPauseBuffering();
+      return;
+    }
+
+    // Check audio/video targets
+    let audioDuration = 0;
+    let videoFrames = 0;
+    for (const pkt of this.pendingPrebufferPackets) {
+      const activeVideo = this.trackManager.getActiveVideoTrack();
+      const activeAudio = this.trackManager.getActiveAudioTrack();
+      if (activeVideo && pkt.streamIndex === activeVideo.id) {
+        videoFrames++;
+      } else if (activeAudio && pkt.streamIndex === activeAudio.id) {
+        audioDuration += pkt.duration ?? 0;
+      }
+    }
+
+    if (audioDuration >= MoviPlayer.PAUSE_BUFFER_AUDIO_SECONDS &&
+        videoFrames >= MoviPlayer.PAUSE_BUFFER_VIDEO_FRAMES) {
+      Logger.debug(TAG, `Pause buffer targets met: audio=${audioDuration.toFixed(1)}s, video=${videoFrames} frames`);
+      this.stopPauseBuffering();
+      return;
+    }
+
+    try {
+      this.demuxInFlight = true;
+      this.demuxInFlightStartTime = performance.now();
+
+      // Read a small burst of packets
+      const burstSize = 10;
+      for (let i = 0; i < burstSize; i++) {
+        if (this.stateManager.getState() !== "paused") break;
+        if (this.pendingPrebufferPackets.length >= MoviPlayer.PAUSE_BUFFER_MAX_PACKETS) break;
+
+        const packet = await this.demuxer.readPacket();
+        if (!packet) {
+          this.eofReached = true;
+          break;
+        }
+
+        // Only stash packets for active tracks
+        if (this.trackManager.isActiveStream(packet.streamIndex)) {
+          this.pendingPrebufferPackets.push(packet);
+        }
+      }
+    } catch (e) {
+      Logger.error(TAG, "Pause buffer demux error", e);
+    } finally {
+      this.demuxInFlight = false;
+    }
+  };
+
+  /**
    * Release WakeLock
    */
   private async releaseWakeLock(): Promise<void> {
@@ -3502,6 +3663,7 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
       cancelAnimationFrame(this.animationFrameId);
     }
     this.stopBackgroundTimer();
+    this.stopPauseBuffering();
 
     // Destroy HLS wrapper
     if (this.hlsWrapper) {

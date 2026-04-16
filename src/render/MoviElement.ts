@@ -54,6 +54,7 @@ export class MoviElement extends HTMLElement {
   private controlsTimeout: number | null = null;
   private isOverControls: boolean = false;
   private isSeeking: boolean = false;
+  private isPosterSeek: boolean = false; // True during initial seek(0) to render first frame
   private isDragging: boolean = false;
   private isTouchDragging: boolean = false;
 
@@ -8967,9 +8968,14 @@ export class MoviElement extends HTMLElement {
           // Autoplay may fail due to browser policies
         });
       } else {
-        // Render first frame (poster) if not autoplaying and no custom start time
+        // Render first frame (poster) if not autoplaying and no custom start time.
+        // Mark as poster seek so the loading indicator stays hidden during this seek —
+        // the user shouldn't see a spinner just to render the first frame.
         if (this._startAt === 0 && this.player) {
-          this.player.seek(0).catch(() => {});
+          this.isPosterSeek = true;
+          this.player.seek(0).catch(() => {}).finally(() => {
+            this.isPosterSeek = false;
+          });
         }
       }
 
@@ -9479,7 +9485,8 @@ export class MoviElement extends HTMLElement {
     let shouldShow = false;
 
     // Only show loading for interruption states
-    if (currentState === "seeking" || currentState === "buffering") {
+    // Don't show spinner during poster seek (initial seek(0) to render first frame)
+    if ((currentState === "seeking" || currentState === "buffering") && !this.isPosterSeek) {
       shouldShow = true;
     } else if (currentState === "loading" && duration === 0) {
       // Show loading only during initial load when duration is not yet available

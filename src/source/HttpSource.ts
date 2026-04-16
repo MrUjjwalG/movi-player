@@ -12,9 +12,9 @@ const TAG = "HttpSource";
 
 // Configuration
 const MIN_BUFFER_SIZE = 2 * 1024 * 1024; // 2MB minimum
-const DEFAULT_MAX_BUFFER_SIZE_MB = 520; // Default max buffer size in MB (matches default LRU cache)
-const BUFFER_PERCENTAGE = 0.03; // 3% of file size
-const MAX_STREAM_BUFFER_SIZE = 50 * 1024 * 1024; // 50MB max per streaming session (regardless of total buffer size)
+const DEFAULT_MAX_BUFFER_SIZE_MB = 250; // ~250MB cap (YouTube-like: Chrome gives ~150-300MB per tab for video)
+const BUFFER_PERCENTAGE = 0.08; // 8% of file size — covers ~60-90s of content for large files
+const MAX_STREAM_BUFFER_SIZE = 250 * 1024 * 1024; // Match max buffer — stream until buffer is full
 const CORS_DETECTION_THRESHOLD = 3; // Only treat "Failed to fetch" as CORS after N consecutive failures while online
 // IMPORTANT: Header size increased to 6 Int32 values (24 bytes) to support 64-bit buffer start offsets
 const HEADER_SIZE = 24; // Header bytes for atomics (6 Int32 values)
@@ -60,6 +60,10 @@ export class HttpSource implements SourceAdapter {
 
   // Track maximum buffered position (independent of sliding window)
   private maxBufferedEnd: number = 0;
+
+  // True when the entire file fits in the buffer and has been fully downloaded.
+  // In this state, all reads can be served from memory — no re-fetching needed.
+  private fullyBuffered: boolean = false;
 
   // Force restart tracking (to prevent cascading failures)
   private consecutiveForceRestarts: number = 0;
@@ -289,12 +293,18 @@ export class HttpSource implements SourceAdapter {
         }
       }
 
-      // Resize buffer to 3% of file size (clamped to min/max)
-      const calculatedBufferSize = Math.floor(this.size * BUFFER_PERCENTAGE);
+      // Buffer sizing strategy (YouTube-like):
+      // - Files <= 250MB: cache entire file (instant seek/replay, zero re-fetch)
+      // - Files > 250MB: sliding window at 8% of file size (~60-90s of content)
+      const maxBufferBytes = this.maxBufferSizeMB * 1024 * 1024;
+      const canCacheEntireFile = this.size <= maxBufferBytes;
+      const calculatedBufferSize = canCacheEntireFile
+        ? this.size  // Cache entire file in memory
+        : Math.floor(this.size * BUFFER_PERCENTAGE);
       this.resizeBuffer(calculatedBufferSize);
-      Logger.debug(
+      Logger.info(
         TAG,
-        `Buffer size set to ${(this.bufferSize / 1024 / 1024).toFixed(2)} MB (3% of ${(this.size / 1024 / 1024).toFixed(2)} MB file)`,
+        `Buffer: ${(this.bufferSize / 1024 / 1024).toFixed(1)}MB ${canCacheEntireFile ? '(full file cache)' : `(${(BUFFER_PERCENTAGE * 100)}% sliding window)`} for ${(this.size / 1024 / 1024).toFixed(1)}MB file`,
       );
 
       // Start caching using the known file size to optimal calculation
@@ -342,6 +352,12 @@ export class HttpSource implements SourceAdapter {
    * Start streaming from offset
    */
   private async startStream(fromOffset: number): Promise<void> {
+    // If the entire file is already cached, no need to start a new stream.
+    if (this.fullyBuffered) {
+      Logger.debug(TAG, `startStream(${fromOffset}): skipped — file fully cached`);
+      return;
+    }
+
     await this.stopStream();
 
     Logger.info(TAG, `Starting stream from ${fromOffset}`);
@@ -365,6 +381,9 @@ export class HttpSource implements SourceAdapter {
     this.atomicSetWritePos(0);
     this.atomicSetStreaming(true);
     this.atomicIncrementVersion();
+
+    // Starting a new stream means old full-cache is invalid
+    this.fullyBuffered = false;
 
     // Reset maxBufferedEnd when seeking to new position
     // If the old maxBufferedEnd is outside the new buffer window, it's stale
@@ -414,11 +433,13 @@ export class HttpSource implements SourceAdapter {
         }
 
         // Calculate bounded range end: download at most MAX_STREAM_BUFFER_SIZE
-        // This prevents downloading too much data on seeks in large files
-        const maxDownload = Math.floor(Math.min(
-          MAX_STREAM_BUFFER_SIZE,
-          this.bufferSize * 0.9 // Don't exceed 90% of allocated buffer
-        ));
+        // This prevents downloading too much data on seeks in large files.
+        // When the file fits entirely in the buffer, request the full remainder
+        // so we don't leave a gap at the end that forces a second fetch.
+        const fileCanFit = this.size > 0 && this.bufferSize >= this.size;
+        const maxDownload = fileCanFit
+          ? this.size  // Full file — no limit needed
+          : Math.floor(Math.min(MAX_STREAM_BUFFER_SIZE, this.bufferSize * 0.9));
         const rangeEnd = this.size > 0
           ? Math.min(resumeOffset + maxDownload - 1, this.size - 1)
           : resumeOffset + maxDownload - 1;
@@ -556,14 +577,18 @@ export class HttpSource implements SourceAdapter {
                   this.maxBufferedEnd = currentEnd;
                 }
 
+                // When the entire file fits in the buffer, skip all limit/compaction
+                // checks — just stream straight to EOF. Buffer has room for everything.
+                const fileCanFitInBuffer = this.size > 0 && this.bufferSize >= this.size;
+
                 // Check if buffer is getting full or download limit reached
                 const totalDownloaded = currentEnd - streamBaseOffset;
                 const maxDownload = Math.floor(Math.min(
                   MAX_STREAM_BUFFER_SIZE,
                   this.bufferSize * 0.9
                 ));
-                const limitReached = totalDownloaded >= maxDownload;
-                const bufferAlmostFull = newWritePos >= buffer.length * 0.9;
+                const limitReached = !fileCanFitInBuffer && totalDownloaded >= maxDownload;
+                const bufferAlmostFull = !fileCanFitInBuffer && newWritePos >= buffer.length * 0.9;
 
                 if (limitReached || bufferAlmostFull) {
                   // Try buffer compaction for continuous forward streaming
@@ -595,7 +620,14 @@ export class HttpSource implements SourceAdapter {
 
                 // Check EOF
                 if (this.size > 0 && currentEnd >= this.size) {
-                  Logger.debug(TAG, "Reached EOF, stopping stream");
+                  // Mark fully buffered if the entire file is in the buffer
+                  // (start at 0 and reached EOF, meaning all bytes are present)
+                  const bufStart = this.atomicGetBufferStart();
+                  if (bufStart === 0 && this.bufferSize >= this.size) {
+                    this.fullyBuffered = true;
+                    Logger.info(TAG, `Entire file cached in memory (${(this.size / 1024 / 1024).toFixed(1)}MB)`);
+                  }
+                  Logger.debug(TAG, `Reached EOF (bufferStart=${bufStart}, bufferEnd=${currentEnd}), stopping stream`);
                   this.atomicSetStreaming(false);
                   break;
                 }
@@ -887,6 +919,15 @@ export class HttpSource implements SourceAdapter {
       return new ArrayBuffer(0);
     }
 
+    // Fast path: entire file is cached in memory — serve directly, no network needed.
+    // Use relaxed check: offset must be in buffer, length can extend past EOF
+    // (FFmpeg commonly over-reads; readFromBuffer clamps to available data).
+    if (this.fullyBuffered && offset >= this.atomicGetBufferStart() && offset < this.bufferEnd) {
+      this.consecutiveForceRestarts = 0;
+      Logger.debug(TAG, `Read: served from full-file cache`);
+      return this.readFromBuffer(offset, length);
+    }
+
     // Check persistent head cache first (avoids stream restart for metadata)
     if (this.headBuffer && offset + length <= this.headBuffer.length) {
       const result = new Uint8Array(length);
@@ -914,14 +955,23 @@ export class HttpSource implements SourceAdapter {
     // Optimization: Check if the ACTIVE stream covers this request.
     // If so, we strictly wait for it. Interrupting an active stream that is
     // successfully filling the buffer is inefficient and causes stalls.
+    //
+    // HOWEVER: if the requested offset is far ahead of what's currently buffered,
+    // waiting for sequential download to reach it is wasteful (e.g., WebM/MKV
+    // files where FFmpeg reads the Cues/index from the end of the file during open).
+    // In that case, restart the stream from the requested offset.
     const streamStart = this.atomicGetBufferStart();
-    // Check coverage: Stream is active AND request is within the buffer window it is filling
+    const currentEnd = this.bufferEnd;
+    const gap = offset - currentEnd;
+    // If data is >2MB away, it's cheaper to restart than wait for sequential fill
+    const GAP_RESTART_THRESHOLD = 2 * 1024 * 1024;
     const isCoveredByStream =
       this.atomicIsStreaming() &&
       offset >= streamStart &&
-      offset < streamStart + this.bufferSize;
+      offset < streamStart + this.bufferSize &&
+      gap <= GAP_RESTART_THRESHOLD;
 
-    Logger.debug(TAG, `Read: isCoveredByStream=${isCoveredByStream}`);
+    Logger.debug(TAG, `Read: isCoveredByStream=${isCoveredByStream}, gap=${(gap / 1024).toFixed(0)}KB`);
 
     if (isCoveredByStream) {
       Logger.debug(TAG, `Read: waiting for data from active stream...`);
@@ -972,6 +1022,51 @@ export class HttpSource implements SourceAdapter {
 
         this.consecutiveForceRestarts++;
         this.lastForceRestartTime = now;
+      }
+    }
+
+    // If the main stream is actively filling a full-file-cache buffer,
+    // do a one-off range fetch instead of restarting the stream (which would
+    // discard all already-downloaded data and start over from the new offset).
+    // This handles WebM/MKV Cues reads from the end of file during open().
+    const fileCanFitInBuffer = this.size > 0 && this.bufferSize >= this.size;
+    if (fileCanFitInBuffer && this.atomicIsStreaming() && gap > GAP_RESTART_THRESHOLD) {
+      Logger.info(TAG, `Read: one-off range fetch for offset=${offset}, length=${length} (gap=${(gap / 1024).toFixed(0)}KB, main stream continues)`);
+      try {
+        const rangeEnd = Math.min(offset + length - 1, this.size - 1);
+        const headers: Record<string, string> = {
+          ...this.headers,
+          Range: `bytes=${offset}-${rangeEnd}`,
+        };
+        const response = await fetch(this.url, { headers });
+        if (response.ok || response.status === 206) {
+          const arrayBuffer = await response.arrayBuffer();
+          const data = new Uint8Array(arrayBuffer);
+
+          // Write the fetched data into the buffer at the correct position
+          // (the buffer is sized for the full file, so the offset maps directly)
+          const buffer = this.getBuffer();
+          const bufStart = this.atomicGetBufferStart();
+          const localOffset = offset - bufStart;
+          if (localOffset >= 0 && localOffset + data.length <= buffer.length) {
+            buffer.set(data, localOffset);
+            // Extend writePos if this fetch goes beyond current end
+            const newEnd = localOffset + data.length;
+            if (newEnd > this.atomicGetWritePos()) {
+              // Don't extend writePos — the main stream owns it sequentially.
+              // Instead, just serve the data directly.
+            }
+          }
+
+          // Serve the fetched data directly
+          const result = new Uint8Array(data.length);
+          result.set(data);
+          this.position = offset + data.length;
+          this.consecutiveForceRestarts = 0;
+          return result.buffer;
+        }
+      } catch (e) {
+        Logger.warn(TAG, `One-off range fetch failed, falling back to stream restart`, e);
       }
     }
 
@@ -1033,12 +1128,23 @@ export class HttpSource implements SourceAdapter {
   }
 
   /**
+   * Returns true when the entire file has been downloaded and is cached in the buffer.
+   * In this state, all seek/replay operations are served from memory (zero network).
+   */
+  isFullyCached(): boolean {
+    return this.fullyBuffered;
+  }
+
+  /**
    * Get the current buffered end position in bytes
    * This represents the furthest byte that has been buffered
    * Uses the maximum of current buffer window and historical max position,
    * but caps it to not exceed what's actually available
    */
   getBufferedEnd(): number {
+    // Entire file is in memory — report full size
+    if (this.fullyBuffered && this.size > 0) return this.size;
+
     const currentBufferEnd = this.bufferEnd;
     const bufferStart = this.atomicGetBufferStart();
 
