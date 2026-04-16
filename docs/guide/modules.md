@@ -4,11 +4,13 @@ Movi-Player is designed with modularity in mind. Use only what you need.
 
 ## Module Overview
 
-| Module      | Import Path           | Size   | Use Case                                |
-| ----------- | --------------------- | ------ | --------------------------------------- |
-| **Demuxer** | `movi-player/demuxer` | ~45KB  | Metadata, HDR detection, packet reading |
-| **Player**  | `movi-player/player`  | ~180KB | Playback control, custom UI             |
-| **Element** | `movi-player`         | ~410KB | Full UI player (drop-in)                |
+| Module      | Import Path           | Size   | Gzip    | Brotli  | Use Case                                |
+| ----------- | --------------------- | ------ | ------- | ------- | --------------------------------------- |
+| **Demuxer** | `movi-player/demuxer` | ~45KB  | 2.31 MB | 1.74 MB | Metadata, HDR detection, packet reading |
+| **Player**  | `movi-player/player`  | ~180KB | 2.52 MB | 1.91 MB | Playback control, custom UI             |
+| **Element** | `movi-player` / `movi-player/element` | ~410KB | 2.57 MB | 1.95 MB | Full UI player (drop-in)                |
+
+> Module sizes (first column) exclude the embedded WASM binary. Gzip/Brotli columns show the total transfer size including WASM. Enable Brotli compression on your server for optimal delivery.
 
 ## Demuxer Module (~45KB)
 

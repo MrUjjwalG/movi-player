@@ -51,6 +51,14 @@ npm i movi-player
 ### HTML Element (simplest)
 
 ```html
+<script type="module" src="https://cdn.jsdelivr.net/npm/movi-player/dist/element.js"></script>
+
+<movi-player src="video.mp4" controls autoplay muted></movi-player>
+```
+
+Or with npm:
+
+```html
 <script type="module">
   import "movi-player";
 </script>
@@ -141,11 +149,13 @@ Use cases: video validators, asset management, HDR detection pipelines, search i
 
 ## Modules
 
-| Module | Size | What you get |
-|---|---|---|
-| `movi-player` | ~410KB | Full player with UI, controls, gestures |
-| `movi-player/player` | ~180KB | Programmatic playback, no UI |
-| `movi-player/demuxer` | ~50KB | Metadata extraction, decoding only |
+| Module | Size | Gzip | Brotli | What you get |
+|---|---|---|---|---|
+| `movi-player` / `movi-player/element` | ~410KB | 2.57 MB | 1.95 MB | Full player with UI, controls, gestures |
+| `movi-player/player` | ~180KB | 2.52 MB | 1.91 MB | Programmatic playback, no UI |
+| `movi-player/demuxer` | ~50KB | 2.31 MB | 1.74 MB | Metadata extraction, decoding only |
+
+> **Note:** Module sizes (first column) exclude the embedded WASM binary. Gzip/Brotli columns show the total transfer size including WASM. Enable Brotli compression on your server for optimal delivery.
 
 ## Features
 
