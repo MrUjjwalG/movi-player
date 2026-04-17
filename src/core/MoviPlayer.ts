@@ -1208,6 +1208,23 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
       this._stallStartTime = 0;
     }
 
+    // Audio desync detection: if audio falls significantly behind video at 1x.
+    // Clock syncs to audio so clock vs audio is always ~0. Compare audio against
+    // maxScheduledMediaTime vs actual playback position to detect real desync.
+    if (this.stateManager.getState() === "playing" && !this.disableAudio && Math.abs(this.clock.getPlaybackRate() - 1.0) < 0.01) {
+      const audioTime = this.audioRenderer.getAudioClock();
+      const videoTime = this.videoRenderer
+        ? (this.videoRenderer as any).currentTime ?? -1
+        : -1;
+      if (audioTime >= 0 && videoTime > 0) {
+        const audioBehind = videoTime - audioTime;
+        if (audioBehind > 0.5) {
+          Logger.warn(TAG, `Audio desync detected: video=${videoTime.toFixed(2)}s, audio=${audioTime.toFixed(2)}s, behind=${(audioBehind * 1000).toFixed(0)}ms — resyncing`);
+          this.seek(this.getCurrentTime()).catch(() => {});
+        }
+      }
+    }
+
     // Prevent concurrent async WASM operations (Asyncify limitation)
     // Add timeout safeguard - if demux has been in flight too long, reset it
     if (this.demuxInFlight) {
