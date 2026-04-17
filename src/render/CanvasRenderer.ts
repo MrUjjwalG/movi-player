@@ -41,6 +41,7 @@ export class CanvasRenderer {
   private presentationStartPts: number = 0;
   private lastPresentedPts: number = -1;
   private syncedToAudio: boolean = false;
+  private lastKnownAudioTime: number = -1;
   private playbackRate: number = 1.0;
   private justSeeked: boolean = false; // Track if we just seeked (for post-seek frame handling)
   private framesPresented: number = 0; // Track number of frames presented (for initial sync)
@@ -1048,6 +1049,11 @@ export class CanvasRenderer {
       const audioTime = this.getAudioTime();
       const isHealthy = this._isAudioHealthy ? this._isAudioHealthy() : true;
 
+      // Track last known audio time for capping video when audio drops out
+      if (audioTime >= 0) {
+        this.lastKnownAudioTime = audioTime;
+      }
+
       if (audioTime >= 0 && isHealthy) {
         // First sync - initialize wall clock to match audio
         if (!this.syncedToAudio) {
@@ -1073,30 +1079,30 @@ export class CanvasRenderer {
           }
         }
 
-        // Loose sync: only correct if video has drifted from audio
-        // This prevents audio jitter from affecting smooth video playback
-        // Only apply drift correction after we've presented many frames to avoid initial stutter
-        // Especially important for Bluetooth where latency can fluctuate in first few seconds
+        // High-FPS (≥50fps) at slow speed: aggressive drift correction to prevent
+        // video racing ahead of audio due to backpressure-induced audio gaps.
+        const isSlowHighFps = this.playbackRate < 0.99 && this.videoFrameRate >= 50;
+
         if (videoTime >= 0 && this.framesPresented > 30) {
           const drift = videoTime - audioTime;
+          const threshold = isSlowHighFps ? 0.05 : 0.15;
+          const strength = isSlowHighFps ? 0.5 : 0.25;
 
-          // If video is more than 150ms ahead or behind audio, gently correct
-          // Higher threshold for Bluetooth compatibility (latency can vary)
-          if (Math.abs(drift) > 0.15) {
-            // Apply very gradual correction (25% per check) to avoid jarring jumps
-            const correction = drift * 0.25;
-            this.presentationStartPts -= correction;
-            // Logger.debug(TAG, `A/V drift correction: ${(drift * 1000).toFixed(1)}ms`);
+          if (Math.abs(drift) > threshold) {
+            this.presentationStartPts -= drift * strength;
           }
         }
 
-        // Return wall clock time (not audio time) for smooth video
         const elapsed = (performance.now() - this.presentationStartTime) / 1000;
         return this.presentationStartPts + elapsed * this.playbackRate;
       }
     }
 
-    // No audio or audio not ready - use wall clock
+    // High-FPS slow playback: cap video to last known audio time when audio drops
+    const isSlowHighFps = this.playbackRate < 0.99 && this.videoFrameRate >= 50;
+    if (isSlowHighFps && videoTime >= 0 && this.lastKnownAudioTime >= 0 && this.syncedToAudio) {
+      return Math.min(videoTime, this.lastKnownAudioTime + 0.15);
+    }
     return videoTime >= 0 ? videoTime : -1;
   }
 
@@ -1992,6 +1998,7 @@ export class CanvasRenderer {
     this.frameQueue = [];
     this.lastPresentedPts = -1;
     this.syncedToAudio = false;
+    this.lastKnownAudioTime = -1;
     this.framesPresented = 0; // Reset frame counter
 
     // Reset presentation timing to prevent stuttering after seek

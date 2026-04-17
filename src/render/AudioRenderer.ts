@@ -177,14 +177,29 @@ export class AudioRenderer {
         audioBuffer.copyToChannel(channelData, channel);
       }
 
+      // Clear rebuffering flag as soon as audio data arrives (decoder is producing).
+      // Don't wait for successful scheduling — SoundTouch may skip a few buffers
+      // while accumulating internally, but the flag should clear immediately.
+      if (this.isRebufferingForRateChange) {
+        this.isRebufferingForRateChange = false;
+        Logger.debug(TAG, "Rebuffering complete after playback rate change");
+      }
+
       // Apply pitch preservation if enabled and playback rate is not 1.0
-      let processedBuffer: AudioBuffer | null = audioBuffer;
+      let processedBuffer = audioBuffer;
+      let usedSoundTouch = false;
       if (this.preservePitch && Math.abs(this._playbackRate - 1.0) > 0.01) {
-        processedBuffer = this.processSoundTouch(audioBuffer, this._playbackRate);
-        // SoundTouch may buffer internally — skip scheduling until output is ready
-        if (!processedBuffer || processedBuffer.length <= 1) {
-          audioData.close();
-          return;
+        const stOutput = this.processSoundTouch(audioBuffer, this._playbackRate);
+        if (stOutput && stOutput.length > 1) {
+          processedBuffer = stOutput;
+          usedSoundTouch = true;
+        } else {
+          // SoundTouch is accumulating internally — schedule silence of the expected
+          // duration to keep timing correct. No pitch change, just a brief gap.
+          const expectedDuration = audioBuffer.duration / this._playbackRate;
+          const silenceFrames = Math.max(1, Math.ceil(expectedDuration * sampleRate));
+          processedBuffer = this.audioContext.createBuffer(numberOfChannels, silenceFrames, sampleRate);
+          usedSoundTouch = true; // treat as SoundTouch path for scheduling
         }
       }
 
@@ -192,8 +207,7 @@ export class AudioRenderer {
       const source = this.audioContext.createBufferSource();
       source.buffer = processedBuffer;
       source.connect(this.gainNode);
-      // When using SoundTouch, playback rate is already applied, so keep it at 1.0
-      source.playbackRate.value = this.preservePitch && Math.abs(this._playbackRate - 1.0) > 0.01 ? 1.0 : this._playbackRate;
+      source.playbackRate.value = usedSoundTouch ? 1.0 : this._playbackRate;
 
       // Schedule playback sequentially
       const now = this.audioContext.currentTime;
@@ -263,21 +277,13 @@ export class AudioRenderer {
       }
 
       this.activeSources.push(source);
-      // Use actual processedBuffer duration when SoundTouch is active —
-      // SoundTouch may output fewer samples than expected due to internal buffering,
-      // so using the original duration would create gaps and play audio at ~1x speed.
-      const useSoundTouch = this.preservePitch && Math.abs(this._playbackRate - 1.0) > 0.01;
-      this.scheduledTime = when + (useSoundTouch
+      // When SoundTouch produced output, use its actual duration.
+      // When falling back to hardware rate, use original duration / rate.
+      this.scheduledTime = when + (usedSoundTouch
         ? processedBuffer.duration
         : audioBuffer.duration / this._playbackRate);
       this.currentMediaTime = audioTime;
       this.scheduledCount++;
-
-      // Clear rebuffering flag once we successfully schedule new audio
-      if (this.isRebufferingForRateChange) {
-        this.isRebufferingForRateChange = false;
-        Logger.debug(TAG, "Rebuffering complete after playback rate change");
-      }
 
       // Track the maximum media time we've scheduled
       // audioBuffer.duration is already in media seconds, no need to multiply by playbackRate
@@ -607,11 +613,9 @@ export class AudioRenderer {
     if (this.audioContext) {
       const now = this.audioContext.currentTime;
 
-      // Set rebuffering flag to signal MoviPlayer to show loading and pause clock
-      // Set this flag even if no active sources, to ensure proper clock sync on resume
-      if (this.isPlaying || this.activeSources.length > 0) {
-        this.isRebufferingForRateChange = true;
-      }
+      // No rebuffering flag — brief audio gap (~50-100ms) is acceptable.
+      // Setting the flag causes loading state that gets stuck when SoundTouch
+      // delays output (especially on Safari). Clock drift correction handles sync.
 
       // Stop all active sources
       if (this.activeSources.length > 0) {

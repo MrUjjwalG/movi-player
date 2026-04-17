@@ -1170,6 +1170,12 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
     // Stall detection: if playing but both video and audio buffers are critically low
     // Skip near end of video to avoid false stall at EOF
     const nearEnd = this.mediaInfo && this.clock.getTime() >= (this.mediaInfo.duration + this.startTime) - 3;
+    // Longer stall timeout for slow + high-FPS: SoundTouch/hardware rate fallback
+    // causes brief audio gaps that aren't true stalls. 2s vs 500ms default.
+    const currentRate = this.clock.getPlaybackRate();
+    const currentFps = (this.mediaInfo as any)?.videoFrameRate ?? 30;
+    const isSlowHighFps = currentRate < 0.99 && currentFps >= 50;
+    const stallTimeout = isSlowHighFps ? 2000 : 500;
     if (this.stateManager.getState() === "playing" && !this.eofReached && !this.waitingForVideoSync && !nearEnd && !this.isBackgrounded) {
       const videoEmpty = this.videoRenderer ? this.videoRenderer.getQueueSize() === 0 : false;
       const hasAudio = !!this.trackManager.getActiveAudioTrack() && !this.disableAudio;
@@ -1177,7 +1183,7 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
       if (videoEmpty && audioLow) {
         if (!this._stallStartTime) {
           this._stallStartTime = performance.now();
-        } else if (performance.now() - this._stallStartTime > 500) {
+        } else if (performance.now() - this._stallStartTime > stallTimeout) {
           // Only enter buffering after 500ms of continuous stall
           Logger.warn(TAG, "Stall detected: buffers empty for 500ms, entering buffering state");
           this.wasPlayingBeforeRebuffer = true;
@@ -1281,11 +1287,17 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
       (this.isBackgrounded && !this.isPiPActive) ||
       currentState === "buffering";
 
+    // When video buffer is full but audio is starving, don't block demuxing —
+    // set a flag so the demux loop skips video decode while keeping audio flowing.
+    const audioStarving = !this.disableAudio && audioBuffered < 0.5;
+    const videoBufferFull = !skipVideoBackpressure && videoBuffered > maxVideoBuffered;
+    const skipVideoDecodeForAudio = videoBufferFull && audioStarving;
+
     if (
-      (!skipVideoBackpressure && this.videoDecoder.queueSize > maxVideoQueue) ||
+      (!skipVideoBackpressure && !skipVideoDecodeForAudio && this.videoDecoder.queueSize > maxVideoQueue) ||
       (!this.disableAudio && this.audioDecoder.queueSize > maxAudioQueue) ||
       (!this.disableAudio && audioBuffered > maxAudioBuffered) ||
-      (!skipVideoBackpressure && videoBuffered > maxVideoBuffered)
+      (!skipVideoBackpressure && !skipVideoDecodeForAudio && videoBuffered > maxVideoBuffered)
     ) {
       if (
         this.waitingForVideoSync &&
@@ -1436,6 +1448,12 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
               continue;
             }
 
+            // Skip video decode when video buffer is full but audio is starving.
+            // This keeps audio flowing at non-1x rates where video frames accumulate
+            // faster than consumed. Some video frames are lost but audio stays smooth.
+            if (skipVideoDecodeForAudio) {
+              continue;
+            }
 
             // After seek, skip non-keyframe video packets until we find a keyframe
             // This prevents decoder errors (decoder needs keyframe after flush)
