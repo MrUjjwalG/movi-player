@@ -185,6 +185,14 @@ int movi_seek_to(MoviContext *ctx, double timestamp, int stream_index,
       avio_flush(ctx->avio_ctx);
     }
 
+    // CRITICAL: Clear AVIO eof_reached flag after successful seek.
+    // Without this, a prior EOF (e.g. from poster-frame reads reaching end
+    // of a short file) causes av_read_frame to immediately return EOF even
+    // though we just seeked back to a valid position.
+    if (ctx->fmt_ctx->pb) {
+      ctx->fmt_ctx->pb->eof_reached = 0;
+    }
+
     // For Matroska/WebM format, we need to ensure resync position is set
     // This helps avoid EBML parsing errors after seek
     const char *format_name =

@@ -1274,15 +1274,25 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
       const timeDone =
         currentTime >= duration + this.startTime - 0.5 || duration === 0;
 
-      const videoDone =
-        !this.videoRenderer || this.videoRenderer.getQueueSize() === 0;
-      const decodersDone =
-        this.videoDecoder.queueSize === 0 && this.audioDecoder.queueSize === 0;
+      const hasAudioTrack = !!this.trackManager?.getActiveAudioTrack();
 
-      // End if: time reached duration, or all queues empty, or decoders done + video done
-      if (timeDone || (decodersDone && videoDone)) {
-        this.handleEnded();
-        return;
+      if (hasAudioTrack) {
+        // With audio: queue-based end is reliable (audio provides steady signal)
+        const videoDone =
+          !this.videoRenderer || this.videoRenderer.getQueueSize() === 0;
+        const decodersDone =
+          this.videoDecoder.queueSize === 0 && this.audioDecoder.queueSize === 0;
+        if (timeDone || (decodersDone && videoDone)) {
+          this.handleEnded();
+          return;
+        }
+      } else {
+        // Video-only: WebCodecs decodeQueueSize drops to 0 before all output
+        // callbacks fire, making queue-based end unreliable. Use clock only.
+        if (timeDone) {
+          this.handleEnded();
+          return;
+        }
       }
       return; // Don't demux more, just wait for playback to finish
     }
@@ -1413,7 +1423,19 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
         }
       }
 
+      // For video-only content, throttle submissions based on renderer queue.
+      // Without audio backpressure, all packets get submitted in one burst which
+      // overwhelms VP8/software WebCodecs decoders (output callbacks stop firing).
+      const hasAudioForBurst = !!this.trackManager?.getActiveAudioTrack() && !this.disableAudio;
+      const maxRendererQueue = 60; // ~2.4s at 25fps, enough buffer without overwhelming
+
       for (let i = 0; i < burstSize; i++) {
+        // Video-only throttle: if renderer queue is full enough, stop submitting
+        // and let the presentation loop consume frames before adding more.
+        if (!hasAudioForBurst && this.videoRenderer && this.videoRenderer.getQueueSize() > maxRendererQueue) {
+          break;
+        }
+
         // Check both video and audio queues after seek to prevent overwhelming decoders
         if (
           this.videoDecoder.queueSize > maxVideoQueue ||
