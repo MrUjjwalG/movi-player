@@ -11450,35 +11450,46 @@ export class MoviElement extends HTMLElement {
       this.player &&
       this.duration > 0
     ) {
-      // Always prefer filename/URL over metadata title (metadata often contains watermarks or junk)
+      // Title priority: Metadata → Content-Disposition → URL filename
       if (this._src) {
         let filename = "";
 
-        if (this._src instanceof File) {
-          // Priority 1: File object name
-          filename = this._src.name;
-        } else if (typeof this._src === "string") {
-          // Priority 2: Extract filename from URL path
-          try {
-            let srcUrl = new URL(this._src, window.location.href);
-            // If proxied URL, extract the original URL from query params
-            if (srcUrl.pathname === "/proxy" && srcUrl.searchParams.get("url")) {
-              srcUrl = new URL(srcUrl.searchParams.get("url")!);
-            }
-            const pathname = srcUrl.pathname;
-            filename = pathname.substring(pathname.lastIndexOf("/") + 1);
-            if (filename) {
-              filename = decodeURIComponent(filename.split("?")[0]);
-            }
-          } catch {
-            filename = this._src;
+        // Priority 1: FFmpeg metadata title (skip if it's a watermark like "Downloaded From ...")
+        if (this.player) {
+          const metaTitle = this.player.getMetadataTitle?.();
+          if (metaTitle && !/download/i.test(metaTitle)) {
+            filename = metaTitle;
           }
+        }
 
-          // Priority 3: Fallback to Content-Disposition if URL gave no useful name
-          if (!filename || filename === "index" || filename === "master" || filename === "playlist") {
-            const dispositionName = this.player.getContentDispositionFilename();
-            if (dispositionName) {
-              filename = dispositionName;
+        // Priority 2: Content-Disposition header (skip if contains "download")
+        if (!filename && this.player) {
+          const dispositionName = this.player.getContentDispositionFilename();
+          if (dispositionName) {
+            const nameNoExt = dispositionName.replace(/\.[^.\/]+$/, "");
+            if (!/download/i.test(nameNoExt)) {
+              filename = nameNoExt;
+            }
+          }
+        }
+
+        // Priority 3: File object name or URL filename
+        if (!filename) {
+          if (this._src instanceof File) {
+            filename = this._src.name;
+          } else if (typeof this._src === "string") {
+            try {
+              let srcUrl = new URL(this._src, window.location.href);
+              if (srcUrl.pathname === "/proxy" && srcUrl.searchParams.get("url")) {
+                srcUrl = new URL(srcUrl.searchParams.get("url")!);
+              }
+              const pathname = srcUrl.pathname;
+              filename = pathname.substring(pathname.lastIndexOf("/") + 1);
+              if (filename) {
+                filename = decodeURIComponent(filename.split("?")[0]);
+              }
+            } catch {
+              filename = this._src;
             }
           }
         }

@@ -2738,6 +2738,10 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
     return null;
   }
 
+  getMetadataTitle(): string | null {
+    return this.mediaInfo?.metadata?.title ?? null;
+  }
+
   /**
    * Get HLS video element (DRM mode) for direct DOM insertion
    */
