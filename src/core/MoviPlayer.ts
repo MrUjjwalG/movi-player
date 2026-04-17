@@ -1144,6 +1144,10 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
       if (canResume) {
         this.stateManager.setState("paused");
         this.wasPlayingBeforeRebuffer = false;
+        // Resume AudioContext before play() so audio picks up from where it was
+        if (this.audioRenderer) {
+          this.audioRenderer.resumeFromBuffering();
+        }
         Logger.info(TAG, "Buffers refilled, resuming playback");
         this.play().catch((err) => {
           Logger.error(TAG, "Failed to resume playback after rebuffering:", err);
@@ -1180,6 +1184,11 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
           this._bufferingEntryTime = performance.now();
           this.stateManager.setState("buffering");
           this.clock.pause();
+          // Suspend AudioContext so already-scheduled audio doesn't play ahead of video.
+          // Keep isPlaying=true so render() still accepts AudioData and buffers fill up.
+          if (this.audioRenderer) {
+            this.audioRenderer.suspendForBuffering();
+          }
           // Stop presentation loop so decoded frames accumulate in queue
           // (otherwise it keeps consuming them and videoReady never becomes true)
           if (this.videoRenderer) this.videoRenderer.stopPresentationLoop();

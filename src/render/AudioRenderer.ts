@@ -369,6 +369,7 @@ export class AudioRenderer {
     this.lastDecodeTime = performance.now();
 
     this.isPlaying = true;
+    this.intentionalSuspend = false;
 
     // NOTE: We do NOT reset scheduledTime or sync anchors here.
     // If we are resuming from pause (suspend), the buffer is preserved
@@ -476,6 +477,9 @@ export class AudioRenderer {
   /**
    * Pause playback
    */
+  // Flag to prevent auto-recovery when we intentionally suspend during buffering
+  private intentionalSuspend: boolean = false;
+
   pause(): void {
     this.isPlaying = false;
 
@@ -485,6 +489,7 @@ export class AudioRenderer {
     // If we clear sources, we lose the buffered audio (e.g. 2 seconds worth), causing the
     // player to jump forward by that amount on resume.
     if (this.audioContext && this.audioContext.state === "running") {
+      this.intentionalSuspend = true;
       this.audioContext.suspend().catch((err) => {
         Logger.error(TAG, "Failed to suspend audio context", err);
       });
@@ -495,6 +500,34 @@ export class AudioRenderer {
     // AudioContext.currentTime and media time is preserved.
 
     Logger.debug(TAG, "Paused");
+  }
+
+  /**
+   * Suspend audio output for buffering without stopping data acceptance.
+   * Keeps isPlaying=true so render() still accepts AudioData and buffers fill up.
+   * Suppresses auto-recovery so the context stays suspended until resumeFromBuffering().
+   */
+  suspendForBuffering(): void {
+    this.intentionalSuspend = true;
+    if (this.audioContext && this.audioContext.state === "running") {
+      this.audioContext.suspend().catch((err) => {
+        Logger.error(TAG, "Failed to suspend audio context for buffering", err);
+      });
+    }
+    Logger.debug(TAG, "Suspended for buffering (isPlaying still true)");
+  }
+
+  /**
+   * Resume audio after buffering. Clears the intentional suspend flag.
+   */
+  resumeFromBuffering(): void {
+    this.intentionalSuspend = false;
+    if (this.audioContext && this.audioContext.state === "suspended") {
+      this.audioContext.resume().catch((err) => {
+        Logger.error(TAG, "Failed to resume audio context from buffering", err);
+      });
+    }
+    Logger.debug(TAG, "Resumed from buffering");
   }
 
   /**
@@ -938,7 +971,7 @@ export class AudioRenderer {
       if (!this.audioContext) return;
       const state = this.audioContext.state;
 
-      if (state === "interrupted" || (state === "suspended" && this.isPlaying && !this._muted)) {
+      if (state === "interrupted" || (state === "suspended" && this.isPlaying && !this._muted && !this.intentionalSuspend)) {
         Logger.warn(TAG, `AudioContext ${state} unexpectedly during playback, attempting recovery`);
         this.attemptContextRecovery();
       } else if (state === "running") {
