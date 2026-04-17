@@ -1868,6 +1868,7 @@ export class MoviElement extends HTMLElement {
           this.updateCanvasSize();
         });
       });
+      this.dispatchEvent(new CustomEvent("fullscreenchange", { detail: { fullscreen: isFullscreen } }));
     });
 
     // Show/hide controls - use a flag to track if mouse is over controls
@@ -4013,6 +4014,7 @@ export class MoviElement extends HTMLElement {
       this.restorePiPCanvas();
       try { win.close(); } catch (_) {}
       Logger.info(TAG, "togglePiP: PiP window closed");
+      this.dispatchEvent(new CustomEvent("pipchange", { detail: { pip: false } }));
       return;
     }
 
@@ -4043,6 +4045,7 @@ export class MoviElement extends HTMLElement {
         height: Math.round(pipHeight),
       });
       this._pipWindow = pipWindow;
+      this.dispatchEvent(new CustomEvent("pipchange", { detail: { pip: true } }));
 
       // Chrome may ignore requestWindow size (remembers last PiP size), force resize
       try {
@@ -4565,6 +4568,7 @@ export class MoviElement extends HTMLElement {
           ) as HTMLElement;
           if (menu) menu.style.display = "none";
           this.updateQualityMenu();
+          this.dispatchEvent(new CustomEvent("qualitychange", { detail: { trackId } }));
         }
       });
     });
@@ -7727,7 +7731,7 @@ export class MoviElement extends HTMLElement {
         color: white;
         font-family: 'Inter', sans-serif;
         text-align: center;
-        padding: 40px;
+        padding: clamp(16px, 5%, 40px);
         backdrop-filter: blur(20px) saturate(180%);
         -webkit-backdrop-filter: blur(20px) saturate(180%);
         opacity: 0;
@@ -7743,7 +7747,7 @@ export class MoviElement extends HTMLElement {
         display: flex;
         flex-direction: column;
         align-items: center;
-        max-width: 320px;
+        max-width: min(320px, 90%);
         animation: movi-slide-up 0.6s cubic-bezier(0.16, 1, 0.3, 1);
       }
 
@@ -7754,26 +7758,26 @@ export class MoviElement extends HTMLElement {
       
       .movi-broken-icon-wrapper {
         position: relative;
-        width: 80px;
-        height: 80px;
-        margin-bottom: 24px;
+        width: clamp(48px, 12vw, 80px);
+        height: clamp(48px, 12vw, 80px);
+        margin-bottom: clamp(12px, 3vw, 24px);
         background: rgba(255, 255, 255, 0.03);
         border: 1px solid rgba(255, 255, 255, 0.08);
-        border-radius: 20px;
+        border-radius: clamp(12px, 3vw, 20px);
         display: flex;
         align-items: center;
         justify-content: center;
         box-shadow: 0 20px 40px rgba(0, 0, 0, 0.4);
       }
-      
+
       .movi-broken-icon-wrapper svg {
-        width: 44px;
-        height: 44px;
+        width: clamp(28px, 7vw, 44px);
+        height: clamp(28px, 7vw, 44px);
         filter: drop-shadow(0 0 15px rgba(255, 68, 68, 0.4));
       }
-      
+
       .movi-broken-title {
-        font-size: 22px;
+        font-size: clamp(16px, 4vw, 22px);
         font-weight: 700;
         margin: 0 0 10px 0;
         letter-spacing: -0.02em;
@@ -7790,7 +7794,7 @@ export class MoviElement extends HTMLElement {
       }
       
       .movi-broken-message {
-        font-size: 14px;
+        font-size: clamp(11px, 2.5vw, 14px);
         line-height: 1.6;
         color: rgba(255, 255, 255, 0.6);
         margin: 0;
@@ -9081,6 +9085,14 @@ export class MoviElement extends HTMLElement {
       this.updateSubtitleTrackMenu();
       this.updateQualityMenu();
       this.renderChapterMarkers();
+      this.dispatchEvent(new CustomEvent("trackschange", {
+        detail: {
+          audio: this.player?.getAudioTracks() || [],
+          video: this.player?.getVideoTracks() || [],
+          subtitle: this.player?.getSubtitleTracks() || [],
+          chapters: this.player?.getChapters() || [],
+        },
+      }));
     };
     this.player.trackManager.on("tracksChange", tracksChangeHandler);
     this.eventHandlers.set("tracksChange", () =>
@@ -10076,6 +10088,8 @@ export class MoviElement extends HTMLElement {
       const statusEl = this.shadowRoot.querySelector(".movi-rotate-status");
       if (statusEl) statusEl.textContent = "0°";
     }
+
+    this.dispatchEvent(new CustomEvent("loadstart", { detail: { src: value instanceof File ? value.name : value } }));
 
     if (value instanceof File) {
       // For File objects, store in memory (can't store in attributes)
@@ -11087,6 +11101,7 @@ export class MoviElement extends HTMLElement {
     }
     this.updateMuted();
     SettingsStorage.getInstance().save({ muted: this._muted });
+    this.dispatchEvent(new CustomEvent("volumechange", { detail: { volume: this._volume, muted: this._muted } }));
   }
 
   get playsInline(): boolean {
@@ -11137,6 +11152,7 @@ export class MoviElement extends HTMLElement {
 
     this.updateVolume();
     SettingsStorage.getInstance().save({ volume: this._volume });
+    this.dispatchEvent(new CustomEvent("volumechange", { detail: { volume: this._volume, muted: this._muted } }));
   }
 
   get playbackRate(): number {
@@ -11148,6 +11164,7 @@ export class MoviElement extends HTMLElement {
     this.setAttribute("playbackrate", this._playbackRate.toString());
     this.updatePlaybackRate();
     SettingsStorage.getInstance().save({ playbackRate: this._playbackRate });
+    this.dispatchEvent(new CustomEvent("ratechange", { detail: { playbackRate: this._playbackRate } }));
   }
 
   get ambientMode(): boolean {
@@ -11407,32 +11424,36 @@ export class MoviElement extends HTMLElement {
       this.player &&
       this.duration > 0
     ) {
-      const mediaInfo = this.player.getMediaInfo();
-      const metaTitle = mediaInfo?.metadata?.title;
-      if (metaTitle && !/download/i.test(metaTitle)) {
-        this._title = metaTitle;
-        this._titleAutoLoaded = true;
-      } else if (this._src) {
+      // Always prefer filename/URL over metadata title (metadata often contains watermarks or junk)
+      if (this._src) {
         let filename = "";
 
-        // Priority 1: Content-Disposition filename from HTTP header
-        const dispositionName = this.player.getContentDispositionFilename();
-        if (dispositionName) {
-          filename = dispositionName;
-        } else if (this._src instanceof File) {
-          // Priority 2: File object name
+        if (this._src instanceof File) {
+          // Priority 1: File object name
           filename = this._src.name;
         } else if (typeof this._src === "string") {
-          // Priority 3: Extract filename from URL path
+          // Priority 2: Extract filename from URL path
           try {
-            const url = new URL(this._src, window.location.href);
-            const pathname = url.pathname;
+            let srcUrl = new URL(this._src, window.location.href);
+            // If proxied URL, extract the original URL from query params
+            if (srcUrl.pathname === "/proxy" && srcUrl.searchParams.get("url")) {
+              srcUrl = new URL(srcUrl.searchParams.get("url")!);
+            }
+            const pathname = srcUrl.pathname;
             filename = pathname.substring(pathname.lastIndexOf("/") + 1);
             if (filename) {
               filename = decodeURIComponent(filename.split("?")[0]);
             }
           } catch {
             filename = this._src;
+          }
+
+          // Priority 3: Fallback to Content-Disposition if URL gave no useful name
+          if (!filename || filename === "index" || filename === "master" || filename === "playlist") {
+            const dispositionName = this.player.getContentDispositionFilename();
+            if (dispositionName) {
+              filename = dispositionName;
+            }
           }
         }
 
@@ -11454,6 +11475,9 @@ export class MoviElement extends HTMLElement {
           }
         }
         this._titleAutoLoaded = true;
+        if (this._title) {
+          this.dispatchEvent(new CustomEvent("titlechange", { detail: { title: this._title } }));
+        }
       }
     }
 
@@ -11492,8 +11516,8 @@ export class MoviElement extends HTMLElement {
       title = title.substring(0, match.index);
     }
 
-    // Clean up extra spaces and trailing hyphens/dashes
-    title = title.replace(/\s*[-–—]\s*$/, "").replace(/\s+/g, " ").trim();
+    // Clean up orphan trailing brackets, hyphens, and extra spaces
+    title = title.replace(/\s*[\(\[]\s*$/, "").replace(/\s*[-–—]\s*$/, "").replace(/\s+/g, " ").trim();
 
     return title || filename;
   }

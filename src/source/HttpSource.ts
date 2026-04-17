@@ -279,12 +279,18 @@ export class HttpSource implements SourceAdapter {
           } catch { /* ignore decode error */ }
         }
         if (!this._contentDispositionFilename) {
-          filenameMatch = disposition.match(/filename\s*=\s*"?([^";\s]+)"?/i);
+          // Try quoted filename first (allows spaces inside quotes)
+          filenameMatch = disposition.match(/filename\s*=\s*"([^"]+)"/i);
+          if (!filenameMatch) {
+            // Unquoted: capture everything until semicolon or end, then trim
+            filenameMatch = disposition.match(/filename\s*=\s*([^;]+)/i);
+          }
           if (filenameMatch) {
+            const raw = filenameMatch[1].trim();
             try {
-              this._contentDispositionFilename = decodeURIComponent(filenameMatch[1]);
+              this._contentDispositionFilename = decodeURIComponent(raw);
             } catch {
-              this._contentDispositionFilename = filenameMatch[1];
+              this._contentDispositionFilename = raw;
             }
           }
         }

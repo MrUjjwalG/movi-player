@@ -46,7 +46,13 @@
     "docs:dev": "vitepress dev docs",
     "docs:build": "vitepress build docs",
     "docs:preview": "vitepress preview docs",
-    "docs:deploy": "npm run docs:build && npx gh-pages -d docs/.vitepress/dist"
+    "docs:deploy": "npm run docs:build && npx gh-pages -d docs/.vitepress/dist",
+    "app:dev": "cd app && npx wrangler dev",
+    "app:deploy": "cd app && cp worker.js worker.js.bak && sed -i '' \"s/__BUILD_VERSION__/$(date +%s)/g\" worker.js && npx wrangler deploy; mv worker.js.bak worker.js",
+    "app:upload": "wrangler r2 object put movi-assets/element.js --file dist/element.js --remote",
+    "app:upload:local": "wrangler r2 object put movi-assets/element.js --file dist/element.js --local --persist-to app/.wrangler/state",
+    "tmdb:dev": "cd tmdb-worker && npx wrangler dev",
+    "tmdb:deploy": "cd tmdb-worker && npx wrangler deploy"
   },
   "keywords": [
     "video-player",
