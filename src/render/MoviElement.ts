@@ -1206,7 +1206,7 @@ export class MoviElement extends HTMLElement {
           ".movi-progress-handle",
         ) as HTMLElement;
         if (progressFilled) progressFilled.style.width = `${percent * 100}%`;
-        if (progressHandle) progressHandle.style.left = `${percent * 100}%`;
+        if (progressHandle) progressHandle.style.left = `${Math.max(1, percent * 100)}%`;
       }
 
       if (duration <= 0) return;
@@ -5612,7 +5612,7 @@ export class MoviElement extends HTMLElement {
       .movi-progress-handle {
         position: absolute;
         top: 50%;
-        left: 0%;
+        left: 1%;
         transform: translate(-50%, -50%) scale(0);
         width: 16px;
         height: 16px;
@@ -6818,8 +6818,8 @@ export class MoviElement extends HTMLElement {
         }
         
         .movi-progress-handle {
-          width: 14px;
-          height: 14px;
+          width: 12px;
+          height: 12px;
         }
 
         .movi-hdr-label {
@@ -9453,7 +9453,7 @@ export class MoviElement extends HTMLElement {
         progressFilled.style.width = `${percent}%`;
       }
       if (progressHandle) {
-        progressHandle.style.left = `${percent}%`;
+        progressHandle.style.left = `${Math.max(1, percent)}%`;
       }
 
       // Update buffer (if available) - Show continuous buffered range from start

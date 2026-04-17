@@ -102,25 +102,30 @@
         right: 0;
         z-index: 100;
         padding: 0 4%;
-        height: 68px;
+        height: 64px;
         display: flex;
         align-items: center;
         justify-content: space-between;
-        background: linear-gradient(180deg, rgba(0,0,0,0.7) 0%, transparent 100%);
-        transition: background 0.3s ease;
+        background: rgba(15, 15, 18, 0.6);
+        backdrop-filter: blur(20px) saturate(1.8);
+        -webkit-backdrop-filter: blur(20px) saturate(1.8);
+        border-bottom: 1px solid rgba(255, 255, 255, 0.06);
+        transition: background 0.3s ease, border-color 0.3s ease;
       }
 
       .navbar.scrolled {
-        background: var(--bg-base);
-        box-shadow: 0 1px 0 var(--border-subtle);
+        background: rgba(15, 15, 18, 0.85);
+        border-bottom-color: rgba(255, 255, 255, 0.1);
       }
 
       [data-theme="light"] .navbar {
-        background: linear-gradient(180deg, rgba(245,245,245,0.9) 0%, transparent 100%);
+        background: rgba(245, 245, 245, 0.7);
+        border-bottom-color: rgba(0, 0, 0, 0.06);
       }
 
       [data-theme="light"] .navbar.scrolled {
-        background: var(--bg-base);
+        background: rgba(245, 245, 245, 0.9);
+        border-bottom-color: rgba(0, 0, 0, 0.1);
       }
 
       .nav-left {
@@ -130,13 +135,13 @@
       }
 
       .brand {
-        font-size: 1.5rem;
-        font-weight: 700;
-        background: linear-gradient(135deg, #ffffff 0%, #a0a0b0 100%);
+        font-size: 1.35rem;
+        font-weight: 800;
+        background: linear-gradient(135deg, #ffffff 0%, #b0b0c0 100%);
         background-clip: text;
         -webkit-background-clip: text;
         -webkit-text-fill-color: transparent;
-        letter-spacing: -0.5px;
+        letter-spacing: -0.3px;
         cursor: default;
         user-select: none;
       }
@@ -157,8 +162,9 @@
       .nav-links a {
         color: var(--text-secondary);
         text-decoration: none;
-        font-size: 0.875rem;
+        font-size: 0.8125rem;
         font-weight: 500;
+        letter-spacing: 0.2px;
         transition: color 0.2s;
       }
 
@@ -175,36 +181,39 @@
 
       .nav-icon-btn {
         background: transparent;
-        border: none;
+        border: 1px solid transparent;
         color: var(--icon-color);
-        width: 40px;
-        height: 40px;
-        border-radius: 50%;
+        width: 36px;
+        height: 36px;
+        border-radius: 10px;
         display: flex;
         align-items: center;
         justify-content: center;
         cursor: pointer;
-        transition: background 0.2s;
+        transition: background 0.2s, border-color 0.2s;
       }
 
       .nav-icon-btn:hover {
         background: var(--btn-ghost-hover);
+        border-color: var(--border-subtle);
       }
 
       .nav-icon-link {
         color: var(--icon-color);
-        width: 40px;
-        height: 40px;
-        border-radius: 50%;
+        width: 36px;
+        height: 36px;
+        border-radius: 10px;
+        border: 1px solid transparent;
         display: flex;
         align-items: center;
         justify-content: center;
         text-decoration: none;
-        transition: background 0.2s;
+        transition: background 0.2s, border-color 0.2s;
       }
 
       .nav-icon-link:hover {
         background: var(--btn-ghost-hover);
+        border-color: var(--border-subtle);
       }
 
       /* ===== HERO SECTION ===== */
@@ -214,8 +223,8 @@
         justify-content: center;
         align-items: flex-start;
         padding: 0 4%;
-        padding-top: calc(68px + 2.5rem);
-        padding-bottom: 10rem;
+        padding-top: calc(64px + 2.5rem);
+        padding-bottom: 3rem;
         overflow: hidden;
         text-align: center;
       }
@@ -231,36 +240,109 @@
         position: absolute;
         inset: 0;
         background:
-          radial-gradient(ellipse 80% 50% at 50% 20%, rgba(108, 93, 211, 0.08) 0%, transparent 60%),
-          radial-gradient(ellipse 60% 40% at 80% 60%, rgba(108, 93, 211, 0.04) 0%, transparent 50%);
+          radial-gradient(ellipse 80% 50% at 50% 20%, rgba(108, 93, 211, 0.12) 0%, transparent 60%),
+          radial-gradient(ellipse 60% 40% at 80% 60%, rgba(108, 93, 211, 0.06) 0%, transparent 50%);
+      }
+
+      /* Animated floating orb */
+      .hero-orb {
+        position: absolute;
+        width: 500px;
+        height: 500px;
+        border-radius: 50%;
+        background: radial-gradient(circle, rgba(108, 93, 211, 0.15) 0%, rgba(108, 93, 211, 0.05) 40%, transparent 70%);
+        top: -10%;
+        left: 50%;
+        transform: translateX(-50%);
+        animation: orbFloat 8s ease-in-out infinite;
+        pointer-events: none;
+      }
+
+      [data-theme="light"] .hero-orb {
+        background: radial-gradient(circle, rgba(108, 93, 211, 0.12) 0%, rgba(108, 93, 211, 0.04) 40%, transparent 70%);
+      }
+
+      @keyframes orbFloat {
+        0%, 100% { transform: translateX(-50%) translateY(0) scale(1); }
+        33% { transform: translateX(-45%) translateY(-10px) scale(1.05); }
+        66% { transform: translateX(-55%) translateY(10px) scale(0.95); }
       }
 
       .hero-bg::after {
-        content: "";
+        display: none;
+      }
+
+      /* Dust particles */
+      .hero-particles {
         position: absolute;
-        bottom: 0;
-        left: 0;
-        right: 0;
-        height: 40%;
-        background: var(--gradient-hero);
+        inset: 0;
+        overflow: hidden;
+        pointer-events: none;
+      }
+
+      .particle {
+        position: absolute;
+        width: var(--size, 2px);
+        height: var(--size, 2px);
+        background: radial-gradient(circle, rgba(255, 255, 255, var(--opacity, 0.3)) 0%, transparent 70%);
+        border-radius: 50%;
+        animation: dustFloat var(--duration, 12s) var(--delay, 0s) infinite linear;
+      }
+
+      [data-theme="light"] .particle {
+        background: radial-gradient(circle, rgba(108, 93, 211, var(--opacity, 0.25)) 0%, transparent 70%);
+      }
+
+      @keyframes dustFloat {
+        0% {
+          transform: translate(0, 0) scale(1);
+          opacity: 0;
+        }
+        10% {
+          opacity: 1;
+        }
+        90% {
+          opacity: 1;
+        }
+        100% {
+          transform: translate(var(--dx, 80px), var(--dy, -120px)) scale(var(--scale-end, 0.5));
+          opacity: 0;
+        }
       }
 
       .hero-content {
         position: relative;
         z-index: 2;
         width: 100%;
-        max-width: 700px;
+        max-width: 680px;
         display: flex;
         flex-direction: column;
         align-items: center;
-        gap: 0.75rem;
+        gap: 1rem;
       }
 
+      /* Hero entry animations */
+      @keyframes fadeUp {
+        from { opacity: 0; transform: translateY(20px); }
+        to { opacity: 1; transform: translateY(0); }
+      }
+
+      .hero-content > * {
+        opacity: 0;
+        animation: fadeUp 0.7s ease-out forwards;
+      }
+      .hero-content > *:nth-child(1) { animation-delay: 0.1s; }
+      .hero-content > *:nth-child(2) { animation-delay: 0.2s; }
+      .hero-content > *:nth-child(3) { animation-delay: 0.3s; }
+      .hero-content > *:nth-child(4) { animation-delay: 0.4s; }
+      .hero-content > *:nth-child(5) { animation-delay: 0.5s; }
+      .hero-content > *:nth-child(6) { animation-delay: 0.6s; }
+
       .hero h1 {
-        font-size: clamp(1.75rem, 3.5vw, 2.5rem);
+        font-size: clamp(2.2rem, 5vw, 3.5rem);
         font-weight: 800;
-        line-height: 1.1;
-        letter-spacing: -0.5px;
+        line-height: 1.08;
+        letter-spacing: -1.5px;
       }
 
       .hero h1 .highlight {
@@ -268,6 +350,21 @@
         background-clip: text;
         -webkit-background-clip: text;
         -webkit-text-fill-color: transparent;
+        background-size: 200% auto;
+        animation: gradientShift 4s ease-in-out infinite;
+      }
+
+      @keyframes gradientShift {
+        0%, 100% { background-position: 0% center; }
+        50% { background-position: 100% center; }
+      }
+
+      .hero-tagline {
+        font-size: 1.05rem;
+        color: var(--text-secondary);
+        font-weight: 400;
+        line-height: 1.6;
+        max-width: 460px;
       }
 
       .hero-formats {
@@ -286,12 +383,69 @@
         font-weight: 700;
         letter-spacing: 0.5px;
         border: 1px solid rgba(108, 93, 211, 0.15);
+        transition: transform 0.2s, box-shadow 0.2s;
+      }
+
+      .format-chip:hover {
+        transform: translateY(-1px);
+        box-shadow: 0 4px 12px rgba(108, 93, 211, 0.25);
       }
 
       .hero-desc {
         font-size: 0.875rem;
         color: var(--text-secondary);
         line-height: 1.5;
+      }
+
+      /* Social proof / trust strip */
+      .hero-trust {
+        display: flex;
+        align-items: center;
+        gap: 1.25rem;
+        flex-wrap: wrap;
+        justify-content: center;
+      }
+
+      .trust-item {
+        display: flex;
+        align-items: center;
+        gap: 0.35rem;
+        font-size: 0.75rem;
+        color: var(--text-muted);
+        font-weight: 500;
+      }
+
+      .trust-item svg {
+        width: 13px;
+        height: 13px;
+        opacity: 0.5;
+      }
+
+      .trust-dot {
+        width: 3px;
+        height: 3px;
+        border-radius: 50%;
+        background: var(--text-muted);
+        opacity: 0.3;
+      }
+
+      .kbd-hint {
+        display: inline-flex;
+        align-items: center;
+        gap: 0.3rem;
+        font-size: 0.75rem;
+        color: var(--text-muted);
+        margin-top: 0.25rem;
+      }
+
+      .kbd {
+        background: var(--btn-ghost-bg);
+        border: 1px solid var(--border-subtle);
+        border-radius: 4px;
+        padding: 0.1rem 0.4rem;
+        font-size: 0.7rem;
+        font-family: inherit;
+        color: var(--text-secondary);
       }
 
       .hero-actions {
@@ -340,7 +494,7 @@
         background: var(--accent);
         border: none;
         color: #fff;
-        padding: 0 1.25rem;
+        padding: 0 1.5rem;
         height: 100%;
         min-height: 48px;
         cursor: pointer;
@@ -350,12 +504,13 @@
         font-family: inherit;
         font-weight: 600;
         font-size: 0.875rem;
-        transition: background 0.2s;
+        transition: all 0.2s;
         white-space: nowrap;
       }
 
       .url-bar-btn:hover {
         background: var(--accent-hover);
+        box-shadow: inset 0 0 20px rgba(255, 255, 255, 0.1);
       }
 
       /* Primary CTA button */
@@ -417,7 +572,7 @@
         position: relative;
         z-index: 2;
         padding: 0 4%;
-        margin-top: -7rem;
+        margin-top: 0;
       }
 
       .player-wrapper {
@@ -426,7 +581,7 @@
         margin: 0 auto;
         border-radius: 16px;
         overflow: hidden;
-        box-shadow: var(--shadow-heavy);
+        box-shadow: var(--shadow-heavy), 0 0 80px -20px rgba(108, 93, 211, 0.15);
         background: #000;
         border: 1px solid var(--border-subtle);
       }
@@ -509,8 +664,14 @@
       .features-section h2 {
         font-size: 1.5rem;
         font-weight: 700;
-        margin-bottom: 2rem;
+        margin-bottom: 0.5rem;
         letter-spacing: -0.5px;
+      }
+
+      .features-section .section-desc {
+        font-size: 0.875rem;
+        color: var(--text-secondary);
+        margin-bottom: 2rem;
       }
 
       .features-grid {
@@ -522,14 +683,33 @@
       .feature-card {
         background: var(--feature-bg);
         border: 1px solid var(--feature-border);
-        border-radius: 12px;
+        border-radius: 14px;
         padding: 1.5rem;
         transition: all 0.3s ease;
+        position: relative;
+        overflow: hidden;
+      }
+
+      .feature-card::before {
+        content: "";
+        position: absolute;
+        top: 0;
+        left: 0;
+        right: 0;
+        height: 1px;
+        background: linear-gradient(90deg, transparent, rgba(108, 93, 211, 0.3), transparent);
+        opacity: 0;
+        transition: opacity 0.3s;
       }
 
       .feature-card:hover {
         border-color: var(--border-hover);
         transform: translateY(-2px);
+        box-shadow: 0 8px 30px rgba(0, 0, 0, 0.2);
+      }
+
+      .feature-card:hover::before {
+        opacity: 1;
       }
 
       .feature-icon {
@@ -660,15 +840,20 @@
 
         .hero {
           padding-top: calc(56px + 1.5rem);
-          padding-bottom: 10rem;
+          padding-bottom: 2rem;
         }
 
         .hero h1 {
           font-size: 2rem;
+          letter-spacing: -0.5px;
         }
 
-        .hero-desc {
+        .hero-tagline {
           font-size: 0.95rem;
+        }
+
+        .hero-trust {
+          gap: 0.75rem;
         }
 
         .hero-actions {
@@ -683,7 +868,7 @@
 
         .player-section {
           padding: 0 1rem;
-          margin-top: -10rem;
+          margin-top: 0;
         }
 
         .player-wrapper {
@@ -705,11 +890,12 @@
 
       @media (max-width: 480px) {
         .hero {
-          padding-bottom: 10rem;
+          padding-bottom: 1.5rem;
         }
 
         .hero h1 {
-          font-size: 1.75rem;
+          font-size: 1.6rem;
+          letter-spacing: -0.3px;
         }
 
         .btn-cta, .btn-ghost {
@@ -759,18 +945,26 @@
 
     <!-- ===== HERO ===== -->
     <section class="hero">
-      <div class="hero-bg"></div>
-      <div class="hero-content">
-        <h1>Play <span class="highlight">Any Video</span> in Your Browser</h1>
-        <div class="hero-formats">
-          <span class="format-chip">MKV</span>
-          <span class="format-chip">HEVC</span>
-          <span class="format-chip">AV1</span>
-          <span class="format-chip">HDR</span>
-          <span class="format-chip">VP9</span>
-          <span class="format-chip">AVI</span>
+      <div class="hero-bg">
+        <div class="hero-orb"></div>
+        <div class="hero-particles">
+          <div class="particle" style="--size:2px;--opacity:0.4;--duration:14s;--delay:0s;--dx:60px;--dy:-100px;--scale-end:0.3;top:70%;left:10%"></div>
+          <div class="particle" style="--size:3px;--opacity:0.25;--duration:18s;--delay:2s;--dx:-40px;--dy:-130px;--scale-end:0.6;top:80%;left:25%"></div>
+          <div class="particle" style="--size:1.5px;--opacity:0.5;--duration:12s;--delay:1s;--dx:90px;--dy:-80px;--scale-end:0.4;top:60%;left:45%"></div>
+          <div class="particle" style="--size:2.5px;--opacity:0.3;--duration:16s;--delay:4s;--dx:-70px;--dy:-110px;--scale-end:0.5;top:75%;left:65%"></div>
+          <div class="particle" style="--size:1px;--opacity:0.6;--duration:10s;--delay:0.5s;--dx:50px;--dy:-90px;--scale-end:0.3;top:50%;left:80%"></div>
+          <div class="particle" style="--size:2px;--opacity:0.35;--duration:20s;--delay:3s;--dx:-30px;--dy:-140px;--scale-end:0.7;top:85%;left:40%"></div>
+          <div class="particle" style="--size:3px;--opacity:0.2;--duration:15s;--delay:6s;--dx:100px;--dy:-60px;--scale-end:0.4;top:55%;left:15%"></div>
+          <div class="particle" style="--size:1.5px;--opacity:0.45;--duration:13s;--delay:1.5s;--dx:-80px;--dy:-100px;--scale-end:0.5;top:65%;left:55%"></div>
+          <div class="particle" style="--size:2px;--opacity:0.3;--duration:17s;--delay:5s;--dx:40px;--dy:-120px;--scale-end:0.6;top:90%;left:75%"></div>
+          <div class="particle" style="--size:1px;--opacity:0.55;--duration:11s;--delay:2.5s;--dx:-60px;--dy:-70px;--scale-end:0.3;top:45%;left:35%"></div>
+          <div class="particle" style="--size:2.5px;--opacity:0.2;--duration:19s;--delay:7s;--dx:70px;--dy:-150px;--scale-end:0.4;top:78%;left:90%"></div>
+          <div class="particle" style="--size:1.5px;--opacity:0.4;--duration:14s;--delay:3.5s;--dx:-50px;--dy:-85px;--scale-end:0.5;top:40%;left:5%"></div>
         </div>
-        <p class="hero-desc">No installs. No servers. Just drop a file or paste a link.</p>
+      </div>
+      <div class="hero-content">
+        <h1>Drop a file.<br><span class="highlight">It just plays.</span></h1>
+        <p class="hero-tagline">MKV, HEVC, AV1, HDR — formats your browser can't handle, we can. No installs, no uploads. Everything runs locally.</p>
         <div class="hero-actions">
           <label class="btn-ghost">
             <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
@@ -802,6 +996,23 @@
             </svg>
             Embed
           </button>
+        </div>
+        <span class="kbd-hint">or drag & drop anywhere</span>
+        <div class="hero-trust">
+          <span class="trust-item">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/></svg>
+            100% Private
+          </span>
+          <span class="trust-dot"></span>
+          <span class="trust-item">
+            <svg viewBox="0 0 24 24" fill="currentColor"><path d="M12 0C5.37 0 0 5.37 0 12c0 5.31 3.435 9.795 8.205 11.385.6.105.825-.255.825-.57 0-.285-.015-1.23-.015-2.235-3.015.555-3.795-.735-4.035-1.41-.135-.345-.72-1.41-1.23-1.695-.42-.225-1.02-.78-.015-.795.945-.015 1.62.87 1.845 1.23 1.08 1.815 2.805 1.305 3.495.99.105-.78.42-1.305.765-1.605-2.67-.3-5.46-1.335-5.46-5.925 0-1.305.465-2.385 1.23-3.225-.12-.3-.54-1.53.12-3.18 0 0 1.005-.315 3.3 1.23.96-.27 1.98-.405 3-.405s2.04.135 3 .405c2.295-1.56 3.3-1.23 3.3-1.23.66 1.65.24 2.88.12 3.18.765.84 1.23 1.905 1.23 3.225 0 4.605-2.805 5.625-5.475 5.925.435.375.81 1.095.81 2.22 0 1.605-.015 2.895-.015 3.3 0 .315.225.69.825.57A12.02 12.02 0 0024 12c0-6.63-5.37-12-12-12z"/></svg>
+            Open Source
+          </span>
+          <span class="trust-dot"></span>
+          <span class="trust-item">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"/></svg>
+            WebCodecs Powered
+          </span>
         </div>
       </div>
     </section>
@@ -835,6 +1046,7 @@
     <!-- ===== FEATURES ===== -->
     <section class="features-section">
       <h2>Why MoviPlayer?</h2>
+      <p class="section-desc">Built for the files other players refuse to touch.</p>
       <div class="features-grid">
         <div class="feature-card">
           <div class="feature-icon">
@@ -891,6 +1103,10 @@
         document.title = name ? `${name} - MoviPlayer` : defaultTitle;
       };
 
+      const scrollToPlayer = () => {
+        document.querySelector(".player-section").scrollIntoView({ behavior: "smooth", block: "center" });
+      };
+
       // --- Navbar scroll effect ---
       window.addEventListener("scroll", () => {
         navbar.classList.toggle("scrolled", window.scrollY > 20);
@@ -910,7 +1126,7 @@
           player.src = proxyUrl(url);
           embedBtn.classList.add("visible");
           // Scroll to player
-          document.querySelector(".player-section").scrollIntoView({ behavior: "smooth", block: "center" });
+          scrollToPlayer();
         }
       };
 
@@ -929,7 +1145,7 @@
             player.src = file;
           }
           urlInput.value = "";
-          document.querySelector(".player-section").scrollIntoView({ behavior: "smooth", block: "center" });
+          scrollToPlayer();
         }
       });
 
@@ -965,7 +1181,7 @@
             player.src = file;
           }
           urlInput.value = "";
-          document.querySelector(".player-section").scrollIntoView({ behavior: "smooth", block: "center" });
+          scrollToPlayer();
         }
       });
 
