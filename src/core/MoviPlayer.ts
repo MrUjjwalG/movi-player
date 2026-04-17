@@ -88,6 +88,7 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
   private wasPlayingBeforeRebuffer: boolean = false; // Track if we were playing before entering rebuffering state
   private _stallStartTime: number = 0; // When stall was first detected
   private _bufferingEntryTime: number = 0; // When we entered buffering state
+  private _decoderStuckSince: number = 0; // When video decoder was first detected stuck
 
   // Playback Loop
   private animationFrameId: number | null = null;
@@ -1286,6 +1287,21 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
     const skipVideoBackpressure =
       (this.isBackgrounded && !this.isPiPActive) ||
       currentState === "buffering";
+
+    // Stuck decoder detection: if video decoder queue is full but renderer queue
+    // stays empty for too long, the decoder is hung (e.g. 8K content too heavy).
+    // Flush it to unstick — some frames may be lost but playback continues.
+    if (this.videoDecoder.queueSize > maxVideoQueue && videoBuffered === 0) {
+      if (!this._decoderStuckSince) {
+        this._decoderStuckSince = performance.now();
+      } else if (performance.now() - this._decoderStuckSince > 5000) {
+        Logger.warn(TAG, `Video decoder stuck for 5s (queue=${this.videoDecoder.queueSize}, output=0), flushing`);
+        this.videoDecoder.flush().catch(() => {});
+        this._decoderStuckSince = 0;
+      }
+    } else {
+      this._decoderStuckSince = 0;
+    }
 
     // When video buffer is full but audio is starving, don't block demuxing —
     // set a flag so the demux loop skips video decode while keeping audio flowing.
