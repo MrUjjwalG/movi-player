@@ -1085,18 +1085,6 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
       );
     }
 
-    // Flush any buffered audio packets
-    if (this.pendingAudioPackets.length > 0) {
-      Logger.debug(
-        TAG,
-        `Flushing ${this.pendingAudioPackets.length} buffered audio packets after seek sync`,
-      );
-      for (const pkt of this.pendingAudioPackets) {
-        this.audioDecoder.decode(pkt.data, pkt.timestamp, pkt.keyframe);
-      }
-      this.pendingAudioPackets = [];
-    }
-
     // Transition to final state
     if (this.wasPlayingBeforeSeek || this.wasPlayingBeforeRebuffer) {
       Logger.info(TAG, "Resuming playback after seek");
@@ -1106,9 +1094,31 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
       if (!this.disableAudio && !this.audioRenderer.isAudioPlaying()) {
         this.audioRenderer.play();
       }
+
+      // Flush buffered audio packets AFTER play() so AudioRenderer.isPlaying=true
+      // and render() accepts the decoded AudioData instead of dropping it.
+      if (this.pendingAudioPackets.length > 0) {
+        Logger.debug(
+          TAG,
+          `Flushing ${this.pendingAudioPackets.length} buffered audio packets after seek sync`,
+        );
+        for (const pkt of this.pendingAudioPackets) {
+          this.audioDecoder.decode(pkt.data, pkt.timestamp, pkt.keyframe);
+        }
+        this.pendingAudioPackets = [];
+      }
     } else {
       Logger.info(TAG, "Seek completed in paused state");
       this.stateManager.setState("paused");
+
+      // Don't decode audio now (AudioRenderer not playing — would drop all data).
+      // Discard stashed audio and prebuffer packets — play() will re-seek the
+      // demuxer to startTime so all packets will be re-read fresh from 0.
+      // Keeping stale packets causes A/V desync (prebuffer audio at 0.4s+
+      // would be processed before fresh audio at 0s).
+      this.pendingAudioPackets = [];
+      this.pendingPrebufferPackets = [];
+
       // Don't start clock or audio — but continue buffering ahead
       this.startPauseBuffering();
     }
@@ -1362,10 +1372,13 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
     // set a flag so the demux loop skips video decode while keeping audio flowing.
     // This is critical for high-FPS content (120fps) where the video decoder queue fills
     // faster than hardware can process, which would otherwise starve the audio pipeline.
+    // ONLY at non-1x rates: at 1x, video/audio are consumed at the same rate so skipping
+    // video is unnecessary and causes early EOF (video never decoded → queues empty → ended).
+    const isNon1xRate = Math.abs(rate - 1.0) > 0.01;
     const audioStarving = !this.disableAudio && audioBuffered < 0.5;
     const videoDecoderFull = this.videoDecoder.queueSize > maxVideoQueue;
     const videoBufferFull = !skipVideoBackpressure && videoBuffered > maxVideoBuffered;
-    const skipVideoDecodeForAudio = (videoBufferFull || videoDecoderFull) && audioStarving;
+    const skipVideoDecodeForAudio = isNon1xRate && (videoBufferFull || videoDecoderFull) && audioStarving;
 
     if (
       (!skipVideoBackpressure && !skipVideoDecodeForAudio && this.videoDecoder.queueSize > maxVideoQueue) ||
@@ -1427,9 +1440,16 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
 
         // If buffers are low, increase burst size to fill faster.
         // High-FPS needs more headroom because audio packets are sparse among video packets.
+        // During initial play grace period with audio active, use a gentler burst to
+        // avoid overwhelming the main thread (audio decode + render + stable audio
+        // processing is CPU-heavy alongside 4K video decode).
         const bufferTarget = isSoftware ? 2.0 : fps >= 60 ? 1.0 : 0.5;
         if (videoQueue < 30 || currentAudioBuffered < bufferTarget) {
-          burstSize = (isSoftware ? 80 : 40) * fpsScale;
+          if (inPlayGrace && !this.muted && !this.disableAudio && !isSoftware) {
+            burstSize = 20 * fpsScale; // Gentler ramp during initial fill with audio
+          } else {
+            burstSize = (isSoftware ? 80 : 40) * fpsScale;
+          }
         }
       }
 

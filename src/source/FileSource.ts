@@ -24,6 +24,8 @@ export class FileSource implements SourceAdapter {
   private currentTime: number = 0;
   private duration: number = 0;
   private preloadOffset: number = 0; // Current byte offset being preloaded around
+  private playbackActive: boolean = false; // Whether playback is currently active
+  private preloadAbort: boolean = false; // Signal to abort current preload cycle
 
   // Disk read stats
   private totalBytesRead: number = 0;
@@ -62,26 +64,11 @@ export class FileSource implements SourceAdapter {
 
     this.currentTime = currentTime;
     this.duration = duration;
+    this.playbackActive = true;
 
-    // Estimate byte position from time (linear estimation)
-    const ratio = Math.max(0, Math.min(1, currentTime / duration));
-    const estimatedByteOffset = Math.floor(ratio * this.size);
-
-    // Update preload offset if it changed significantly (more than one chunk)
-    const offsetDiff = Math.abs(estimatedByteOffset - this.preloadOffset);
-    if (offsetDiff >= CHUNK_SIZE) {
-      const oldOffset = this.preloadOffset;
-      this.preloadOffset = estimatedByteOffset;
-
-      Logger.debug(
-        TAG,
-        `Preload position updated: ${oldOffset} -> ${estimatedByteOffset} (time: ${currentTime.toFixed(2)}s / ${duration.toFixed(2)}s)`,
-      );
-
-      // Restart preloading around new position
-      this.preloadPromise = null; // Allow restart
-      this.startPreload();
-    }
+    // Let the initial preload finish — it's caching the file for smooth playback.
+    // Don't restart or trigger new preloads during playback; demux reads via
+    // readFromFile() already cache every chunk they touch as a fallback.
   }
 
   /**
@@ -199,6 +186,8 @@ export class FileSource implements SourceAdapter {
    * Preload chunks around current position (ahead for playback, behind for seeking)
    */
   private async preloadChunks(): Promise<void> {
+    this.preloadAbort = false;
+
     try {
       const startOffset = this.preloadOffset > 0 ? this.preloadOffset : 0;
       const timeInfo =
@@ -210,24 +199,29 @@ export class FileSource implements SourceAdapter {
         `Starting preload for file: ${this.file.name} around offset ${startOffset}${timeInfo} (${this.size} bytes)`,
       );
 
-      // Preload strategy: prioritize chunks ahead of current position, then behind
-      // This ensures smooth playback while allowing backward seeks
-      const PRELOAD_AHEAD_CHUNKS = 20; // Preload 20 chunks (40MB) ahead
-      const PRELOAD_BEHIND_CHUNKS = 5; // Preload 5 chunks (10MB) behind
+      // Preload only runs before playback starts (initial load).
+      // During playback, demux reads fill the cache naturally.
+      // If the entire file fits in cache, preload ALL chunks to avoid disk I/O
+      // during playback (which causes stutter on 4K content with heavy processLoop).
+      const totalChunks = Math.ceil(this.size / CHUNK_SIZE);
+      const cacheMaxBytes = this.cache.getMaxSize();
+      const fileFitsInCache = cacheMaxBytes > 0 && this.size < cacheMaxBytes * 0.8;
+      const PRELOAD_AHEAD_CHUNKS = fileFitsInCache ? totalChunks : 20;
+      const PRELOAD_BEHIND_CHUNKS = fileFitsInCache ? 0 : 5;
 
       // Calculate range to preload
       const startChunk = Math.floor(startOffset / CHUNK_SIZE);
-      const aheadStart = startChunk;
+      const aheadStart = fileFitsInCache ? 0 : startChunk;
       const aheadEnd = Math.min(
-        startChunk + PRELOAD_AHEAD_CHUNKS,
-        Math.ceil(this.size / CHUNK_SIZE),
+        (fileFitsInCache ? 0 : startChunk) + PRELOAD_AHEAD_CHUNKS,
+        totalChunks,
       );
       const behindStart = Math.max(0, startChunk - PRELOAD_BEHIND_CHUNKS);
       const behindEnd = startChunk;
 
       // Preload ahead chunks first (for playback)
       for (let chunkIdx = aheadStart; chunkIdx < aheadEnd; chunkIdx++) {
-        if (await this.shouldStopPreload()) break;
+        if (this.preloadAbort || await this.shouldStopPreload()) break;
 
         const offset = chunkIdx * CHUNK_SIZE;
         const chunkLength = Math.min(CHUNK_SIZE, this.size - offset);
@@ -245,7 +239,7 @@ export class FileSource implements SourceAdapter {
 
       // Preload behind chunks (for seeking backward)
       for (let chunkIdx = behindEnd - 1; chunkIdx >= behindStart; chunkIdx--) {
-        if (await this.shouldStopPreload()) break;
+        if (this.preloadAbort || await this.shouldStopPreload()) break;
 
         const offset = chunkIdx * CHUNK_SIZE;
         const chunkLength = Math.min(CHUNK_SIZE, this.size - offset);
@@ -261,15 +255,17 @@ export class FileSource implements SourceAdapter {
         this.cache.set(this.sourceKey, offset, chunkLength, chunk);
       }
 
-      Logger.debug(
-        TAG,
-        `Preload completed for file: ${this.file.name} around offset ${startOffset}`,
-      );
+      if (!this.preloadAbort) {
+        Logger.debug(
+          TAG,
+          `Preload completed for file: ${this.file.name} around offset ${startOffset}`,
+        );
+      }
     } catch (error) {
       Logger.error(TAG, `Failed to preload file: ${this.file.name}`, error);
-      // Don't throw - preload failure shouldn't break the source
     } finally {
       this.preloadPromise = null;
+      this.preloadAbort = false;
     }
   }
 
