@@ -2,8 +2,8 @@ import HTML_RAW from "./index.html";
 import SITEMAP from "./sitemap.xml";
 import ROBOTS from "./robots.txt";
 
-const BUILD_VERSION = "1776527774";
-const HTML = HTML_RAW.replace(/1776527774/g, BUILD_VERSION);
+const BUILD_VERSION = "__BUILD_VERSION__";
+const HTML = HTML_RAW.replace(/__BUILD_VERSION__/g, BUILD_VERSION);
 
 const SECURITY_HEADERS = {
   "Cross-Origin-Opener-Policy": "same-origin",
@@ -96,7 +96,7 @@ function handleEmbed(url) {
 <head>
 <meta charset="UTF-8"/>
 <meta name="viewport" content="width=device-width,initial-scale=1.0"/>
-<link rel="icon" type="image/svg+xml" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Cdefs%3E%3ClinearGradient id='g' x1='0%25' y1='0%25' x2='100%25' y2='100%25'%3E%3Cstop offset='0%25' stop-color='%23bd34fe'/%3E%3Cstop offset='100%25' stop-color='%2341d1ff'/%3E%3C/linearGradient%3E%3C/defs%3E%3Ccircle cx='50' cy='50' r='45' fill='url(%23g)'/%3E%3Cpolygon points='40,30 40,70 75,50' fill='white'/%3E%3C/svg%3E"/>
+<link rel="icon" type="image/svg+xml" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Cdefs%3E%3ClinearGradient id='g' x1='0%25' y1='0%25' x2='100%25' y2='100%25'%3E%3Cstop offset='0%25' stop-color='%236c5dd3'/%3E%3Cstop offset='100%25' stop-color='%234a3bba'/%3E%3C/linearGradient%3E%3C/defs%3E%3Ccircle cx='50' cy='50' r='45' fill='url(%23g)'/%3E%3Cpolygon points='39,29 39,71 74,50' fill='white'/%3E%3C/svg%3E"/>
 <style>
 *{margin:0;padding:0;box-sizing:border-box}
 html,body{width:100%;height:100%;overflow:hidden;background:#000}

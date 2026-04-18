@@ -152,3 +152,19 @@ document.addEventListener("drop", (e) => {
   const file = e.dataTransfer.files[0];
   if (file) loadFile(file);
 });
+
+// Forward document keyboard events to player
+document.addEventListener("keydown", (e) => {
+  if (e.target.tagName === "INPUT" || e.target.tagName === "TEXTAREA" || e.target.isContentEditable) return;
+  const player = document.getElementById("player");
+  if (!player || !player.shadowRoot) return;
+  if (document.activeElement === player || player.contains(e.target)) return;
+  player.dispatchEvent(new KeyboardEvent("keydown", {
+    key: e.key, code: e.code, keyCode: e.keyCode,
+    shiftKey: e.shiftKey, ctrlKey: e.ctrlKey, altKey: e.altKey, metaKey: e.metaKey,
+    bubbles: true, cancelable: true
+  }));
+  if (["Space", "ArrowUp", "ArrowDown", "ArrowLeft", "ArrowRight"].includes(e.code)) {
+    e.preventDefault();
+  }
+});
