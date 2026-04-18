@@ -1385,7 +1385,7 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
     const audioStarving = !this.disableAudio && audioBuffered < 0.5;
     const videoDecoderFull = this.videoDecoder.queueSize > maxVideoQueue;
     const videoBufferFull = !skipVideoBackpressure && videoBuffered > maxVideoBuffered;
-    const skipVideoDecodeForAudio = isNon1xRate && (videoBufferFull || videoDecoderFull) && audioStarving;
+    const skipVideoDecodeForAudio = isNon1xRate && !this.muted && (videoBufferFull || videoDecoderFull) && audioStarving;
 
     if (
       (!skipVideoBackpressure && !skipVideoDecodeForAudio && this.videoDecoder.queueSize > maxVideoQueue) ||
