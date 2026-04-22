@@ -70,21 +70,26 @@ async function harden() {
       drop_debugger: false, // keep debugger traps if they appear
       pure_getters: true,
       unsafe: false,
-      toplevel: true,
       booleans_as_integers: false,
     },
     mangle: {
-      toplevel: true,
-      keep_classnames: false,
-      keep_fnames: false,
+      // Only local-variable mangling. Property mangling is explicitly
+      // OFF: a combined bundle of MoviPlayer + hls.js + FFmpeg WASM
+      // glue has too many `"_foo"` string literals handed to event
+      // dispatchers / EventEmitter.on calls that terser's static
+      // analysis cannot connect to the `obj._foo` accesses on the
+      // other end. Renaming only one side breaks the callback
+      // wire-up and surfaces as cryptic runtime "X is not a function"
+      // errors. Toplevel / class / function name mangling is also
+      // off for the same reason — third-party dispatch that relies
+      // on Function.name or constructor identity would break. What
+      // remains still buys most of the hardening value: console.log
+      // removal + multi-pass dead-code + expression compression +
+      // shorter local variables.
+      keep_classnames: true,
+      keep_fnames: true,
       reserved: RESERVED_IDENTIFIERS,
-      properties: {
-        // Mangle internal property names. This is the main hardening
-        // win — class field names, private method names, and object
-        // keys used only within this bundle become single letters.
-        regex: /^_/,
-        reserved: RESERVED_PROP_NAMES,
-      },
+      properties: false,
     },
     format: {
       comments: false,

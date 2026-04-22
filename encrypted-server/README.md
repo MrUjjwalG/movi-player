@@ -1,6 +1,10 @@
 # Encrypted Video Server Example
 
-AES-256-GCM encrypted video playback with short-lived tokens (2s expiry), IP binding, and browser fingerprint validation.
+Self-hosted reference implementation of MoviPlayer's encrypted-playback
+protocol, backed by pre-encrypted `.enc` files produced by
+`encrypt.js`. Mirrors the wire protocol used by the Cloudflare
+Workers edge at `../app/worker.js` — MoviPlayer's `encrypted` mode
+attributes work against either backend unchanged.
 
 ## Quick Start
 
@@ -8,54 +12,90 @@ AES-256-GCM encrypted video playback with short-lived tokens (2s expiry), IP bin
 # 1. Install dependencies
 npm install
 
-# 2. Encrypt a video
+# 2. Encrypt a video (one-time, produces videos/<name>.enc + .key)
 node encrypt.js /path/to/video.mp4
 
-# 3. Start server
+# 3. Set the server secret (used to HMAC-sign tokens + derive the
+#    static wrap key for server ECDH private keys). Omit for local
+#    testing — a dev default is used with a warning.
+export ENC_SERVER_SECRET="$(openssl rand -hex 32)"
+
+# 4. Start server
 npm start
 
-# 4. Open browser
+# 5. Open browser
 open http://localhost:3000
 ```
 
-## How it works
+## Wire protocol
 
 ```
-Browser                          Server
-  │                                │
-  ├─ POST /api/token ────────────►│ Validate IP + fingerprint
-  │  {videoId, fingerprint}        │ Generate token (2s TTL)
-  │                                │ Return: {key, iv, token}
-  │◄───────────────────────────────┤
-  │                                │
-  ├─ GET /api/video ─────────────►│ Validate token + IP + fingerprint
-  │  X-Token: xxx                  │ Check not expired (<2s)
-  │  X-Fingerprint: xxx            │ Serve encrypted chunk
-  │  Range: bytes=0-2097151        │
-  │◄───────────────────────────────┤
-  │                                │
-  │  Browser: AES-GCM decrypt      │
-  │  → WASM demuxer → Canvas       │
-  │                                │
-  │  (Token expires, get new one)  │
-  ├─ POST /api/token ────────────►│ ...repeat
+Browser                                        Server
+  │                                              │
+  │  Generate ephemeral P-256 ECDH keypair       │
+  │  (private key is non-extractable)            │
+  │                                              │
+  ├─ POST /api/token ──────────────────────────►│ Generate ephemeral server ECDH
+  │  { videoId, fingerprint, clientPubKey }      │  keypair + random hkdfSalt
+  │                                              │ Wrap server priv with static
+  │                                              │  key derived from ENC_SERVER_SECRET
+  │                                              │ Sign token payload with HMAC
+  │◄─────────────────────────────────────────────┤
+  │  { token, serverPubKey, hkdfSalt,            │
+  │    fileSize, chunkSize, expiresAt }          │
+  │                                              │
+  │  Derive session keys via ECDH + HKDF         │
+  │  (master-AES for decrypt, req-HMAC for sign) │
+  │                                              │
+  ├─ GET /api/video ───────────────────────────►│ Verify token HMAC
+  │  X-Token, X-Nonce, X-Timestamp, X-Signature  │ Verify timestamp window
+  │  Range: bytes=<start>-<end>                  │ Unwrap server priv
+  │  Signature = HMAC(hmacKey,                   │ Re-derive session keys
+  │    "GET:token:nonce:ts:start:length")        │ Verify X-Signature
+  │                                              │ Check nonce hasn't been replayed
+  │                                              │ Decrypt needed disk chunks
+  │                                              │  with the per-file master key
+  │                                              │ Re-encrypt plaintext with
+  │                                              │  session master key in 2 MB
+  │                                              │  framed AES-GCM
+  │◄─────────────────────────────────────────────┤
+  │  [ 4-byte BE len ][ 12-byte IV ][ CT || Tag ] (repeated per frame)
+  │                                              │
+  │  Decrypt each frame progressively            │
+  │  → WASM demuxer → canvas                     │
+  │                                              │
+  │  Token refresh happens automatically ~500 ms │
+  │  before expiry                               │
 ```
 
-## Security Layers
+## Security layers
 
 | Layer | Protection |
 |---|---|
-| AES-256-GCM | Video is encrypted at rest and in transit |
-| Token TTL (2s) | Intercepted tokens expire immediately |
-| IP binding | Token only works from same IP |
-| Fingerprint binding | Token only works in same browser |
-| No `<video>` element | Can't right-click → Save Video |
-| Canvas rendering | No direct media access |
-| WASM demuxer | Stream processing in WebAssembly |
+| Pre-encrypted at rest | `.enc` file is AES-256-GCM with a random per-file master key; `.key` sidecar holds it and never leaves the server |
+| Per-request session key | Every `/api/video` uses a fresh ECDH-derived AES-GCM key; recording the wire bytes yields nothing without the (non-extractable) client priv |
+| Non-extractable client priv | Re-imported with `extractable=false`; DevTools `exportKey()` refuses |
+| Method-bound HMAC | `GET` signatures cannot be lifted to `HEAD` or vice versa |
+| Nonce replay window | Every nonce is single-use within the timestamp window |
+| Token TTL 30 s | Stolen tokens expire fast; IP + fingerprint pinning blocks cross-session replay |
+| HKDF salt per token | Session keys are unique even if ECDH secrets happened to collide |
+| No `<video>` element | Canvas-only path; no right-click → Save Video; no EME surface |
 
 ## Files
 
-- `encrypt.js` — Encrypt a video file (run once)
-- `server.js` — Express server with token auth
-- `*.enc` — Encrypted video (safe to put on CDN)
-- `*.key` — Decryption key info (KEEP SECRET, server-only)
+- `encrypt.js` — Encrypts a plaintext video into `videos/<name>.enc` + `<name>.key`
+- `server.js` — Express server implementing the encrypted playback protocol
+- `videos/*.enc` — Encrypted video data. Safe to sync to cheap storage
+- `videos/*.key` — Per-file master key. KEEP SERVER-ONLY
+
+## Notes
+
+- The Cloudflare Workers backend rotates its wrap key hourly via a
+  Durable Object for forward secrecy; this single-process server uses
+  a deterministic derivation from `ENC_SERVER_SECRET` instead (no
+  state to keep, tokens survive restarts, but no forward secrecy).
+- The nonce tracker is an in-memory `Map` — sufficient for single-
+  process deployments. Scale-out would swap in Redis.
+- File size and chunk layout come from the `.key` sidecar; the server
+  never reads plaintext from disk and never caches it outside the
+  currently-serving range.

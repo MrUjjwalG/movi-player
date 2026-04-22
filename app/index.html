@@ -1607,10 +1607,10 @@
               placeholder="Paste a video URL..."
               aria-label="Video URL"
             />
-            <!-- Protected toggle temporarily hidden while encrypted
-                 playback is still being validated in production. The
-                 JS references are null-guarded so the checkbox can be
-                 reinstated by uncommenting this block alone. -->
+            <!-- Protected toggle hidden while encrypted playback is
+                 still being validated in production. JS references
+                 are null-guarded so this block can be uncommented
+                 without touching the script. -->
             <!--
             <label class="url-bar-toggle" id="encrypt-toggle-label" title="Route the URL through a signed token proxy — hides the source URL and requires auth per request.">
               <input type="checkbox" id="encrypt-toggle" />

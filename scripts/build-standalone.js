@@ -87,6 +87,15 @@ async function buildEntry(entry, format) {
         : []),
     ],
     build: {
+      // Native class fields output (no __publicField helper). Required
+      // by the post-build harden pass: terser's property mangler
+      // rewrites `this._foo` accesses, but it does NOT rename the
+      // string literal inside `__publicField(this, "_foo", ...)`. With
+      // the helper in play, the mangled getter looks up a property
+      // that was never installed under its new name → undefined at
+      // runtime. All WebCodecs-supporting browsers ship class fields,
+      // so dropping the helper costs nothing.
+      target: 'es2022',
       lib: {
         entry: resolve(rootDir, entry.path),
         name: 'Movi',
