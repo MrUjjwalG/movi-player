@@ -35,25 +35,29 @@ bucket_name = "movi-assets"
 #   site:   1x00000000000000000000AA
 #   secret: 1x0000000000000000000000000000000AA
 
-# Durable Object for nonce replay protection. Single global instance
-# ("global") tracks recently-seen request nonces so a captured signed
-# tuple can't be replayed within the skew window. Requires the paid
-# Workers plan; custom-domain routes already imply that.
-[[durable_objects.bindings]]
-name = "NONCE_TRACKER"
-class_name = "NonceTracker"
-
-# Rotating wrap-key store. Holds the current + previous epoch's 32-byte
-# random key used to AES-seal the ephemeral ECDH private key inside each
-# token. Rotates hourly — provides forward secrecy even if
-# ENC_SERVER_SECRET leaks later.
-[[durable_objects.bindings]]
-name = "WRAP_KEY_STORE"
-class_name = "WrapKeyStore"
-
-[[migrations]]
-tag = "v1"
-new_classes = ["NonceTracker", "WrapKeyStore"]
+# Durable Object bindings — DISABLED on the free Workers plan. The
+# worker.js code paths are fall-open safe: when NONCE_TRACKER is
+# absent, nonce replay protection is skipped (a warning is logged);
+# when WRAP_KEY_STORE is absent, the wrap key is derived
+# deterministically from ENC_SERVER_SECRET instead of rotating hourly
+# (so forward secrecy is lost). Core auth — HMAC signature, token
+# HMAC + 30 s TTL, IP + fingerprint pinning, method + timestamp
+# binding — remains intact on the free tier.
+#
+# To enable on the paid plan, uncomment the two bindings below plus
+# the migrations block, then `wrangler deploy`.
+#
+# [[durable_objects.bindings]]
+# name = "NONCE_TRACKER"
+# class_name = "NonceTracker"
+#
+# [[durable_objects.bindings]]
+# name = "WRAP_KEY_STORE"
+# class_name = "WrapKeyStore"
+#
+# [[migrations]]
+# tag = "v1"
+# new_classes = ["NonceTracker", "WrapKeyStore"]
 
 [[rules]]
 type = "Text"

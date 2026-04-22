@@ -1607,6 +1607,11 @@
               placeholder="Paste a video URL..."
               aria-label="Video URL"
             />
+            <!-- Protected toggle temporarily hidden while encrypted
+                 playback is still being validated in production. The
+                 JS references are null-guarded so the checkbox can be
+                 reinstated by uncommenting this block alone. -->
+            <!--
             <label class="url-bar-toggle" id="encrypt-toggle-label" title="Route the URL through a signed token proxy — hides the source URL and requires auth per request.">
               <input type="checkbox" id="encrypt-toggle" />
               <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
@@ -1615,6 +1620,8 @@
               </svg>
               <span>Protected</span>
             </label>
+            -->
+
             <button class="url-bar-btn" id="load-btn">
               <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
                 <polygon points="5 3 19 12 5 21 5 3"></polygon>
@@ -1932,17 +1939,22 @@
         return encSessionJwt;
       };
 
-      // Remember the "Protected" toggle across reloads.
-      try {
-        if (localStorage.getItem("enc-toggle") === "1") {
-          encryptToggle.checked = true;
-        }
-      } catch { /* noop */ }
-      encryptToggle.addEventListener("change", () => {
+      // Remember the "Protected" toggle across reloads. The toggle is
+      // currently commented out in the markup — these guards keep the
+      // script safe when the element is absent so reinstating the
+      // checkbox later is a pure HTML uncomment.
+      if (encryptToggle) {
         try {
-          localStorage.setItem("enc-toggle", encryptToggle.checked ? "1" : "0");
+          if (localStorage.getItem("enc-toggle") === "1") {
+            encryptToggle.checked = true;
+          }
         } catch { /* noop */ }
-      });
+        encryptToggle.addEventListener("change", () => {
+          try {
+            localStorage.setItem("enc-toggle", encryptToggle.checked ? "1" : "0");
+          } catch { /* noop */ }
+        });
+      }
 
       const loadUrlEncrypted = async (url) => {
         clearPlaylist();
