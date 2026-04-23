@@ -341,7 +341,43 @@ async function handleStaticAsset(env, key) {
   });
 }
 
+// Referer allowlist for the general-purpose /proxy endpoints. <video>
+// media fetches don't send an Origin header, but browsers do send Referer
+// (governed by Referrer-Policy). Our own pages produce a moviplayer.com
+// Referer; a third-party page doing <video src="https://moviplayer.com/proxy?url=...">
+// produces Referer: https://theirsite/... — rejected here so freeloaders
+// can't use our worker as an open video CDN.
+//
+// Same-origin is always allowed (wrangler dev, future custom domains,
+// and the /embed iframe which runs on moviplayer.com and therefore
+// fetches /proxy as same-origin).
+const PROXY_ALLOWED_REFERER_ORIGINS = new Set([
+  "https://moviplayer.com",
+  "https://www.moviplayer.com",
+  "http://localhost:8787",
+  "http://127.0.0.1:8787",
+]);
+
+function isAllowedProxyReferer(request) {
+  const referer = request.headers.get("Referer");
+  if (!referer) return false;
+  let refOrigin;
+  try {
+    refOrigin = new URL(referer).origin;
+  } catch {
+    return false;
+  }
+  try {
+    if (refOrigin === new URL(request.url).origin) return true;
+  } catch { /* malformed request.url — fall through to allowlist */ }
+  return PROXY_ALLOWED_REFERER_ORIGINS.has(refOrigin);
+}
+
 async function handleProxy(request, url) {
+  if (!isAllowedProxyReferer(request)) {
+    return jsonResponse({ error: "Referer not allowed" }, 403);
+  }
+
   const targetUrl = url.searchParams.get("url");
   if (!targetUrl) {
     return jsonResponse({ error: "url parameter required" }, 400);
@@ -436,6 +472,10 @@ async function handleProxy(request, url) {
 //   - Never caches (every request carries a one-time nonce; caching would
 //     both break security and serve stale tokens)
 async function handleEncryptedProxy(request, url) {
+  if (!isAllowedProxyReferer(request)) {
+    return jsonResponse({ error: "Referer not allowed" }, 403);
+  }
+
   const targetUrl = url.searchParams.get("url");
   if (!targetUrl) {
     return jsonResponse({ error: "url parameter required" }, 400);
