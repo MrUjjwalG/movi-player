@@ -39,6 +39,88 @@ const ALLOWED_CONTENT_TYPES = [
   "application/vnd.apple.mpegurl", "application/dash+xml",
 ];
 
+// How many leading bytes to sniff when validating a file's magic bytes.
+// 32 is enough to cover every container we care about (EBML, ISO BMFF
+// boxes at offset 4, RIFF/AVI at offset 8–11, etc.) without buffering
+// meaningful amounts of video data.
+const MAGIC_SNIFF_SIZE = 32;
+
+/**
+ * Returns true if the given byte prefix matches a known video/audio
+ * container or streaming-manifest signature. Used as defense-in-depth
+ * against upstream servers that mislabel Content-Type — an attacker
+ * with their own origin could trivially set Content-Type: video/mp4
+ * on arbitrary binaries, so the Content-Type allowlist alone isn't
+ * enough to ensure the proxy only serves media.
+ */
+function hasSupportedSignature(buf) {
+  if (!buf || buf.length < 4) return false;
+  const b = buf;
+
+  // MKV / WebM — EBML header 1A 45 DF A3
+  if (b[0] === 0x1A && b[1] === 0x45 && b[2] === 0xDF && b[3] === 0xA3) return true;
+
+  // ISO BMFF family (MP4, MOV, M4A, M4V, 3GP, DASH segments). Every
+  // ISO BMFF file starts with a top-level box: 4-byte size + 4-byte
+  // type. We allowlist the box types a media file actually starts
+  // with — ftyp/styp for initial boxes, moof/moov/mdat/free/skip for
+  // segment starts (fragmented MP4 used by DASH/CMAF).
+  if (buf.length >= 8) {
+    const isBox = (a, c, d, e) => b[4] === a && b[5] === c && b[6] === d && b[7] === e;
+    if (isBox(0x66, 0x74, 0x79, 0x70)) return true; // ftyp
+    if (isBox(0x73, 0x74, 0x79, 0x70)) return true; // styp
+    if (isBox(0x6D, 0x6F, 0x6F, 0x66)) return true; // moof
+    if (isBox(0x6D, 0x6F, 0x6F, 0x76)) return true; // moov
+    if (isBox(0x6D, 0x64, 0x61, 0x74)) return true; // mdat
+    if (isBox(0x66, 0x72, 0x65, 0x65)) return true; // free
+    if (isBox(0x73, 0x6B, 0x69, 0x70)) return true; // skip
+  }
+
+  // AVI — "RIFF"....\"AVI \"
+  if (buf.length >= 12 &&
+      b[0] === 0x52 && b[1] === 0x49 && b[2] === 0x46 && b[3] === 0x46 &&
+      b[8] === 0x41 && b[9] === 0x56 && b[10] === 0x49 && b[11] === 0x20) return true;
+
+  // FLV
+  if (b[0] === 0x46 && b[1] === 0x4C && b[2] === 0x56) return true;
+
+  // ASF / WMV — GUID 30 26 B2 75 8E 66 CF 11
+  if (buf.length >= 8 &&
+      b[0] === 0x30 && b[1] === 0x26 && b[2] === 0xB2 && b[3] === 0x75 &&
+      b[4] === 0x8E && b[5] === 0x66 && b[6] === 0xCF && b[7] === 0x11) return true;
+
+  // MPEG-PS (program stream) — pack-header start code 00 00 01 BA
+  if (b[0] === 0x00 && b[1] === 0x00 && b[2] === 0x01 && b[3] === 0xBA) return true;
+
+  // MPEG-2 TS — sync byte 0x47. Stronger than just checking byte 0 by
+  // also requiring the packet length offset (188 or 204) to repeat the
+  // sync. Within 32 sniffed bytes we can only check the first one, so
+  // this is paired with the Content-Type allowlist for safety.
+  if (b[0] === 0x47) return true;
+
+  // OGG — "OggS"
+  if (b[0] === 0x4F && b[1] === 0x67 && b[2] === 0x67 && b[3] === 0x53) return true;
+
+  // MP3 w/ID3 tag — "ID3"
+  if (b[0] === 0x49 && b[1] === 0x44 && b[2] === 0x33) return true;
+  // MP3 frame sync
+  if (b[0] === 0xFF && (b[1] & 0xE0) === 0xE0) return true;
+  // FLAC — "fLaC"
+  if (b[0] === 0x66 && b[1] === 0x4C && b[2] === 0x61 && b[3] === 0x43) return true;
+
+  // HLS playlist — must start with "#EXTM3U"
+  if (buf.length >= 7 &&
+      b[0] === 0x23 && b[1] === 0x45 && b[2] === 0x58 && b[3] === 0x54 &&
+      b[4] === 0x4D && b[5] === 0x33 && b[6] === 0x55) return true;
+
+  // DASH MPD — XML. "<?xml" or "<MPD"
+  if (buf.length >= 5 &&
+      b[0] === 0x3C && b[1] === 0x3F && b[2] === 0x78 && b[3] === 0x6D && b[4] === 0x6C) return true;
+  if (b[0] === 0x3C && b[1] === 0x4D && b[2] === 0x50 && b[3] === 0x44) return true;
+
+  return false;
+}
+
 /**
  * Durable Object that tracks recently-seen nonces so that a captured
  * {token, nonce, timestamp, signature} tuple cannot be replayed within
@@ -373,6 +455,74 @@ function isAllowedProxyReferer(request) {
   return PROXY_ALLOWED_REFERER_ORIGINS.has(refOrigin);
 }
 
+// Sniff the first MAGIC_SNIFF_SIZE bytes from a ReadableStream, then
+// return a new stream that re-emits the sniffed prefix followed by the
+// remaining bytes. Returns { ok: false } if the signature doesn't match
+// a supported container.
+async function sniffAndPassthrough(stream) {
+  const reader = stream.getReader();
+  const chunks = [];
+  let total = 0;
+  try {
+    while (total < MAGIC_SNIFF_SIZE) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      chunks.push(value);
+      total += value.byteLength;
+    }
+  } catch {
+    reader.cancel().catch(() => {});
+    return { ok: false, stream: null };
+  }
+  const prefix = new Uint8Array(total);
+  let off = 0;
+  for (const c of chunks) {
+    prefix.set(c, off);
+    off += c.byteLength;
+  }
+  if (!hasSupportedSignature(prefix)) {
+    reader.cancel().catch(() => {});
+    return { ok: false, stream: null };
+  }
+  const { readable, writable } = new TransformStream();
+  (async () => {
+    const writer = writable.getWriter();
+    try {
+      await writer.write(prefix);
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        await writer.write(value);
+      }
+      await writer.close();
+    } catch (err) {
+      try { await writer.abort(err); } catch { /* noop */ }
+    }
+  })();
+  return { ok: true, stream: readable };
+}
+
+// Preflight magic-byte check for requests whose response body can't be
+// sniffed inline (HEAD, or Range seek past byte 0). One small extra
+// subrequest — Cloudflare edge caches it after the first hit.
+async function preflightSignatureCheck(targetUrl) {
+  try {
+    const res = await fetch(targetUrl, {
+      method: "GET",
+      headers: {
+        "Range": `bytes=0-${MAGIC_SNIFF_SIZE - 1}`,
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+      },
+      redirect: "follow",
+    });
+    if (!res.ok && res.status !== 206) return false;
+    const buf = new Uint8Array(await res.arrayBuffer());
+    return hasSupportedSignature(buf);
+  } catch {
+    return false;
+  }
+}
+
 async function handleProxy(request, url) {
   if (!isAllowedProxyReferer(request)) {
     return jsonResponse({ error: "Referer not allowed" }, 403);
@@ -431,6 +581,25 @@ async function handleProxy(request, url) {
       return jsonResponse({ error: "Content type not allowed: " + contentType }, 403);
     }
 
+    // Magic-byte check: upstream Content-Type can lie, so also verify
+    // the actual file signature. Inline when the body starts at byte 0
+    // (no Range or Range: bytes=0-…); otherwise do a preflight since we
+    // can't infer the signature from mid-file bytes.
+    const startsAtZero = !rangeHeader || /^bytes=0[-=]/i.test(rangeHeader);
+    let body = response.body;
+    if (request.method === "HEAD" || !startsAtZero) {
+      const ok = await preflightSignatureCheck(targetUrl);
+      if (!ok) {
+        return jsonResponse({ error: "Unsupported file format" }, 415);
+      }
+    } else if (body) {
+      const sniffed = await sniffAndPassthrough(body);
+      if (!sniffed.ok) {
+        return jsonResponse({ error: "Unsupported file format" }, 415);
+      }
+      body = sniffed.stream;
+    }
+
     // Build response headers
     const respHeaders = new Headers({
       ...CORS_HEADERS,
@@ -451,7 +620,7 @@ async function handleProxy(request, url) {
     respHeaders.set("Cache-Control", "public, max-age=86400");
 
     // Stream the response body (no buffering)
-    return new Response(response.body, {
+    return new Response(body, {
       status: response.status,
       headers: respHeaders,
     });
