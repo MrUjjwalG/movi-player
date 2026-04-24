@@ -390,6 +390,20 @@ export class EncryptedHttpSource extends HttpSource {
    * actually not cached and every seek would round-trip. The player
    * UI's seek-is-instant hint relies on this being honest.
    */
+  /**
+   * Report the real read cursor as the source's current position.
+   * HttpSource's base implementation tracks position via readFromBuffer(),
+   * which encrypted mode bypasses — we go through the block cache in our
+   * overridden read(). The cursor we actually maintain is _lastReadEnd,
+   * snapped synchronously at the start of read() (see comment on that
+   * assignment). Expose it here so MoviPlayer.getBufferedTime can compute
+   * the forward-buffered delta correctly; otherwise this.position stays
+   * at its default and every seek looks like a huge forward buffer.
+   */
+  getPosition(): number {
+    return this._lastReadEnd;
+  }
+
   getBufferedEnd(): number {
     const BLOCK = EncryptedHttpSource.BLOCK_SIZE;
     // Report the end of the contiguous cached-or-inflight run containing
