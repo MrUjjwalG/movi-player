@@ -1346,6 +1346,18 @@ export class HttpSource implements SourceAdapter {
     const currentBufferEnd = this.bufferEnd;
     const bufferStart = this.atomicGetBufferStart();
 
+    // If the current read position is outside the buffer window, the buffer
+    // doesn't cover us — there is nothing forward-buffered at the new spot
+    // yet. Report position itself so "forward = bufferedEnd - position = 0".
+    // This collapses a transient seek race: source.seek() updates position
+    // synchronously, but startStream() (which resets window atomics) runs
+    // async on the next read. Without this clamp, callers briefly see a
+    // stale bufferedEnd against a new position and compute a huge forward
+    // delta, producing a phantom "scan" sweep on the seek bar.
+    if (this.position < bufferStart || this.position > currentBufferEnd) {
+      return this.position;
+    }
+
     // The current buffer end is the most reliable indicator of what's actually buffered
     // Only use maxBufferedEnd if it's within the current buffer window or close to it
     // (within 2x buffer size, meaning we might have read ahead but the window hasn't caught up)

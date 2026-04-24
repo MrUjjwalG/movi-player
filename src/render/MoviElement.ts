@@ -5623,7 +5623,10 @@ export class MoviElement extends HTMLElement {
         background: rgba(255, 255, 255, 0.25);
         border-radius: 100px;
         width: 0%;
-        transition: width 0.1s linear, left 0.1s linear;
+        /* No transition: animating width across the brief post-seek window
+           where the source's buffered-end is still stale produced a
+           "scan" sweep that then snapped back. State updates should
+           reflect instantly. */
       }
 
       .movi-progress-handle {
