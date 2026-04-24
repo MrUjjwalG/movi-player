@@ -2467,15 +2467,24 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
     });
     Logger.debug(TAG, "Isolated WASM module loaded for thumbnails");
 
-    // Use dedicated ThumbnailHttpSource to avoid conflicts with main playback stream
-    // This source makes independent range requests without shared buffering state
+    // Use dedicated ThumbnailHttpSource to avoid conflicts with main playback stream.
+    // This source makes independent range requests without shared buffering state,
+    // but will read-only peek into the main source's head cache + sliding window
+    // when possible — high hit-rate for seekbar hover previews near playback.
     const sourceConfig = this.config.source;
+    const borrowSource =
+      this.source &&
+      typeof (this.source as any).peekMetadata === "function" &&
+      typeof (this.source as any).peekRange === "function"
+        ? (this.source as any)
+        : null;
     if (typeof sourceConfig === "string") {
-      this.thumbnailSource = new ThumbnailHttpSource(sourceConfig);
+      this.thumbnailSource = new ThumbnailHttpSource(sourceConfig, {}, borrowSource);
     } else if ("url" in sourceConfig && sourceConfig.url) {
       this.thumbnailSource = new ThumbnailHttpSource(
         sourceConfig.url,
         sourceConfig.headers || {},
+        borrowSource,
       );
     } else {
       // File source - use regular createSource as files don't have streaming conflicts
@@ -3794,17 +3803,19 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
       return 0;
     }
 
-    // For HttpSource, convert buffered bytes to time using stable linear estimation.
-    // Transient bitrate-based estimation is unstable during seeks.
+    // For HttpSource, report the buffered-end *relative* to the source's
+    // real read cursor. Converting both endpoints to time via linear ratio
+    // fails on VBR (seek byte offset ≠ linear(seek time)). Instead, use the
+    // byte delta between buffered-end and the source's last-read position
+    // — both are real byte offsets — and apply linear conversion only to
+    // that small delta, added to the accurate currentTime.
     if (this.source instanceof HttpSource && this.fileSize > 0) {
-      const bufferedBytes = this.source.getBufferedEnd();
-      if (bufferedBytes > 0) {
-        const ratio = Math.min(1, bufferedBytes / this.fileSize);
-        const bufferedTime = ratio * duration;
-
-        // Ensure buffer appears at least as far as current playback position
-        // This prevents buffer bar from appearing behind progress bar
-        return Math.max(bufferedTime, this.getCurrentTime());
+      const bufferedEndBytes = this.source.getBufferedEnd();
+      if (bufferedEndBytes > 0) {
+        const currentBytes = this.source.getPosition();
+        const forwardBytes = Math.max(0, bufferedEndBytes - currentBytes);
+        const forwardTime = (forwardBytes / this.fileSize) * duration;
+        return this.getCurrentTime() + forwardTime;
       }
     }
 

@@ -32,6 +32,15 @@ const HEADER = {
 
 // HEAD_CACHE_SIZE is now dynamic: calculated in ensureHeadCache based on file size.
 
+// Metadata LRU: caches small reads served out of HttpSource so that
+// metadata-shaped access patterns (moov/ftyp/Cues/index reads — typically
+// small, repeated, scattered across the file) survive sliding-window
+// eviction. Format-agnostic: we don't assume where metadata lives, we
+// learn from actual access patterns. Hot path for thumbnail borrow.
+const METADATA_CACHE_MAX_CHUNK = 128 * 1024; // Reads larger than this skip the cache
+const METADATA_CACHE_MAX_BYTES = 8 * 1024 * 1024; // 8MB total cap
+const METADATA_CACHE_MAX_ENTRIES = 128;
+
 export class HttpSource implements SourceAdapter {
   private url: string;
   private headers: Record<string, string>;
@@ -41,6 +50,12 @@ export class HttpSource implements SourceAdapter {
 
   // Persistent Cache
   private headBuffer: Uint8Array | null = null;
+
+  // Metadata LRU (see top-of-file comment). Keyed by absolute file offset
+  // → the cached bytes. JS Map preserves insertion order; on hit we
+  // delete+re-insert to bump to most-recent. Only small reads enter.
+  private metadataCache: Map<number, Uint8Array> = new Map();
+  private metadataCacheBytes: number = 0;
 
   // Shared buffer
   private sharedBuffer: SharedArrayBuffer | null = null;
@@ -408,6 +423,109 @@ export class HttpSource implements SourceAdapter {
   }
 
   /**
+   * Read-only peek into the persistent head cache.
+   * Returns a copy if the full range is covered, null otherwise.
+   * Does not mutate position/state, safe for cross-source borrowing.
+   */
+  peekHead(offset: number, length: number): Uint8Array | null {
+    if (!this.headBuffer) return null;
+    if (offset < 0 || offset + length > this.headBuffer.length) return null;
+    const out = new Uint8Array(length);
+    out.set(this.headBuffer.subarray(offset, offset + length));
+    return out;
+  }
+
+  /**
+   * Record a freshly-served small read into the metadata LRU.
+   * Ignores reads larger than METADATA_CACHE_MAX_CHUNK (those are payload,
+   * not metadata). The caller must pass bytes that will not be mutated —
+   * we keep the reference as-is. read() already hands us fresh Uint8Arrays.
+   */
+  private cacheMetadataRead(offset: number, bytes: Uint8Array): void {
+    if (bytes.length === 0 || bytes.length > METADATA_CACHE_MAX_CHUNK) return;
+
+    // Refresh existing entry at the same offset (dedupe).
+    const existing = this.metadataCache.get(offset);
+    if (existing) {
+      this.metadataCache.delete(offset);
+      this.metadataCacheBytes -= existing.length;
+    }
+
+    this.metadataCache.set(offset, bytes);
+    this.metadataCacheBytes += bytes.length;
+
+    // Evict oldest until under caps.
+    while (
+      (this.metadataCacheBytes > METADATA_CACHE_MAX_BYTES ||
+        this.metadataCache.size > METADATA_CACHE_MAX_ENTRIES) &&
+      this.metadataCache.size > 0
+    ) {
+      const oldestKey = this.metadataCache.keys().next().value as
+        | number
+        | undefined;
+      if (oldestKey === undefined) break;
+      const oldest = this.metadataCache.get(oldestKey)!;
+      this.metadataCache.delete(oldestKey);
+      this.metadataCacheBytes -= oldest.length;
+    }
+  }
+
+  /**
+   * Read-only peek into the metadata LRU.
+   * Returns a fresh copy if any cached chunk fully covers [offset, offset+length).
+   * Bumps matched entry to most-recent. Safe for cross-source borrowing.
+   */
+  peekMetadata(offset: number, length: number): Uint8Array | null {
+    if (length <= 0 || this.metadataCache.size === 0) return null;
+    for (const [entryOffset, entryBytes] of this.metadataCache) {
+      if (
+        entryOffset <= offset &&
+        entryOffset + entryBytes.length >= offset + length
+      ) {
+        const localOffset = offset - entryOffset;
+        const out = new Uint8Array(length);
+        out.set(entryBytes.subarray(localOffset, localOffset + length));
+        // Bump to most-recent — delete + re-insert preserves Map order.
+        this.metadataCache.delete(entryOffset);
+        this.metadataCache.set(entryOffset, entryBytes);
+        return out;
+      }
+    }
+    return null;
+  }
+
+  /**
+   * Read-only peek into the sliding window buffer.
+   * Returns a copy if the full range is present, null otherwise.
+   * Seqlock-guarded via HEADER.VERSION — if the window shifts mid-copy
+   * (new stream started), returns null so the caller can fall back.
+   * Does not mutate position/state, safe for cross-source borrowing.
+   */
+  peekRange(offset: number, length: number): Uint8Array | null {
+    if (length <= 0) return null;
+    // Seqlock snapshot: capture version, bounds; re-check after copy.
+    const v1 = this.useSharedBuffer && this.headerView
+      ? Atomics.load(this.headerView, HEADER.VERSION)
+      : 0;
+    const start = this.atomicGetBufferStart();
+    const writePos = this.atomicGetWritePos();
+    if (offset < start || offset + length > start + writePos) return null;
+
+    const buf = this.getBuffer();
+    if (!buf) return null;
+    const localOffset = offset - start;
+    const out = new Uint8Array(length);
+    out.set(buf.subarray(localOffset, localOffset + length));
+
+    // If the window shifted (new stream), the bytes we copied may be stale.
+    if (this.useSharedBuffer && this.headerView) {
+      const v2 = Atomics.load(this.headerView, HEADER.VERSION);
+      if (v1 !== v2) return null;
+    }
+    return out;
+  }
+
+  /**
    * Start streaming from offset
    */
   private async startStream(fromOffset: number): Promise<void> {
@@ -444,12 +562,13 @@ export class HttpSource implements SourceAdapter {
     // Starting a new stream means old full-cache is invalid
     this.fullyBuffered = false;
 
-    // Reset maxBufferedEnd when seeking to new position
-    // If the old maxBufferedEnd is outside the new buffer window, it's stale
-    if (this.maxBufferedEnd < fromOffset || this.maxBufferedEnd > fromOffset + this.bufferSize) {
-      // Old buffered data is outside new window, reset to current position
-      this.maxBufferedEnd = fromOffset;
-    }
+    // Buffer has been reset (writePos = 0): nothing is actually buffered at
+    // the new position yet. maxBufferedEnd tracks the farthest byte present
+    // in the CURRENT window, so it must collapse to fromOffset regardless
+    // of where the old value sat. Preserving it caused the seek-bar to
+    // flash a phantom "already buffered ahead" region immediately after
+    // seek, before any bytes had streamed in.
+    this.maxBufferedEnd = fromOffset;
 
     this.abortController = new AbortController();
 
@@ -635,6 +754,7 @@ export class HttpSource implements SourceAdapter {
                 if (currentEnd > this.maxBufferedEnd) {
                   this.maxBufferedEnd = currentEnd;
                 }
+
 
                 // When the entire file fits in the buffer, skip all limit/compaction
                 // checks — just stream straight to EOF. Buffer has room for everything.
@@ -967,6 +1087,26 @@ export class HttpSource implements SourceAdapter {
   }
 
   async read(offset: number, length: number): Promise<ArrayBuffer> {
+    // LRU peek first — metadata reads often repeat after the sliding window
+    // has moved on. Cheap: single Map scan, bounded size.
+    const cached = this.peekMetadata(offset, length);
+    if (cached) {
+      this.position = offset + length;
+      Logger.debug(TAG, `Read: served from metadata LRU`);
+      return cached.buffer as ArrayBuffer;
+    }
+
+    const result = await this._readInternal(offset, length);
+
+    // Populate LRU on every small read served. Result is a fresh ArrayBuffer
+    // (read paths all allocate new Uint8Arrays), safe to keep by-reference.
+    if (result.byteLength > 0 && result.byteLength <= METADATA_CACHE_MAX_CHUNK) {
+      this.cacheMetadataRead(offset, new Uint8Array(result));
+    }
+    return result;
+  }
+
+  private async _readInternal(offset: number, length: number): Promise<ArrayBuffer> {
     Logger.debug(
       TAG,
       `Read: offset=${offset}, length=${length}, bufferStart=${this.atomicGetBufferStart()}, bufferEnd=${this.bufferEnd}, streaming=${this.atomicIsStreaming()}`,
@@ -1218,12 +1358,6 @@ export class HttpSource implements SourceAdapter {
       this.maxBufferedEnd <= maxReasonable
     ) {
       result = this.maxBufferedEnd;
-    }
-
-    // Ensure buffered end is at least as far as current read position
-    // This prevents buffer bar from appearing behind playback position
-    if (result < this.position) {
-      result = this.position;
     }
 
     // Never exceed file size

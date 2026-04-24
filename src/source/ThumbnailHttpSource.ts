@@ -16,6 +16,15 @@ const BUFFER_SIZE = 512 * 1024;
 // Maximum fetch size to prevent excessive downloads (5MB cap)
 const MAX_FETCH_SIZE = 5 * 1024 * 1024;
 
+/**
+ * Minimal interface describing a source we can peek into without mutating.
+ * HttpSource implements this structurally via peekMetadata() / peekRange().
+ */
+export interface PeekableSource {
+  peekMetadata(offset: number, length: number): Uint8Array | null;
+  peekRange(offset: number, length: number): Uint8Array | null;
+}
+
 export class ThumbnailHttpSource implements SourceAdapter {
   private url: string;
   private headers: Record<string, string>;
@@ -28,9 +37,23 @@ export class ThumbnailHttpSource implements SourceAdapter {
   private bufferStart: number = 0;
   private bufferEnd: number = 0;
 
-  constructor(url: string, headers: Record<string, string> = {}) {
+  // Optional main source to borrow already-buffered bytes from.
+  // Used to avoid re-fetching data the main playback stream has cached
+  // — particularly hot for seekbar hover previews near current playback.
+  private borrowSource: PeekableSource | null = null;
+
+  constructor(
+    url: string,
+    headers: Record<string, string> = {},
+    borrowSource: PeekableSource | null = null,
+  ) {
     this.url = url;
     this.headers = headers;
+    this.borrowSource = borrowSource;
+  }
+
+  setBorrowSource(source: PeekableSource | null): void {
+    this.borrowSource = source;
   }
 
   async getSize(): Promise<number> {
@@ -79,6 +102,26 @@ export class ThumbnailHttpSource implements SourceAdapter {
       this.position = offset + length;
       Logger.debug(TAG, `Read from buffer: offset=${offset}, length=${length}`);
       return result.buffer;
+    }
+
+    // Try borrowing from main source's buffers before paying for a new fetch.
+    // Metadata LRU covers moov/ftyp/Cues reads the main player has already
+    // served (format-agnostic); sliding window covers keyframe bytes near
+    // current playback (seekbar hover previews).
+    if (this.borrowSource) {
+      const meta = this.borrowSource.peekMetadata(offset, length);
+      if (meta) {
+        this.position = offset + length;
+        Logger.debug(TAG, `Read borrowed from metadata LRU: offset=${offset}, length=${length}`);
+        // peek methods always return fresh Uint8Array backed by ArrayBuffer
+        return meta.buffer as ArrayBuffer;
+      }
+      const hit = this.borrowSource.peekRange(offset, length);
+      if (hit) {
+        this.position = offset + length;
+        Logger.debug(TAG, `Read borrowed from main window: offset=${offset}, length=${length}`);
+        return hit.buffer as ArrayBuffer;
+      }
     }
 
     // Need to fetch - calculate optimal range

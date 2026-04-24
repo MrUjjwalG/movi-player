@@ -9621,14 +9621,16 @@ export class MoviElement extends HTMLElement {
         progressHandle.style.left = `${Math.max(1, percent)}%`;
       }
 
-      // Update buffer (if available) - Show continuous buffered range from start
+      // Buffer draws from 0 to bufferEnd; the filled bar overlays it on top
+      // so the buffer's left rounded edge is hidden beneath the played
+      // portion. Only the trailing (right) rounded edge is visible, which
+      // sits cleanly against the filled bar without a radius-on-radius
+      // notch. bufferEnd math is already correct (relative to real read
+      // cursor), so drawing from 0 is purely a visual choice.
       if (this.player && progressBuffer) {
         const bufferEnd = this.player.getBufferEndTime();
-
         if (bufferEnd > 0) {
-          // Show buffer from 0 to bufferEnd (continuous appearance, no gaps)
-          const endPercent = (bufferEnd / this.duration) * 100;
-
+          const endPercent = Math.min(100, (bufferEnd / this.duration) * 100);
           progressBuffer.style.left = "0%";
           progressBuffer.style.width = `${endPercent}%`;
         } else {
