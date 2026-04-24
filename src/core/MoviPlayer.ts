@@ -2467,28 +2467,42 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
     });
     Logger.debug(TAG, "Isolated WASM module loaded for thumbnails");
 
-    // Use dedicated ThumbnailHttpSource to avoid conflicts with main playback stream.
-    // This source makes independent range requests without shared buffering state,
-    // but will read-only peek into the main source's head cache + sliding window
-    // when possible — high hit-rate for seekbar hover previews near playback.
+    // Encrypted playback: reuse the main EncryptedHttpSource for thumbnails.
+    // A 2nd EncryptedHttpSource spins up an independent ECDH handshake +
+    // token-signed GETs, which the server treats as concurrent sessions;
+    // observed server behavior is 206 responses with truncated/empty
+    // bodies (seen as "Stream ended before block N" errors) when both
+    // instances fetch overlapping ranges. Sharing the main source also
+    // makes thumbnail reads free once the block is in the main source's
+    // block cache — no extra network at all for near-playhead previews.
     const sourceConfig = this.config.source;
-    const borrowSource =
-      this.source &&
-      typeof (this.source as any).peekMetadata === "function" &&
-      typeof (this.source as any).peekRange === "function"
-        ? (this.source as any)
-        : null;
-    if (typeof sourceConfig === "string") {
-      this.thumbnailSource = new ThumbnailHttpSource(sourceConfig, {}, borrowSource);
-    } else if ("url" in sourceConfig && sourceConfig.url) {
-      this.thumbnailSource = new ThumbnailHttpSource(
-        sourceConfig.url,
-        sourceConfig.headers || {},
-        borrowSource,
-      );
+    const isEncrypted = sourceConfig
+      && typeof sourceConfig !== "string"
+      && (sourceConfig as any).type === "encrypted";
+    if (isEncrypted && this.source) {
+      this.thumbnailSource = this.source;
     } else {
-      // File source - use regular createSource as files don't have streaming conflicts
-      this.thumbnailSource = await this.createSource(sourceConfig);
+      // Plain HTTP / URL sources: use a dedicated ThumbnailHttpSource that
+      // borrows (read-only) from the main source's metadata LRU +
+      // sliding-window buffer, only fetching on miss.
+      const borrowSource =
+        this.source &&
+        typeof (this.source as any).peekMetadata === "function" &&
+        typeof (this.source as any).peekRange === "function"
+          ? (this.source as any)
+          : null;
+      if (typeof sourceConfig === "string") {
+        this.thumbnailSource = new ThumbnailHttpSource(sourceConfig, {}, borrowSource);
+      } else if ("url" in sourceConfig && sourceConfig.url) {
+        this.thumbnailSource = new ThumbnailHttpSource(
+          sourceConfig.url,
+          sourceConfig.headers || {},
+          borrowSource,
+        );
+      } else {
+        // File source
+        this.thumbnailSource = await this.createSource(sourceConfig);
+      }
     }
 
     const fileSize = await this.thumbnailSource.getSize();

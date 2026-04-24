@@ -145,9 +145,15 @@ export class EncryptedHttpSource extends HttpSource {
   // time ladder we had before.
   private static readonly PREFETCH_LOW_WATER = 32;  //  64 MB — trigger refill
   private static readonly PREFETCH_HIGH_WATER = 96; // 192 MB — aim depth
-  // Hard cap on streams running in parallel. Bigger = deeper prefetch
-  // but more worker CPU contention and more upstream connections.
-  private static readonly MAX_CONCURRENT_STREAMS = 6;
+  // Hard cap on streams running in parallel. Observed upstream behavior:
+  // with 3+ concurrent token-signed streams from the same session, the
+  // server truncates responses (206 with near-empty body, logs show
+  // "delivered [N..N-1]" i.e. zero blocks). Capping at 2 keeps one
+  // foreground demuxer stream + one background prefetch stream without
+  // tripping that limit. maybePrefetch honors this cap directly; the
+  // stale-stream abort in fetchBlock drops us back under it whenever a
+  // far seek happens.
+  private static readonly MAX_CONCURRENT_STREAMS = 2;
 
   // Per-instance override for prefetch depth + cache cap. Populated by
   // MoviElement when the `buffersize` attribute is set — lets callers
@@ -529,6 +535,25 @@ export class EncryptedHttpSource extends HttpSource {
       }
     }
 
+    // Hard concurrency cap: the upstream server truncates responses when
+    // too many token-signed streams are open on the same session. If the
+    // stale-window abort above didn't get us under the cap (can happen
+    // when the new block is near existing streams — prefetch window),
+    // abort the oldest surviving active stream. Demuxer-driven reads
+    // are latency-sensitive; starving them to keep prefetch alive just
+    // causes playback stalls.
+    while (
+      this._activeStreams.size >= EncryptedHttpSource.MAX_CONCURRENT_STREAMS
+    ) {
+      const oldest = this._activeStreams.values().next().value;
+      if (!oldest) break;
+      console.log(
+        `[EncSrc] Evicting oldest active stream [${oldest.firstBlock}..${oldest.lastBlock}] to stay under concurrent cap`,
+      );
+      try { oldest.abortCtrl.abort(); } catch { /* noop */ }
+      this._activeStreams.delete(oldest);
+    }
+
     const resolvers = new Map<number, {
       resolve: (v: Uint8Array) => void;
       reject: (e: unknown) => void;
@@ -538,6 +563,12 @@ export class EncryptedHttpSource extends HttpSource {
       const p = new Promise<Uint8Array>((resolve, reject) => {
         resolvers.set(b, { resolve, reject });
       });
+      // Silence "unhandled rejection" for prefetch blocks that nothing
+      // ends up awaiting — they reject en masse whenever a seek aborts
+      // an in-flight stream, which was flooding DevTools. Real awaiters
+      // (read() caller for their own block, or a dedupe hit on the same
+      // promise) still see the rejection through their own chain.
+      p.catch(() => { /* prefetch rejection — owner handles its own */ });
       this._blockInflight.set(b, p);
     }
 
