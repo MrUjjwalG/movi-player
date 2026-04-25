@@ -927,7 +927,20 @@ export class MoviElement extends HTMLElement {
       resumeDialog.style.display = "none";
       this.focus();
       if (this.player && time > 0) {
-        this.player.seek(time).then(() => this.play()).catch(() => {});
+        // Wait for the seek to fully settle (state out of "seeking") before
+        // playing. seek()'s promise resolves once the demuxer.seek + processLoop
+        // are kicked off, but state stays "seeking" until the first frame syncs.
+        // Calling play() during "seeking" takes a deferred-resume shortcut that
+        // skips first-play init (sets _playStartTime, re-aligns demuxer, starts
+        // native audio); on a fresh paused load that path drops us back to t=0
+        // instead of the resume target. Awaiting "seeked" lets play() run the
+        // full first-play pipeline from a settled paused state.
+        const player = this.player;
+        const onSeeked = () => this.play().catch(() => {});
+        player.once("seeked", onSeeked);
+        player.seek(time).catch(() => {
+          player.off("seeked", onSeeked);
+        });
       }
     });
 
