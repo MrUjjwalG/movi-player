@@ -100,19 +100,23 @@ function injectDirectVideoOverlay() {
   });
 }
 
-// Initial scan
-if (isNativeVideoViewer()) {
-  injectDirectVideoOverlay();
-} else {
-  scanPage();
-}
-
-// Re-scan on DOM changes (SPA, dynamic content)
-const observer = new MutationObserver(() => {
+// Bail out on non-HTML documents (SVG, XML, image viewers, etc.) — they have
+// no <body> element, so MutationObserver and our DOM scans would just throw.
+if (document.body instanceof HTMLElement) {
+  // Initial scan
   if (isNativeVideoViewer()) {
     injectDirectVideoOverlay();
   } else {
     scanPage();
   }
-});
-observer.observe(document.body, { childList: true, subtree: true });
+
+  // Re-scan on DOM changes (SPA, dynamic content)
+  const observer = new MutationObserver(() => {
+    if (isNativeVideoViewer()) {
+      injectDirectVideoOverlay();
+    } else {
+      scanPage();
+    }
+  });
+  observer.observe(document.body, { childList: true, subtree: true });
+}
