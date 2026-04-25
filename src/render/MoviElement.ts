@@ -7528,6 +7528,10 @@ export class MoviElement extends HTMLElement {
         pointer-events: none;
         max-height: 250px;
         overflow-y: auto;
+        font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+        font-size: 14px;
+        color: var(--movi-controls-color);
+        letter-spacing: 0.01em;
       }
 
       .movi-context-menu-submenu.movi-context-menu-submenu-visible {
@@ -7556,6 +7560,10 @@ export class MoviElement extends HTMLElement {
         pointer-events: none;
         max-height: 250px;
         overflow-y: auto;
+        font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+        font-size: 14px;
+        color: var(--movi-controls-color);
+        letter-spacing: 0.01em;
       }
       
       .movi-context-menu-submenu-audio.movi-context-menu-submenu-visible,
