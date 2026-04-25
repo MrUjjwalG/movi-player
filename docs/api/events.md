@@ -37,22 +37,24 @@ element.addEventListener("durationChange", (e: CustomEvent) => {
 
 All events from `PlayerEventMap`:
 
-| Event            | Payload             | Description                    |
-| ---------------- | ------------------- | ------------------------------ |
-| `loadStart`      | `void`              | Loading started                |
-| `loadEnd`        | `void`              | Loading completed              |
-| `stateChange`    | `PlayerState`       | State changed                  |
-| `timeUpdate`     | `number`            | Current time updated           |
-| `durationChange` | `number`            | Duration available/changed     |
-| `tracksChange`   | `Track[]`           | Tracks list updated            |
-| `seeking`        | `number`            | Seek started (target time)     |
-| `seeked`         | `number`            | Seek completed (actual time)   |
-| `bufferUpdate`   | `{ start, end }[]`  | Buffer ranges updated          |
-| `ended`          | `void`              | Playback ended                 |
-| `error`          | `Error`             | Error occurred                 |
-| `frame`          | `DecodedVideoFrame` | Video frame decoded (advanced) |
-| `audio`          | `DecodedAudioFrame` | Audio frame decoded (advanced) |
-| `subtitle`       | `SubtitleCue`       | Subtitle cue active            |
+| Event                  | Payload                  | Description                                |
+| ---------------------- | ------------------------ | ------------------------------------------ |
+| `loadStart`            | `void`                   | Loading started                            |
+| `loadEnd`              | `void`                   | Loading completed                          |
+| `stateChange`          | `PlayerState`            | State changed                              |
+| `timeUpdate`           | `number`                 | Current time updated                       |
+| `durationChange`       | `number`                 | Duration available/changed                 |
+| `tracksChange`         | `Track[]`                | Tracks list updated                        |
+| `audioTrackChange`     | `{ lang, label }`        | Active audio track switched                |
+| `subtitleTrackChange`  | `{ lang, label } \| { lang: null, label: null }` | Active subtitle track switched (or off) |
+| `seeking`              | `number`                 | Seek started (target time)                 |
+| `seeked`               | `number`                 | Seek completed (actual time)               |
+| `bufferUpdate`         | `{ start, end }[]`       | Reserved — declared in `PlayerEventMap` but not emitted yet |
+| `ended`                | `void`                   | Playback ended                             |
+| `error`                | `Error`                  | Error occurred                             |
+| `frame`                | `DecodedVideoFrame`      | Video frame decoded (advanced)             |
+| `audio`                | `DecodedAudioFrame`      | Audio frame decoded (advanced)             |
+| `subtitle`             | `SubtitleCue`            | Subtitle cue active                        |
 
 ## Lifecycle Events
 
@@ -247,6 +249,37 @@ player.on("tracksChange", (tracks: Track[]) => {
 });
 ```
 
+### `audioTrackChange`
+
+Fired when the active audio track switches (e.g., user picks a different language).
+
+```typescript
+player.on("audioTrackChange", ({ lang, label }) => {
+  console.log("Audio now:", lang, label);
+  highlightActiveAudio(lang);
+});
+```
+
+**Payload:** `{ lang: string; label: string }`
+
+### `subtitleTrackChange`
+
+Fired when the active subtitle track switches, or when subtitles are turned off.
+
+```typescript
+player.on("subtitleTrackChange", ({ lang, label }) => {
+  if (lang === null) {
+    console.log("Subtitles off");
+    hideSubtitleIndicator();
+  } else {
+    console.log("Subtitles now:", lang, label);
+    highlightActiveSubtitle(lang);
+  }
+});
+```
+
+**Payload:** `{ lang: string; label: string }` when a track is selected, `{ lang: null, label: null }` when subtitles are disabled.
+
 ## Advanced Events
 
 ### `frame`
@@ -428,4 +461,63 @@ function formatTime(seconds: number): string {
   const s = Math.floor(seconds % 60);
   return `${m}:${s.toString().padStart(2, "0")}`;
 }
+```
+
+## MoviElement DOM Events
+
+The custom element re-exposes player activity as DOM events so you can wire `addEventListener(...)` like a native `<video>`. Names use HTML-style lowercase where they map to a standard media event, and stay as-is for player-specific extras.
+
+| Event                  | Detail payload                       | Description                                        |
+| ---------------------- | ------------------------------------ | -------------------------------------------------- |
+| `loadstart`            | `{ src: string \| null }`            | A new source is being loaded                       |
+| `loadeddata`           | —                                    | First frame is decoded and ready to render         |
+| `play`                 | —                                    | Playback started                                   |
+| `pause`                | —                                    | Playback paused                                    |
+| `ended`                | —                                    | Playback reached the end                           |
+| `timeupdate`           | `number` (current time)              | Current time advanced (fires repeatedly)           |
+| `error`                | `Error`                              | Internal player error surfaced to the DOM          |
+| `statechange`          | `PlayerState`                        | Underlying `MoviPlayer` state transitioned         |
+| `volumechange`         | `{ volume: number, muted: boolean }` | Volume or mute toggled (UI, hotkey, or property)   |
+| `ratechange`           | `{ playbackRate: number }`           | Playback speed changed                             |
+| `titlechange`          | `{ title: string \| null }`          | Resolved/cleaned video title changed               |
+| `audiotrackchange`     | —                                    | Active audio track switched                        |
+| `subtitleTrackChange`  | —                                    | Active subtitle track switched (note camelCase)    |
+| `trackschange`         | `Track[]`                            | Available tracks list updated                      |
+| `fullscreenchange`     | `{ fullscreen: boolean }`            | Player entered/exited fullscreen                   |
+| `pipchange`            | `{ pip: boolean }`                   | Picture-in-Picture window opened/closed            |
+| `qualitychange`        | `{ trackId: number }`                | Active video quality / track switched              |
+
+::: tip Casing note
+`subtitleTrackChange` keeps camelCase for backward compatibility while every other custom event uses lowercase. If you're listening for both `audiotrackchange` and subtitle changes, mind the casing.
+:::
+
+### Subscribing
+
+```typescript
+const el = document.querySelector("movi-player")!;
+
+el.addEventListener("loadstart", (e: CustomEvent) => {
+  console.log("Loading:", e.detail.src);
+});
+
+el.addEventListener("timeupdate", (e: CustomEvent<number>) => {
+  progressBar.style.width = `${(e.detail / el.duration) * 100}%`;
+});
+
+el.addEventListener("statechange", (e: CustomEvent) => {
+  if (e.detail === "buffering") showSpinner();
+  else hideSpinner();
+});
+
+el.addEventListener("volumechange", (e: CustomEvent) => {
+  volumeIcon.dataset.muted = String(e.detail.muted);
+});
+
+el.addEventListener("pipchange", (e: CustomEvent) => {
+  pipButton.dataset.active = String(e.detail.pip);
+});
+
+el.addEventListener("titlechange", (e: CustomEvent) => {
+  document.title = e.detail.title ?? "Movi";
+});
 ```

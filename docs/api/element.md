@@ -1146,61 +1146,147 @@ MoviElement.cleanVideoTitle("My.Series.S01E02.Episode.Title.1080p.WEB-DL.DDP5.1.
 
 ## Events
 
-The element fires standard HTMLMediaElement events:
+The element re-exposes player activity as DOM events so you can wire `addEventListener(...)` like a native `<video>`. Standard media events use HTML-style lowercase; player-specific extras carry richer `detail` payloads.
 
-### Lifecycle Events
+| Event                  | Detail payload                       | When it fires                                      |
+| ---------------------- | ------------------------------------ | -------------------------------------------------- |
+| `loadstart`            | `{ src: string \| null }`            | A new source is being loaded                       |
+| `loadeddata`           | —                                    | First frame is decoded and ready to render         |
+| `play`                 | —                                    | Playback started                                   |
+| `pause`                | —                                    | Playback paused                                    |
+| `ended`                | —                                    | Playback reached the end                           |
+| `timeupdate`           | `number` (current time)              | Current time advanced (fires repeatedly)           |
+| `error`                | `Error`                              | Internal player error surfaced to the DOM          |
+| `statechange`          | `PlayerState`                        | Underlying `MoviPlayer` state transitioned         |
+| `volumechange`         | `{ volume: number, muted: boolean }` | Volume or mute toggled (UI, hotkey, or property)   |
+| `ratechange`           | `{ playbackRate: number }`           | Playback speed changed                             |
+| `titlechange`          | `{ title: string \| null }`          | Resolved/cleaned video title changed               |
+| `audiotrackchange`     | —                                    | Active audio track switched                        |
+| `subtitleTrackChange`  | —                                    | Active subtitle track switched (note camelCase)    |
+| `trackschange`         | `Track[]`                            | Available tracks list updated                      |
+| `fullscreenchange`     | `{ fullscreen: boolean }`            | Player entered/exited fullscreen                   |
+| `pipchange`            | `{ pip: boolean }`                   | Picture-in-Picture window opened/closed            |
+| `qualitychange`        | `{ trackId: number }`                | Active video quality / track switched              |
+
+::: tip Casing note
+`subtitleTrackChange` keeps camelCase for backward compatibility while every other custom event uses lowercase. If you're listening for both `audiotrackchange` and subtitle changes, mind the casing.
+:::
+
+### Lifecycle
 
 ```typescript
-player.addEventListener("loadstart", () => {
-  console.log("Loading started");
+const player = document.querySelector("movi-player")!;
+
+player.addEventListener("loadstart", (e: CustomEvent) => {
+  console.log("Loading:", e.detail.src);
 });
 
-player.addEventListener("loadedmetadata", () => {
-  console.log(`Duration: ${player.duration}s`);
+player.addEventListener("loadeddata", () => {
+  console.log(`First frame ready, duration: ${player.duration}s`);
 });
 
-player.addEventListener("canplay", () => {
-  console.log("Can start playing");
-});
+player.addEventListener("play", () => console.log("Playing"));
+player.addEventListener("pause", () => console.log("Paused"));
+player.addEventListener("ended", () => console.log("Playback finished"));
+```
 
-player.addEventListener("play", () => {
-  console.log("Playing");
-});
+---
 
-player.addEventListener("pause", () => {
-  console.log("Paused");
-});
+### Progress
 
-player.addEventListener("ended", () => {
-  console.log("Playback finished");
+```typescript
+player.addEventListener("timeupdate", (e: CustomEvent<number>) => {
+  console.log(`Time: ${e.detail}s`);
+});
+```
+
+`statechange` (below) covers seeking/buffering — the element does not fire separate `seeking`/`seeked` DOM events.
+
+---
+
+### State
+
+```typescript
+player.addEventListener("statechange", (e: CustomEvent) => {
+  switch (e.detail) {
+    case "buffering": showSpinner(); break;
+    case "seeking":   showSeekIndicator(); break;
+    case "playing":   hideSpinner(); break;
+    case "paused":    hideSpinner(); break;
+    case "error":     showError(); break;
+  }
 });
 ```
 
 ---
 
-### Time Events
+### Volume / Speed
 
 ```typescript
-player.addEventListener("timeupdate", () => {
-  console.log(`Time: ${player.currentTime}s`);
+player.addEventListener("volumechange", (e: CustomEvent) => {
+  volumeIcon.dataset.muted = String(e.detail.muted);
+  volumeSlider.value = String(e.detail.volume);
 });
 
-player.addEventListener("seeking", () => {
-  console.log("Seeking started");
-});
-
-player.addEventListener("seeked", () => {
-  console.log("Seeking finished");
+player.addEventListener("ratechange", (e: CustomEvent) => {
+  speedLabel.textContent = `${e.detail.playbackRate}x`;
 });
 ```
 
 ---
 
-### Error Events
+### Tracks
 
 ```typescript
-player.addEventListener("error", (event) => {
-  console.error("Playback error:", event.detail);
+player.addEventListener("trackschange", (e: CustomEvent) => {
+  rebuildTrackMenus(e.detail);
+});
+
+player.addEventListener("audiotrackchange", () => {
+  highlightActiveAudio(player.getAudioLangs().find((t) => t.active));
+});
+
+player.addEventListener("subtitleTrackChange", () => {
+  // camelCase — see note above
+  highlightActiveSubtitle(player.getSubtitleLangs().find((t) => t.active));
+});
+
+player.addEventListener("qualitychange", (e: CustomEvent) => {
+  console.log("Quality switched to track:", e.detail.trackId);
+});
+```
+
+---
+
+### Title
+
+```typescript
+player.addEventListener("titlechange", (e: CustomEvent) => {
+  document.title = e.detail.title ?? "Movi";
+});
+```
+
+---
+
+### Fullscreen / PiP
+
+```typescript
+player.addEventListener("fullscreenchange", (e: CustomEvent) => {
+  console.log("Fullscreen:", e.detail.fullscreen);
+});
+
+player.addEventListener("pipchange", (e: CustomEvent) => {
+  pipButton.dataset.active = String(e.detail.pip);
+});
+```
+
+---
+
+### Error
+
+```typescript
+player.addEventListener("error", (e: CustomEvent<Error>) => {
+  console.error("Playback error:", e.detail);
 });
 ```
 
