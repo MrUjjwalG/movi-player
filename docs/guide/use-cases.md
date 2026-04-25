@@ -336,8 +336,8 @@ class ThumbnailGenerator {
 
     for (let i = 1; i <= count; i++) {
       const timestamp = interval * i;
-      const thumbnail = await player.generatePreview(timestamp, 320, 180);
-      thumbnails.push(thumbnail);
+      const thumbnail = await player.getPreviewFrame(timestamp);
+      if (thumbnail) thumbnails.push(thumbnail);
     }
 
     player.destroy();

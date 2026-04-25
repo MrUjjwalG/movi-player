@@ -219,7 +219,7 @@ Use cases: video validators, asset management, HDR detection pipelines, search i
   resume                    <!-- Resume from last position -->
   stablevolume              <!-- Loudness normalization -->
   buffersize="200"          <!-- Max prefetch window in MB (HTTP + encrypted) -->
-  renderer="canvas"         <!-- canvas | mse -->
+  renderer="canvas"         <!-- canvas (HLS/DRM auto-pick their own pipeline) -->
   sw                        <!-- Force software decoding -->
   fps="60"                  <!-- Override frame rate -->
   gesturefs                 <!-- Gestures only in fullscreen -->

@@ -77,7 +77,7 @@ import { FileSource } from "movi-player/player";
 
 // File never leaves the browser
 const source = new FileSource(userSelectedFile);
-player.load({ file: userSelectedFile });
+player.load({ type: "file", file: userSelectedFile });
 ```
 
 ::: info Privacy Benefit

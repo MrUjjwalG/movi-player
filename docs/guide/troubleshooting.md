@@ -113,7 +113,7 @@ if (!gl) {
 1. **Check muted state:**
 
 ```typescript
-player.unmute();
+player.setMuted(false);
 player.setVolume(1.0);
 ```
 
@@ -150,26 +150,27 @@ document.addEventListener(
 ```typescript
 // Try software decoding if hardware fails
 const player = new MoviPlayer({
-  source: { url },
+  source: { type: "url", url },
   canvas,
   decoder: "software",
 });
 ```
 
-2. **Reduce resolution:**
+2. **Shrink the prefetch window:**
 
 ```typescript
-const videoTracks = player.getVideoTracks();
-const lowRes = videoTracks.find((t) => t.height <= 720);
-if (lowRes) player.selectVideoTrack(lowRes.id);
+// Lower memory pressure on weak devices
+player.setMaxBufferSize(80); // 80 MB ahead instead of the default 250
 ```
+
+For HLS streams, the built-in `<movi-player>` quality menu can drop to a lower-bitrate rendition.
 
 3. **Check available memory:**
 
 ```typescript
 // Reduce cache size if needed
 const player = new MoviPlayer({
-  source: { url },
+  source: { type: "url", url },
   canvas,
   cache: { maxSizeMB: 50 },
 });
@@ -278,7 +279,7 @@ console.log("Primaries:", track.colorPrimaries);
 
 ```typescript
 const player = new MoviPlayer({
-  source: { url },
+  source: { type: "url", url },
   canvas,
   cache: { maxSizeMB: 50 }, // Default is 100
 });
@@ -394,16 +395,19 @@ console.log("Audio tracks:", player.getAudioTracks());
 
 ```typescript
 function getDebugInfo(player: MoviPlayer) {
+  const state = player.getState();
   return {
-    state: player.getState(),
+    state,
     currentTime: player.getCurrentTime(),
     duration: player.getDuration(),
     videoTrack: player.getVideoTracks()[0],
     audioTrack: player.getAudioTracks()[0],
-    isPaused: player.isPaused(),
+    paused: state === "paused",
     volume: player.getVolume(),
-    isMuted: player.isMuted(),
+    muted: player.getMuted(),
     playbackRate: player.getPlaybackRate(),
+    softwareDecoding: player.isSoftwareDecoding(),
+    bufferedTime: player.getBufferedTime(),
     userAgent: navigator.userAgent,
   };
 }

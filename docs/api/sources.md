@@ -28,20 +28,17 @@ console.log("Duration:", demuxer.getDuration());
 ### With Player
 
 ```typescript
-import { MoviPlayer, HttpSource } from "movi-player/player";
+import { MoviPlayer } from "movi-player/player";
 
 const player = new MoviPlayer({
-  source: { url: "https://example.com/video.mp4" },
+  source: { type: "url", url: "https://example.com/video.mp4" },
   canvas: document.getElementById("canvas") as HTMLCanvasElement,
 });
 
-// Or with explicit HttpSource
-const source = new HttpSource("https://example.com/video.mp4");
-const player = new MoviPlayer({
-  source: { url: source.url },
-  canvas: document.getElementById("canvas") as HTMLCanvasElement,
-});
+await player.load();
 ```
+
+`HttpSource` is created internally — there's no public path for passing a pre-built source instance to `MoviPlayer`. Use `HttpSource` directly with `Demuxer` only when extracting metadata without playing.
 
 ### CORS Requirements
 
@@ -97,11 +94,11 @@ fileInput.addEventListener("change", async (e) => {
   if (!file) return;
 
   const player = new MoviPlayer({
-    source: { file },
+    source: { type: "file", file },
     canvas: document.getElementById("canvas") as HTMLCanvasElement,
   });
 
-  await player.load({ file });
+  await player.load();
   await player.play();
 });
 ```
@@ -178,20 +175,26 @@ const demuxer = new Demuxer(customSource);
 
 ## Source Selection
 
-The player automatically selects the appropriate source:
+`SourceConfig` requires an explicit `type` discriminant — the player picks the right adapter from it:
 
 ```typescript
-// Auto-detect from URL
-player.load({ url: "https://example.com/video.mp4" });
-// → Uses HttpSource
+// HTTP URL → HttpSource
+await player.load({ type: "url", url: "https://example.com/video.mp4" });
 
-// Auto-detect from File
-player.load({ file: selectedFile });
-// → Uses FileSource
+// Local File → FileSource
+await player.load({ type: "file", file: selectedFile });
 
-// Explicit type
-player.load({ url: "https://example.com/video.mp4", type: "http" });
-player.load({ file: selectedFile, type: "file" });
+// Encrypted endpoint → EncryptedHttpSource
+await player.load({
+  type: "encrypted",
+  encrypted: {
+    videoUrl: "/api/video",
+    tokenUrl: "/api/token",
+    videoId: "movie.mp4",
+    fingerprint: await generateFingerprint(),
+    sessionToken: jwt,
+  },
+});
 ```
 
 ## Error Handling

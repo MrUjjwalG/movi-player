@@ -10,11 +10,11 @@ Movi-Player provides comprehensive HDR (High Dynamic Range) support for metadata
 import { MoviPlayer } from "movi-player/player";
 
 const player = new MoviPlayer({
-  source: { url: "hdr-video.mp4" },
+  source: { type: "url", url: "hdr-video.mp4" },
   canvas: document.getElementById("canvas") as HTMLCanvasElement,
 });
 
-await player.load({ url: "hdr-video.mp4" });
+await player.load();
 
 const videoTrack = player.getVideoTracks()[0];
 
@@ -130,7 +130,7 @@ console.log(hdrInfo);
 
 ```typescript
 const player = new MoviPlayer({
-  source: { url: "hdr-video.mp4" },
+  source: { type: "url", url: "hdr-video.mp4" },
   canvas: document.getElementById("canvas") as HTMLCanvasElement,
   renderer: "canvas", // Canvas renderer supports HDR
 });

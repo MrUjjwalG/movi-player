@@ -338,13 +338,13 @@ Modern bundlers can tree-shake unused components:
 
 ```typescript
 // Only imports Demuxer (~45KB)
-import { Demuxer } from "movi/demuxer";
+import { Demuxer } from "movi-player/demuxer";
 
 // Only imports Player (~180KB)
-import { MoviPlayer } from "movi/player";
+import { MoviPlayer } from "movi-player/player";
 
 // Imports everything (~410KB)
-import { MoviElement } from "movi";
+import { MoviElement } from "movi-player";
 ```
 
 ---

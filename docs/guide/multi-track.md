@@ -20,11 +20,11 @@ Movi-Player can switch between tracks seamlessly during playback.
 import { MoviPlayer } from "movi-player/player";
 
 const player = new MoviPlayer({
-  source: { url: "anime.mkv" },
+  source: { type: "url", url: "anime.mkv" },
   canvas: document.getElementById("canvas") as HTMLCanvasElement,
 });
 
-await player.load({ url: "anime.mkv" });
+await player.load();
 
 const audioTracks = player.getAudioTracks();
 console.log("Available audio tracks:", audioTracks);
@@ -156,77 +156,19 @@ function setupSubtitleSelector(player: MoviPlayer) {
 }
 ```
 
-## Video Tracks
-
-### Multiple Video Qualities
+## Video Tracks (Quality)
 
 ```typescript
 const videoTracks = player.getVideoTracks();
-console.log("Available video tracks:", videoTracks);
-
-// Example output:
-// [
-//   { id: 0, width: 1920, height: 1080, codec: 'hevc', bitrate: 8000000 },
-//   { id: 1, width: 1280, height: 720, codec: 'hevc', bitrate: 4000000 },
-//   { id: 2, width: 854, height: 480, codec: 'hevc', bitrate: 2000000 }
-// ]
+console.log("Video tracks:", videoTracks);
+// [{ id: 0, width: 1920, height: 1080, codec: 'hevc', bitrate: 8000000, isHDR: false }, ...]
 ```
 
-### Switch Video Quality
+::: warning Programmatic switching is HLS-only
+`MoviPlayer` does **not** expose `selectVideoTrack()` — multi-quality switching is supported only on HLS streams (driven internally by `hls.js`). The `<movi-player>` element surfaces the HLS quality menu via the gear icon → Quality.
 
-```typescript
-// Switch to 4K
-const track4K = videoTracks.find((t) => t.height >= 2160);
-if (track4K) {
-  player.selectVideoTrack(track4K.id);
-}
-
-// Switch to 720p
-const track720p = videoTracks.find((t) => t.height === 720);
-if (track720p) {
-  player.selectVideoTrack(track720p.id);
-}
-```
-
-### Quality Selector UI
-
-```typescript
-function setupQualitySelector(player: MoviPlayer) {
-  const videoTracks = player.getVideoTracks();
-  const selector = document.getElementById(
-    "qualitySelect",
-  ) as HTMLSelectElement;
-
-  selector.innerHTML = "";
-
-  // Sort by resolution (highest first)
-  const sorted = [...videoTracks].sort((a, b) => b.height - a.height);
-
-  sorted.forEach((track) => {
-    const option = document.createElement("option");
-    option.value = String(track.id);
-
-    let label = `${track.height}p`;
-    if (track.height >= 2160) label = "4K";
-    else if (track.height >= 1440) label = "1440p QHD";
-    else if (track.height >= 1080) label = "1080p HD";
-    else if (track.height >= 720) label = "720p HD";
-    else if (track.height >= 480) label = "480p SD";
-    else label = `${track.height}p`;
-
-    if (track.isHDR) {
-      label += " HDR";
-    }
-
-    option.textContent = label;
-    selector.appendChild(option);
-  });
-
-  selector.onchange = () => {
-    player.selectVideoTrack(parseInt(selector.value));
-  };
-}
-```
+For a non-HLS multi-bitrate scenario, swap the URL via a fresh `load()` instead.
+:::
 
 ## Complete Track Manager
 
@@ -273,23 +215,9 @@ class TrackManager {
     return false;
   }
 
-  setVideoByQuality(minHeight: number) {
-    const track = this.player
-      .getVideoTracks()
-      .filter((t) => t.height >= minHeight)
-      .sort((a, b) => a.height - b.height)[0];
-
-    if (track) {
-      this.player.selectVideoTrack(track.id);
-      return true;
-    }
-    return false;
-  }
-
   autoSelectByPreferences(prefs: {
     audioLanguage?: string;
     subtitleLanguage?: string | null;
-    maxVideoHeight?: number;
   }) {
     if (prefs.audioLanguage) {
       this.setAudioByLanguage(prefs.audioLanguage);
@@ -297,10 +225,6 @@ class TrackManager {
 
     if (prefs.subtitleLanguage !== undefined) {
       this.setSubtitleByLanguage(prefs.subtitleLanguage);
-    }
-
-    if (prefs.maxVideoHeight) {
-      this.setVideoByQuality(prefs.maxVideoHeight);
     }
   }
 }
@@ -311,30 +235,19 @@ const trackManager = new TrackManager(player);
 trackManager.autoSelectByPreferences({
   audioLanguage: "jpn",
   subtitleLanguage: "eng",
-  maxVideoHeight: 1080,
 });
 ```
 
-## Using with Custom Element
+## Using with the Custom Element
+
+The `<movi-player>` element exposes language-keyed helpers — there is no numeric track-selection on the element itself.
 
 ```html
 <movi-player id="player" src="multi-track.mkv" controls></movi-player>
 
 <div class="track-controls">
-  <label>
-    Audio:
-    <select id="audioSelect"></select>
-  </label>
-
-  <label>
-    Subtitles:
-    <select id="subtitleSelect"></select>
-  </label>
-
-  <label>
-    Quality:
-    <select id="qualitySelect"></select>
-  </label>
+  <label>Audio: <select id="audioSelect"></select></label>
+  <label>Subtitles: <select id="subtitleSelect"></select></label>
 </div>
 
 <script type="module">
@@ -342,40 +255,36 @@ trackManager.autoSelectByPreferences({
 
   const player = document.getElementById("player");
 
-  player.addEventListener("loadedmetadata", () => {
-    // Setup audio selector
-    const audioTracks = player.getAudioTracks();
+  // Tracks are ready by the time `loadeddata` fires
+  player.addEventListener("loadeddata", () => {
     const audioSelect = document.getElementById("audioSelect");
-
-    audioTracks.forEach((track) => {
-      const option = document.createElement("option");
-      option.value = track.id;
-      option.textContent = `${track.language} - ${track.title || track.codec}`;
-      audioSelect.appendChild(option);
-    });
-
-    audioSelect.onchange = () => {
-      player.selectAudioTrack(parseInt(audioSelect.value));
-    };
-
-    // Setup subtitle selector
-    const subtitleTracks = player.getSubtitleTracks();
     const subtitleSelect = document.getElementById("subtitleSelect");
 
+    // Audio
+    audioSelect.innerHTML = "";
+    for (const t of player.getAudioLangs()) {
+      audioSelect.add(
+        new Option(`${t.label} (${t.lang})`, t.lang, t.active, t.active),
+      );
+    }
+    audioSelect.onchange = () => player.selectAudioLang(audioSelect.value);
+
+    // Subtitles
     subtitleSelect.innerHTML = '<option value="">Off</option>';
-
-    subtitleTracks.forEach((track) => {
-      const option = document.createElement("option");
-      option.value = track.id;
-      option.textContent = `${track.language} - ${track.title || "Subtitle"}`;
-      subtitleSelect.appendChild(option);
-    });
-
-    subtitleSelect.onchange = () => {
-      const value = subtitleSelect.value;
-      player.selectSubtitleTrack(value ? parseInt(value) : null);
+    for (const t of player.getSubtitleLangs()) {
+      subtitleSelect.add(
+        new Option(`${t.label} (${t.lang})`, t.lang, t.active, t.active),
+      );
+    }
+    subtitleSelect.onchange = async () => {
+      const v = subtitleSelect.value;
+      await player.selectSubtitleLang(v || null);
     };
   });
+
+  // React to runtime track switches (e.g., from the context menu)
+  player.addEventListener("audiotrackchange", () => {/* refresh UI */});
+  player.addEventListener("subtitleTrackChange", () => {/* refresh UI */});
 </script>
 ```
 

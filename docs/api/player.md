@@ -106,24 +106,31 @@ constructor(config: PlayerConfig)
 
 ```typescript
 interface PlayerConfig {
-  source: SourceConfig; // Required: { url: string } or { file: File }
+  source: SourceConfig;                         // Required — { type, url } or { type, file }
+  audioSource?: SourceConfig;                   // Separate audio for split video+audio sources
+  audioTracks?: AudioSourceEntry[];             // Multi-language audio with metadata
+  subtitleTracks?: SubtitleSourceEntry[];       // External subtitles (VTT/SRT) with metadata
   canvas?: HTMLCanvasElement | OffscreenCanvas;
-  renderer?: RendererType; // 'canvas' | 'mse'
-  decoder?: DecoderType; // 'hardware' | 'software'
-  cache?: CacheConfig; // { maxSizeMB: number }
-  wasmBinary?: Uint8Array; // Pre-loaded WASM binary
-  enablePreviews?: boolean; // Enable thumbnail generation
+  renderer?: "canvas";                          // Only "canvas" today (MSE pathway is HLS-internal)
+  decoder?: "auto" | "software";                // Default "auto" — hardware first, software fallback
+  cache?: { maxSizeMB: number };
+  wasmBinary?: Uint8Array;                      // Pre-loaded WASM (skips fetch)
+  enablePreviews?: boolean;                     // Enable thumbnail-pipeline preview frames
+  frameRate?: number;                           // Override fps (0 = auto from metadata)
+  drm?: boolean;                                // DRM mode for HLS (native <video> + EME)
+  licenseUrl?: string;                          // Widevine/FairPlay license server URL
+  licenseHeaders?: Record<string, string>;      // Auth headers for license requests
 }
 ```
 
 **Example:**
 
 ```typescript
-import { MoviPlayer } from "movi/player";
+import { MoviPlayer } from "movi-player/player";
 
 const canvas = document.getElementById("canvas") as HTMLCanvasElement;
 const player = new MoviPlayer({
-  source: { url: "video.mp4" },
+  source: { type: "url", url: "video.mp4" },
   canvas: canvas,
   renderer: "canvas",
 });
@@ -133,31 +140,33 @@ const player = new MoviPlayer({
 
 ### Methods
 
-#### `load(config: SourceConfig): Promise<MediaInfo>`
+#### `load(sourceConfig?: SourceConfig): Promise<void>`
 
-Loads a media source and initializes playback pipeline.
-
-**Parameters:**
+Loads the media source set in the constructor (or the override passed here) and initializes the playback pipeline. `SourceConfig` requires a `type` discriminant.
 
 ```typescript
 interface SourceConfig {
-  url?: string; // HTTP(S) URL
-  file?: File; // File object from input
-  type?: "http" | "file"; // Auto-detected if omitted
-  wasmBinary?: Uint8Array; // Optional pre-loaded WASM
+  type: "url" | "file" | "encrypted";
+  url?: string;     // For type: "url"
+  file?: File;      // For type: "file"
+  headers?: Record<string, string>;
+  encrypted?: { videoUrl, tokenUrl, videoId, fingerprint, sessionToken, ... };
 }
 ```
 
-**Returns:** MediaInfo with tracks, duration, and format details
+**Returns:** `void`. Inspect tracks/duration via [`getMediaInfo()`](#getmediainfo-mediainfo-null), [`getDuration()`](#getduration-number), and [`getTracks()`](#gettracks-track) after the promise resolves.
 
-**Example:**
+**Examples:**
 
 ```typescript
-const info = await player.load({
-  url: "https://example.com/video.mp4",
-});
+// Use the source from the constructor
+await player.load();
 
-console.log(`Loaded: ${info.duration}s, ${info.tracks.length} tracks`);
+// Override the source on an idle instance
+await player.load({ type: "url", url: "https://example.com/video.mp4" });
+
+const info = player.getMediaInfo();
+console.log(`Loaded: ${info?.duration}s`);
 ```
 
 ---
@@ -580,22 +589,12 @@ Push subtitles up by N pixels so they don't sit under the controls bar when cont
 
 ## Configuration
 
-### Player Config Options
+See the [Constructor](#constructor) section above for the full `PlayerConfig` shape. Highlights:
 
-```typescript
-interface PlayerConfig {
-  // Required
-  source: SourceConfig; // { url: string } or { file: File }
-
-  // Optional
-  canvas?: HTMLCanvasElement | OffscreenCanvas; // Canvas for rendering
-  renderer?: RendererType; // 'canvas' | 'mse' (default: 'canvas')
-  decoder?: DecoderType; // 'hardware' | 'software' (default: 'hardware')
-  cache?: CacheConfig; // { maxSizeMB: number } (default: 100MB)
-  wasmBinary?: Uint8Array; // Pre-loaded WASM binary
-  enablePreviews?: boolean; // Enable thumbnail generation (default: false)
-}
-```
+- `decoder: "auto"` (default) tries hardware (WebCodecs) first and falls back to software (FFmpeg WASM) on failure. Force `"software"` only when hardware decode is producing visual artifacts.
+- `renderer: "canvas"` is currently the only option — DRM/HLS paths internally manage their own native `<video>` element when needed.
+- `cache.maxSizeMB` defaults to ~100 MB; tune via [`setMaxBufferSize()`](#setmaxbuffersizemegabytes-number-void) at runtime.
+- `enablePreviews: true` is required if you plan to call [`getPreviewFrame()`](#getpreviewframetime-number-promiseblob-null).
 
 ---
 
@@ -809,11 +808,11 @@ If buffers drain:
 ### Basic Playback
 
 ```typescript
-import { MoviPlayer } from "movi/player";
+import { MoviPlayer } from "movi-player/player";
 
 const canvas = document.getElementById("myCanvas") as HTMLCanvasElement;
 const player = new MoviPlayer({
-  source: { url: "https://example.com/video.mp4" },
+  source: { type: "url", url: "https://example.com/video.mp4" },
   canvas: canvas,
   renderer: "canvas",
 });
@@ -821,8 +820,9 @@ const player = new MoviPlayer({
 // Load and play
 async function playVideo() {
   try {
-    const info = await player.load({ url: "https://example.com/video.mp4" });
-    console.log(`Loaded: ${info.duration}s`);
+    await player.load();
+    const info = player.getMediaInfo();
+    console.log(`Loaded: ${info?.duration}s`);
 
     await player.play();
   } catch (error) {
@@ -841,13 +841,12 @@ playVideo();
 const progressBar = document.getElementById("progress") as HTMLInputElement;
 const timeDisplay = document.getElementById("time") as HTMLSpanElement;
 
-player.on("timeupdate", ({ currentTime, duration }) => {
+player.on("timeUpdate", (currentTime: number) => {
+  const duration = player.getDuration();
   const percent = (currentTime / duration) * 100;
   progressBar.value = percent.toString();
 
-  const current = formatTime(currentTime);
-  const total = formatTime(duration);
-  timeDisplay.textContent = `${current} / ${total}`;
+  timeDisplay.textContent = `${formatTime(currentTime)} / ${formatTime(duration)}`;
 });
 
 progressBar.addEventListener("input", () => {
@@ -870,7 +869,7 @@ function formatTime(seconds: number): string {
 
 ```typescript
 async function setupAudioTracks() {
-  await player.load({ url });
+  await player.load();
 
   const audioTracks = player.getAudioTracks();
   const selector = document.getElementById("audioTrack") as HTMLSelectElement;
@@ -897,7 +896,7 @@ async function setupAudioTracks() {
 
 ```typescript
 async function checkHDR() {
-  await player.load({ url });
+  await player.load();
 
   const videoTrack = player.getVideoTracks()[0];
   const isHDR =
@@ -920,7 +919,7 @@ async function checkHDR() {
 ```typescript
 async function generateThumbnails(url: string, count: number) {
   const player = new MoviPlayer({ canvas });
-  await player.load({ url });
+  await player.load();
 
   const duration = player.getDuration();
   const interval = duration / (count + 1);

@@ -11,12 +11,12 @@ import { MoviPlayer } from "movi-player/player";
 
 const canvas = document.getElementById("canvas") as HTMLCanvasElement;
 const player = new MoviPlayer({
-  source: { url: "video.mp4" },
+  source: { type: "url", url: "video.mp4" },
   canvas: canvas,
 });
 
 // Load and play
-await player.load({ url: "video.mp4" });
+await player.load();
 await player.play();
 ```
 
@@ -35,7 +35,7 @@ const volumeSlider = document.getElementById("volume") as HTMLInputElement;
 
 // Create player
 const player = new MoviPlayer({
-  source: { url: "video.mp4" },
+  source: { type: "url", url: "video.mp4" },
   canvas: canvas,
   renderer: "canvas",
 });
@@ -43,7 +43,7 @@ const player = new MoviPlayer({
 // Initialize
 async function init() {
   try {
-    const info = await player.load({ url: "video.mp4" });
+    const info = await player.load();
     console.log(`Loaded: ${info.duration}s, ${info.tracks.length} tracks`);
 
     // Show video info
@@ -61,7 +61,8 @@ playBtn.onclick = () => player.play();
 pauseBtn.onclick = () => player.pause();
 
 // Progress bar
-player.on("timeupdate", ({ currentTime, duration }) => {
+player.on("timeUpdate", (currentTime: number) => {
+  const duration = player.getDuration();
   const percent = (currentTime / duration) * 100;
   progressBar.value = String(percent);
   timeDisplay.textContent = `${formatTime(currentTime)} / ${formatTime(duration)}`;
@@ -102,20 +103,27 @@ interface PlayerConfig {
   canvas: HTMLCanvasElement | OffscreenCanvas;
 
   // Optional
-  renderer?: "canvas" | "mse"; // Default: 'canvas'
-  decoder?: "auto" | "hardware" | "software"; // Default: 'auto'
+  renderer?: "canvas";              // Only "canvas" is currently supported
+  decoder?: "auto" | "software";    // Default: "auto" — hardware first, software fallback
   cache?: CacheConfig;
+  wasmBinary?: Uint8Array;          // Pre-loaded WASM (skips fetch)
+  enablePreviews?: boolean;         // Required for getPreviewFrame()
+  frameRate?: number;               // Override fps (0 = auto)
+  drm?: boolean;                    // Switch to native <video> + EME for HLS
+  licenseUrl?: string;              // Widevine/FairPlay license server
+  audioSource?: SourceConfig;       // Separate audio file (split video+audio)
+  audioTracks?: AudioSourceEntry[]; // Multi-language audio
+  subtitleTracks?: SubtitleSourceEntry[]; // External VTT/SRT
 }
 
 interface SourceConfig {
-  type?: "url" | "file"; // Auto-detected if omitted
-  url?: string; // HTTP(S) URL
-  file?: File; // File object from input
+  type: "url" | "file";
+  url?: string;
+  file?: File;
 }
 
 interface CacheConfig {
-  type?: "lru";
-  maxSizeMB?: number; // Default: 100
+  maxSizeMB: number; // Default: 100
 }
 ```
 
@@ -145,7 +153,7 @@ const player = new MoviPlayer({
 
 ```typescript
 // Load media
-const info = await player.load({ url: "video.mp4" });
+const info = await player.load();
 
 // Destroy and cleanup
 player.destroy();
@@ -165,10 +173,11 @@ await player.seek(120.5);
 
 // Set playback rate (0.25 to 4.0)
 player.setPlaybackRate(1.5);
-
-// Set loop mode
-player.setLoop(true);
 ```
+
+::: info Looping
+`MoviPlayer` itself doesn't expose a loop toggle — looping is owned by the `<movi-player>` element layer (the `loop` attribute / `player.loop = true`). When driving `MoviPlayer` directly, listen for `ended` and call `seek(0)` + `play()`.
+:::
 
 ### Audio Control
 
@@ -176,9 +185,12 @@ player.setLoop(true);
 // Set volume (0.0 to 1.0)
 player.setVolume(0.5);
 
-// Mute/Unmute
-player.mute();
-player.unmute();
+// Mute / unmute
+player.setMuted(true);
+player.setMuted(false);
+
+// Loudness normalization (DynamicsCompressorNode)
+player.setStableAudio(true);
 ```
 
 ### State Queries
@@ -192,12 +204,12 @@ const duration = player.getDuration();
 
 // Player state
 const state = player.getState();
-// 'idle' | 'loading' | 'ready' | 'playing' | 'seeking' | 'ended' | 'error'
+// 'idle' | 'loading' | 'ready' | 'playing' | 'paused' | 'buffering'
+// | 'seeking' | 'ended' | 'error'
 
 // Boolean checks
-const isPaused = player.isPaused();
-const isLooping = player.isLooping();
-const isMuted = player.isMuted();
+const isPaused = state === "paused";
+const isMuted = player.getMuted();
 const volume = player.getVolume();
 const rate = player.getPlaybackRate();
 ```
@@ -213,19 +225,25 @@ const videoTracks = player.getVideoTracks();
 const audioTracks = player.getAudioTracks();
 const subtitleTracks = player.getSubtitleTracks();
 
-// Select tracks
-player.selectVideoTrack(trackId);
+// Select tracks (numeric IDs)
 player.selectAudioTrack(trackId);
-player.selectSubtitleTrack(trackId); // or null to disable
+await player.selectSubtitleTrack(trackId); // pass null to disable
+
+// Or by language code
+player.selectAudioLang("hi");
+await player.selectSubtitleLang("en"); // null to disable
 ```
+
+::: info No video-track switching
+`MoviPlayer` doesn't expose `selectVideoTrack()`. Multi-quality switching is HLS-only and lives on the HLS wrapper / `<movi-player>` quality menu. For non-HLS sources, swap the URL via a fresh `load()`.
+:::
 
 ### Thumbnail Generation
 
 ```typescript
-// Generate thumbnail at timestamp
-const blob = await player.generatePreview(60, 320, 180);
-const url = URL.createObjectURL(blob);
-imgElement.src = url;
+// Single frame at a timestamp (isolated WASM, doesn't disturb playback)
+const blob = await player.getPreviewFrame(60);
+if (blob) imgElement.src = URL.createObjectURL(blob);
 ```
 
 ## Events
@@ -271,11 +289,11 @@ import { MoviPlayer } from "movi-player/player";
 
 async function setupMultiAudio() {
   const player = new MoviPlayer({
-    source: { url: "multi-audio.mkv" },
+    source: { type: "url", url: "multi-audio.mkv" },
     canvas: document.getElementById("canvas") as HTMLCanvasElement,
   });
 
-  await player.load({ url: "multi-audio.mkv" });
+  await player.load();
 
   // Get audio tracks
   const audioTracks = player.getAudioTracks();
@@ -312,11 +330,11 @@ async function setupMultiAudio() {
 ```typescript
 async function setupSubtitles() {
   const player = new MoviPlayer({
-    source: { url: "video-with-subs.mkv" },
+    source: { type: "url", url: "video-with-subs.mkv" },
     canvas: document.getElementById("canvas") as HTMLCanvasElement,
   });
 
-  await player.load({ url: "video-with-subs.mkv" });
+  await player.load();
 
   const subtitleTracks = player.getSubtitleTracks();
   console.log("Subtitles:", subtitleTracks);
@@ -341,11 +359,11 @@ async function setupSubtitles() {
 ```typescript
 async function checkHDR() {
   const player = new MoviPlayer({
-    source: { url: "hdr-video.mp4" },
+    source: { type: "url", url: "hdr-video.mp4" },
     canvas: document.getElementById("canvas") as HTMLCanvasElement,
   });
 
-  await player.load({ url: "hdr-video.mp4" });
+  await player.load();
 
   const videoTrack = player.getVideoTracks()[0];
 
@@ -374,12 +392,12 @@ async function checkHDR() {
 ```typescript
 async function setupProgressWithThumbnails() {
   const player = new MoviPlayer({
-    source: { url: "video.mp4" },
+    source: { type: "url", url: "video.mp4" },
     canvas: document.getElementById("canvas") as HTMLCanvasElement,
     enablePreviews: true, // Enable thumbnail generation
   });
 
-  await player.load({ url: "video.mp4" });
+  await player.load();
 
   const progressBar = document.getElementById("progress") as HTMLInputElement;
   const thumbnail = document.getElementById("thumbnail") as HTMLImageElement;
@@ -401,12 +419,8 @@ async function setupProgressWithThumbnails() {
     // Debounce thumbnail generation
     clearTimeout(thumbnailTimeout);
     thumbnailTimeout = window.setTimeout(async () => {
-      try {
-        const blob = await player.generatePreview(time, 160, 90);
-        thumbnail.src = URL.createObjectURL(blob);
-      } catch (e) {
-        // Ignore errors during rapid mouse movement
-      }
+      const blob = await player.getPreviewFrame(time);
+      if (blob) thumbnail.src = URL.createObjectURL(blob);
     }, 100);
   };
 
@@ -421,7 +435,7 @@ async function setupProgressWithThumbnails() {
 
 ```typescript
 const player = new MoviPlayer({
-  source: { url: "video.mp4" },
+  source: { type: "url", url: "video.mp4" },
   canvas: document.getElementById("canvas") as HTMLCanvasElement,
 });
 
@@ -439,7 +453,7 @@ player.on("error", (error) => {
 });
 
 try {
-  await player.load({ url: "video.mp4" });
+  await player.load();
   await player.play();
 } catch (error) {
   console.error("Failed to start playback:", error);

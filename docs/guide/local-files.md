@@ -296,8 +296,8 @@ async function generateThumbnails(file: File, count: number = 10) {
 
   for (let i = 0; i < count; i++) {
     const time = i * interval;
-    const blob = await player.generatePreview(time, 320, 180);
-    thumbnails.push(blob);
+    const blob = await player.getPreviewFrame(time);
+    if (blob) thumbnails.push(blob);
   }
 
   player.destroy();

@@ -54,7 +54,7 @@ The `<movi-player>` custom HTML element provides a native `<video>`-like interfa
 ### Installation
 
 ```bash
-npm install movi
+npm install movi-player
 ```
 
 ### Basic Usage
@@ -64,7 +64,7 @@ npm install movi
 <html>
   <head>
     <script type="module">
-      import "movi";
+      import "movi-player";
     </script>
   </head>
   <body>
@@ -90,7 +90,7 @@ That's it! The element works just like a native `<video>` tag.
 The custom element is automatically registered on import:
 
 ```typescript
-import "movi"; // Registers <movi-player>
+import "movi-player"; // Registers <movi-player>
 ```
 
 **Element Name:** `movi-player` (hyphen required per Web Components spec)
@@ -286,18 +286,15 @@ Chooses the rendering backend.
 
 **Values:**
 
-- `canvas` (default) - WebGL2 canvas rendering with full features
-- `mse` - Media Source Extensions via HLS.js (for compatibility)
+- `canvas` (default) — WebGL2 canvas rendering with full features (HDR, rotation, snapshots, ambient mode)
 
 ```html
 <movi-player src="video.mp4" renderer="canvas"></movi-player>
 ```
 
-**When to use MSE:**
-
-- Browser lacks WebCodecs support
-- Need native media controls
-- Simpler integration with existing MSE infrastructure
+::: info MSE / HLS / DRM
+There is no separate `mse` renderer — HLS streams (`.m3u8`) are handled internally via `hls.js` + a hidden native `<video>` element, and DRM is opt-in via the `drm` + `licenseurl` attributes. Both paths are selected automatically; you don't pick them via `renderer`.
+:::
 
 ---
 

@@ -41,7 +41,7 @@ The `<movi-player>` custom element is a drop-in replacement for the native `<vid
 | `theme`       | `string`            | `dark`, `light`                    | UI theme                                          |
 | `hdr`         | `boolean`           | -                                  | Enable HDR rendering                              |
 | `ambientmode` | `boolean`           | -                                  | Ambient background effects                        |
-| `renderer`    | `string`            | `canvas`, `mse`                    | Rendering mode                                    |
+| `renderer`    | `string`            | `canvas` (only)                    | Rendering backend (HLS/DRM auto-pick separately)  |
 | `sw`          | `boolean`, `string` | `auto`                             | Decoder mode (`auto`, `true`/`software`, `false`) |
 | `fps`         | `number`            | -                                  | Custom frame rate override                        |
 | `thumb`       | `boolean`           | -                                  | Enable seek preview thumbnails                    |
@@ -195,41 +195,32 @@ player.addEventListener("error", (e) => {
 ```javascript
 const player = document.querySelector("movi-player");
 
-// Get audio tracks
-const audioTracks = player.getAudioTracks();
-console.log(audioTracks);
-// [{ id: 0, language: 'eng', codec: 'aac' },
-//  { id: 1, language: 'jpn', codec: 'aac' }]
+// Get audio languages
+const audioLangs = player.getAudioLangs();
+console.log(audioLangs);
+// [{ lang: 'eng', label: 'English', active: true },
+//  { lang: 'jpn', label: 'Japanese', active: false }]
 
-// Switch audio track
-player.selectAudioTrack(1); // Switch to Japanese
+// Switch audio by language code
+player.selectAudioLang("jpn");
 ```
 
 ### Subtitle Tracks
 
 ```javascript
-// Get subtitle tracks
-const subtitleTracks = player.getSubtitleTracks();
+// Get available subtitles
+const subtitleLangs = player.getSubtitleLangs();
 
-// Enable subtitles
-player.selectSubtitleTrack(subtitleTracks[0].id);
+// Enable a subtitle by language
+await player.selectSubtitleLang("eng");
 
 // Disable subtitles
-player.selectSubtitleTrack(null);
+await player.selectSubtitleLang(null);
 ```
 
 ### Video Quality
 
-```javascript
-// Get video tracks (different qualities)
-const videoTracks = player.getVideoTracks();
-
-// Switch to 4K
-const track4K = videoTracks.find((t) => t.height >= 2160);
-if (track4K) {
-  player.selectVideoTrack(track4K.id);
-}
-```
+For HLS streams, the built-in quality menu (gear icon → Quality) handles switching automatically. The element doesn't expose a programmatic `selectVideoTrack()` for non-HLS multi-bitrate sources — point `src` at a different file or use the `MoviPlayer` programmatic API for advanced cases.
 
 ## Gestures
 
