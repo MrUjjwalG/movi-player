@@ -67,7 +67,7 @@ async function harden() {
     compress: {
       passes: 3,
       drop_console: true,
-      drop_debugger: false, // keep debugger traps if they appear
+      drop_debugger: true,
       pure_getters: true,
       unsafe: false,
       booleans_as_integers: false,
