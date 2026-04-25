@@ -81,6 +81,10 @@ export class MoviElement extends HTMLElement {
   // Nerd Stats
   private _nerdStatsVisible: boolean = false;
   private _currentManualRotation: number = 0; // Track for thumbnail margin re-apply
+  private _timelineGenerating: boolean = false;
+  private _timelineCancelled: boolean = false;
+  private _timelineComplete: boolean = false;
+  private _timelineNextIndex: number = 0;
   private nerdStatsInterval: number | null = null;
   private networkSpeedHistory: number[] = []; // speed samples for graph
   private static readonly GRAPH_MAX_SAMPLES = 60; // 30 seconds of data (500ms interval)
@@ -899,6 +903,7 @@ export class MoviElement extends HTMLElement {
     // Timeline close button
     timelinePanel.querySelector(".movi-timeline-close")?.addEventListener("click", (e) => {
       e.stopPropagation();
+      this._timelineCancelled = true;
       timelinePanel.style.display = "none";
       this.focus();
     });
@@ -11194,6 +11199,9 @@ export class MoviElement extends HTMLElement {
 
   private resetTimeline(): void {
     if (!this.shadowRoot) return;
+    this._timelineCancelled = true;
+    this._timelineComplete = false;
+    this._timelineNextIndex = 0;
     const strip = this.shadowRoot.querySelector(".movi-timeline-strip") as HTMLElement;
     const status = this.shadowRoot.querySelector(".movi-timeline-status") as HTMLElement;
     const panel = this.shadowRoot.querySelector(".movi-timeline-panel") as HTMLElement;
@@ -11213,14 +11221,21 @@ export class MoviElement extends HTMLElement {
 
     if (panel.style.display === "none") {
       panel.style.display = "flex";
-      // Auto-generate if strip is empty or previous attempt failed
+      // Auto-generate if strip is empty, previous attempt failed, or generation
+      // was paused mid-way (resumes from _timelineNextIndex)
       const strip = shadowRoot.querySelector(".movi-timeline-strip") as HTMLElement;
       const status = shadowRoot.querySelector(".movi-timeline-status") as HTMLElement;
       const failed = status?.textContent?.includes("Failed");
-      if (strip && (strip.children.length === 0 || failed)) {
+      if (failed) {
+        this._timelineNextIndex = 0;
+        this._timelineComplete = false;
+        if (strip) strip.innerHTML = "";
+      }
+      if (strip && !this._timelineComplete && !this._timelineGenerating) {
         requestAnimationFrame(() => this.generateTimelineStrip(shadowRoot));
       }
     } else {
+      this._timelineCancelled = true;
       panel.style.display = "none";
       this.focus();
     }
@@ -11231,13 +11246,19 @@ export class MoviElement extends HTMLElement {
    */
   private async generateTimelineStrip(shadowRoot: ShadowRoot): Promise<void> {
     if (!this.player) return;
+    if (this._timelineGenerating) return; // re-entrancy guard
 
     const strip = shadowRoot.querySelector(".movi-timeline-strip") as HTMLElement;
     const status = shadowRoot.querySelector(".movi-timeline-status") as HTMLElement;
     const titleEl = shadowRoot.querySelector(".movi-timeline-title") as HTMLElement;
     if (!strip || !status) return;
 
-    strip.innerHTML = "";
+    // Only clear when starting fresh; on resume we keep already-generated items
+    if (this._timelineNextIndex === 0) {
+      strip.innerHTML = "";
+    }
+    this._timelineGenerating = true;
+    this._timelineCancelled = false;
 
     // Detect portrait video — consider metadata rotation
     const videoTrack = this.player.getVideoTracks()?.[0];
@@ -11291,88 +11312,110 @@ export class MoviElement extends HTMLElement {
     const chapters = this.player.getChapters();
     const hasChapters = chapters.length > 0;
 
-    if (hasChapters) {
-      // Chapter-based timeline
-      if (titleEl) titleEl.textContent = `Chapters (${chapters.length})`;
-      status.textContent = "Generating...";
+    try {
+      if (hasChapters) {
+        // Chapter-based timeline
+        if (titleEl) titleEl.textContent = `Chapters (${chapters.length})`;
+        status.textContent = "Generating...";
 
-      for (let i = 0; i < chapters.length; i++) {
-        const ch = chapters[i];
-        // Generate thumbnail at chapter start time
-        const blob = await this.player.getPreviewFrame(ch.start);
+        for (let i = this._timelineNextIndex; i < chapters.length; i++) {
+          const ch = chapters[i];
+          // Generate thumbnail at chapter start time
+          const blob = await this.player.getPreviewFrame(ch.start);
+          if (this._timelineCancelled) return;
 
-        const item = document.createElement("div");
-        item.className = "movi-timeline-item movi-timeline-chapter";
+          const item = document.createElement("div");
+          item.className = "movi-timeline-item movi-timeline-chapter";
 
-        if (blob) {
-          const img = document.createElement("img");
-          img.src = URL.createObjectURL(blob);
-          img.alt = ch.title;
-          item.appendChild(img);
+          if (blob) {
+            const img = document.createElement("img");
+            img.src = URL.createObjectURL(blob);
+            img.alt = ch.title;
+            item.appendChild(img);
+          }
+
+          const labelContainer = document.createElement("div");
+          labelContainer.className = "movi-timeline-chapter-label";
+
+          const titleSpan = document.createElement("span");
+          titleSpan.className = "movi-timeline-chapter-title";
+          titleSpan.textContent = ch.title;
+
+          const timeSpan = document.createElement("span");
+          timeSpan.className = "movi-timeline-time";
+          timeSpan.textContent = formatTime(ch.start);
+
+          labelContainer.appendChild(titleSpan);
+          labelContainer.appendChild(timeSpan);
+          item.appendChild(labelContainer);
+
+          // Click to seek to chapter
+          item.addEventListener("click", (e) => {
+            e.stopPropagation();
+            this.currentTime = ch.start;
+          });
+
+          strip.appendChild(item);
+          const chImg = item.querySelector("img") as HTMLElement;
+          if (chImg) applyRotationToImg(chImg);
+          this._timelineNextIndex = i + 1;
+          status.textContent = `${i + 1} / ${chapters.length}`;
         }
 
-        const labelContainer = document.createElement("div");
-        labelContainer.className = "movi-timeline-chapter-label";
+        status.textContent = `${chapters.length} chapters`;
+        this._timelineComplete = true;
+      } else {
+        // Regular interval-based timeline
+        if (titleEl) titleEl.textContent = "Timeline";
+        status.textContent = "Generating...";
+        const count = 20;
+        const duration = this.player.getDuration();
+        if (duration <= 0) {
+          status.textContent = "Failed to generate — try again";
+          return;
+        }
+        // Mirror MoviPlayer.generateTimeline interval (avoids first/last frames)
+        const interval = duration / (count + 1);
 
-        const titleSpan = document.createElement("span");
-        titleSpan.className = "movi-timeline-chapter-title";
-        titleSpan.textContent = ch.title;
+        for (let i = this._timelineNextIndex; i < count; i++) {
+          const time = interval * (i + 1);
+          const blob = await this.player.getPreviewFrame(time);
+          if (this._timelineCancelled) return;
+          // Advance even on null so a permanently-failing frame doesn't wedge resume
+          this._timelineNextIndex = i + 1;
+          if (!blob) continue;
 
-        const timeSpan = document.createElement("span");
-        timeSpan.className = "movi-timeline-time";
-        timeSpan.textContent = formatTime(ch.start);
+          const item = document.createElement("div");
+          item.className = "movi-timeline-item";
 
-        labelContainer.appendChild(titleSpan);
-        labelContainer.appendChild(timeSpan);
-        item.appendChild(labelContainer);
+          const img = document.createElement("img");
+          img.src = URL.createObjectURL(blob);
+          img.alt = `Timeline ${formatTime(time)}`;
 
-        // Click to seek to chapter
-        item.addEventListener("click", (e) => {
-          e.stopPropagation();
-          this.currentTime = ch.start;
-        });
+          const label = document.createElement("span");
+          label.className = "movi-timeline-time";
+          label.textContent = formatTime(time);
 
-        strip.appendChild(item);
-        const chImg = item.querySelector("img") as HTMLElement;
-        if (chImg) applyRotationToImg(chImg);
-        status.textContent = `${i + 1} / ${chapters.length}`;
+          item.appendChild(img);
+          item.appendChild(label);
+
+          item.addEventListener("click", (e) => {
+            e.stopPropagation();
+            this.currentTime = time;
+          });
+
+          strip.appendChild(item);
+          applyRotationToImg(img);
+          status.textContent = `${strip.children.length} / ${count}`;
+        }
+
+        status.textContent = strip.children.length > 0
+          ? `${strip.children.length} thumbnails`
+          : "Failed to generate — try again";
+        if (strip.children.length > 0) this._timelineComplete = true;
       }
-
-      status.textContent = `${chapters.length} chapters`;
-    } else {
-      // Regular interval-based timeline
-      if (titleEl) titleEl.textContent = "Timeline";
-      status.textContent = "Generating...";
-      const count = 20;
-
-      await this.player.generateTimeline(count, (_i, _total, blob, time) => {
-        const item = document.createElement("div");
-        item.className = "movi-timeline-item";
-
-        const img = document.createElement("img");
-        img.src = URL.createObjectURL(blob);
-        img.alt = `Timeline ${formatTime(time)}`;
-
-        const label = document.createElement("span");
-        label.className = "movi-timeline-time";
-        label.textContent = formatTime(time);
-
-        item.appendChild(img);
-        item.appendChild(label);
-
-        item.addEventListener("click", (e) => {
-          e.stopPropagation();
-          this.currentTime = time;
-        });
-
-        strip.appendChild(item);
-        applyRotationToImg(img);
-        status.textContent = `${strip.children.length} / ${count}`;
-      });
-
-      status.textContent = strip.children.length > 0
-        ? `${strip.children.length} thumbnails`
-        : "Failed to generate — try again";
+    } finally {
+      this._timelineGenerating = false;
     }
 
   }
