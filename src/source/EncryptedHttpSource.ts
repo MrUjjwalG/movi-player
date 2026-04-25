@@ -178,6 +178,12 @@ export class EncryptedHttpSource extends HttpSource {
     firstBlock: number;
     lastBlock: number;
     abortCtrl: AbortController;
+    // Reference to the stream's resolvers map. Undelivered entries mean
+    // someone is still awaiting blocks from this stream — aborting would
+    // reject their await with AbortError. Used by the stale-window and
+    // cap-eviction logic in fetchBlock to skip streams that are still
+    // actively serving consumers (e.g. a hover thumbnail request).
+    resolvers: Map<number, { resolve: (v: Uint8Array) => void; reject: (e: unknown) => void }>;
   }>();
 
   constructor(config: EncryptedSourceConfig) {
@@ -283,8 +289,22 @@ export class EncryptedHttpSource extends HttpSource {
       `[EncSrc] read offset=${clampedOffset} len=${clampedLength} blocks=[${firstBlock}..${lastBlock}] hits=${cacheHits.length} misses=${misses.length}${misses.length ? ` missBlocks=${misses.join(",")}` : ""}`,
     );
 
-    // Fetch all overlapping blocks in parallel; each fetchBlock dedupes
+    // Fetch all overlapping blocks sequentially; each fetchBlock dedupes
     // concurrent requests for the same block via `blockInflight`.
+    // Observed upstream behavior: token-signed streams occasionally
+    // return 206 with an empty/near-empty body — streamBlocks rejects
+    // with "Stream ended before block N" and clears the inflight entry.
+    // A bounded retry loop here pulls those failures inside the read,
+    // so the caller (and the demuxer above it) see a successful read
+    // once any attempt delivers. AbortError is included for the same
+    // reason — a concurrent fetchBlock may abort a stream mid-way.
+    // No per-block retry/cooldown here. Transient truncations surface
+    // to the caller (demuxer processLoop / thumbnail pipeline) which
+    // already retries on its own schedule. An in-read retry loop
+    // re-issues the same deterministically-broken range back-to-back
+    // and only wastes time; a persistent-failure cooldown blocks main
+    // playback if block 0 ever has a hiccup, since the encrypted
+    // source is shared between playback and thumbnails.
     const blocks: Uint8Array[] = [];
     for (let b = firstBlock; b <= lastBlock; b++) {
       blocks.push(await this.fetchBlock(b));
@@ -515,12 +535,16 @@ export class EncryptedHttpSource extends HttpSource {
     );
 
     // Cancel any in-flight stream whose range is far enough from this
-    // new block that a user-visible seek must have happened. Without
-    // this, a rapid scrub leaves 5+ streams each fetching 18 MB —
-    // they pile up on worker CPU and upstream bandwidth, starving the
-    // one stream the player actually needs now. Keep streams that
-    // overlap or are immediately adjacent to the new window; abort
-    // anything clearly stranded.
+    // new block that a user-visible seek must have happened AND which
+    // has no remaining consumers. A stream with undelivered resolvers
+    // has someone awaiting its blocks (thumbnail hover, demuxer read
+    // across blocks); aborting it rejects their await with AbortError.
+    // The stale-window heuristic only judges by range distance, which
+    // is wrong for legitimate reads at far offsets — previously, a
+    // hover thumbnail read at block 413 would get aborted the moment
+    // playback prefetched block 21 because 413 fell outside playback's
+    // keep window. Skip those; only retire streams whose blocks are
+    // all delivered (no one awaiting, free to cancel the leftover body).
     const keepWindowStart = firstBlock - 8;
     const keepWindowEnd = lastBlock + EncryptedHttpSource.PREFETCH_HIGH_WATER;
     for (const active of this._activeStreams) {
@@ -528,6 +552,10 @@ export class EncryptedHttpSource extends HttpSource {
         active.lastBlock < keepWindowStart ||
         active.firstBlock > keepWindowEnd
       ) {
+        if (active.resolvers.size > 0) {
+          // Someone is still awaiting blocks here — leave it alone.
+          continue;
+        }
         console.log(
           `[EncSrc] Aborting stale stream [${active.firstBlock}..${active.lastBlock}] — outside [${keepWindowStart}..${keepWindowEnd}]`,
         );
@@ -537,21 +565,24 @@ export class EncryptedHttpSource extends HttpSource {
 
     // Hard concurrency cap: the upstream server truncates responses when
     // too many token-signed streams are open on the same session. If the
-    // stale-window abort above didn't get us under the cap (can happen
-    // when the new block is near existing streams — prefetch window),
-    // abort the oldest surviving active stream. Demuxer-driven reads
-    // are latency-sensitive; starving them to keep prefetch alive just
-    // causes playback stalls.
-    while (
+    // stale-window abort above didn't get us under the cap, evict the
+    // oldest surviving stream — but only if its resolvers are empty
+    // (already delivered everything). Evicting a stream with pending
+    // awaiters would break those reads. If every active stream still
+    // has consumers, accept the temporary over-cap rather than cause
+    // cascading read failures.
+    if (
       this._activeStreams.size >= EncryptedHttpSource.MAX_CONCURRENT_STREAMS
     ) {
-      const oldest = this._activeStreams.values().next().value;
-      if (!oldest) break;
-      console.log(
-        `[EncSrc] Evicting oldest active stream [${oldest.firstBlock}..${oldest.lastBlock}] to stay under concurrent cap`,
-      );
-      try { oldest.abortCtrl.abort(); } catch { /* noop */ }
-      this._activeStreams.delete(oldest);
+      for (const s of this._activeStreams) {
+        if (s.resolvers.size !== 0) continue;
+        console.log(
+          `[EncSrc] Evicting active stream [${s.firstBlock}..${s.lastBlock}] to stay under concurrent cap`,
+        );
+        try { s.abortCtrl.abort(); } catch { /* noop */ }
+        this._activeStreams.delete(s);
+        if (this._activeStreams.size < EncryptedHttpSource.MAX_CONCURRENT_STREAMS) break;
+      }
     }
 
     const resolvers = new Map<number, {
@@ -613,7 +644,7 @@ export class EncryptedHttpSource extends HttpSource {
     const onMasterAbort = () => streamAbort.abort();
     if (masterAbort.signal.aborted) streamAbort.abort();
     else masterAbort.signal.addEventListener("abort", onMasterAbort);
-    const streamCtx = { firstBlock, lastBlock, abortCtrl: streamAbort };
+    const streamCtx = { firstBlock, lastBlock, abortCtrl: streamAbort, resolvers };
     this._activeStreams.add(streamCtx);
 
     await this.ensureValidToken();

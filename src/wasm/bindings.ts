@@ -1212,6 +1212,17 @@ export class ThumbnailBindings {
         self.dataSource.read(offsetNum, size).then((data) => {
           const view = data instanceof Uint8Array ? data : new Uint8Array(data);
           self.fulfillRead(view, view.byteLength);
+        }).catch((err) => {
+          // Source read failed (e.g. encrypted stream truncated → rejected
+          // with "Stream ended before block N"). Without this catch the
+          // pending WASM read never resolves, wedging the thumbnail demuxer
+          // and leaving every subsequent hover/timeline request stuck.
+          // Fulfill with -1 (matches main bindings' convention) — WASM
+          // surfaces this as a read failure, distinct from 0 (EOF). That
+          // lets FFmpeg's own retry loop kick in rather than treating the
+          // file as ended mid-frame.
+          console.warn(`[ThumbnailBindings] read(${offsetNum}, ${size}) failed:`, err);
+          self.fulfillRead(new Uint8Array(0), -1);
         });
       }
     };
