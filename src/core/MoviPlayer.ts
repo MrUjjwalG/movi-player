@@ -3824,6 +3824,16 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
     // — both are real byte offsets — and apply linear conversion only to
     // that small delta, added to the accurate currentTime.
     if (this.source instanceof HttpSource && this.fileSize > 0) {
+      // Small files fully cached in memory should report the entire
+      // duration as buffered. The byte-delta math below underreports
+      // for VBR content (e.g., a high-bitrate intro consumes more bytes
+      // than its share of duration, so currentBytes/fileSize at low
+      // currentTime is artificially high → forwardTime is artificially
+      // low → bufferedTime = currentTime + forwardTime falls short of
+      // duration even though every byte is in memory).
+      if (this.source.isFullyCached()) {
+        return duration;
+      }
       const bufferedEndBytes = this.source.getBufferedEnd();
       if (bufferedEndBytes > 0) {
         const currentBytes = this.source.getPosition();
