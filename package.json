@@ -52,9 +52,7 @@
     "app:harden": "node scripts/harden-element.js",
     "app:upload": "npm run app:harden && wrangler r2 object put movi-assets/element.js --file dist/element.js --remote",
     "app:upload:local": "wrangler r2 object put movi-assets/element.js --file dist/element.js --local --persist-to app/.wrangler/state",
-    "app:release": "npm run build:ts && npm run app:upload && npm run app:deploy",
-    "tmdb:dev": "cd tmdb-worker && npx wrangler dev",
-    "tmdb:deploy": "cd tmdb-worker && npx wrangler deploy"
+    "app:release": "npm run build:ts && npm run app:upload && npm run app:deploy"
   },
   "keywords": [
     "video-player",
