@@ -888,23 +888,28 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
     // and restarted from the beginning.
     if (this._playStartTime === 0 && this.demuxer) {
       const targetTime = this.clock.getTime();
-      const userSeeked = Math.abs(targetTime - this.startTime) > 0.05;
 
-      // If the user scrubbed before play, the prebuffer (load-time) has
-      // already decoded audio/video at startTime. Flush those pipelines so
-      // they don't briefly play startTime content before the seek target.
-      if (userSeeked) {
-        await this.videoDecoder.flush();
-        await this.audioDecoder.flush();
-        if (this.videoRenderer) this.videoRenderer.clearQueue();
-        this.audioRenderer.reset();
+      // Flush the decode pipeline before re-seeking the demuxer. The
+      // poster seek's processLoop bursts ~40 packets per rAF, racing the
+      // demuxer cursor ahead of pts=0 while it hunts for the first video
+      // frame. Without a flush + audio reset here, the first audio packet
+      // that surfaces after demuxer.seek(targetTime) can land at a stale
+      // interleaved PTS (e.g. 2.6s), anchoring firstBufferMediaTime there
+      // and forcing video to skip ahead to catch up — the first-play
+      // stutter. Mirrors the replay path which flushes + resets first.
+      await this.videoDecoder.flush();
+      await this.audioDecoder.flush();
+      if (this.videoRenderer) this.videoRenderer.clearQueue();
+      this.audioRenderer.reset();
+
+      // Seek the demuxer first; only after it completes do we resume the
+      // audio context. Running them concurrently let the audio renderer
+      // accept the very first decoded packet before the demuxer cursor
+      // had finished rewinding.
+      await this.demuxer.seek(targetTime);
+      if (!this.disableAudio) {
+        await this.audioRenderer.play();
       }
-
-      const demuxerSeek = this.demuxer.seek(targetTime);
-      const audioInit = !this.disableAudio
-        ? this.audioRenderer.play()
-        : Promise.resolve();
-      await Promise.all([demuxerSeek, audioInit]);
       this.clock.seek(targetTime);
       this.pendingAudioPackets = [];
       // Discard pause-time buffered packets — demuxer was just re-seeked,
@@ -912,13 +917,6 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
       // decoder, making first frame jump ahead instead of starting at targetTime).
       this.pendingPrebufferPackets = [];
       this.eofReached = false;
-      // Reset presentation timing — poster seek set presentationStartTime which
-      // becomes stale if user waits before clicking play. Without this, elapsed
-      // wall-clock time causes getCurrentPlaybackTime() to return a huge value,
-      // dropping all freshly decoded frames as "too far behind".
-      if (this.videoRenderer && !userSeeked) {
-        this.videoRenderer.clearQueue();
-      }
     } else {
       // Resume from pause — just resume AudioContext
       if (!this.disableAudio) {
