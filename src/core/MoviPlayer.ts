@@ -907,6 +907,10 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
       await Promise.all([demuxerSeek, audioInit]);
       this.clock.seek(targetTime);
       this.pendingAudioPackets = [];
+      // Discard pause-time buffered packets — demuxer was just re-seeked,
+      // so stashed packets are stale (would feed later timestamps into the
+      // decoder, making first frame jump ahead instead of starting at targetTime).
+      this.pendingPrebufferPackets = [];
       this.eofReached = false;
       // Reset presentation timing — poster seek set presentationStartTime which
       // becomes stale if user waits before clicking play. Without this, elapsed
