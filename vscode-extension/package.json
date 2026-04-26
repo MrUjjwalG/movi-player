@@ -1,0 +1,103 @@
+{
+  "name": "movi-player-vscode",
+  "displayName": "Movi Player",
+  "description": "A modern video player that handles formats and codecs VS Code can't play natively — right inside your editor.",
+  "version": "0.2.2",
+  "publisher": "mrujjwalg",
+  "engines": {
+    "vscode": "^1.80.0"
+  },
+  "categories": ["Other"],
+  "keywords": ["video", "player", "mp4", "mkv", "hevc", "av1", "hdr"],
+  "icon": "icons/icon128.png",
+  "main": "./out/extension.js",
+  "contributes": {
+    "customEditors": [
+      {
+        "viewType": "movi.player",
+        "displayName": "Movi Player",
+        "selector": [
+          { "filenamePattern": "*.mp4" },
+          { "filenamePattern": "*.mkv" },
+          { "filenamePattern": "*.webm" },
+          { "filenamePattern": "*.mov" },
+          { "filenamePattern": "*.ts" },
+          { "filenamePattern": "*.avi" },
+          { "filenamePattern": "*.flv" },
+          { "filenamePattern": "*.wmv" },
+          { "filenamePattern": "*.m4v" },
+          { "filenamePattern": "*.3gp" },
+          { "filenamePattern": "*.mpg" },
+          { "filenamePattern": "*.mpeg" },
+          { "filenamePattern": "*.m2ts" },
+          { "filenamePattern": "*.hevc" },
+          { "filenamePattern": "*.265" }
+        ],
+        "priority": "default"
+      }
+    ],
+    "commands": [
+      {
+        "command": "movi.openPlayer",
+        "title": "Movi: Open Video File",
+        "category": "Movi"
+      },
+      {
+        "command": "movi.openCurrentFile",
+        "title": "Movi: Play with Movi Player",
+        "category": "Movi"
+      },
+      {
+        "command": "movi.openUrl",
+        "title": "Movi: Open Video from URL",
+        "category": "Movi"
+      }
+    ],
+    "menus": {
+      "explorer/context": [
+        {
+          "command": "movi.openCurrentFile",
+          "when": "resourceExtname =~ /\\.(mp4|mkv|webm|mov|ts|avi|flv|wmv|m4v|3gp|mpg|mpeg|m2ts|hevc|265)$/i",
+          "group": "navigation@10"
+        }
+      ],
+      "editor/title/context": [
+        {
+          "command": "movi.openCurrentFile",
+          "when": "resourceExtname =~ /\\.(mp4|mkv|webm|mov|ts|avi|flv|wmv|m4v|3gp|mpg|mpeg|m2ts|hevc|265)$/i"
+        }
+      ]
+    },
+    "configuration": {
+      "title": "Movi Player",
+      "properties": {
+        "movi.ambientMode": {
+          "type": "boolean",
+          "default": true,
+          "description": "Enable ambient mode (color glow around video)"
+        },
+        "movi.resume": {
+          "type": "boolean",
+          "default": true,
+          "description": "Resume playback from last position"
+        }
+      }
+    }
+  },
+  "scripts": {
+    "vscode:prepublish": "npm run compile",
+    "compile": "tsc -p ./",
+    "watch": "tsc -watch -p ./",
+    "package": "vsce package"
+  },
+  "devDependencies": {
+    "@types/node": "^18.0.0",
+    "@types/vscode": "^1.80.0",
+    "typescript": "^5.0.0"
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/MrUjjwalG/movi-player"
+  },
+  "license": "MIT"
+}
