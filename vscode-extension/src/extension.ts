@@ -3,7 +3,7 @@ import * as path from "path";
 import * as fs from "fs";
 
 const VIDEO_EXTS = [
-  "mp4", "mkv", "webm", "mov", "ts", "avi", "flv", "wmv",
+  "mp4", "mkv", "webm", "mov", "avi", "flv", "wmv",
   "m4v", "3gp", "mpg", "mpeg", "m2ts", "hevc", "265",
 ];
 
@@ -110,22 +110,80 @@ class MoviEditorProvider
       "icon128.png"
     );
 
-    const fileUri = panel.webview.asWebviewUri(document.uri);
-    const name = path.basename(document.uri.fsPath);
+    const fsPath = document.uri.fsPath;
+    const name = path.basename(fsPath);
+    let stat: fs.Stats | undefined;
+    try {
+      stat = fs.statSync(fsPath);
+    } catch (e) {
+      vscode.window.showErrorMessage(`Movi: cannot stat file ${name}`);
+    }
 
-    const sub = panel.webview.onDidReceiveMessage((msg) => {
+    const sub = panel.webview.onDidReceiveMessage(async (msg) => {
       if (msg?.type === "ready") {
+        if (!stat) return;
         panel.webview.postMessage({
-          type: "loadFile",
-          url: fileUri.toString(),
+          type: "loadStream",
           name,
+          size: stat.size,
+          mimeType: guessMime(fsPath),
         });
+      } else if (msg?.type === "readChunk") {
+        const { id, start, length } = msg;
+        try {
+          const buffer = await readFileRange(fsPath, start, length);
+          panel.webview.postMessage({
+            type: "chunkData",
+            id,
+            buffer: buffer.buffer.slice(buffer.byteOffset, buffer.byteOffset + buffer.byteLength),
+          });
+        } catch (err: unknown) {
+          const message = err instanceof Error ? err.message : String(err);
+          panel.webview.postMessage({ type: "chunkError", id, error: message });
+        }
       } else if (msg?.type === "log") {
         appendLog(msg);
       }
     });
     panel.onDidDispose(() => sub.dispose());
   }
+}
+
+function guessMime(filePath: string): string {
+  const ext = path.extname(filePath).toLowerCase();
+  const map: Record<string, string> = {
+    ".mp4": "video/mp4",
+    ".m4v": "video/x-m4v",
+    ".mkv": "video/x-matroska",
+    ".webm": "video/webm",
+    ".mov": "video/quicktime",
+    ".avi": "video/x-msvideo",
+    ".ts": "video/mp2t",
+    ".m2ts": "video/mp2t",
+    ".mpg": "video/mpeg",
+    ".mpeg": "video/mpeg",
+    ".flv": "video/x-flv",
+    ".wmv": "video/x-ms-wmv",
+    ".3gp": "video/3gpp",
+    ".hevc": "video/hevc",
+    ".265": "video/hevc",
+  };
+  return map[ext] || "application/octet-stream";
+}
+
+async function readFileRange(
+  filePath: string,
+  start: number,
+  length: number
+): Promise<Uint8Array> {
+  return new Promise((resolve, reject) => {
+    const end = start + length - 1;
+    const stream = fs.createReadStream(filePath, { start, end });
+    const chunks: Buffer[] = [];
+    stream.on("data", (chunk) => chunks.push(chunk as Buffer));
+    stream.on("end", () => resolve(new Uint8Array(Buffer.concat(chunks))));
+    stream.on("error", reject);
+  });
 }
 
 function openCommandPanelWithUrl(

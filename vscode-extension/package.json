@@ -2,14 +2,37 @@
   "name": "movi-player-vscode",
   "displayName": "Movi Player",
   "description": "A modern video player that handles formats and codecs VS Code can't play natively — right inside your editor.",
-  "version": "0.2.2",
+  "version": "0.2.3",
   "publisher": "mrujjwalg",
   "engines": {
     "vscode": "^1.80.0"
   },
-  "categories": ["Other"],
-  "keywords": ["video", "player", "mp4", "mkv", "hevc", "av1", "hdr"],
+  "categories": [
+    "Other",
+    "Visualization"
+  ],
+  "keywords": [
+    "video",
+    "player",
+    "mp4",
+    "mkv",
+    "hevc",
+    "av1",
+    "hdr",
+    "webm",
+    "ffmpeg",
+    "media",
+    "movie"
+  ],
   "icon": "icons/icon128.png",
+  "galleryBanner": {
+    "color": "#0a0a0f",
+    "theme": "dark"
+  },
+  "homepage": "https://moviplayer.com",
+  "bugs": {
+    "url": "https://github.com/MrUjjwalG/movi-player/issues"
+  },
   "main": "./out/extension.js",
   "contributes": {
     "customEditors": [
@@ -17,21 +40,48 @@
         "viewType": "movi.player",
         "displayName": "Movi Player",
         "selector": [
-          { "filenamePattern": "*.mp4" },
-          { "filenamePattern": "*.mkv" },
-          { "filenamePattern": "*.webm" },
-          { "filenamePattern": "*.mov" },
-          { "filenamePattern": "*.ts" },
-          { "filenamePattern": "*.avi" },
-          { "filenamePattern": "*.flv" },
-          { "filenamePattern": "*.wmv" },
-          { "filenamePattern": "*.m4v" },
-          { "filenamePattern": "*.3gp" },
-          { "filenamePattern": "*.mpg" },
-          { "filenamePattern": "*.mpeg" },
-          { "filenamePattern": "*.m2ts" },
-          { "filenamePattern": "*.hevc" },
-          { "filenamePattern": "*.265" }
+          {
+            "filenamePattern": "*.mp4"
+          },
+          {
+            "filenamePattern": "*.mkv"
+          },
+          {
+            "filenamePattern": "*.webm"
+          },
+          {
+            "filenamePattern": "*.mov"
+          },
+          {
+            "filenamePattern": "*.avi"
+          },
+          {
+            "filenamePattern": "*.flv"
+          },
+          {
+            "filenamePattern": "*.wmv"
+          },
+          {
+            "filenamePattern": "*.m4v"
+          },
+          {
+            "filenamePattern": "*.3gp"
+          },
+          {
+            "filenamePattern": "*.mpg"
+          },
+          {
+            "filenamePattern": "*.mpeg"
+          },
+          {
+            "filenamePattern": "*.m2ts"
+          },
+          {
+            "filenamePattern": "*.hevc"
+          },
+          {
+            "filenamePattern": "*.265"
+          }
         ],
         "priority": "default"
       }
@@ -57,14 +107,14 @@
       "explorer/context": [
         {
           "command": "movi.openCurrentFile",
-          "when": "resourceExtname =~ /\\.(mp4|mkv|webm|mov|ts|avi|flv|wmv|m4v|3gp|mpg|mpeg|m2ts|hevc|265)$/i",
+          "when": "resourceExtname =~ /\\.(mp4|mkv|webm|mov|avi|flv|wmv|m4v|3gp|mpg|mpeg|m2ts|hevc|265)$/i",
           "group": "navigation@10"
         }
       ],
       "editor/title/context": [
         {
           "command": "movi.openCurrentFile",
-          "when": "resourceExtname =~ /\\.(mp4|mkv|webm|mov|ts|avi|flv|wmv|m4v|3gp|mpg|mpeg|m2ts|hevc|265)$/i"
+          "when": "resourceExtname =~ /\\.(mp4|mkv|webm|mov|avi|flv|wmv|m4v|3gp|mpg|mpeg|m2ts|hevc|265)$/i"
         }
       ]
     },

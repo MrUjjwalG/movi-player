@@ -1,48 +1,55 @@
-# Movi Player VS Code Extension
+# Movi Player for VS Code
 
-Play any video file with Movi Player directly inside VS Code.
+Play modern video formats directly inside VS Code — **MKV, HEVC, AV1, HDR, WebM, MOV, TS** and more, including formats VS Code can't natively handle.
 
-## Features
+100% local. Nothing uploaded. Powered by FFmpeg WebAssembly + WebCodecs hardware decoding.
 
-- **Right-click any video file** in the Explorer → "Movi: Play with Movi Player"
-- **Command Palette** → `Movi: Open Video File` to pick a file
-- **Command Palette** → `Movi: Open Video from URL` to play a remote URL
-- **Drag & drop** videos into the player panel
-- Supports: MP4, MKV, WebM, MOV, TS, AVI, HLS, HEVC, AV1, HDR
+## Usage
 
-## Setup (development)
+- **Single-click any video file** in the Explorer (`.mp4`, `.mkv`, `.webm`, `.mov`, `.avi`, `.ts`, `.flv`, `.wmv`, `.m4v`, `.3gp`, `.mpg`, `.mpeg`, `.m2ts`, `.hevc`, `.265`) — opens directly in Movi Player
+- **Right-click any file → "Open With…" → "Movi Player"** — works for any extension (try with `.iso`, `.vob`, etc.)
+- **Command Palette** (`Cmd+Shift+P`):
+  - `Movi: Open Video File` — file picker
+  - `Movi: Open Video from URL` — paste a remote video URL
 
-```bash
-# 1. From repo root, build movi-player dist
-cd ..
-npm run build:ts
+## Supported formats
 
-# 2. Build extension (compiles TS + copies player bundle)
-cd vscode-extension
-./build.sh
+**Containers:** MP4, MKV, WebM, MOV, TS/M2TS, AVI, FLV, WMV, MPG/MPEG, 3GP
 
-# 3. Open this folder in VS Code, press F5
-#    A new VS Code window opens with the extension loaded.
-#    Run "Movi: Open Video File" from the command palette.
-```
+**Video codecs:** H.264, HEVC (H.265), AV1, VP9, VP8 — hardware-accelerated where available
 
-## Packaging
+**Audio codecs:** AAC, Opus, FLAC, MP3, AC3, Vorbis — software fallback
 
-```bash
-npm install -g @vscode/vsce
-vsce package
-# produces movi-player-vscode-X.Y.Z.vsix
-```
+**HDR:** HDR10 / HLG / Dolby Vision profile 8 (on supported displays)
 
-Install the `.vsix` via Extensions panel → `…` menu → "Install from VSIX".
+## Settings
 
-## How it works
+| Setting | Default | Effect |
+|---|---|---|
+| `movi.ambientMode` | `true` | Color glow around the video |
+| `movi.resume` | `true` | Resume playback from last position |
 
-- **Webview Panel** hosts the `<movi-player>` custom element with full controls, seek, subtitles, HDR
-- **Local files** are served via `webview.asWebviewUri()` — VS Code's secure resource scheme
-- **No server needed** — everything runs locally via WASM
-- **Settings** (autoplay, ambient mode, resume) configurable via VS Code settings under "Movi Player"
+## Limitations
 
-## Why webview?
+VS Code's webview sandbox restricts a few features that work in the [Chrome extension](https://chromewebstore.google.com/detail/movi-player/ckleeigcopjnpehkjokijokjegknfgej):
 
-VS Code can't natively play formats like MKV, HEVC, AV1, or HDR content. The webview gives us a sandboxed Chromium where we run the same WASM-based decoder pipeline as the Chrome extension and the npm package.
+- **Fullscreen** is disabled (Permissions-Policy denies `requestFullscreen` in webviews)
+- **Picture-in-Picture** is hidden (same reason)
+- **SharedArrayBuffer** is unavailable, so FFmpeg runs single-threaded — slightly slower demuxing on very large files (8K HDR streams). Hardware video decode is unaffected.
+
+For full feature parity (including fullscreen + PiP), use the Chrome extension or [movi-player web app](https://mrujjwalg.github.io/movi-player/).
+
+## Privacy
+
+Everything runs locally inside VS Code's sandboxed webview. No uploads, no telemetry, no servers. Your video files never leave your machine.
+
+## Links
+
+- 📦 [movi-player on GitHub](https://github.com/MrUjjwalG/movi-player)
+- 📖 [Documentation](https://mrujjwalg.github.io/movi-player/)
+- 🐛 [Report a bug](https://github.com/MrUjjwalG/movi-player/issues)
+- 🛒 [Chrome extension](https://chromewebstore.google.com/detail/movi-player/ckleeigcopjnpehkjokijokjegknfgej)
+
+---
+
+Made with 💜 by [mrujjwalg](https://github.com/MrUjjwalG)

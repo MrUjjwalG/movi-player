@@ -77,7 +77,58 @@ customElements.whenDefined("movi-player").then(() => {
   setTimeout(hideUnsupported, 500);
 });
 
+// ─── Streaming File proxy ──────────────────────────────────
+// Bridges movi-player's FileSource.slice() calls to extension-host
+// fs.createReadStream chunks. Memory cost = ~chunk size, not file size,
+// so 10 GB files work without loading anything.
+const pendingChunks = new Map(); // id → { resolve, reject }
+let nextChunkId = 1;
+
+function requestChunk(start, length) {
+  const id = nextChunkId++;
+  return new Promise((resolve, reject) => {
+    pendingChunks.set(id, { resolve, reject });
+    vscode.postMessage({ type: "readChunk", id, start, length });
+  });
+}
+
+function createStreamingFile(name, size, mimeType) {
+  // Real File for `instanceof File` checks; size + slice are overridden
+  // to pull bytes on demand from the extension host.
+  const file = new File([new Uint8Array(0)], name, { type: mimeType });
+  Object.defineProperty(file, "size", { value: size, configurable: true });
+  Object.defineProperty(file, "slice", {
+    value: function (start = 0, end = size) {
+      const realStart = Math.max(0, start);
+      const realEnd = Math.min(size, end);
+      const length = Math.max(0, realEnd - realStart);
+      const blob = new Blob([new Uint8Array(0)], { type: mimeType });
+      Object.defineProperty(blob, "size", { value: length, configurable: true });
+      Object.defineProperty(blob, "arrayBuffer", {
+        value: async function () {
+          if (length === 0) return new ArrayBuffer(0);
+          return await requestChunk(realStart, length);
+        },
+        configurable: true,
+      });
+      return blob;
+    },
+    configurable: true,
+  });
+  return file;
+}
+
+function loadStream(name, size, mimeType) {
+  hideLoading();
+  if (name) document.title = name + " — Movi Player";
+  const file = createStreamingFile(name || "video", size, mimeType || "video/mp4");
+  customElements.whenDefined("movi-player").then(() => {
+    document.getElementById("player").src = file;
+  });
+}
+
 async function loadFromUrl(url, name) {
+  // Fallback: fetch+blob path (used for remote URLs from openUrl command).
   showLoading(name || "");
   try {
     const response = await fetch(url);
@@ -107,10 +158,24 @@ function loadRemoteUrl(url) {
 window.addEventListener("message", (event) => {
   const msg = event.data;
   if (!msg) return;
-  if (msg.type === "loadFile") {
+  if (msg.type === "loadStream") {
+    loadStream(msg.name, msg.size, msg.mimeType);
+  } else if (msg.type === "loadFile") {
     loadFromUrl(msg.url, msg.name);
   } else if (msg.type === "loadUrl") {
     loadRemoteUrl(msg.url);
+  } else if (msg.type === "chunkData") {
+    const pending = pendingChunks.get(msg.id);
+    if (pending) {
+      pendingChunks.delete(msg.id);
+      pending.resolve(msg.buffer);
+    }
+  } else if (msg.type === "chunkError") {
+    const pending = pendingChunks.get(msg.id);
+    if (pending) {
+      pendingChunks.delete(msg.id);
+      pending.reject(new Error(msg.error));
+    }
   }
 });
 
