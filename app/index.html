@@ -1008,6 +1008,7 @@
       .playlist-panel {
         width: 380px;
         flex-shrink: 0;
+        min-height: 420px;
         max-height: 75vh;
         background:
           linear-gradient(180deg, rgba(124, 108, 240, 0.04) 0%, transparent 40%),
@@ -1426,6 +1427,202 @@
         background: #fff;
       }
 
+      /* ─── Folder tree (hierarchy) ─── */
+      .playlist-folder {
+        display: flex;
+        align-items: center;
+        gap: 7px;
+        padding: 7px 8px;
+        cursor: pointer;
+        color: var(--text-secondary);
+        font-size: 0.78rem;
+        font-weight: 500;
+        border-radius: 10px;
+        user-select: none;
+        transition: background 0.12s, color 0.12s;
+      }
+      .playlist-folder + .playlist-item,
+      .playlist-item + .playlist-folder,
+      .playlist-folder + .playlist-folder { margin-top: 2px; }
+      .playlist-folder:hover {
+        background: rgba(255, 255, 255, 0.035);
+        color: var(--text-primary);
+      }
+      [data-theme="light"] .playlist-folder:hover {
+        background: rgba(0, 0, 0, 0.03);
+      }
+      .playlist-folder .chevron {
+        width: 12px; height: 12px;
+        color: var(--text-muted);
+        flex-shrink: 0;
+        transition: transform 0.18s ease;
+      }
+      .playlist-folder.collapsed .chevron { transform: rotate(-90deg); }
+      .playlist-folder .folder-icon {
+        width: 14px; height: 14px;
+        color: var(--accent);
+        opacity: 0.85;
+        flex-shrink: 0;
+      }
+      .playlist-folder-name {
+        flex: 1;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+        letter-spacing: -0.05px;
+      }
+      .playlist-folder-count {
+        font-size: 0.66rem;
+        color: var(--text-muted);
+        background: var(--bg-surface);
+        padding: 2px 8px;
+        border-radius: 999px;
+        font-weight: 500;
+        flex-shrink: 0;
+        font-variant-numeric: tabular-nums;
+      }
+      .playlist-folder-children {
+        margin-left: 14px;
+        padding-left: 8px;
+        border-left: 1px solid var(--border-subtle);
+        transition: border-color 0.15s;
+      }
+      .playlist-folder-children:hover { border-left-color: rgba(124, 108, 240, 0.35); }
+      .playlist-folder-children.hidden { display: none; }
+
+      /* ─── Search ─── */
+      .playlist-search {
+        position: relative;
+        padding: 8px 14px 6px;
+        flex-shrink: 0;
+      }
+      .playlist-search > svg {
+        position: absolute;
+        left: 24px;
+        top: 50%;
+        transform: translateY(-50%);
+        width: 13px;
+        height: 13px;
+        color: var(--text-muted);
+        pointer-events: none;
+      }
+      .playlist-search input {
+        width: 100%;
+        background: var(--bg-surface);
+        border: 1px solid var(--border-subtle);
+        color: var(--text-primary);
+        padding: 7px 28px 7px 30px;
+        border-radius: 8px;
+        font-size: 0.78rem;
+        outline: none;
+        font-family: inherit;
+        transition: border-color 0.12s, background 0.12s;
+      }
+      .playlist-search input:focus { border-color: var(--accent); }
+      .playlist-search input::placeholder { color: var(--text-muted); }
+      .playlist-search input::-webkit-search-cancel-button,
+      .playlist-search input::-webkit-search-decoration {
+        -webkit-appearance: none;
+        appearance: none;
+        display: none;
+      }
+      .playlist-search-clear {
+        position: absolute;
+        right: 20px;
+        top: 50%;
+        transform: translateY(-50%);
+        width: 18px;
+        height: 18px;
+        border-radius: 4px;
+        background: transparent;
+        border: 0;
+        color: var(--text-muted);
+        cursor: pointer;
+        display: none;
+        align-items: center;
+        justify-content: center;
+      }
+      .playlist-search-clear:hover { color: var(--text-primary); background: var(--bg-surface); }
+      .playlist-search-clear svg { width: 11px; height: 11px; }
+      .playlist-search.has-query .playlist-search-clear { display: flex; }
+
+      /* Keyboard "selection cursor" — distinct from .active (currently playing). */
+      .playlist-item.highlighted {
+        box-shadow: inset 0 0 0 2px var(--accent);
+      }
+      .playlist-item.highlighted:not(.active) {
+        background: rgba(124, 108, 240, 0.08);
+        color: var(--text-primary);
+      }
+      [data-theme="light"] .playlist-item.highlighted:not(.active) {
+        background: rgba(124, 108, 240, 0.1);
+      }
+      .playlist-panel:focus { outline: none; }
+
+      /* Failed-thumb fallback (shimmer kill + video icon) */
+      .playlist-thumb.no-thumb::before { display: none !important; animation: none !important; }
+      .playlist-thumb-fallback {
+        position: absolute;
+        inset: 0;
+        display: none;
+        align-items: center;
+        justify-content: center;
+        color: var(--text-muted);
+        pointer-events: none;
+      }
+      .playlist-thumb.no-thumb .playlist-thumb-fallback { display: flex; }
+      .playlist-thumb-fallback svg { width: 28px; height: 28px; opacity: 0.55; }
+
+      /* ─── Cache info — subtle centered chip below the drop hint.
+         Sits in the hero's centered flow so it doesn't fight the
+         layout, but stays visually quiet so it doesn't compete with
+         the primary hero copy. ─── */
+      .cache-info {
+        display: inline-flex;
+        align-items: center;
+        gap: 10px;
+        margin-top: -0.5rem;
+        font-size: 0.7rem;
+        color: var(--text-muted);
+        opacity: 0.6;
+        transition: opacity 0.15s;
+      }
+      .cache-info:hover { opacity: 1; }
+      .cache-info[hidden] { display: none; }
+      .cache-info .cache-size {
+        display: inline-flex;
+        align-items: center;
+        gap: 5px;
+        font-variant-numeric: tabular-nums;
+      }
+      .cache-info .cache-size svg {
+        width: 12px;
+        height: 12px;
+        color: var(--text-muted);
+        opacity: 0.75;
+      }
+      .cache-info .cache-clear {
+        background: transparent;
+        border: 1px solid var(--border-subtle);
+        color: var(--text-secondary);
+        padding: 4px 10px;
+        border-radius: 6px;
+        font-size: 0.7rem;
+        cursor: pointer;
+        font-family: inherit;
+        transition: all 0.15s;
+      }
+      .cache-info .cache-clear:hover {
+        border-color: var(--accent);
+        color: var(--text-primary);
+      }
+      .cache-info .cache-clear:disabled {
+        opacity: 0.5;
+        cursor: default;
+        border-color: var(--border-subtle);
+        color: var(--text-muted);
+      }
+
       /* Switch to stacked (player-on-top, playlist-below) once the
          side-by-side layout runs out of comfortable width — 900 px is
          the minimum where 380 px playlist + ~500 px player + gaps still
@@ -1453,6 +1650,7 @@
         .playlist-panel {
           width: 100%;
           max-width: 960px;
+          min-height: 320px;
           max-height: 420px;
         }
       }
@@ -2267,7 +2465,7 @@
               <line x1="12" y1="3" x2="12" y2="15"></line>
             </svg>
             Open File
-            <input type="file" id="file-input" accept="video/*,.mkv,.ts,.avi,.flv,.wmv,.mov" />
+            <input type="file" id="file-input" accept="video/*,.mkv,.ts,.avi,.flv,.wmv,.mov" multiple />
           </label>
           <button class="btn-ghost" id="folder-btn" type="button" title="Open a folder as a playlist">
             <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
@@ -2291,6 +2489,15 @@
           </button>
         </div>
         <span class="kbd-hint">or drag & drop anywhere</span>
+        <div class="cache-info" id="cache-info" hidden>
+          <span class="cache-size" id="cache-size" title="Cached thumbnails">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+              <ellipse cx="12" cy="5" rx="9" ry="3"/><path d="M3 5v14a9 3 0 0 0 18 0V5"/><path d="M3 12a9 3 0 0 0 18 0"/>
+            </svg>
+            <span id="cache-size-text">—</span>
+          </span>
+          <button type="button" class="cache-clear" id="cache-clear-btn" title="Clear thumbnail cache">Clear cache</button>
+        </div>
         <div class="hero-trust">
           <span class="trust-item">
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/></svg>
@@ -2335,18 +2542,29 @@
             </movi-player>
           </div>
         </div>
-        <aside class="playlist-panel" id="playlist-panel" hidden aria-label="Playlist">
+        <aside class="playlist-panel" id="playlist-panel" hidden tabindex="0" aria-label="Playlist">
           <div class="playlist-header">
             <div class="playlist-title-group">
               <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="8" y1="6" x2="21" y2="6"></line><line x1="8" y1="12" x2="21" y2="12"></line><line x1="8" y1="18" x2="21" y2="18"></line><line x1="3" y1="6" x2="3.01" y2="6"></line><line x1="3" y1="12" x2="3.01" y2="12"></line><line x1="3" y1="18" x2="3.01" y2="18"></line></svg>
-              <span class="playlist-title">Playlist</span>
+              <span class="playlist-title" id="playlist-title">Playlist</span>
               <span class="playlist-count" id="playlist-count">0</span>
             </div>
             <button class="playlist-close" id="playlist-close" type="button" title="Hide playlist" aria-label="Hide playlist">
               <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"></line><line x1="6" y1="6" x2="18" y2="18"></line></svg>
             </button>
           </div>
-          <ol class="playlist-items" id="playlist-items"></ol>
+          <div class="playlist-search" id="playlist-search-wrap">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+              <circle cx="11" cy="11" r="7"/><line x1="21" y1="21" x2="16.65" y2="16.65"/>
+            </svg>
+            <input type="search" id="playlist-search" placeholder="Search files..." autocomplete="off" spellcheck="false" />
+            <button class="playlist-search-clear" id="playlist-search-clear" type="button" title="Clear">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round">
+                <line x1="6" y1="6" x2="18" y2="18"/><line x1="6" y1="18" x2="18" y2="6"/>
+              </svg>
+            </button>
+          </div>
+          <div class="playlist-items" id="playlist-items"></div>
           <label class="playlist-autoplay">
             <input type="checkbox" id="playlist-autoplay" checked />
             <span>Autoplay next</span>
@@ -2577,6 +2795,13 @@
       const playlistCloseBtn = document.getElementById("playlist-close");
       const playlistShowBtn = document.getElementById("playlist-show-btn");
       const playlistAutoplayEl = document.getElementById("playlist-autoplay");
+      const playlistTitleEl = document.getElementById("playlist-title");
+      const playlistSearchWrap = document.getElementById("playlist-search-wrap");
+      const playlistSearch = document.getElementById("playlist-search");
+      const playlistSearchClear = document.getElementById("playlist-search-clear");
+      const cacheInfoEl = document.getElementById("cache-info");
+      const cacheSizeText = document.getElementById("cache-size-text");
+      const cacheClearBtn = document.getElementById("cache-clear-btn");
       let currentVideoUrl = "";
       const defaultTitle = document.title;
 
@@ -2773,17 +2998,21 @@
 
       // --- File Upload ---
       fileInput.addEventListener("change", (e) => {
-        const file = e.target.files[0];
-        if (file && player) {
+        const files = Array.from(e.target.files || []);
+        if (!files.length || !player) return;
+        if (files.length === 1) {
+          // Single file: load directly without spinning up the playlist UI.
+          // Matches pre-multi-select behavior so users picking one file
+          // don't suddenly land in playlist mode.
           clearPlaylist();
-          if (player.setFile) {
-            player.setFile(file);
-          } else {
-            player.src = file;
-          }
+          if (player.setFile) player.setFile(files[0]);
+          else player.src = files[0];
           urlInput.value = "";
           scrollToPlayer();
+        } else {
+          setPlaylist(files);
         }
+        fileInput.value = "";
       });
 
       // --- Folder / Playlist ---
@@ -2793,6 +3022,106 @@
 
       const naturalCompare = (a, b) =>
         a.localeCompare(b, undefined, { numeric: true, sensitivity: "base" });
+
+      // Tree-DFS sort with folders-first at every depth so playlist[0]
+      // matches whatever sits at the visual top of the playlist tree.
+      const compareTreeOrder = (a, b) => {
+        const pa = (a.webkitRelativePath || a.name).split("/");
+        const pb = (b.webkitRelativePath || b.name).split("/");
+        for (let i = 0; ; i++) {
+          if (i >= pa.length || i >= pb.length) return pa.length - pb.length;
+          const inFolderA = i < pa.length - 1;
+          const inFolderB = i < pb.length - 1;
+          if (inFolderA !== inFolderB) return inFolderA ? -1 : 1;
+          const c = naturalCompare(pa[i], pb[i]);
+          if (c !== 0) return c;
+        }
+      };
+
+      // ─── IndexedDB thumbnail / metadata cache ─────────────────
+      // Caches generated thumbs across sessions so reopening the same
+      // folder doesn't redo every WASM call. Key is (name, size,
+      // lastModified) — collision-free in practice.
+      const CACHE_DB = "moviplayer-cache";
+      const CACHE_STORE = "thumbnails";
+      let cacheDbPromise = null;
+      function openCacheDb() {
+        if (cacheDbPromise) return cacheDbPromise;
+        cacheDbPromise = new Promise((resolve, reject) => {
+          const req = indexedDB.open(CACHE_DB, 1);
+          req.onupgradeneeded = () => {
+            const db = req.result;
+            if (!db.objectStoreNames.contains(CACHE_STORE)) {
+              db.createObjectStore(CACHE_STORE, { keyPath: "key" });
+            }
+          };
+          req.onsuccess = () => resolve(req.result);
+          req.onerror = () => reject(req.error);
+        }).catch((err) => {
+          console.warn("[Movi] thumb cache open failed:", err);
+          cacheDbPromise = null;
+          return null;
+        });
+        return cacheDbPromise;
+      }
+      const cacheKey = (file) =>
+        `${file.name}::${file.size}::${file.lastModified || 0}`;
+      async function cacheGet(key) {
+        const db = await openCacheDb();
+        if (!db) return null;
+        return new Promise((resolve) => {
+          try {
+            const tx = db.transaction(CACHE_STORE, "readonly");
+            const r = tx.objectStore(CACHE_STORE).get(key);
+            r.onsuccess = () => resolve(r.result || null);
+            r.onerror = () => resolve(null);
+          } catch { resolve(null); }
+        });
+      }
+      async function cachePut(entry) {
+        const db = await openCacheDb();
+        if (!db) return;
+        return new Promise((resolve) => {
+          try {
+            const tx = db.transaction(CACHE_STORE, "readwrite");
+            tx.objectStore(CACHE_STORE).put(entry);
+            tx.oncomplete = () => resolve();
+            tx.onerror = () => resolve();
+            tx.onabort = () => resolve();
+          } catch { resolve(); }
+        });
+      }
+      async function cacheStats() {
+        const db = await openCacheDb();
+        if (!db) return { count: 0, bytes: 0 };
+        return new Promise((resolve) => {
+          let count = 0, bytes = 0;
+          try {
+            const tx = db.transaction(CACHE_STORE, "readonly");
+            const cur = tx.objectStore(CACHE_STORE).openCursor();
+            cur.onsuccess = () => {
+              const c = cur.result;
+              if (!c) return resolve({ count, bytes });
+              count++;
+              if (c.value?.thumbBlob) bytes += c.value.thumbBlob.size || 0;
+              c.continue();
+            };
+            cur.onerror = () => resolve({ count, bytes });
+          } catch { resolve({ count, bytes }); }
+        });
+      }
+      async function cacheClear() {
+        const db = await openCacheDb();
+        if (!db) return;
+        return new Promise((resolve) => {
+          try {
+            const tx = db.transaction(CACHE_STORE, "readwrite");
+            tx.objectStore(CACHE_STORE).clear();
+            tx.oncomplete = () => resolve();
+            tx.onerror = () => resolve();
+          } catch { resolve(); }
+        });
+      }
 
       const formatSize = (bytes) => {
         if (!bytes) return "";
@@ -2888,6 +3217,12 @@
           if (img.src !== meta.thumbUrl) img.src = meta.thumbUrl;
           img.hidden = false;
           if (idxEl) idxEl.hidden = true;
+          thumbEl.classList.remove("no-thumb");
+        } else if (meta?.completed) {
+          // Generation finished without a thumb (decode failed or non-video) —
+          // kill the shimmer and show a placeholder icon instead.
+          thumbEl.classList.add("no-thumb");
+          if (idxEl) idxEl.hidden = true;
         }
         if (meta?.duration) {
           durEl.textContent = formatDuration(meta.duration);
@@ -2981,7 +3316,7 @@
         );
 
       const createItemEl = (file, i) => {
-        const li = document.createElement("li");
+        const li = document.createElement("div");
         li.className = "playlist-item";
         li.dataset.index = String(i);
         li.title = file.webkitRelativePath || file.name;
@@ -2989,6 +3324,11 @@
           <span class="playlist-thumb">
             <span class="playlist-thumb-index">${i + 1}</span>
             <img class="playlist-thumb-img" alt="" loading="lazy" hidden />
+            <span class="playlist-thumb-fallback" aria-hidden="true">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
+                <polygon points="23 7 16 12 23 17 23 7"/><rect x="1" y="5" width="15" height="14" rx="2" ry="2"/>
+              </svg>
+            </span>
             <span class="playlist-thumb-playing" aria-hidden="true">
               <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor"><polygon points="5 3 19 12 5 21 5 3"></polygon></svg>
             </span>
@@ -3011,6 +3351,10 @@
           const wasPlaying = !!player?.playing;
           if (wasPlaying) primeAudioForSafari();
           playPlaylistItem(i, { autoplay: wasPlaying });
+          // Keep focus on the panel so the user can immediately Up/Down
+          // to the next item without re-clicking.
+          playlistPanel.focus({ preventScroll: true });
+          setHighlightedIndex(i);
         });
         applyItemMeta(li, file);
         return li;
@@ -3032,17 +3376,112 @@
             )
           : null;
 
+      const collapsedFolders = new Set();
+
+      function buildTree(files) {
+        const root = { folders: new Map(), files: [], depth: 0, path: "" };
+        files.forEach((file, i) => {
+          const rel = file.webkitRelativePath || file.name;
+          const parts = rel.split("/");
+          parts.pop();
+          let node = root;
+          for (const part of parts) {
+            if (!node.folders.has(part)) {
+              node.folders.set(part, {
+                folders: new Map(),
+                files: [],
+                depth: node.depth + 1,
+                path: node.path ? node.path + "/" + part : part,
+              });
+            }
+            node = node.folders.get(part);
+          }
+          node.files.push({ file, index: i });
+        });
+        // If everything sits inside a single root folder, promote that folder
+        // up — the panel header already shows its name, so a duplicate top-
+        // level row would feel redundant.
+        if (root.files.length === 0 && root.folders.size === 1) {
+          const only = Array.from(root.folders.values())[0];
+          const rebase = (n, depth, prefix) => {
+            n.depth = depth;
+            n.path = prefix;
+            n.folders.forEach((c, name) =>
+              rebase(c, depth + 1, prefix ? prefix + "/" + name : name)
+            );
+          };
+          rebase(only, 0, "");
+          return only;
+        }
+        return root;
+      }
+
+      function countTreeFiles(node) {
+        let n = node.files.length;
+        for (const c of node.folders.values()) n += countTreeFiles(c);
+        return n;
+      }
+
+      function renderTreeNode(node, container) {
+        // Standard explorer convention: folders alphabetically first, then
+        // files alphabetically. compareTreeOrder on `playlist` keeps
+        // playlist[0] in sync with whatever sits at the visual top.
+        const folderEntries = Array.from(node.folders.entries()).sort(
+          ([a], [b]) => naturalCompare(a, b)
+        );
+        for (const [name, child] of folderEntries) {
+          const folderEl = document.createElement("div");
+          folderEl.className = "playlist-folder";
+          folderEl.dataset.path = child.path;
+          const isCollapsed = collapsedFolders.has(child.path);
+          if (isCollapsed) folderEl.classList.add("collapsed");
+          folderEl.innerHTML = `
+            <svg class="chevron" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round">
+              <polyline points="6 9 12 15 18 9"/>
+            </svg>
+            <svg class="folder-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+              <path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/>
+            </svg>
+            <span class="playlist-folder-name"></span>
+            <span class="playlist-folder-count"></span>
+          `;
+          folderEl.querySelector(".playlist-folder-name").textContent = name;
+          folderEl.querySelector(".playlist-folder-count").textContent = String(countTreeFiles(child));
+          container.appendChild(folderEl);
+
+          const childWrap = document.createElement("div");
+          childWrap.className = "playlist-folder-children";
+          if (isCollapsed) childWrap.classList.add("hidden");
+          container.appendChild(childWrap);
+
+          folderEl.addEventListener("click", () => {
+            const collapsed = folderEl.classList.toggle("collapsed");
+            childWrap.classList.toggle("hidden", collapsed);
+            if (collapsed) collapsedFolders.add(child.path);
+            else collapsedFolders.delete(child.path);
+          });
+
+          renderTreeNode(child, childWrap);
+        }
+
+        const fileEntries = [...node.files].sort((a, b) =>
+          naturalCompare(a.file.name, b.file.name)
+        );
+        for (const { file, index } of fileEntries) {
+          const li = createItemEl(file, index);
+          if (index === playlistIndex) li.classList.add("active");
+          container.appendChild(li);
+          playlistItemEls[index] = li;
+          metaObserver?.observe(li);
+        }
+      }
+
       const renderPlaylist = () => {
         playlistItemsEl.innerHTML = "";
         playlistItemEls.length = 0;
         playlistCountEl.textContent = `${playlist.length}`;
-        playlist.forEach((file, i) => {
-          const li = createItemEl(file, i);
-          if (i === playlistIndex) li.classList.add("active");
-          playlistItemsEl.appendChild(li);
-          playlistItemEls[i] = li;
-          metaObserver?.observe(li);
-        });
+        const tree = buildTree(playlist);
+        renderTreeNode(tree, playlistItemsEl);
       };
 
       const updateActiveItem = (newIdx) => {
@@ -3093,6 +3532,26 @@
       }
 
       async function generateMetaAndThumb(file) {
+        // ── Cache check first — same-file second loads stay zero-WASM. ──
+        const cacheK = cacheKey(file);
+        const cached = await cacheGet(cacheK);
+        if (cached) {
+          const next = {
+            duration: cached.duration,
+            width: cached.width,
+            height: cached.height,
+            codec: cached.codec,
+            isHDR: cached.isHDR,
+            frameRate: cached.frameRate,
+            isHighFps: cached.isHighFps,
+            thumbUrl: cached.thumbBlob ? URL.createObjectURL(cached.thumbBlob) : undefined,
+            completed: true,
+          };
+          fileMeta.set(file, { ...(fileMeta.get(file) || {}), ...next });
+          scheduleCacheInfoRefresh();
+          return;
+        }
+
         if (!Movi?.ThumbnailBindings || !Movi?.FileSource || !Movi?.loadWasmModuleNew) {
           fileMeta.set(file, { ...(fileMeta.get(file) || {}), completed: true });
           return;
@@ -3182,15 +3641,28 @@
 
           if (!sw || !sh || !duration) {
             fileMeta.set(file, { ...(fileMeta.get(file) || {}), completed: true });
+            cachePut({
+              key: cacheK, name: file.name, size: file.size,
+              lastModified: file.lastModified || 0,
+              duration, width: displayW, height: displayH, codec, isHDR,
+              frameRate, isHighFps, thumbBlob: null, createdAt: Date.now(),
+            });
+            scheduleCacheInfoRefresh();
             return;
           }
 
           const time = Math.max(0, duration * 0.1);
           const pktSize = await bindings.readKeyframe(time);
-          if (!pktSize || pktSize <= 0) return;
+          if (!pktSize || pktSize <= 0) {
+            fileMeta.set(file, { ...(fileMeta.get(file) || {}), completed: true });
+            return;
+          }
 
           const rgba = bindings.decodeCurrentPacket(sw, sh);
-          if (!rgba) return;
+          if (!rgba) {
+            fileMeta.set(file, { ...(fileMeta.get(file) || {}), completed: true });
+            return;
+          }
 
           const THUMB_W = 320, THUMB_H = 180;
 
@@ -3237,6 +3709,13 @@
               thumbUrl: URL.createObjectURL(blob),
               completed: true,
             });
+            cachePut({
+              key: cacheK, name: file.name, size: file.size,
+              lastModified: file.lastModified || 0,
+              duration, width: displayW, height: displayH, codec, isHDR,
+              frameRate, isHighFps, thumbBlob: blob, createdAt: Date.now(),
+            });
+            scheduleCacheInfoRefresh();
           } else {
             fileMeta.set(file, { ...(fileMeta.get(file) || {}), completed: true });
           }
@@ -3284,14 +3763,27 @@
       const setPlaylist = (files) => {
         const videos = files.filter(isVideoFile);
         if (!videos.length) return;
-        videos.sort((a, b) =>
-          naturalCompare(a.webkitRelativePath || a.name, b.webkitRelativePath || b.name)
-        );
+        videos.sort(compareTreeOrder);
         playlist = videos;
         playlistIndex = -1;
         playlistPanel.hidden = false;
         playerLayout.classList.add("has-playlist");
         syncPlaylistShowBtn();
+        // Drop any leftover search query before rendering the new playlist
+        if (playlistSearch && playlistSearch.value) {
+          playlistSearch.value = "";
+          playlistSearchWrap?.classList.remove("has-query");
+        }
+        // Surface a meaningful playlist title — folder name when picking a
+        // folder (derive from webkitRelativePath), otherwise generic.
+        if (playlistTitleEl) {
+          const rel = videos[0].webkitRelativePath;
+          if (rel && rel.includes("/")) {
+            playlistTitleEl.textContent = rel.split("/")[0];
+          } else {
+            playlistTitleEl.textContent = videos.length === 1 ? videos[0].name : "Playlist";
+          }
+        }
         renderPlaylist();
         playPlaylistItem(0);
         scrollToPlayer();
@@ -3341,9 +3833,13 @@
         const isMobile = window.matchMedia("(max-width: 900px)").matches;
         if (isMobile) {
           playlistPanel.style.maxHeight = "";
+          playlistPanel.style.minHeight = "";
         } else {
           const h = playerWrapperEl.getBoundingClientRect().height;
-          if (h > 0) playlistPanel.style.maxHeight = `${h}px`;
+          if (h > 0) {
+            playlistPanel.style.maxHeight = `${h}px`;
+            playlistPanel.style.minHeight = `${h}px`;
+          }
         }
       };
       if ("ResizeObserver" in window && playerWrapperEl) {
@@ -3360,6 +3856,207 @@
 
       playlistCloseBtn.addEventListener("click", hidePlaylist);
       playlistShowBtn.addEventListener("click", showPlaylist);
+
+      // ─── Search filter ─────────────────────────────────────
+      function applySearchFilter() {
+        const q = (playlistSearch.value || "").trim().toLowerCase();
+        playlistSearchWrap.classList.toggle("has-query", !!q);
+        if (!q) {
+          playlistItemsEl.querySelectorAll(".playlist-item").forEach((el) => { el.style.display = ""; });
+          playlistItemsEl.querySelectorAll(".playlist-folder").forEach((folderEl) => {
+            folderEl.style.display = "";
+            const wrap = folderEl.nextElementSibling;
+            if (!wrap) return;
+            wrap.style.display = "";
+            const path = folderEl.dataset.path;
+            if (collapsedFolders.has(path)) {
+              folderEl.classList.add("collapsed");
+              wrap.classList.add("hidden");
+            } else {
+              folderEl.classList.remove("collapsed");
+              wrap.classList.remove("hidden");
+            }
+          });
+          return;
+        }
+        playlistItemEls.forEach((el, i) => {
+          if (!el) return;
+          const name = playlist[i]?.name?.toLowerCase() || "";
+          el.style.display = name.includes(q) ? "" : "none";
+        });
+        const folders = Array.from(playlistItemsEl.querySelectorAll(".playlist-folder")).reverse();
+        for (const folderEl of folders) {
+          const wrap = folderEl.nextElementSibling;
+          if (!wrap) continue;
+          let anyVisible = false;
+          wrap.querySelectorAll(":scope > .playlist-item").forEach((it) => {
+            if (it.style.display !== "none") anyVisible = true;
+          });
+          wrap.querySelectorAll(":scope > .playlist-folder").forEach((sub) => {
+            if (sub.style.display !== "none") anyVisible = true;
+          });
+          if (anyVisible) {
+            folderEl.style.display = "";
+            wrap.style.display = "";
+            folderEl.classList.remove("collapsed");
+            wrap.classList.remove("hidden");
+          } else {
+            folderEl.style.display = "none";
+            wrap.style.display = "none";
+          }
+        }
+      }
+      playlistSearch.addEventListener("input", applySearchFilter);
+      playlistSearchClear.addEventListener("click", () => {
+        playlistSearch.value = "";
+        applySearchFilter();
+        playlistSearch.focus();
+      });
+      playlistSearch.addEventListener("keydown", (e) => {
+        if (e.code === "Escape" && playlistSearch.value) {
+          e.preventDefault();
+          e.stopPropagation();
+          playlistSearch.value = "";
+          applySearchFilter();
+        }
+      });
+
+      // ─── Keyboard "selection cursor" ───────────────────────
+      let highlightedIndex = -1;
+      function setHighlightedIndex(i) {
+        highlightedIndex = i;
+        playlistItemEls.forEach((el, j) => {
+          if (!el) return;
+          el.classList.toggle("highlighted", j === i);
+        });
+        const el = playlistItemEls[i];
+        if (!el) return;
+        const c = playlistItemsEl;
+        const elTop = el.offsetTop - c.offsetTop;
+        const elBottom = elTop + el.offsetHeight;
+        if (elTop < c.scrollTop) c.scrollTo({ top: elTop, behavior: "smooth" });
+        else if (elBottom > c.scrollTop + c.clientHeight) {
+          c.scrollTo({ top: elBottom - c.clientHeight, behavior: "smooth" });
+        }
+      }
+      function visibleItemIndices() {
+        const out = [];
+        for (let i = 0; i < playlistItemEls.length; i++) {
+          const el = playlistItemEls[i];
+          if (el && el.offsetParent !== null) out.push(i);
+        }
+        return out;
+      }
+      function moveHighlight(delta) {
+        const visible = visibleItemIndices();
+        if (!visible.length) return;
+        let cursor = visible.indexOf(highlightedIndex);
+        if (cursor === -1) {
+          cursor = visible.indexOf(playlistIndex);
+          if (cursor === -1) cursor = 0;
+        } else {
+          cursor = Math.max(0, Math.min(visible.length - 1, cursor + delta));
+        }
+        setHighlightedIndex(visible[cursor]);
+      }
+
+      // Focus the panel on any mousedown so keyboard nav becomes active
+      // immediately. Buttons / inputs still receive their own clicks.
+      playlistPanel.addEventListener("mousedown", (e) => {
+        if (playlistPanel.contains(document.activeElement)) return;
+        if (e.target === playlistPanel) {
+          e.preventDefault();
+          playlistPanel.focus();
+        } else {
+          queueMicrotask(() => {
+            if (!playlistPanel.contains(document.activeElement)) playlistPanel.focus();
+          });
+        }
+      });
+
+      // Up / Down / Enter while playlist is focused — handled by panel,
+      // NOT forwarded to the player.
+      playlistPanel.addEventListener("keydown", (e) => {
+        const tag = e.target.tagName;
+        if (tag === "INPUT" || tag === "TEXTAREA" || tag === "BUTTON") return;
+        if (e.code === "ArrowDown") {
+          e.preventDefault();
+          e.stopPropagation();
+          moveHighlight(1);
+        } else if (e.code === "ArrowUp") {
+          e.preventDefault();
+          e.stopPropagation();
+          moveHighlight(-1);
+        } else if (e.code === "Enter") {
+          e.preventDefault();
+          e.stopPropagation();
+          if (highlightedIndex >= 0) {
+            primeAudioForSafari();
+            playPlaylistItem(highlightedIndex, { autoplay: true });
+          }
+        } else if (e.code === "Escape") {
+          e.preventDefault();
+          e.stopPropagation();
+          setHighlightedIndex(-1);
+          player?.focus?.();
+        }
+      });
+
+      // Tab toggles focus between player and playlist (only when there's a
+      // playlist to switch to — otherwise Tab keeps its normal form-nav role).
+      document.addEventListener("keydown", (e) => {
+        if (e.code !== "Tab" || e.shiftKey || e.ctrlKey || e.metaKey || e.altKey) return;
+        if (!playlist.length) return;
+        // Only intercept when focus is currently on the player or the
+        // playlist — skip URL bar, file pickers, etc.
+        const fromPlayer = player && (document.activeElement === player || player.contains(e.target));
+        const fromPlaylist = playlistPanel.contains(document.activeElement) || document.activeElement === playlistPanel;
+        if (!fromPlayer && !fromPlaylist) return;
+        e.preventDefault();
+        e.stopPropagation();
+        if (fromPlaylist) {
+          player?.focus?.();
+        } else {
+          if (playlistPanel.hidden) showPlaylist();
+          playlistPanel.focus({ preventScroll: true });
+        }
+      }, true);
+
+      // ─── Cache info widget ─────────────────────────────────
+      const formatCacheBytes = (b) => {
+        if (!b) return "0 B";
+        const units = ["B", "KB", "MB", "GB"];
+        let i = 0, n = b;
+        while (n >= 1024 && i < units.length - 1) { n /= 1024; i++; }
+        return `${n.toFixed(n < 10 && i > 0 ? 1 : 0)} ${units[i]}`;
+      };
+      let cacheInfoTimer = 0;
+      async function refreshCacheInfo() {
+        const { count, bytes } = await cacheStats();
+        if (count === 0) {
+          cacheInfoEl.hidden = true;
+          return;
+        }
+        cacheInfoEl.hidden = false;
+        cacheSizeText.textContent =
+          `${formatCacheBytes(bytes)} · ${count} ${count === 1 ? "thumb" : "thumbs"}`;
+        cacheClearBtn.disabled = false;
+      }
+      function scheduleCacheInfoRefresh() {
+        if (cacheInfoTimer) return;
+        cacheInfoTimer = setTimeout(() => {
+          cacheInfoTimer = 0;
+          refreshCacheInfo();
+        }, 800);
+      }
+      cacheClearBtn.addEventListener("click", async () => {
+        cacheClearBtn.disabled = true;
+        cacheClearBtn.textContent = "Clearing…";
+        await cacheClear();
+        cacheClearBtn.textContent = "Clear cache";
+        await refreshCacheInfo();
+      });
+      refreshCacheInfo();
 
       player.addEventListener("ended", () => {
         // Mark watched on completion
