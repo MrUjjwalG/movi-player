@@ -2161,6 +2161,13 @@
         if (!wrap || !closeBtn) return;
         if (location.protocol === "chrome-extension:" || location.protocol === "moz-extension:") return;
 
+        // The extension's content script tags <html> with this attribute on our
+        // own domain. If the marker is present (now or set later), don't promote.
+        function isExtInstalled() {
+          return document.documentElement.getAttribute("data-movi-extension") === "installed";
+        }
+        if (isExtInstalled()) return;
+
         var ua = navigator.userAgent;
         var uaData = navigator.userAgentData;
         var brands = (uaData && uaData.brands) || [];
@@ -2192,6 +2199,15 @@
           e.stopPropagation();
           wrap.classList.remove("visible");
           try { sessionStorage.setItem("movi-ext-dismissed", "1"); } catch (_) { /* private mode */ }
+        });
+
+        // Content scripts can race with our inline check — if the marker shows
+        // up after we've already rendered, hide the prompt retroactively.
+        new MutationObserver(function () {
+          if (isExtInstalled()) wrap.classList.remove("visible");
+        }).observe(document.documentElement, {
+          attributes: true,
+          attributeFilter: ["data-movi-extension"],
         });
       })();
     </script>

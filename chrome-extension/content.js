@@ -1,3 +1,13 @@
+// Mark the document so the official Movi Player site can detect that the
+// extension is installed and skip its "Add to Chrome" prompt. Runs on every
+// page (cheap, single attribute write) so we don't depend on manifest match
+// patterns being perfectly tuned for every host (localhost ports, etc.).
+try {
+  if (document.documentElement) {
+    document.documentElement.setAttribute("data-movi-extension", "installed");
+  }
+} catch {}
+
 // Detect video URLs on page and add play button overlay
 const VIDEO_EXTENSIONS = /\.(mp4|mkv|webm|mov|avi|ts|m3u8|flv|m4v|ogv|wmv|m2ts|mts|3gp|mpg|mpeg)(\?|$)/i;
 
