@@ -3012,9 +3012,11 @@ export class MoviElement extends HTMLElement {
       this.setAttribute("tabindex", "0");
     }
 
-    // Auto-focus on mouse enter so keyboard shortcuts work without clicking
+    // Auto-focus on mouse enter so keyboard shortcuts work without clicking.
+    // preventScroll: focus() would otherwise scroll the player into view,
+    // which yanks the page mid-hover when the player is partly off-screen.
     this.addEventListener("mouseenter", () => {
-      this.focus();
+      this.focus({ preventScroll: true });
     });
   }
 
