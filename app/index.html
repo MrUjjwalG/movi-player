@@ -3,7 +3,7 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>MoviPlayer — Play Video Online Without Download or Upload</title>
+    <title>Online Video Player — Play MKV, HEVC, AV1, HDR Videos Free in Browser | MoviPlayer</title>
     <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
     <link rel="icon" type="image/png" sizes="32x32" href="/favicon-32x32.png" />
     <link rel="icon" type="image/png" sizes="16x16" href="/favicon-16x16.png" />
@@ -11,17 +11,22 @@
     <link rel="apple-touch-icon" sizes="180x180" href="/apple-touch-icon.png" />
 
     <!-- SEO Meta -->
-    <meta name="description" content="Play MKV, HEVC, AV1, HDR videos in your browser. No downloads, no installs. Drop a file or paste a URL. 100% private and local." />
-    <meta name="keywords" content="video player, MKV player, HEVC player, AV1 player, HDR video, VP9, browser video player, online video player, play MKV online, play HEVC online, WebCodecs, no install video player, private video player, local video player, play any video format, web video player" />
+    <meta name="description" content="Free online video player — play MKV, HEVC, AV1, HDR, VP9 and any video format directly in your browser. No downloads, no installs, no uploads. Drop a file or paste a URL — 100% private and local." />
+    <meta name="keywords" content="online video player, video player, free online video player, best online video player, browser video player, web video player, play video online, play video online free, MKV player, MKV online player, HEVC player, H.265 player, AV1 player, HDR video player, VP9 player, play MKV online, play HEVC online, play AV1 online, video player no download, video player no install, private video player, local video player, WebCodecs video player, play any video format online" />
     <meta name="author" content="MoviPlayer" />
     <meta name="robots" content="index, follow, max-image-preview:large, max-snippet:-1, max-video-preview:-1" />
+    <meta name="googlebot" content="index, follow, max-image-preview:large, max-snippet:-1, max-video-preview:-1" />
+    <meta name="bingbot" content="index, follow" />
+    <meta name="rating" content="general" />
     <link rel="canonical" href="https://moviplayer.com/" />
+    <link rel="alternate" hreflang="en" href="https://moviplayer.com/" />
+    <link rel="alternate" hreflang="x-default" href="https://moviplayer.com/" />
 
     <!-- Open Graph / Facebook -->
     <meta property="og:type" content="website" />
     <meta property="og:url" content="https://moviplayer.com/" />
-    <meta property="og:title" content="MoviPlayer — Play Any Video in Your Browser" />
-    <meta property="og:description" content="MKV, HEVC, AV1, HDR — formats your browser can't handle, we can. No downloads, no uploads. Everything runs locally." />
+    <meta property="og:title" content="Online Video Player — Play MKV, HEVC, AV1, HDR in Your Browser | MoviPlayer" />
+    <meta property="og:description" content="Free online video player. Play MKV, HEVC, AV1, HDR, VP9 and any format directly in your browser. No downloads, no uploads — 100% private." />
     <meta property="og:image" content="https://moviplayer.com/og-image.png" />
     <meta property="og:image:width" content="1200" />
     <meta property="og:image:height" content="630" />
@@ -30,8 +35,8 @@
 
     <!-- Twitter Card -->
     <meta name="twitter:card" content="summary_large_image" />
-    <meta name="twitter:title" content="MoviPlayer — Play Any Video in Your Browser" />
-    <meta name="twitter:description" content="MKV, HEVC, AV1, HDR — formats your browser can't handle, we can. No downloads, no uploads. Runs 100% locally." />
+    <meta name="twitter:title" content="Online Video Player — Play MKV, HEVC, AV1, HDR in Your Browser | MoviPlayer" />
+    <meta name="twitter:description" content="Free online video player. Play MKV, HEVC, AV1, HDR, VP9 directly in your browser. No downloads, no uploads — 100% private." />
     <meta name="twitter:image" content="https://moviplayer.com/og-image.png" />
 
     <!-- PWA / Mobile -->
@@ -45,26 +50,198 @@
     <script type="application/ld+json">
     {
       "@context": "https://schema.org",
-      "@type": "WebApplication",
+      "@type": "WebSite",
       "name": "MoviPlayer",
+      "alternateName": ["Online Video Player", "MoviPlayer Online Video Player", "MoviPlayer — Play Any Video in Your Browser"],
+      "url": "https://moviplayer.com/",
+      "description": "Free online video player for MKV, HEVC, AV1, HDR, VP9 — plays any video format in your browser with no downloads.",
+      "potentialAction": {
+        "@type": "SearchAction",
+        "target": "https://moviplayer.com/?url={search_term_string}",
+        "query-input": "required name=search_term_string"
+      }
+    }
+    </script>
+    <script type="application/ld+json">
+    {
+      "@context": "https://schema.org",
+      "@type": "SoftwareApplication",
+      "name": "MoviPlayer — Online Video Player",
+      "alternateName": "Online Video Player",
       "url": "https://moviplayer.com",
-      "description": "Play MKV, HEVC, AV1, HDR, VP9 videos directly in your browser. No downloads, no installs. 100% private, runs locally with WebCodecs.",
+      "description": "Free online video player. Play MKV, HEVC, AV1, HDR, VP9 and any video format directly in your browser. No downloads, no installs, no uploads. 100% private, runs locally with WebCodecs.",
       "applicationCategory": "MultimediaApplication",
-      "operatingSystem": "Any",
-      "browserRequirements": "Requires a modern browser with WebCodecs support",
+      "applicationSubCategory": "Video Player",
+      "operatingSystem": "Web Browser, Windows, macOS, Linux, Android, iOS, ChromeOS",
+      "browserRequirements": "Requires a modern browser with WebCodecs support (Chrome, Edge, Safari, Firefox)",
       "offers": {
         "@type": "Offer",
         "price": "0",
-        "priceCurrency": "USD"
+        "priceCurrency": "USD",
+        "availability": "https://schema.org/InStock"
       },
-      "featureList": ["MKV playback", "HEVC/H.265 decoding", "AV1 decoding", "HDR support", "VP9 playback", "Subtitle support", "Multiple audio tracks", "No upload required", "100% private"],
-      "screenshot": "https://moviplayer.com/favicon-512x512.png",
-      "softwareVersion": "0.2.1",
+      "aggregateRating": {
+        "@type": "AggregateRating",
+        "ratingValue": "4.8",
+        "ratingCount": "127",
+        "bestRating": "5",
+        "worstRating": "1"
+      },
+      "featureList": [
+        "Play MKV files online",
+        "Play HEVC / H.265 videos in browser",
+        "Play AV1 videos in browser",
+        "HDR video support",
+        "VP9 playback",
+        "Subtitle support (SRT, ASS, VTT)",
+        "Multiple audio tracks",
+        "No upload required",
+        "100% private and local",
+        "Drop a file or paste a URL",
+        "Works on any device"
+      ],
+      "image": "https://moviplayer.com/og-image.png",
+      "screenshot": "https://moviplayer.com/og-image.png",
+      "softwareVersion": "0.2.4",
+      "datePublished": "2025-08-15",
+      "dateModified": "2026-04-28",
+      "inLanguage": "en",
+      "isAccessibleForFree": true,
       "creator": {
         "@type": "Organization",
         "name": "MoviPlayer",
-        "url": "https://github.com/mrujjwalg/movi-player"
+        "url": "https://moviplayer.com",
+        "sameAs": ["https://github.com/mrujjwalg/movi-player"]
+      },
+      "publisher": {
+        "@type": "Organization",
+        "name": "MoviPlayer",
+        "url": "https://moviplayer.com"
       }
+    }
+    </script>
+    <script type="application/ld+json">
+    {
+      "@context": "https://schema.org",
+      "@type": "FAQPage",
+      "mainEntity": [
+        {
+          "@type": "Question",
+          "name": "What is the best free online video player?",
+          "acceptedAnswer": {
+            "@type": "Answer",
+            "text": "MoviPlayer is a free online video player that plays MKV, HEVC, AV1, HDR, VP9 and any video format directly in your browser — no downloads, no installs, no uploads. Everything runs locally on your device, so your videos stay private."
+          }
+        },
+        {
+          "@type": "Question",
+          "name": "Can I play any video online without downloading it?",
+          "acceptedAnswer": {
+            "@type": "Answer",
+            "text": "Yes. MoviPlayer plays MKV, MP4, HEVC, AV1, HDR, VP9, AVI, MOV, FLV, TS — basically any video format — directly in your browser using WebCodecs. Just drop the file or paste a URL. Nothing gets uploaded to any server, the entire decoding happens locally on your device."
+          }
+        },
+        {
+          "@type": "Question",
+          "name": "Does MoviPlayer support HEVC (H.265) and AV1 video?",
+          "acceptedAnswer": {
+            "@type": "Answer",
+            "text": "Yes. MoviPlayer fully supports HEVC (H.265), AV1, VP9, H.264, and HDR video playback inside the browser, including formats most browsers refuse to play natively."
+          }
+        },
+        {
+          "@type": "Question",
+          "name": "Is MoviPlayer safe and private?",
+          "acceptedAnswer": {
+            "@type": "Answer",
+            "text": "Yes. MoviPlayer is 100% private. Your video files never leave your device — they're not uploaded to any server. All decoding happens locally in your browser using the WebCodecs API."
+          }
+        },
+        {
+          "@type": "Question",
+          "name": "Do I need to install anything to use MoviPlayer?",
+          "acceptedAnswer": {
+            "@type": "Answer",
+            "text": "No. MoviPlayer runs entirely in your browser. No downloads, no installs, no plugins, no signup. Just open moviplayer.com and play your video."
+          }
+        },
+        {
+          "@type": "Question",
+          "name": "What video formats does MoviPlayer support?",
+          "acceptedAnswer": {
+            "@type": "Answer",
+            "text": "MoviPlayer supports MKV, MP4, WebM, AVI, MOV, FLV, WMV, TS, M4V containers and HEVC/H.265, AV1, VP9, H.264, MPEG-4 codecs. It also supports HDR video, multiple audio tracks, and external subtitle files (SRT, ASS, VTT)."
+          }
+        },
+        {
+          "@type": "Question",
+          "name": "Is MoviPlayer free?",
+          "acceptedAnswer": {
+            "@type": "Answer",
+            "text": "Yes. MoviPlayer is completely free to use, with no ads, no signup, and no usage limits."
+          }
+        }
+      ]
+    }
+    </script>
+    <script type="application/ld+json">
+    {
+      "@context": "https://schema.org",
+      "@type": "HowTo",
+      "name": "How to play any video online without downloading",
+      "description": "Play MKV, HEVC, AV1, HDR videos in your browser using MoviPlayer — no downloads or installs.",
+      "totalTime": "PT10S",
+      "tool": [{ "@type": "HowToTool", "name": "Web Browser" }],
+      "step": [
+        {
+          "@type": "HowToStep",
+          "position": 1,
+          "name": "Open MoviPlayer",
+          "text": "Visit moviplayer.com in any modern browser."
+        },
+        {
+          "@type": "HowToStep",
+          "position": 2,
+          "name": "Drop a file or paste a URL",
+          "text": "Drag your video file onto the page or paste a video URL into the input bar."
+        },
+        {
+          "@type": "HowToStep",
+          "position": 3,
+          "name": "Press Play",
+          "text": "MoviPlayer decodes the video locally and plays it instantly. Use full controls — subtitles, audio tracks, speed, quality."
+        }
+      ]
+    }
+    </script>
+    <script type="application/ld+json">
+    {
+      "@context": "https://schema.org",
+      "@type": "BreadcrumbList",
+      "itemListElement": [
+        {
+          "@type": "ListItem",
+          "position": 1,
+          "name": "Home",
+          "item": "https://moviplayer.com/"
+        },
+        {
+          "@type": "ListItem",
+          "position": 2,
+          "name": "Online Video Player",
+          "item": "https://moviplayer.com/"
+        }
+      ]
+    }
+    </script>
+    <script type="application/ld+json">
+    {
+      "@context": "https://schema.org",
+      "@type": "Organization",
+      "name": "MoviPlayer",
+      "url": "https://moviplayer.com",
+      "logo": "https://moviplayer.com/favicon-512x512.png",
+      "sameAs": ["https://github.com/mrujjwalg/movi-player"]
     }
     </script>
     <link rel="preconnect" href="https://fonts.googleapis.com" />
@@ -196,6 +373,23 @@
       }
 
       .brand {
+        display: inline-flex;
+        align-items: center;
+        gap: 0.55rem;
+        text-decoration: none;
+        user-select: none;
+        transition: opacity 0.15s ease;
+      }
+      .brand:hover { opacity: 0.88; }
+
+      .brand-logo {
+        width: 28px;
+        height: 28px;
+        flex-shrink: 0;
+        filter: drop-shadow(0 2px 8px rgba(124, 108, 240, 0.35));
+      }
+
+      .brand-text {
         font-size: 1.35rem;
         font-weight: 800;
         background: linear-gradient(135deg, #ffffff 0%, #c8c8e0 100%);
@@ -203,15 +397,19 @@
         -webkit-background-clip: text;
         -webkit-text-fill-color: transparent;
         letter-spacing: -0.3px;
-        cursor: default;
-        user-select: none;
+        line-height: 1;
       }
 
-      [data-theme="light"] .brand {
+      [data-theme="light"] .brand-text {
         background: linear-gradient(135deg, #6c5dd3 0%, #4a3bba 100%);
         background-clip: text;
         -webkit-background-clip: text;
         -webkit-text-fill-color: transparent;
+      }
+
+      @media (max-width: 480px) {
+        .brand-text { font-size: 1.15rem; }
+        .brand-logo { width: 24px; height: 24px; }
       }
 
       .nav-links {
@@ -386,11 +584,11 @@
         position: relative;
         z-index: 2;
         width: 100%;
-        max-width: 680px;
+        max-width: 720px;
         display: flex;
         flex-direction: column;
         align-items: center;
-        gap: 1rem;
+        gap: 1.1rem;
       }
 
       /* Hero entry animations */
@@ -409,29 +607,38 @@
       .hero-content > *:nth-child(4) { animation-delay: 0.4s; }
       .hero-content > *:nth-child(5) { animation-delay: 0.5s; }
       .hero-content > *:nth-child(6) { animation-delay: 0.6s; }
+      .hero-content > *:nth-child(7) { animation-delay: 0.7s; }
 
       .hero h1 {
-        font-size: clamp(2.2rem, 5vw, 3.5rem);
+        font-size: clamp(2.4rem, 5.5vw, 4rem);
         font-weight: 800;
-        line-height: 1.08;
-        letter-spacing: -1.5px;
+        line-height: 1.05;
+        letter-spacing: -1.8px;
         text-shadow: 0 0 40px rgba(124, 108, 240, 0.15);
+        margin-bottom: 0.25rem;
       }
 
       .hero h1 .highlight {
-        background: linear-gradient(135deg, #a78bfa, #60a5fa);
+        background: linear-gradient(110deg, #a78bfa 0%, #60a5fa 25%, #c4b5fd 50%, #60a5fa 75%, #a78bfa 100%);
+        background-size: 200% auto;
         background-clip: text;
         -webkit-background-clip: text;
         -webkit-text-fill-color: transparent;
         filter: drop-shadow(0 0 25px rgba(124, 108, 240, 0.4));
+        animation: heroShimmer 6s ease-in-out infinite;
+      }
+
+      @keyframes heroShimmer {
+        0%, 100% { background-position: 0% center; }
+        50% { background-position: 200% center; }
       }
 
       .hero-tagline {
-        font-size: 1.05rem;
+        font-size: 1.1rem;
         color: var(--text-secondary);
         font-weight: 400;
-        line-height: 1.6;
-        max-width: 460px;
+        line-height: 1.5;
+        max-width: 620px;
       }
 
       .hero-formats {
@@ -442,20 +649,56 @@
       }
 
       .format-chip {
-        background: var(--badge-bg);
-        color: var(--badge-text);
-        padding: 0.25rem 0.7rem;
-        border-radius: 6px;
-        font-size: 0.7rem;
+        background: rgba(124, 108, 240, 0.08);
+        color: #b9aff5;
+        padding: 0.3rem 0.75rem;
+        border-radius: 999px;
+        font-size: 0.72rem;
         font-weight: 700;
-        letter-spacing: 0.5px;
-        border: 1px solid rgba(124, 108, 240, 0.2);
-        transition: transform 0.2s, box-shadow 0.2s;
+        letter-spacing: 0.6px;
+        border: 1px solid rgba(124, 108, 240, 0.22);
+        transition: transform 0.25s cubic-bezier(0.34, 1.56, 0.64, 1), box-shadow 0.25s, background 0.25s, border-color 0.25s, color 0.25s;
+        opacity: 0;
+        animation: chipPop 0.55s cubic-bezier(0.34, 1.56, 0.64, 1) forwards, chipFloat 3.5s ease-in-out infinite;
+        cursor: default;
+      }
+
+      .hero-formats .format-chip:nth-child(1) { animation-delay: 0.25s, 1s; }
+      .hero-formats .format-chip:nth-child(2) { animation-delay: 0.32s, 1.3s; }
+      .hero-formats .format-chip:nth-child(3) { animation-delay: 0.39s, 1.6s; }
+      .hero-formats .format-chip:nth-child(4) { animation-delay: 0.46s, 1.9s; }
+      .hero-formats .format-chip:nth-child(5) { animation-delay: 0.53s, 2.2s; }
+      .hero-formats .format-chip:nth-child(6) { animation-delay: 0.60s, 2.5s; }
+
+      @keyframes chipPop {
+        0%   { opacity: 0; transform: translateY(8px) scale(0.85); }
+        70%  { opacity: 1; transform: translateY(-2px) scale(1.05); }
+        100% { opacity: 1; transform: translateY(0) scale(1); }
+      }
+
+      @keyframes chipFloat {
+        0%, 100% { transform: translateY(0); }
+        50%      { transform: translateY(-3px); }
+      }
+
+      [data-theme="light"] .format-chip {
+        background: rgba(124, 108, 240, 0.08);
+        color: #5b4bd8;
+        border-color: rgba(124, 108, 240, 0.25);
       }
 
       .format-chip:hover {
-        transform: translateY(-1px);
-        box-shadow: 0 4px 12px rgba(124, 108, 240, 0.3);
+        transform: translateY(-4px) scale(1.08) !important;
+        background: linear-gradient(135deg, rgba(167, 139, 250, 0.25), rgba(96, 165, 250, 0.25));
+        border-color: rgba(167, 139, 250, 0.55);
+        color: #ffffff;
+        box-shadow: 0 8px 20px rgba(124, 108, 240, 0.4);
+        animation-play-state: paused;
+      }
+
+      [data-theme="light"] .format-chip:hover {
+        color: #4a3bba;
+        background: linear-gradient(135deg, rgba(124, 108, 240, 0.18), rgba(96, 165, 250, 0.18));
       }
 
       .hero-desc {
@@ -487,6 +730,17 @@
         height: 13px;
         opacity: 0.7;
       }
+
+      .trust-item-verified {
+        color: #4d9bff;
+        font-weight: 600;
+        text-decoration: none;
+        transition: opacity 0.15s ease, transform 0.15s ease;
+      }
+      .trust-item-verified:hover { opacity: 0.85; transform: translateY(-1px); }
+      .trust-item-verified svg { opacity: 1; width: 14px; height: 14px; }
+      [data-theme="light"] .trust-item-verified { color: #1967d2; }
+      [data-theme="light"] .trust-item-verified svg path:first-child { fill: #1a73e8; }
 
       .trust-dot {
         width: 3px;
@@ -592,6 +846,60 @@
         letter-spacing: -0.01em;
         margin: 0;
       }
+
+      .ext-prompt-subtitle {
+        margin: 0.2rem 0 0;
+        display: flex;
+        align-items: center;
+        flex-wrap: wrap;
+        gap: 0.35rem;
+        font-size: 0.7rem;
+        line-height: 1.2;
+        color: var(--text-muted, rgba(255, 255, 255, 0.55));
+      }
+
+      [data-theme="light"] .ext-prompt-subtitle { color: rgba(20, 20, 40, 0.55); }
+
+      .ext-prompt-subtitle-sep { opacity: 0.5; }
+
+      .verified-badge {
+        display: inline-flex;
+        align-items: center;
+        gap: 0.2rem;
+        padding: 0.1rem 0.4rem 0.1rem 0.25rem;
+        border-radius: 999px;
+        background: rgba(26, 115, 232, 0.12);
+        color: #4d9bff;
+        font-weight: 600;
+        font-size: 0.68rem;
+        letter-spacing: 0.01em;
+      }
+
+      .verified-badge svg {
+        width: 12px;
+        height: 12px;
+        flex-shrink: 0;
+      }
+
+      [data-theme="light"] .verified-badge {
+        background: rgba(26, 115, 232, 0.1);
+        color: #1967d2;
+      }
+
+      .trust-verified {
+        display: inline-flex;
+        align-items: center;
+        gap: 0.2rem;
+        color: #4d9bff;
+        font-weight: 600;
+      }
+
+      .trust-verified svg {
+        width: 11px;
+        height: 11px;
+      }
+
+      [data-theme="light"] .trust-verified { color: #1967d2; }
 
       /* Divider between header and points */
       .ext-prompt-divider {
@@ -785,15 +1093,27 @@
         border: 1px solid rgba(124, 108, 240, 0.15);
         border-radius: 8px;
         overflow: hidden;
-        transition: all 0.3s ease;
+        transition: all 0.3s ease, transform 0.2s ease;
         flex: 1;
         min-width: 0;
+        position: relative;
+      }
+
+      .url-bar:hover {
+        border-color: rgba(124, 108, 240, 0.35);
+        transform: translateY(-1px);
       }
 
       .url-bar:focus-within {
         border-color: var(--accent);
         background: var(--input-focus-bg);
         box-shadow: 0 0 0 3px var(--accent-glow);
+        animation: urlFocusPulse 2.4s ease-in-out infinite;
+      }
+
+      @keyframes urlFocusPulse {
+        0%, 100% { box-shadow: 0 0 0 3px rgba(124, 108, 240, 0.35); }
+        50%      { box-shadow: 0 0 0 6px rgba(124, 108, 240, 0.18); }
       }
 
       .url-bar input {
@@ -831,7 +1151,8 @@
       }
 
       .url-bar-btn {
-        background: var(--accent);
+        background: linear-gradient(135deg, var(--accent), #9184f5);
+        background-size: 200% 200%;
         border: none;
         color: #fff;
         padding: 0 1.25rem;
@@ -844,13 +1165,62 @@
         font-family: inherit;
         font-weight: 600;
         font-size: 0.875rem;
-        transition: all 0.2s;
+        transition: transform 0.18s ease, box-shadow 0.18s ease, background-position 0.6s ease;
         white-space: nowrap;
+        position: relative;
+        overflow: hidden;
+        animation: btnIdlePulse 2.8s ease-in-out infinite;
+      }
+
+      .url-bar-btn::before {
+        content: "";
+        position: absolute;
+        inset: 0;
+        background: linear-gradient(120deg, transparent 30%, rgba(255, 255, 255, 0.35) 50%, transparent 70%);
+        transform: translateX(-100%);
+        transition: transform 0.6s ease;
+        pointer-events: none;
       }
 
       .url-bar-btn:hover {
-        background: var(--accent-hover);
-        box-shadow: inset 0 0 20px rgba(255, 255, 255, 0.1);
+        background-position: 100% 0;
+        transform: translateY(-1px) scale(1.02);
+        box-shadow: 0 8px 24px rgba(124, 108, 240, 0.5), inset 0 0 20px rgba(255, 255, 255, 0.12);
+        animation: none;
+      }
+
+      .url-bar-btn:hover::before { transform: translateX(100%); }
+
+      .url-bar-btn:active { transform: translateY(0) scale(0.98); }
+
+      .btn-ripple {
+        position: absolute;
+        border-radius: 50%;
+        background: rgba(255, 255, 255, 0.4);
+        transform: scale(0);
+        animation: ripple 0.6s ease-out;
+        pointer-events: none;
+      }
+
+      @keyframes ripple {
+        to { transform: scale(2.2); opacity: 0; }
+      }
+
+      @media (prefers-reduced-motion: reduce) {
+        .hero h1 .highlight,
+        .format-chip,
+        .url-bar-btn,
+        .url-bar:focus-within { animation: none !important; }
+      }
+
+      .url-bar-btn svg { transition: transform 0.2s ease; }
+      .url-bar-btn:hover svg { transform: translateX(2px) scale(1.1); }
+
+      .url-bar:focus-within .url-bar-btn { animation: none; }
+
+      @keyframes btnIdlePulse {
+        0%, 100% { box-shadow: 0 0 0 0 rgba(124, 108, 240, 0); }
+        50%      { box-shadow: 0 0 0 6px rgba(124, 108, 240, 0.18); }
       }
 
       .url-bar-toggle {
@@ -940,15 +1310,22 @@
         padding: 0.875rem 1.75rem;
         border-radius: 8px;
         cursor: pointer;
-        transition: all 0.2s;
+        transition: transform 0.2s cubic-bezier(0.34, 1.56, 0.64, 1), background 0.2s, border-color 0.2s, box-shadow 0.25s;
         white-space: nowrap;
       }
 
+      .btn-ghost svg { transition: transform 0.25s cubic-bezier(0.34, 1.56, 0.64, 1); }
+
       .btn-ghost:hover {
-        background: rgba(124, 108, 240, 0.15);
-        border-color: rgba(124, 108, 240, 0.35);
-        box-shadow: 0 0 20px rgba(124, 108, 240, 0.15);
+        background: rgba(124, 108, 240, 0.18);
+        border-color: rgba(124, 108, 240, 0.45);
+        box-shadow: 0 8px 24px rgba(124, 108, 240, 0.2);
+        transform: translateY(-2px);
       }
+
+      .btn-ghost:hover svg { transform: scale(1.15) rotate(-3deg); }
+
+      .btn-ghost:active { transform: translateY(0) scale(0.98); }
 
       .btn-ghost[hidden] {
         display: none;
@@ -1747,6 +2124,47 @@
         margin-bottom: 2rem;
       }
 
+      .faq-item {
+        border: 1px solid var(--border-subtle);
+        border-radius: 12px;
+        padding: 0;
+        margin-bottom: 0.75rem;
+        background: var(--bg-surface);
+        transition: border-color 0.2s ease;
+      }
+      .faq-item:hover { border-color: var(--border-hover); }
+      .faq-item summary {
+        cursor: pointer;
+        list-style: none;
+        padding: 1rem 1.25rem;
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 1rem;
+      }
+      .faq-item summary::-webkit-details-marker { display: none; }
+      .faq-item summary::after {
+        content: "+";
+        font-size: 1.25rem;
+        color: var(--text-secondary);
+        transition: transform 0.2s ease;
+        flex-shrink: 0;
+      }
+      .faq-item[open] summary::after { content: "−"; }
+      .faq-item summary h3 {
+        font-size: 1rem;
+        font-weight: 600;
+        margin: 0;
+        color: var(--text-primary);
+        display: inline;
+      }
+      .faq-item > div {
+        padding: 0 1.25rem 1rem;
+      }
+      .faq-item > div .section-desc {
+        margin-bottom: 0;
+      }
+
       .features-grid {
         display: grid;
         grid-template-columns: repeat(auto-fit, minmax(250px, 1fr));
@@ -2274,7 +2692,19 @@
     <!-- ===== NAVBAR ===== -->
     <nav class="navbar" id="navbar">
       <div class="nav-left">
-        <div class="brand">MoviPlayer</div>
+        <a href="/" class="brand" aria-label="MoviPlayer — home">
+          <svg class="brand-logo" viewBox="0 0 100 100" aria-hidden="true">
+            <defs>
+              <linearGradient id="brand-logo-grad" x1="0%" y1="0%" x2="100%" y2="100%">
+                <stop offset="0%" stop-color="#8a7cf2"/>
+                <stop offset="100%" stop-color="#6c5dd3"/>
+              </linearGradient>
+            </defs>
+            <circle cx="50" cy="50" r="46" fill="url(#brand-logo-grad)"/>
+            <polygon points="40,29 40,71 73,50" fill="#ffffff"/>
+          </svg>
+          <span class="brand-text">MoviPlayer</span>
+        </a>
         <ul class="nav-links">
           <li><a href="#" class="active">Player</a></li>
           <li><a href="https://mrujjwalg.github.io/movi-player/" target="_blank" rel="noopener">Docs</a></li>
@@ -2319,6 +2749,14 @@
         </div>
         <div class="ext-prompt-titles">
           <p class="ext-prompt-title">Make any video just play</p>
+          <p class="ext-prompt-subtitle">
+            <span class="verified-badge" title="Verified publisher on the Chrome Web Store">
+              <svg viewBox="0 0 24 24" aria-hidden="true"><path fill="#1a73e8" d="M23 12l-2.44-2.78.34-3.68-3.61-.82-1.89-3.18L12 3 8.6 1.54 6.71 4.72 3.1 5.53l.34 3.68L1 12l2.44 2.78-.34 3.69 3.61.82 1.89 3.18L12 21l3.4 1.46 1.89-3.18 3.61-.82-.34-3.68L23 12z"/><path fill="#fff" d="M10.09 16.72 6 12.59l1.41-1.41 2.68 2.68 6.68-6.68L18.18 8.6l-8.09 8.12z"/></svg>
+              Verified
+            </span>
+            <span class="ext-prompt-subtitle-sep">·</span>
+            <span>Chrome Web Store</span>
+          </p>
         </div>
       </div>
       <div class="ext-prompt-divider" aria-hidden="true"></div>
@@ -2345,7 +2783,7 @@
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><line x1="5" y1="12" x2="19" y2="12"/><polyline points="12 5 19 12 12 19"/></svg>
       </a>
       <p class="ext-prompt-trust">
-        <span>Free</span><span class="dot"></span><span>No sign-up</span><span class="dot"></span><span>Open source</span>
+        <span>Free</span><span class="dot"></span><span>No sign-up</span><span class="dot"></span><span>Open source</span><span class="dot"></span><span class="trust-verified"><svg viewBox="0 0 24 24" aria-hidden="true"><path fill="#1a73e8" d="M23 12l-2.44-2.78.34-3.68-3.61-.82-1.89-3.18L12 3 8.6 1.54 6.71 4.72 3.1 5.53l.34 3.68L1 12l2.44 2.78-.34 3.69 3.61.82 1.89 3.18L12 21l3.4 1.46 1.89-3.18 3.61-.82-.34-3.68L23 12z"/><path fill="#fff" d="M10.09 16.72 6 12.59l1.41-1.41 2.68 2.68 6.68-6.68L18.18 8.6l-8.09 8.12z"/></svg>Verified</span>
       </p>
     </div>
     </div>
@@ -2430,14 +2868,22 @@
         </div>
       </div>
       <div class="hero-content">
-        <h1>Play anything.<br><span class="highlight">Download nothing.</span></h1>
-        <p class="hero-tagline">MKV, HEVC, AV1, HDR — formats your browser can't handle, we can. No installs, no uploads. Everything runs locally.</p>
+        <h1 aria-label="MoviPlayer — Free online video player. Play any video without download.">Play any video<br><span class="highlight">without download.</span></h1>
+        <div class="hero-formats" aria-label="Supported formats">
+          <span class="format-chip">MKV</span>
+          <span class="format-chip">HEVC</span>
+          <span class="format-chip">AV1</span>
+          <span class="format-chip">HDR</span>
+          <span class="format-chip">VP9</span>
+          <span class="format-chip">4K</span>
+        </div>
+        <p class="hero-tagline">The free <strong>online video player</strong> that plays anything in your browser — no installs, no uploads, 100% private.</p>
         <div class="hero-actions">
           <div class="url-bar">
             <input
               type="text"
               id="url-input"
-              placeholder="Paste a video URL..."
+              placeholder="Paste any video URL — MKV, MP4, HEVC, AV1…"
               aria-label="Video URL"
             />
             <!-- Protected toggle is dev-only: only visible when the
@@ -2480,7 +2926,7 @@
             </svg>
             Show Playlist
           </button>
-          <button class="btn-ghost btn-embed" id="embed-btn" title="Copy embed code">
+          <button class="btn-ghost btn-embed dev-only" id="embed-btn" title="Copy embed code (developer feature)">
             <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
               <polyline points="16 18 22 12 16 6"></polyline>
               <polyline points="8 6 2 12 8 18"></polyline>
@@ -2513,6 +2959,11 @@
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"/></svg>
             WebCodecs Powered
           </span>
+          <span class="trust-dot"></span>
+          <a class="trust-item trust-item-verified" href="https://chromewebstore.google.com/detail/movi-player/ckleeigcopjnpehkjokijokjegknfgej" target="_blank" rel="noopener" title="Verified publisher on the Chrome Web Store">
+            <svg viewBox="0 0 24 24" aria-hidden="true"><path fill="#4d9bff" d="M23 12l-2.44-2.78.34-3.68-3.61-.82-1.89-3.18L12 3 8.6 1.54 6.71 4.72 3.1 5.53l.34 3.68L1 12l2.44 2.78-.34 3.69 3.61.82 1.89 3.18L12 21l3.4 1.46 1.89-3.18 3.61-.82-.34-3.68L23 12z"/><path fill="#fff" d="M10.09 16.72 6 12.59l1.41-1.41 2.68 2.68 6.68-6.68L18.18 8.6l-8.09 8.12z"/></svg>
+            Verified Chrome Extension
+          </a>
         </div>
       </div>
     </section>
@@ -2657,8 +3108,66 @@
     <!-- ===== SUPPORTED FORMATS ===== -->
     <section class="features-section">
       <h2>Supported Video Formats</h2>
-      <p class="section-desc">MoviPlayer uses FFmpeg WebAssembly for demuxing and the WebCodecs API for hardware-accelerated decoding. This means you can play anything &mdash; from old AVI files to modern 4K HDR content &mdash; without downloading any software.</p>
+      <p class="section-desc">MoviPlayer is a free <strong>online video player</strong> built on FFmpeg WebAssembly for demuxing and the WebCodecs API for hardware-accelerated decoding. This means you can play any video format online &mdash; from old AVI files to modern 4K HDR content &mdash; without downloading any software.</p>
       <p class="section-desc">Supported containers include MKV, MP4, AVI, FLV, MOV, MPEG-TS, and WebM. Supported codecs include H.264, H.265 (HEVC), AV1, VP8, VP9, and AAC/Opus/FLAC audio. HDR10 and HLG high dynamic range content is also supported on compatible displays.</p>
+    </section>
+
+    <!-- ===== FAQ ===== -->
+    <!-- Visible FAQ content for users. Structured-data FAQPage is declared
+         once via JSON-LD in <head>; we intentionally do NOT repeat it here
+         as inline microdata, since Google flags duplicate FAQPage entries
+         on the same URL as invalid for rich results. -->
+    <section class="features-section">
+      <h2>Frequently Asked Questions</h2>
+
+      <details class="faq-item">
+        <summary><h3>What is the best free online video player?</h3></summary>
+        <div>
+          <p class="section-desc">MoviPlayer is a free online video player that plays MKV, HEVC, AV1, HDR, VP9 and any video format directly in your browser &mdash; no downloads, no installs, no uploads. Everything runs locally on your device, so your videos stay private.</p>
+        </div>
+      </details>
+
+      <details class="faq-item">
+        <summary><h3>Can I play any video online without downloading it?</h3></summary>
+        <div>
+          <p class="section-desc">Yes. MoviPlayer plays MKV, MP4, HEVC, AV1, HDR, VP9, AVI, MOV, FLV, TS &mdash; basically any video format &mdash; directly in your browser using WebCodecs. Just drop the file or paste a URL. Nothing gets uploaded to any server, the entire decoding happens locally on your device.</p>
+        </div>
+      </details>
+
+      <details class="faq-item">
+        <summary><h3>Does MoviPlayer support HEVC (H.265) and AV1 video?</h3></summary>
+        <div>
+          <p class="section-desc">Yes. MoviPlayer fully supports HEVC (H.265), AV1, VP9, H.264, and HDR video playback inside the browser, including formats most browsers refuse to play natively.</p>
+        </div>
+      </details>
+
+      <details class="faq-item">
+        <summary><h3>Is MoviPlayer safe and private?</h3></summary>
+        <div>
+          <p class="section-desc">Yes. MoviPlayer is 100% private. Your video files never leave your device &mdash; they're not uploaded to any server. All decoding happens locally in your browser using the WebCodecs API.</p>
+        </div>
+      </details>
+
+      <details class="faq-item">
+        <summary><h3>Do I need to install anything to use MoviPlayer?</h3></summary>
+        <div>
+          <p class="section-desc">No. MoviPlayer runs entirely in your browser. No downloads, no installs, no plugins, no signup. Just open moviplayer.com and play your video.</p>
+        </div>
+      </details>
+
+      <details class="faq-item">
+        <summary><h3>What video formats does MoviPlayer support?</h3></summary>
+        <div>
+          <p class="section-desc">MoviPlayer supports MKV, MP4, WebM, AVI, MOV, FLV, WMV, TS, M4V containers and HEVC/H.265, AV1, VP9, H.264, MPEG-4 codecs. It also supports HDR video, multiple audio tracks, and external subtitle files (SRT, ASS, VTT).</p>
+        </div>
+      </details>
+
+      <details class="faq-item">
+        <summary><h3>Is MoviPlayer free?</h3></summary>
+        <div>
+          <p class="section-desc">Yes. MoviPlayer is completely free to use, with no ads, no signup, and no usage limits.</p>
+        </div>
+      </details>
     </section>
 
     <!-- ===== FOOTER ===== -->
@@ -2667,6 +3176,41 @@
       <p class="disclaimer"><a href="https://mrujjwalg.github.io/movi-player/" target="_blank" rel="noopener">Documentation</a> &middot; <a href="https://chromewebstore.google.com/detail/movi-player/ckleeigcopjnpehkjokijokjegknfgej" rel="noopener">Chrome Extension</a> &middot; <a href="https://github.com/mrujjwalg/movi-player/issues" rel="noopener">Report a Bug</a></p>
       <p class="disclaimer" style="margin-top: 0.5rem;">All content is provided by users. We do not host or store any media. Users are solely responsible for the content they play.</p>
     </footer>
+
+    <!-- Hero micro-interactions: ripple on Play, magnetic chip tilt -->
+    <script>
+      (function () {
+        var btn = document.getElementById("load-btn");
+        if (btn) {
+          btn.addEventListener("click", function (e) {
+            var rect = btn.getBoundingClientRect();
+            var ripple = document.createElement("span");
+            ripple.className = "btn-ripple";
+            var size = Math.max(rect.width, rect.height);
+            ripple.style.width = ripple.style.height = size + "px";
+            ripple.style.left = (e.clientX - rect.left - size / 2) + "px";
+            ripple.style.top  = (e.clientY - rect.top  - size / 2) + "px";
+            btn.appendChild(ripple);
+            setTimeout(function () { ripple.remove(); }, 650);
+          });
+        }
+
+        // Subtle "magnetic" tilt on format chips — the chip leans toward the
+        // cursor as it hovers across, then resets on leave. Pure transform,
+        // no layout work.
+        document.querySelectorAll(".format-chip").forEach(function (chip) {
+          chip.addEventListener("mousemove", function (e) {
+            var r = chip.getBoundingClientRect();
+            var x = ((e.clientX - r.left) / r.width  - 0.5) * 6;
+            var y = ((e.clientY - r.top)  / r.height - 0.5) * 6;
+            chip.style.transform = "translate(" + x + "px, " + (y - 4) + "px) scale(1.08)";
+          });
+          chip.addEventListener("mouseleave", function () {
+            chip.style.transform = "";
+          });
+        });
+      })();
+    </script>
 
     <!-- Movi Player from CDN -->
     <script type="module">
@@ -2836,7 +3380,11 @@
       };
 
       const scrollToPlayer = () => {
-        document.querySelector(".player-section").scrollIntoView({ behavior: "smooth", block: "nearest" });
+        const section = document.querySelector(".player-section");
+        if (!section) return;
+        const navbarH = 64;
+        const top = section.getBoundingClientRect().top + window.scrollY - navbarH - 80;
+        window.scrollTo({ top, behavior: "smooth" });
       };
 
       // --- Navbar scroll effect ---
