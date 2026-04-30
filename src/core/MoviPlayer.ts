@@ -3545,7 +3545,16 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
     if (document.visibilityState === "hidden" && isPlaying) {
       // Tab went to background — use Worker timer (Safari throttles setInterval to 1s+)
       this.isBackgrounded = true;
-      this.startBackgroundTimer();
+
+      // Background timer drives processLoop to keep audio flowing while hidden.
+      // For audio-less content (no audio track or audio disabled) without PiP,
+      // video decode is skipped AND there's no audio to drive — running the loop
+      // would just race the demuxer to EOF (no backpressure → eofReached=true →
+      // foreground recovery returns early → video stuck on resume).
+      const hasAudio = !!this.trackManager.getActiveAudioTrack() && !this.disableAudio;
+      if (hasAudio || this.isPiPActive) {
+        this.startBackgroundTimer();
+      }
 
       // In background (not PiP), stop video presentation and clear queue
       // to prevent frame accumulation that blocks audio demuxing via backpressure.
@@ -3596,6 +3605,11 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
             }
 
             if (this.seekSessionId !== mySessionId) return; // Superseded
+
+            // Reset EOF flag — demuxer is being repositioned. For audio-less
+            // video, background processLoop may have raced to EOF; without this
+            // reset, processLoop would early-return and playback stalls.
+            this.eofReached = false;
 
             // Seek demuxer to nearest keyframe before current audio position
             if (this.demuxer) {
