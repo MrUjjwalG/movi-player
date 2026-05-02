@@ -1927,7 +1927,7 @@ export class MoviElement extends HTMLElement {
     // Fullscreen change listener
     document.addEventListener("fullscreenchange", () => {
       const isFullscreen = !!document.fullscreenElement;
-      this.updateFullscreenIcon(isFullscreen);
+      this.applyFullscreenUiState(isFullscreen);
       requestAnimationFrame(() => {
         requestAnimationFrame(() => {
           this.updateCanvasSize();
@@ -4009,13 +4009,30 @@ export class MoviElement extends HTMLElement {
     if (this.isLoading || this._isUnsupported || !this.player) {
       return;
     }
+
+    // Give the host a chance to take over (e.g. VS Code webviews where
+    // requestFullscreen is blocked, or embedded apps that drive their own
+    // fullscreen layout). Hosts call event.preventDefault() and then drive
+    // setHostFullscreen() themselves to keep the UI in sync.
+    const currentlyActive = !!document.fullscreenElement || this._hostFullscreen;
+    const requestEvent = new CustomEvent("movi-fullscreen-request", {
+      cancelable: true,
+      bubbles: true,
+      composed: true,
+      detail: { active: currentlyActive },
+    });
+    this.dispatchEvent(requestEvent);
+    if (requestEvent.defaultPrevented) {
+      return;
+    }
+
     try {
       if (!document.fullscreenElement) {
         await this.requestFullscreen();
-        this.updateFullscreenIcon(true);
+        this.applyFullscreenUiState(true);
       } else {
         await document.exitFullscreen();
-        this.updateFullscreenIcon(false);
+        this.applyFullscreenUiState(false);
       }
     } catch (error) {
       Logger.error(TAG, "Failed to toggle fullscreen", error);
@@ -4331,6 +4348,11 @@ export class MoviElement extends HTMLElement {
     }
   }
 
+  /** Tracks host-driven fullscreen so toggleFullscreen() and the
+   *  movi-fullscreen-request event can reflect it correctly even when
+   *  document.fullscreenElement is null. */
+  private _hostFullscreen = false;
+
   private updateFullscreenIcon(isFullscreen: boolean): void {
     const fullscreenIcon = this.shadowRoot?.querySelector(
       ".movi-icon-fullscreen",
@@ -4346,6 +4368,29 @@ export class MoviElement extends HTMLElement {
       fullscreenIcon?.style.setProperty("display", "block");
       fullscreenExitIcon?.style.setProperty("display", "none");
     }
+  }
+
+  private updateFullscreenContextMenu(isFullscreen: boolean): void {
+    const label = this.shadowRoot?.querySelector(
+      '.movi-context-menu-item[data-action="fullscreen"] .movi-context-menu-label',
+    ) as HTMLElement | null;
+    if (label) label.textContent = isFullscreen ? "Exit Fullscreen" : "Fullscreen";
+  }
+
+  private applyFullscreenUiState(isFullscreen: boolean): void {
+    this.updateFullscreenIcon(isFullscreen);
+    this.updateFullscreenContextMenu(isFullscreen);
+  }
+
+  /**
+   * Public hook for hosts (VS Code extension, embedded apps) that take over
+   * fullscreen via the cancelable `movi-fullscreen-request` event. Call this
+   * whenever the host enters/exits its custom fullscreen so the player's
+   * toolbar icon and right-click context menu reflect the correct state.
+   */
+  public setHostFullscreen(active: boolean): void {
+    this._hostFullscreen = active;
+    this.applyFullscreenUiState(active);
   }
 
   private static readonly ASPECT_ICONS: Record<string, string> = {

@@ -23,9 +23,8 @@ document.addEventListener("fullscreenchange", () => {
 });
 document.addEventListener("fullscreenerror", (e) => {
   console.error("[Movi] fullscreenerror:", e.type, "target:", e.target && e.target.tagName);
-  // Fallback path (e.g. double-tap gesturefs) — primary paths (button
-  // click, 'f' key) are intercepted in capture phase below before they
-  // ever reach the player's toggleFullscreen.
+  // Safety net only — primary path is the player's `movi-fullscreen-request`
+  // event below, which fires BEFORE requestFullscreen is attempted.
   sendFullscreen();
 });
 
@@ -33,6 +32,14 @@ document.addEventListener("fullscreenerror", (e) => {
 let _lastFullscreenAt = 0;
 let _inMoviFullscreen = false;
 let _fullscreenDisabled = false;
+
+function syncPlayerFullscreenIcon(active) {
+  const player = document.getElementById("player");
+  if (player && typeof player.setHostFullscreen === "function") {
+    player.setHostFullscreen(active);
+  }
+}
+
 function sendFullscreen() {
   if (_fullscreenDisabled) return;
   const now = Date.now();
@@ -42,6 +49,7 @@ function sendFullscreen() {
   // Skip the confirm dialog on EXIT — only ask before entering fullscreen.
   if (_inMoviFullscreen) {
     _inMoviFullscreen = false;
+    syncPlayerFullscreenIcon(false);
     try { vscode.postMessage({ type: "fullscreen" }); } catch {}
     return;
   }
@@ -49,6 +57,7 @@ function sendFullscreen() {
   showFullscreenConfirm().then((ok) => {
     if (!ok) return;
     _inMoviFullscreen = true;
+    syncPlayerFullscreenIcon(true);
     try { vscode.postMessage({ type: "fullscreen" }); } catch {}
   });
 }
@@ -85,19 +94,6 @@ function showFullscreenConfirm() {
   });
 }
 
-// Capture-phase 'f' interceptor — fires before the player's keydown handler
-// or our document-level forwarder, so the player never sees the keypress
-// and never attempts requestFullscreen (which would fail with a permissions
-// error AND leave the player's internal fullscreen state inconsistent).
-window.addEventListener("keydown", (e) => {
-  if (e.target.tagName === "INPUT" || e.target.tagName === "TEXTAREA" || e.target.isContentEditable) return;
-  if (e.code === "KeyF" && !e.metaKey && !e.ctrlKey && !e.altKey && !e.shiftKey) {
-    e.preventDefault();
-    e.stopPropagation();
-    e.stopImmediatePropagation();
-    sendFullscreen();
-  }
-}, true);
 
 const loadingOverlay = document.getElementById("loadingOverlay");
 const loadingName = document.getElementById("loadingName");
@@ -117,43 +113,30 @@ customElements.whenDefined("movi-player").then(() => {
     const title = player.title;
     if (title) document.title = title + " — Movi Player";
   });
-  // Hide fullscreen + PiP buttons (not supported in VS Code webviews) and
-  // remove their entries from the right-click context menu. Inject into
-  // shadow DOM since regular page CSS can't reach inside it.
+
+  // Standard handoff: MoviElement dispatches the cancelable
+  // `movi-fullscreen-request` event before calling requestFullscreen. We
+  // preventDefault and route through the host so the browser API (which
+  // VS Code webviews block) is never invoked, and the player's UI stays
+  // in sync via setHostFullscreen() — see syncPlayerFullscreenIcon().
+  player.addEventListener("movi-fullscreen-request", (e) => {
+    e.preventDefault();
+    sendFullscreen();
+  });
+
+  // PiP isn't supported in webviews — hide its UI entries.
   function hideUnsupported() {
     if (!player.shadowRoot) return;
     if (player.shadowRoot.getElementById("movi-vscode-hide")) return;
     const style = document.createElement("style");
     style.id = "movi-vscode-hide";
-    // VS Code webview top-level frame: Permissions-Policy denies both
-    // fullscreen and PiP. PiP button is hidden entirely. Fullscreen button
-    // stays visible (familiar UI) but disabled — clicking does nothing.
     style.textContent = `
       .movi-pip-btn,
       .movi-context-menu-item[data-action="pip"] { display: none !important; }
     `;
     player.shadowRoot.appendChild(style);
-
-    // Capture-phase click interceptor on the shadow root: fullscreen button
-    // and the right-click context-menu fullscreen entry both bypass the
-    // player's own click handler — we send the message ourselves and stop
-    // propagation so the player never calls requestFullscreen.
-    if (!player.shadowRoot._moviFsClickIntercept) {
-      player.shadowRoot.addEventListener("click", (e) => {
-        const btn = e.target && e.target.closest && e.target.closest(
-          '.movi-fullscreen-btn, .movi-context-menu-item[data-action="fullscreen"]'
-        );
-        if (!btn) return;
-        e.preventDefault();
-        e.stopPropagation();
-        e.stopImmediatePropagation();
-        sendFullscreen();
-      }, true);
-      player.shadowRoot._moviFsClickIntercept = true;
-    }
   }
   hideUnsupported();
-  // Re-apply after first frame in case shadow root populates async
   setTimeout(hideUnsupported, 0);
   setTimeout(hideUnsupported, 500);
 });
