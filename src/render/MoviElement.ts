@@ -2875,6 +2875,26 @@ export class MoviElement extends HTMLElement {
             }
           }
           break;
+        case "g":
+        case "G":
+        case "h":
+        case "H": {
+          // G / H: Subtitle delay — shift subs earlier (G) or later (H) by
+          // 100ms per press. VLC convention: positive value = subs later.
+          e.preventDefault();
+          if (this.player) {
+            const step = 0.1;
+            const direction = e.key === "g" || e.key === "G" ? -1 : 1;
+            // Round to 3 decimals to keep the displayed value stable across
+            // many presses despite floating-point accumulation.
+            const next = Math.round((this._subtitleDelay + direction * step) * 1000) / 1000;
+            this.subtitleDelay = next;
+            const formatted =
+              next === 0 ? "0s" : `${next > 0 ? "+" : ""}${next.toFixed(2)}s`;
+            this.showOSD(OSD.subOn, `Subtitle Delay: ${formatted}`);
+          }
+          break;
+        }
         case "b":
         case "B":
           // B: Cycle audio track — muxed + external combined
