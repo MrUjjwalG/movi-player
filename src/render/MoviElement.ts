@@ -111,6 +111,10 @@ export class MoviElement extends HTMLElement {
   private _poster: string = "";
   private _volume: number = 1.0;
   private _playbackRate: number = 1.0;
+  // Subtitle delay in seconds (VLC/mpv sign convention). Not persisted to
+  // SettingsStorage — sync drift is per-source, so a global value would
+  // mis-shift unrelated videos.
+  private _subtitleDelay: number = 0;
   private _ambientMode: boolean = false;
   private _renderer: RendererType = "canvas";
   private _objectFit: "contain" | "cover" | "fill" | "zoom" | "control" =
@@ -185,6 +189,7 @@ export class MoviElement extends HTMLElement {
       "crossorigin",
       "volume",
       "playbackrate",
+      "subtitledelay",
       "ambientmode",
       "ambientwrapper",
       "renderer",
@@ -8311,6 +8316,11 @@ export class MoviElement extends HTMLElement {
     if (volumeAttr) this._volume = parseFloat(volumeAttr);
     const playbackRateAttr = this.getAttribute("playbackrate");
     if (playbackRateAttr) this._playbackRate = parseFloat(playbackRateAttr);
+    const subtitleDelayAttr = this.getAttribute("subtitledelay");
+    if (subtitleDelayAttr) {
+      const parsed = parseFloat(subtitleDelayAttr);
+      if (Number.isFinite(parsed)) this._subtitleDelay = parsed;
+    }
     this._ambientMode = this.hasAttribute("ambientmode");
     this._ambientWrapper = this.getAttribute("ambientwrapper");
     const objectFitAttr = this.getAttribute("objectfit");
@@ -8776,6 +8786,22 @@ export class MoviElement extends HTMLElement {
           }
         }
         break;
+      case "subtitledelay":
+        if (newValue !== null) {
+          const parsed = parseFloat(newValue);
+          if (Number.isFinite(parsed)) {
+            this._subtitleDelay = parsed;
+            if (this.player) {
+              this.updateSubtitleDelay();
+            }
+          }
+        } else {
+          this._subtitleDelay = 0;
+          if (this.player) {
+            this.updateSubtitleDelay();
+          }
+        }
+        break;
       case "ambientmode":
         this._ambientMode = newValue !== null;
         this.updateAmbientMode();
@@ -8924,6 +8950,12 @@ export class MoviElement extends HTMLElement {
       if (this.player && this.player.getAudioTracks().length > 0) {
         this.showOSD(icon, `${volumePercent}%`);
       }
+    }
+  }
+
+  private updateSubtitleDelay() {
+    if (this.player) {
+      this.player.setSubtitleDelay(this._subtitleDelay);
     }
   }
 
@@ -9147,6 +9179,7 @@ export class MoviElement extends HTMLElement {
       this.updateVolume();
       this.updateMuted(); // Apply muted state before autoplay
       this.updatePlaybackRate();
+      this.updateSubtitleDelay();
       this.updateCanvasSize(); // Ensure canvas size is synced after load overwrites
       this.updateFitMode();
       if (this.player) {
@@ -11567,6 +11600,32 @@ export class MoviElement extends HTMLElement {
     this.updatePlaybackRate();
     SettingsStorage.getInstance().save({ playbackRate: this._playbackRate });
     this.dispatchEvent(new CustomEvent("ratechange", { detail: { playbackRate: this._playbackRate } }));
+  }
+
+  get subtitleDelay(): number {
+    return this._subtitleDelay;
+  }
+
+  set subtitleDelay(value: number) {
+    if (!Number.isFinite(value)) return;
+    this._subtitleDelay = value;
+    this.setAttribute("subtitledelay", this._subtitleDelay.toString());
+    this.updateSubtitleDelay();
+    this.dispatchEvent(
+      new CustomEvent("subtitledelaychange", {
+        detail: { subtitleDelay: this._subtitleDelay },
+      }),
+    );
+  }
+
+  /** VLC-style API alias from the feature request issue. */
+  setSubtitleDelay(seconds: number): void {
+    this.subtitleDelay = seconds;
+  }
+
+  /** VLC-style API alias from the feature request issue. */
+  getSubtitleDelay(): number {
+    return this._subtitleDelay;
   }
 
   get ambientMode(): boolean {

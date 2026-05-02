@@ -3257,6 +3257,24 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
   }
 
   /**
+   * Set subtitle delay in seconds.
+   * VLC/mpv convention: positive value = subtitles appear later than the
+   * original cue timing, negative value = earlier. Useful when the subtitle
+   * track is out of sync with the video due to different source releases or
+   * frame-rate conversions.
+   */
+  setSubtitleDelay(seconds: number): void {
+    if (this.videoRenderer) {
+      this.videoRenderer.setSubtitleDelay(seconds);
+    }
+  }
+
+  /** Get current subtitle delay in seconds. */
+  getSubtitleDelay(): number {
+    return this.videoRenderer ? this.videoRenderer.getSubtitleDelay() : 0;
+  }
+
+  /**
    * Set volume (0-1)
    */
   setVolume(volume: number): void {

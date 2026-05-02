@@ -73,6 +73,11 @@ export class CanvasRenderer {
   private subtitleCues: SubtitleCue[] = [];
   private subtitleOverlay: HTMLElement | null = null;
   private subtitleControlsPadding: number = 0; // Extra padding when controls visible
+  // Subtitle delay in seconds. VLC/mpv convention: positive = subs appear
+  // later, negative = earlier. Applied at the active-cue check so it works
+  // uniformly for text and image subtitles and can be adjusted live without
+  // invalidating buffered cues.
+  private subtitleDelay: number = 0;
 
   // Animation state for object-fit transitions
   private currentScaleX: number = 0;
@@ -1508,12 +1513,15 @@ export class CanvasRenderer {
     } else if (cues.length === 1) {
       // Add single cue to list, but remove old cues that have already ended
       const newCue = cues[0];
-      const currentTime = this.getCurrentPlaybackTime();
+      // Match the offset semantics in updateActiveSubtitle so a positive
+      // subtitleDelay doesn't prematurely evict cues whose display window is
+      // still in the future.
+      const adjustedTime = this.getCurrentPlaybackTime() - this.subtitleDelay;
 
       // Remove cues that have ended (with some tolerance)
       this.subtitleCues = this.subtitleCues.filter((cue) => {
         // Keep cues that haven't ended yet (with 500ms tolerance for safety)
-        return currentTime <= cue.end + 0.5;
+        return adjustedTime <= cue.end + 0.5;
       });
 
       // Check if this cue already exists (same start time)
@@ -1540,6 +1548,27 @@ export class CanvasRenderer {
     this.updateActiveSubtitle();
     // Also trigger render to update display
     this.renderSubtitles();
+  }
+
+  /**
+   * Set subtitle delay in seconds (VLC/mpv convention).
+   * Positive value: subtitles appear later than their original timing.
+   * Negative value: subtitles appear earlier.
+   */
+  setSubtitleDelay(seconds: number): void {
+    if (!Number.isFinite(seconds)) return;
+    if (seconds === this.subtitleDelay) return;
+    this.subtitleDelay = seconds;
+    Logger.debug(TAG, `Subtitle delay set to ${seconds.toFixed(3)}s`);
+    // Re-evaluate the active cue against the new offset and repaint so the
+    // user sees the change immediately even when paused.
+    this.updateActiveSubtitle();
+    this.renderSubtitles();
+  }
+
+  /** Get current subtitle delay in seconds. */
+  getSubtitleDelay(): number {
+    return this.subtitleDelay;
   }
 
   /**
@@ -1741,6 +1770,11 @@ export class CanvasRenderer {
     // Use getCurrentPlaybackTime() instead of this.currentTime to ensure accurate timing
     // this.currentTime is only updated when frames are drawn, but subtitles need real-time updates
     const currentTime = this.getCurrentPlaybackTime();
+    // Apply subtitle delay by shifting the comparison time. Positive delay
+    // means subs should appear later, so we match cues against an earlier
+    // adjusted time. Cues retain their original PTS in subtitleCues so the
+    // offset can be changed mid-playback without re-decoding.
+    const adjustedTime = currentTime - this.subtitleDelay;
     const previousCue = this.activeSubtitleCue;
     this.activeSubtitleCue = null;
 
@@ -1757,13 +1791,13 @@ export class CanvasRenderer {
     for (const cue of this.subtitleCues) {
       // Check if current time is within the subtitle's time range (with tolerance)
       const isInRange =
-        currentTime >= cue.start - startTolerance &&
-        currentTime <= cue.end + endTolerance;
+        adjustedTime >= cue.start - startTolerance &&
+        adjustedTime <= cue.end + endTolerance;
 
       if (isInRange) {
         // Calculate a score - prefer cues that are more centered in their time range
         const cueCenter = (cue.start + cue.end) / 2;
-        const distanceFromCenter = Math.abs(currentTime - cueCenter);
+        const distanceFromCenter = Math.abs(adjustedTime - cueCenter);
         const score = distanceFromCenter;
 
         // If this cue is better (closer to center), use it
@@ -1795,8 +1829,8 @@ export class CanvasRenderer {
       // Keep showing previous cue if we're still within extended tolerance
       const extendedEndTolerance = 0.3; // 300ms extended tolerance
       if (
-        currentTime >= previousCue.start - startTolerance &&
-        currentTime <= previousCue.end + extendedEndTolerance
+        adjustedTime >= previousCue.start - startTolerance &&
+        adjustedTime <= previousCue.end + extendedEndTolerance
       ) {
         // Keep showing previous cue a bit longer
         this.activeSubtitleCue = previousCue;
