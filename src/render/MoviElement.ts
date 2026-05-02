@@ -4416,6 +4416,13 @@ export class MoviElement extends HTMLElement {
 
   private formatAudioBadge(track: AudioTrack): string {
     const codec = (track.codec || "").toUpperCase();
+    const lang = track.language
+      ? track.language.length >= 2
+        ? track.language.substring(0, 3).toUpperCase()
+        : track.language.toUpperCase()
+      : "";
+
+    let main = "";
     if (track.channels) {
       const layout =
         track.channels === 1
@@ -4427,15 +4434,13 @@ export class MoviElement extends HTMLElement {
               : track.channels === 8
                 ? "7.1"
                 : `${track.channels}ch`;
-      return codec ? `${codec} ${layout}` : layout;
+      main = codec ? `${codec} ${layout}` : layout;
+    } else {
+      main = codec;
     }
-    if (track.language) {
-      const lang = track.language.length >= 2
-        ? track.language.substring(0, 3).toUpperCase()
-        : track.language.toUpperCase();
-      return codec ? `${codec} • ${lang}` : lang;
-    }
-    return codec;
+
+    if (lang && main) return `${lang} • ${main}`;
+    return main || lang;
   }
 
   private formatSubtitleBadge(track: SubtitleTrack): string {
