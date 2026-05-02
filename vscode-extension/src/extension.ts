@@ -1,6 +1,7 @@
 import * as vscode from "vscode";
 import * as path from "path";
 import * as fs from "fs";
+import { spawn, ChildProcess } from "child_process";
 
 const VIDEO_EXTS = [
   "mp4", "mkv", "webm", "mov", "avi", "flv", "wmv",
@@ -37,6 +38,54 @@ const ZEN_OVERRIDES: Array<{ section: string; key: string; force: unknown }> = [
 const UNSET = Symbol("unset");
 const savedZenValues = new Map<string, unknown | typeof UNSET>();
 let inMoviFullscreen = false;
+
+// Cross-platform wake lock — VS Code webviews block navigator.wakeLock via
+// Permissions-Policy, so spawn an OS-level inhibitor process from the host
+// instead. Held only while in Movi fullscreen so a backgrounded/idle
+// VS Code doesn't inhibit sleep when the user isn't watching.
+let wakeLockProcess: ChildProcess | undefined;
+
+function acquireWakeLock(): void {
+  if (wakeLockProcess && !wakeLockProcess.killed) return;
+  try {
+    if (process.platform === "darwin") {
+      // -i blocks idle sleep; runs forever until killed.
+      wakeLockProcess = spawn("caffeinate", ["-i"], { stdio: "ignore", detached: false });
+    } else if (process.platform === "linux") {
+      // systemd-inhibit holds the inhibitor until the spawned command exits.
+      wakeLockProcess = spawn(
+        "systemd-inhibit",
+        ["--what=idle:sleep", "--who=movi-player", "--why=Playing video", "sleep", "infinity"],
+        { stdio: "ignore", detached: false }
+      );
+    } else if (process.platform === "win32") {
+      // ES_CONTINUOUS | ES_DISPLAY_REQUIRED | ES_SYSTEM_REQUIRED kept alive
+      // by an idle PowerShell loop; releases when the process exits.
+      const ps = [
+        "Add-Type -TypeDefinition '",
+        "using System;",
+        "using System.Runtime.InteropServices;",
+        "public class Sleep {",
+        "  [DllImport(\"kernel32.dll\")]",
+        "  public static extern uint SetThreadExecutionState(uint esFlags);",
+        "}';",
+        "[Sleep]::SetThreadExecutionState(0x80000003) | Out-Null;",
+        "while ($true) { Start-Sleep -Seconds 60 }",
+      ].join(" ");
+      wakeLockProcess = spawn("powershell", ["-NoProfile", "-Command", ps], { stdio: "ignore", detached: false });
+    }
+    wakeLockProcess?.on("error", () => { wakeLockProcess = undefined; });
+    wakeLockProcess?.on("exit", () => { wakeLockProcess = undefined; });
+  } catch {
+    wakeLockProcess = undefined;
+  }
+}
+
+function releaseWakeLock(): void {
+  if (!wakeLockProcess) return;
+  try { wakeLockProcess.kill(); } catch {}
+  wakeLockProcess = undefined;
+}
 
 // Set true by movi.openInNewWindow just before openWith, consumed by
 // resolveCustomEditor. Always force-cleared in a finally{} after openWith
@@ -102,8 +151,10 @@ async function toggleMoviFullscreen(): Promise<void> {
     await applyZenOverrides("zen");
     await applyZenOverrides("nonZen");
     await closeBars();
+    acquireWakeLock();
   } else {
     inMoviFullscreen = false;
+    releaseWakeLock();
     await restoreZenOverrides();
   }
 }
@@ -467,6 +518,7 @@ function renderHtml(webview: vscode.Webview, webviewRoot: vscode.Uri): string {
 
 export async function deactivate(): Promise<void> {
   if (commandPanel) commandPanel.dispose();
+  releaseWakeLock();
   if (inMoviFullscreen) {
     // Block here so VS Code's 5s deactivate window waits for settings to
     // actually be written back. A sync call returns a Promise but the host
