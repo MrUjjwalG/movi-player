@@ -988,8 +988,14 @@ export class CanvasRenderer {
       const firstFrame = this.frameQueue[0];
       const frameTime = firstFrame.timestamp / 1_000_000;
       const frameInterval = 1.0 / this.videoFrameRate;
-      // Only use it if it's not too far behind (more than 2 frame intervals)
-      if (currentPlaybackTime - frameTime <= frameInterval * 2) {
+      // Reject frames that are too far ahead OR too far behind. Without the
+      // upper cap, hardware decoders that emit 8K frames in bursts queue
+      // many future-PTS frames; on >60Hz displays this fallback then drains
+      // them faster than wall-clock, advancing currentTime past the audio
+      // clock and tripping the audio-desync resync seek loop.
+      const ahead = frameTime - currentPlaybackTime;
+      const behind = currentPlaybackTime - frameTime;
+      if (ahead <= frameInterval && behind <= frameInterval * 2) {
         this.drawFrame(firstFrame);
 
         // Retain for resize redraws
