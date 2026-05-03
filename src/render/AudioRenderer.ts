@@ -386,6 +386,12 @@ export class AudioRenderer {
     this.isPlaying = true;
     this.intentionalSuspend = false;
 
+    // pause() ramps the gain to 0 (BT-friendly pause keeps the context
+    // running). Restore gain here so resumed playback is audible.
+    if (this.gainNode && !this._muted) {
+      this.rampGain(this.volume);
+    }
+
     // NOTE: We do NOT reset scheduledTime or sync anchors here.
     // If we are resuming from pause (suspend), the buffer is preserved
     // and we want to continue exactly where we left off.
@@ -499,23 +505,40 @@ export class AudioRenderer {
   pause(): void {
     this.isPlaying = false;
 
-    // Don't stop sources or clear buffers!
-    // Just suspend the context to pause time.
-    // This preserves the audio buffer (scheduled nodes) so we resume exactly where we left off.
-    // If we clear sources, we lose the buffered audio (e.g. 2 seconds worth), causing the
-    // player to jump forward by that amount on resume.
-    if (this.audioContext && this.audioContext.state === "running") {
-      this.intentionalSuspend = true;
-      this.audioContext.suspend().catch((err) => {
-        Logger.error(TAG, "Failed to suspend audio context", err);
-      });
+    // Bluetooth-friendly pause: instead of audioContext.suspend() (which makes
+    // the OS release the audio output, causing A2DP devices to drop and
+    // reconnect), keep the context running and just silence + stop scheduled
+    // sources. The device stays claimed so BT stays connected. On resume,
+    // render() will re-anchor the clock when scheduledTime is in the past.
+    if (this.gainNode) {
+      this.rampGain(0);
     }
 
-    // We do NOT reset clock tracking here.
-    // Since we are suspending the context, the relationship between
-    // AudioContext.currentTime and media time is preserved.
+    if (this.activeSources.length > 0) {
+      const stopAt = this.audioContext
+        ? this.audioContext.currentTime + AudioRenderer.GAIN_RAMP_TIME
+        : 0;
+      for (const source of this.activeSources) {
+        try {
+          source.stop(stopAt);
+          source.onended = () => {
+            try { source.disconnect(); } catch { /* ignore */ }
+          };
+        } catch {
+          // Source may already be stopped
+        }
+      }
+      this.activeSources = [];
+    }
 
-    Logger.debug(TAG, "Paused");
+    // Force render() to pivot the audio clock on resume. Without this, the
+    // first post-resume buffer would be scheduled relative to a stale
+    // scheduledTime (now far behind ctx.currentTime since we kept the context
+    // running) and produce a long silent gap.
+    this.scheduledTime = 0;
+    this.hasFirstBuffer = false;
+
+    Logger.debug(TAG, "Paused (gain ramped, sources stopped, context kept running)");
   }
 
   /**

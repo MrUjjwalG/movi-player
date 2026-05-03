@@ -8767,11 +8767,12 @@ export class MoviElement extends HTMLElement {
         if (this.video) {
           this.video.muted = this._muted;
         }
-        if (this._autoplay) {
-          this.play();
-        } else if (this._startAt > 0 && this.player) {
-          // Seek to start time if set
-          this.player.seek(this._startAt);
+        // Just propagate the muted state. Triggering play()/seek() here makes
+        // every M-key toggle resume from pause, and was only ever meant for
+        // the autoplay-muted → unmute startup flow (handled in
+        // initializePlayer / restoreState instead).
+        if (this.player) {
+          this.updateMuted();
         }
         break;
       case "playsinline":
