@@ -172,6 +172,56 @@ export class MoviElement extends HTMLElement {
   // Context handling state
   private _contextLostTime: number = 0;
   private _contextLostPlaying: boolean = false;
+  private _lastFrameSnapshot: string = ""; // dataURL captured before backgrounding, used as poster during context-loss recovery
+  private _snapshotPosterActive: boolean = false;
+  private _snapshotPosterPrev: { src: string; display: string } | null = null;
+  private _showSnapshotPoster = () => {
+    if (!this._lastFrameSnapshot || !this.posterElement) return;
+    if (this._snapshotPosterActive) return;
+    this._snapshotPosterPrev = {
+      src: this.posterElement.src,
+      display: this.posterElement.style.display,
+    };
+    this.posterElement.src = this._lastFrameSnapshot;
+    this.posterElement.style.display = "block";
+    this._snapshotPosterActive = true;
+  };
+
+  private _hideSnapshotPoster = () => {
+    if (!this._snapshotPosterActive || !this.posterElement) return;
+    const prev = this._snapshotPosterPrev;
+    this.posterElement.src = prev?.src ?? "";
+    this.posterElement.style.display = prev?.display ?? "none";
+    this._snapshotPosterActive = false;
+    this._snapshotPosterPrev = null;
+  };
+
+  private _onVisibilityChange = () => {
+    if (document.visibilityState === "hidden") {
+      // Capture last visible frame BEFORE the OS may kill the GL context.
+      if (this.canvas) {
+        try {
+          const dataUrl = this.canvas.toDataURL("image/jpeg", 0.85);
+          if (dataUrl && dataUrl.length > 32) {
+            this._lastFrameSnapshot = dataUrl;
+          }
+        } catch { /* tainted canvas */ }
+      }
+      // Pre-emptively show the snapshot as a poster overlay. This way, when
+      // the user returns the browser can't briefly paint a corrupt canvas
+      // frame between visibility-visible and webglcontextlost firing.
+      this._showSnapshotPoster();
+    } else {
+      // Visible again. If the GL context is still alive, hide the snapshot
+      // immediately. If it was lost, leave the snapshot up — handleContextLost
+      // / handleContextRestored own the recovery teardown.
+      const gl = this.canvas?.getContext("webgl2") as WebGL2RenderingContext | null;
+      const lost = gl?.isContextLost?.() ?? false;
+      if (!lost && this._contextLostTime === 0) {
+        this._hideSnapshotPoster();
+      }
+    }
+  };
 
   // Observed attributes (native video element attributes)
   static get observedAttributes() {
@@ -8310,6 +8360,16 @@ export class MoviElement extends HTMLElement {
       this.player = null;
     }
 
+    // Hide the canvas while the GL context is gone — otherwise the user sees
+    // the last (now-corrupt) GPU framebuffer flash through as garbled pixels
+    // before the loading spinner takes over. visibility:hidden keeps layout.
+    this.canvas.style.visibility = "hidden";
+
+    // Show the captured snapshot as a poster overlay (no-op if visibility
+    // change already activated it). Covers cases where the context is lost
+    // without a preceding visibility-hidden event.
+    this._showSnapshotPoster();
+
     this.isLoading = true;
     this.updateControlsState();
     this.updateLoadingIndicator("loading");
@@ -8335,6 +8395,13 @@ export class MoviElement extends HTMLElement {
           });
         }
       }
+      // Reveal the canvas again — a fresh frame has been rendered (poster
+      // seek inside initializePlayer or the seek above), so no garbled
+      // framebuffer left behind.
+      this.canvas.style.visibility = "";
+      // Restore the poster overlay to whatever it was before context loss
+      // (user-supplied poster, or hidden if there wasn't one).
+      this._hideSnapshotPoster();
       // Clear recovery markers so the next initializePlayer (e.g. user picks
       // a new file) doesn't suppress the resume dialog or skip the seek.
       this._contextLostTime = 0;
@@ -8439,6 +8506,11 @@ export class MoviElement extends HTMLElement {
       "webglcontextrestored",
       this.handleContextRestored,
     );
+
+    // Capture the last visible frame just before the tab is hidden — by the
+    // time webglcontextlost fires the GPU buffer is already gone, so snapshot
+    // proactively. Used as a poster during context-loss recovery.
+    document.addEventListener("visibilitychange", this._onVisibilityChange);
 
     // Initial state: disable controls except volume
     this.updateControlsState();
@@ -8594,6 +8666,7 @@ export class MoviElement extends HTMLElement {
       "webglcontextrestored",
       this.handleContextRestored,
     );
+    document.removeEventListener("visibilitychange", this._onVisibilityChange);
     // Cleanup nerd stats interval
     if (this.nerdStatsInterval) {
       clearInterval(this.nerdStatsInterval);
