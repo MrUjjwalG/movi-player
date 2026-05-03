@@ -3321,6 +3321,10 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
     if (muted) {
       this.audioRenderer.mute();
     } else {
+      // Audio decode is dropped while muted, so getAudioClock() is frozen at
+      // the last scheduled time. Reset the desync cooldown so the resync
+      // check doesn't fire a corrective seek before the audio clock catches up.
+      this._lastDesyncSeekTime = performance.now();
       // unmute() is async (initializes AudioContext on first unmute)
       // but we don't await it to keep setMuted() synchronous
       this.audioRenderer.unmute().catch((err) => {

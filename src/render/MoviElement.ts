@@ -1328,7 +1328,7 @@ export class MoviElement extends HTMLElement {
           ".movi-progress-handle",
         ) as HTMLElement;
         if (progressFilled) progressFilled.style.width = `${percent * 100}%`;
-        if (progressHandle) progressHandle.style.left = `${Math.max(1, percent * 100)}%`;
+        if (progressHandle) progressHandle.style.left = `${percent * 100}%`;
       }
 
       if (duration <= 0) return;
@@ -5847,7 +5847,7 @@ export class MoviElement extends HTMLElement {
       .movi-progress-handle {
         position: absolute;
         top: 50%;
-        left: 1%;
+        left: 0%;
         transform: translate(-50%, -50%) scale(0);
         width: 16px;
         height: 16px;
@@ -9975,7 +9975,7 @@ export class MoviElement extends HTMLElement {
         progressFilled.style.width = `${percent}%`;
       }
       if (progressHandle) {
-        progressHandle.style.left = `${Math.max(1, percent)}%`;
+        progressHandle.style.left = `${percent}%`;
       }
 
       // Buffer draws from 0 to bufferEnd; the filled bar overlays it on top
