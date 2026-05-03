@@ -1506,52 +1506,44 @@ export class MoviElement extends HTMLElement {
     volumeBtn?.addEventListener("click", (e) => {
       e.stopPropagation();
 
-      // Determine if interaction is touch-based
-      const pEvent = e as PointerEvent;
-      const isTouch = pEvent.pointerType === "touch";
-      const isMouse = pEvent.pointerType === "mouse";
+      // matchMedia is reliable across browsers; pointerType on click events is
+      // not (Android Chrome can synthesize click with pointerType="mouse" from
+      // a touch tap, which previously fell through to mute on the first tap).
       const noHover = window.matchMedia("(hover: none)").matches;
-
       const volumeContainer = shadowRoot.querySelector(
         ".movi-volume-container",
-      );
+      ) as HTMLElement | null;
 
-      // If explicit mouse interaction -> Just Mute (Desktop)
-      if (isMouse) {
-        this.muted = !this.muted;
-        return;
-      }
-
-      // If on mobile/touch, prioritize opening slider
-      if (volumeContainer && (isTouch || noHover)) {
-        // If slider is NOT active, open it
+      // Touch / mobile: first tap opens the slider, second tap mutes.
+      if (noHover && volumeContainer) {
         if (!volumeContainer.classList.contains("active")) {
           volumeContainer.classList.add("active");
 
           const closeVolume = (evt: Event) => {
-            const target = evt.target as Node;
-            // If click outside container and button
+            // composedPath crosses shadow boundaries; evt.target alone gets
+            // retargeted to the host, which makes every click look "outside".
+            const path = evt.composedPath();
             if (
-              volumeContainer &&
-              !volumeContainer.contains(target) &&
-              target !== volumeBtn &&
-              !volumeBtn.contains(target)
+              !path.includes(volumeContainer) &&
+              !path.includes(volumeBtn)
             ) {
               volumeContainer.classList.remove("active");
               document.removeEventListener("click", closeVolume);
             }
           };
 
-          // Defer listener
           setTimeout(() => {
             document.addEventListener("click", closeVolume);
           }, 10);
 
-          return; // Capture event, do NOT mute
+          return;
         }
+        // Slider already open -> second tap mutes
+        this.muted = !this.muted;
+        return;
       }
 
-      // Default behavior (Desktop click OR Touch second click): Toggle mute
+      // Desktop (hover-capable): tap toggles mute, slider opens on hover
       this.muted = !this.muted;
     });
     volumeSlider?.addEventListener("input", (e) => {
@@ -7008,6 +7000,15 @@ export class MoviElement extends HTMLElement {
         
         .movi-volume-slider-container {
           display: none !important;
+        }
+
+        /* When user taps the speaker on mobile, surface the slider */
+        .movi-volume-container.active .movi-volume-slider-container {
+          display: flex !important;
+          width: 80px !important;
+          padding: 8px 8px !important;
+          overflow: visible !important;
+          opacity: 1 !important;
         }
 
         .movi-seek-backward,
