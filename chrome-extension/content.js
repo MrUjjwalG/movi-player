@@ -21,7 +21,7 @@ function createPlayButton(link) {
 
   const btn = document.createElement("div");
   btn.className = "movi-ext-play-btn";
-  btn.innerHTML = `<svg viewBox="0 0 24 24" fill="white" width="20" height="20"><path d="M8 5v14l11-7z"/></svg>`;
+  btn.innerHTML = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100" width="24" height="24"><defs><linearGradient id="moviExtG" x1="0%" y1="0%" x2="100%" y2="100%"><stop offset="0%" stop-color="#6c5dd3"/><stop offset="100%" stop-color="#4a3bba"/></linearGradient></defs><circle cx="50" cy="50" r="45" fill="url(#moviExtG)"/><polygon points="39,29 39,71 74,50" fill="white"/></svg>`;
   btn.title = "Play with Movi Player";
 
   btn.addEventListener("click", (e) => {
@@ -88,8 +88,15 @@ function injectDirectVideoOverlay() {
   overlay.innerHTML = `
     <div class="movi-ext-card">
       <div class="movi-ext-icon">
-        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" width="40" height="40">
-          <polygon points="5 3 19 12 5 21 5 3" fill="currentColor"/>
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100" width="56" height="56">
+          <defs>
+            <linearGradient id="moviExtOverlayG" x1="0%" y1="0%" x2="100%" y2="100%">
+              <stop offset="0%" stop-color="#6c5dd3"/>
+              <stop offset="100%" stop-color="#4a3bba"/>
+            </linearGradient>
+          </defs>
+          <circle cx="50" cy="50" r="45" fill="url(#moviExtOverlayG)"/>
+          <polygon points="39,29 39,71 74,50" fill="white"/>
         </svg>
       </div>
       <div class="movi-ext-title">Open with Movi Player</div>
