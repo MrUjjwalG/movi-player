@@ -549,7 +549,7 @@ export class HLSPlayerWrapper extends EventEmitter<PlayerEventMap> {
     if (w && h) {
       stats["Video Codec"] = level?.videoCodec ?? "N/A";
       stats["Resolution"] = `${w}x${h}`;
-      stats["Quality"] = h >= 2160 ? "4K" : h >= 1440 ? "2K" : h >= 1080 ? "1080p" : h >= 720 ? "720p" : h >= 480 ? "480p" : "SD";
+      stats["Quality"] = h >= 8640 ? "16K" : h >= 4320 ? "8K" : h >= 2160 ? "4K" : h >= 1440 ? "2K" : h >= 1080 ? "1080p" : h >= 720 ? "720p" : h >= 480 ? "480p" : "SD";
       if (level?.frameRate) stats["Frame Rate"] = `${level.frameRate} fps`;
       stats["Video Bitrate"] = level?.bitrate
         ? `${(level.bitrate / 1000).toFixed(0)} kbps`

@@ -3380,7 +3380,7 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
       stats["Resolution"] = `${videoTrack.width}x${videoTrack.height}`;
       // Quality label
       const h = videoTrack.height;
-      stats["Quality"] = h >= 2160 ? "4K" : h >= 1440 ? "2K" : h >= 1080 ? "1080p" : h >= 720 ? "720p" : h >= 480 ? "480p" : "SD";
+      stats["Quality"] = h >= 8640 ? "16K" : h >= 4320 ? "8K" : h >= 2160 ? "4K" : h >= 1440 ? "2K" : h >= 1080 ? "1080p" : h >= 720 ? "720p" : h >= 480 ? "480p" : "SD";
       stats["Frame Rate"] = `${videoTrack.frameRate} fps`;
       stats["Video Bitrate"] = videoTrack.bitRate
         ? `${(videoTrack.bitRate / 1000).toFixed(0)} kbps`
