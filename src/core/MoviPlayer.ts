@@ -64,6 +64,7 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
   private stateManager: PlayerStateManager;
   private mediaInfo: MediaInfo | null = null;
   private fileSize: number = -1; // Cached file size for buffer calculations
+  private lastBufferedTime: number = 0;
 
   // Decoders and Renderers
   private videoDecoder: MoviVideoDecoder;
@@ -379,6 +380,7 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
 
     this.stateManager.setState("loading");
     this.emit("loadStart", undefined);
+    this.lastBufferedTime = 0;
 
     // Clean up any existing preview pipeline
     this.destroyPreviewPipeline();
@@ -1912,6 +1914,10 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
 
       // Reset EOF flag after seek - we're now at a new position
       this.eofReached = false;
+
+      // Buffered region restarts from the new position; drop the
+      // monotonic clamp so the bar can shrink to reflect the new range.
+      this.lastBufferedTime = 0;
 
       // Mark that we need to skip to keyframe after seek
       // This prevents decoder errors from non-keyframe packets after seek
@@ -3637,7 +3643,26 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
           // We seek the demuxer to the nearest keyframe near current audio position,
           // flush only the video decoder, and set seekTargetTime to skip any
           // re-demuxed audio packets that were already played.
-          const audioTime = this.clock.getTime();
+          //
+          // clock.getTime() falls back to wall-clock when the audio output is
+          // suspended in background, so it can race far ahead of the audio
+          // that has actually been rendered. Resolve the real audio position:
+          //   - external audio (separate <source kind="audio">) → nativeAudioEl
+          //     keeps advancing its own currentTime even while clock raced ahead
+          //   - in-container audio → AudioRenderer's clock / buffer end
+          //   - no audio at all → fall back to wall-clock
+          const nativeAudioTime = this.nativeAudioEl
+            ? this.nativeAudioEl.currentTime
+            : -1;
+          const audioClock = this.audioRenderer.getAudioClock();
+          const audioBufferEnd = this.audioRenderer.getMaxScheduledMediaTime();
+          const audioTime = nativeAudioTime >= 0
+            ? nativeAudioTime
+            : audioClock >= 0
+              ? audioClock
+              : audioBufferEnd > 0
+                ? audioBufferEnd
+                : this.clock.getTime();
           Logger.debug(TAG, `Foreground recovery: video-only seek to ${audioTime.toFixed(2)}s`);
 
           // Cancel any in-flight processLoop to avoid demux conflicts during seek
@@ -3670,9 +3695,15 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
 
             if (this.seekSessionId !== mySessionId) return; // Superseded
 
+            // Re-anchor the wall clock to audio. While backgrounded the wall
+            // clock advanced freely while audio output was suspended; without
+            // this re-sync, getTime() will continue reporting the inflated
+            // value and Clock's drift correction will snap the wall clock
+            // back at 50%/sample, causing time-update jitter on resume.
+            this.clock.seek(audioTime + this.startTime);
+
             // Skip pre-target packets: use audio buffer end (not clock time) so
             // already-scheduled audio isn't re-decoded — prevents fast-forward sound.
-            const audioBufferEnd = this.audioRenderer.getMaxScheduledMediaTime();
             this.seekTargetTime = Math.max(audioTime + this.startTime, audioBufferEnd);
             this.seekingToKeyframe = true;
             this.seekingToKeyframeStartTime = performance.now();
@@ -3840,6 +3871,22 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
         if (this.stateManager.getState() !== "paused") break;
         if (this.pendingPrebufferPackets.length >= MoviPlayer.PAUSE_BUFFER_MAX_PACKETS) break;
 
+        // Don't push the demuxer past what HttpSource already holds — the next
+        // read would otherwise trigger startStream() at the new offset, which
+        // resets the sliding window and evicts already-buffered earlier bytes.
+        // Pause-time buffering must never request bytes the network hasn't
+        // delivered yet.
+        if (this.source instanceof HttpSource && !this.source.isFullyCached()) {
+          const pos = this.source.getPosition();
+          const end = this.source.getBufferedEnd();
+          // Keep ~1MB margin so an in-progress demuxer read doesn't straddle
+          // the boundary and still trigger a refetch.
+          if (pos >= end - 1024 * 1024) {
+            this.stopPauseBuffering();
+            break;
+          }
+        }
+
         const packet = await this.demuxer.readPacket();
         if (!packet) {
           this.eofReached = true;
@@ -3898,6 +3945,12 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
     // byte delta between buffered-end and the source's last-read position
     // — both are real byte offsets — and apply linear conversion only to
     // that small delta, added to the accurate currentTime.
+    //
+    // Pause-time buffering decouples the demuxer cursor from the playback
+    // clock (demuxer keeps reading ahead while currentTime is frozen),
+    // which causes forwardBytes to shrink and the bar to walk backward.
+    // Clamp monotonically: the buffered-end never moves backward except on
+    // seek (where lastBufferedTime is reset elsewhere).
     if (this.source instanceof HttpSource && this.fileSize > 0) {
       // Small files fully cached in memory should report the entire
       // duration as buffered. The byte-delta math below underreports
@@ -3907,6 +3960,7 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
       // low → bufferedTime = currentTime + forwardTime falls short of
       // duration even though every byte is in memory).
       if (this.source.isFullyCached()) {
+        this.lastBufferedTime = duration;
         return duration;
       }
       const bufferedEndBytes = this.source.getBufferedEnd();
@@ -3914,7 +3968,9 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
         const currentBytes = this.source.getPosition();
         const forwardBytes = Math.max(0, bufferedEndBytes - currentBytes);
         const forwardTime = (forwardBytes / this.fileSize) * duration;
-        return this.getCurrentTime() + forwardTime;
+        const computed = this.getCurrentTime() + forwardTime;
+        this.lastBufferedTime = Math.max(this.lastBufferedTime, computed);
+        return this.lastBufferedTime;
       }
     }
 
