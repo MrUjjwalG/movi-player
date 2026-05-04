@@ -8994,6 +8994,9 @@ export class MoviElement extends HTMLElement {
     }
   }
 
+  private _lastCanvasW: number = 0;
+  private _lastCanvasH: number = 0;
+
   private updateCanvasSize() {
     const widthAttr = this.getAttribute("width");
     const heightAttr = this.getAttribute("height");
@@ -9012,21 +9015,25 @@ export class MoviElement extends HTMLElement {
     }
 
     if (width > 0 && height > 0) {
-      // Update canvas dimensions
-      // Update canvas dimensions
-      this.canvas.width = width;
-      this.canvas.height = height;
+      // Coalesce burst resizes (e.g. ResizeObserver during fullscreen
+      // animation). Setting canvas.width clears the WebGL framebuffer
+      // and CanvasRenderer.resize does heavy CSS/style writes — running
+      // it many times per transition stalls the presentation loop.
+      if (width === this._lastCanvasW && height === this._lastCanvasH) {
+        return;
+      }
+      this._lastCanvasW = width;
+      this._lastCanvasH = height;
 
-      // CSS layout is handled by CanvasRenderer and style.width='100%' default
-      // Removing manual pixel overrides prevents conflict with rotation logic
-
-      // Update video dimensions
-      this.video.width = width;
-      this.video.height = height;
-
-      // Reconfigure video renderer with new canvas dimensions
       if (this.player) {
+        // CanvasRenderer.resize() owns canvas.width/height (it accounts
+        // for rotation). Setting them here too clears the framebuffer a
+        // second time on every resize.
         this.player.resizeCanvas(width, height);
+      } else {
+        // Pre-init: keep buffer dims in sync so toDataURL etc. work.
+        this.canvas.width = width;
+        this.canvas.height = height;
       }
     }
   }
