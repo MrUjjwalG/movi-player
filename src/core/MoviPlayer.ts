@@ -3037,12 +3037,18 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
   private setupNativeAudio(url: string): void {
     const wasPlaying = this.nativeAudioEl && !this.nativeAudioEl.paused;
     const currentTime = this.nativeAudioEl?.currentTime ?? 0;
+    const sameSrc = this.nativeAudioEl && this.nativeAudioEl.src === url;
 
     // Reuse or create element
     if (!this.nativeAudioEl) {
       this.nativeAudioEl = new Audio();
     }
-    this.nativeAudioEl.src = url;
+    // Skip src reassignment when adopting an already-playing element with the
+    // same URL (quality switch where audio track is shared) — reassigning the
+    // same src triggers a reload and loses the user-activated play() context.
+    if (!sameSrc) {
+      this.nativeAudioEl.src = url;
+    }
     this.nativeAudioEl.preload = "auto";
     this.nativeAudioEl.volume = this.muted ? 0 : this.audioRenderer.getVolume();
     this.nativeAudioEl.muted = this.muted;
@@ -3075,6 +3081,34 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
     if (wasPlaying) {
       audioEl.play().catch(() => {});
     }
+  }
+
+  /**
+   * Detach the native <audio> element from this player WITHOUT pausing it,
+   * so it can be re-adopted by a successor instance during a quality switch.
+   * Returns the element (or null) so callers can hand it to adoptNativeAudio
+   * on the new player. Critical because creating a fresh Audio element after
+   * a programmatic src swap loses the user-activation token and trips
+   * browser autoplay policy on the way back up.
+   */
+  releaseNativeAudio(): HTMLAudioElement | null {
+    const el = this.nativeAudioEl;
+    if (el) {
+      this.nativeAudioEl = null;
+    }
+    return el;
+  }
+
+  /**
+   * Adopt an existing <audio> element before init() runs, so setupNativeAudio
+   * sees a populated nativeAudioEl and reuses it (instead of constructing a
+   * brand-new — and unactivated — Audio).
+   */
+  adoptNativeAudio(el: HTMLAudioElement): void {
+    if (this.nativeAudioEl && this.nativeAudioEl !== el) {
+      try { this.nativeAudioEl.pause(); } catch {}
+    }
+    this.nativeAudioEl = el;
   }
 
   /**
@@ -3207,6 +3241,10 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
 
       // Detect format
       const fmt = track.format || (track.url.includes(".srt") ? "srt" : "vtt");
+
+      // Tell the renderer which format we're using so it can toggle the
+      // VTT-only backdrop styling.
+      this.videoRenderer?.setSubtitleFormat(fmt);
 
       // Parse into cues
       this._externalSubCues = fmt === "srt"

@@ -93,6 +93,10 @@ export class MoviElement extends HTMLElement {
   // Internal state
   private _src: string | File | null = null;
   private _audioSrc: string | null = null; // Separate audio source URL
+  // Pre-muxed video qualities declared via multiple <source> tags with
+  // data-height / data-label. Lets the player drive a YouTube-style quality
+  // menu for plain MP4 sources (where there's no HLS manifest to enumerate).
+  private _videoQualities: { src: string; type?: string; height: number; label: string; fps?: number; badge?: string }[] = [];
   private _audioTracks: { src: string; type?: string; lang: string; label: string }[] = []; // Multi-language audio
   private _subtitleTracks: { src: string; lang: string; label: string; format?: string }[] = []; // External subtitles
   private _autoplay: boolean = false;
@@ -115,6 +119,20 @@ export class MoviElement extends HTMLElement {
   // SettingsStorage — sync drift is per-source, so a global value would
   // mis-shift unrelated videos.
   private _subtitleDelay: number = 0;
+  // User-customizable subtitle appearance. Applied as CSS variables on the
+  // host element so the shadow-DOM subtitle CSS can read them. Persisted
+  // to localStorage so the user's choice survives reloads.
+  private _subtitleSettings: {
+    sizeMult: number;
+    color: string;
+    bgAlpha: number;
+    edge: "none" | "shadow" | "outline" | "raised";
+  } = {
+    sizeMult: 1,
+    color: "#FFFFFF",
+    bgAlpha: 0.75,
+    edge: "shadow",
+  };
   private _ambientMode: boolean = false;
   private _renderer: RendererType = "canvas";
   private _objectFit: "contain" | "cover" | "fill" | "zoom" | "control" =
@@ -316,6 +334,25 @@ export class MoviElement extends HTMLElement {
     // Create poster image element (overlay on video/canvas)
     this.posterElement = document.createElement("img");
     this.posterElement.className = "movi-poster-overlay";
+    // Pages that ship Cross-Origin-Embedder-Policy: require-corp will block
+    // cross-origin images that aren't loaded with CORS. Without this, a host
+    // page that opts into COEP gets a silent black overlay instead of the
+    // poster.
+    this.posterElement.crossOrigin = "anonymous";
+    this.posterElement.referrerPolicy = "no-referrer";
+    this.posterElement.decoding = "async";
+    // YouTube's `maxresdefault.jpg` 404s for videos that never had a 720p
+    // thumbnail uploaded; fall back to `hqdefault.jpg` (always present) so
+    // the overlay never sits as silent black.
+    this.posterElement.addEventListener("error", () => {
+      const url = this.posterElement.src;
+      const m = url.match(/\/vi\/([\w-]+)\/maxresdefault\.jpg/);
+      if (m) {
+        this.posterElement.src = `https://i.ytimg.com/vi/${m[1]}/hqdefault.jpg`;
+      } else {
+        this.posterElement.style.display = "none";
+      }
+    });
     this.posterElement.style.position = "absolute";
     this.posterElement.style.top = "0";
     this.posterElement.style.left = "0";
@@ -800,12 +837,21 @@ export class MoviElement extends HTMLElement {
                   </svg>
                 </button>
                 <div class="movi-subtitle-track-menu" style="display: none;">
-                  <div class="movi-track-menu-header">
+                  <div class="movi-track-menu-header movi-subtitle-track-header">
                     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
                       <rect width="20" height="16" x="2" y="4" rx="2" ry="2"></rect>
                       <path d="M10 8.5H8a2 2 0 0 0-2 2v3a2 2 0 0 0 2 2h2 M18 8.5h-2a2 2 0 0 0-2 2v3a2 2 0 0 0 2 2h2"></path>
                     </svg>
                     <span>Subtitles</span>
+                    <button type="button"
+                            class="movi-subtitle-customize-btn"
+                            aria-label="Customize captions"
+                            title="Customize captions">
+                      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" width="16" height="16">
+                        <circle cx="12" cy="12" r="3"></circle>
+                        <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"></path>
+                      </svg>
+                    </button>
                   </div>
                   <div class="movi-subtitle-track-list"></div>
                   <div class="movi-track-menu-footer movi-subtitle-track-footer"></div>
@@ -818,6 +864,7 @@ export class MoviElement extends HTMLElement {
                     <path d="M12.22 2h-.44a2 2 0 0 0-2 2v.18a2 2 0 0 1-1 1.73l-.43.25a2 2 0 0 1-2 0l-.15-.08a2 2 0 0 0-2.73.73l-.22.38a2 2 0 0 0 .73 2.73l.15.1a2 2 0 0 1 1 1.72v.51a2 2 0 0 1-1 1.74l-.15.09a2 2 0 0 0-.73 2.73l.22.38a2 2 0 0 0 2.73.73l.15-.08a2 2 0 0 1 2 0l.43.25a2 2 0 0 1 1 1.73V20a2 2 0 0 0 2 2h.44a2 2 0 0 0 2-2v-.18a2 2 0 0 1 1-1.73l.43-.25a2 2 0 0 1 2 0l.15.08a2 2 0 0 0 2.73-.73l.22-.38a2 2 0 0 0-.73-2.73l-.15-.1a2 2 0 0 1-1-1.72v-.51a2 2 0 0 1 1-1.74l.15-.09a2 2 0 0 0 .73-2.73l-.22-.38a2 2 0 0 0-2.73-.73l-.15.08a2 2 0 0 1-2 0l-.43-.25a2 2 0 0 1-1-1.73V4a2 2 0 0 0-2-2z"></path>
                     <circle cx="12" cy="12" r="3"></circle>
                   </svg>
+                  <span class="movi-quality-btn-badge" style="display: none;"></span>
                 </button>
                 <div class="movi-quality-menu" style="display: none;">
                   <div class="movi-quality-list"></div>
@@ -1694,21 +1741,36 @@ export class MoviElement extends HTMLElement {
         const isVisible = subtitleTrackMenu.style.display !== "none";
         subtitleTrackMenu.style.display = isVisible ? "none" : "block";
         if (!isVisible) {
+          // Always open on the track list, never on the customize panel.
+          this._showingSubtitleCustomize = false;
           this.updateSubtitleTrackMenu();
         }
       }
     });
 
-    // Close subtitle menu when clicking outside
+    // Header gear → toggle the customize panel inside the same dropdown.
+    const subtitleCustomizeBtn = shadowRoot.querySelector(
+      ".movi-subtitle-customize-btn",
+    ) as HTMLElement | null;
+    subtitleCustomizeBtn?.addEventListener("click", (e) => {
+      e.stopPropagation();
+      this._showingSubtitleCustomize = !this._showingSubtitleCustomize;
+      this.updateSubtitleTrackMenu();
+    });
+
+    // Close subtitle menu when clicking outside. Uses composedPath()
+    // instead of contains() so a click that originates inside the
+    // menu's shadow tree still counts as "inside" — important for the
+    // customize-panel's range sliders, where releasing the thumb past
+    // the menu's bounding box used to land the click target outside
+    // the menu and slam the panel shut mid-drag.
     const closeSubtitleMenuHandler = (e: MouseEvent) => {
-      if (
-        subtitleTrackMenu &&
-        subtitleTrackBtn &&
-        !subtitleTrackMenu.contains(e.target as Node) &&
-        !subtitleTrackBtn.contains(e.target as Node)
-      ) {
-        subtitleTrackMenu.style.display = "none";
+      if (!subtitleTrackMenu || !subtitleTrackBtn) return;
+      const path = e.composedPath();
+      if (path.includes(subtitleTrackMenu) || path.includes(subtitleTrackBtn)) {
+        return;
       }
+      subtitleTrackMenu.style.display = "none";
     };
     document.addEventListener("click", closeSubtitleMenuHandler);
 
@@ -4678,6 +4740,17 @@ export class MoviElement extends HTMLElement {
     const isHLS =
       typeof this._src === "string" &&
       (this._src.includes(".m3u8") || this._src.toLowerCase().endsWith("m3u8"));
+
+    // Pre-muxed multi-quality path: build a virtual track list from the
+    // declarative <source> tags so the picker works without HLS.
+    if (!isHLS && this._videoQualities.length > 1) {
+      this.renderPremuxedQualityMenu(
+        qualityList,
+        qualityContainer,
+      );
+      return;
+    }
+
     if (!isHLS) {
       qualityContainer.style.display = "none";
       return;
@@ -4758,15 +4831,37 @@ export class MoviElement extends HTMLElement {
       this.player as any
     ).trackManager?.getActiveVideoTrack();
 
+    // For HLS Auto mode, the active track id is -1 with height 0; surface the
+    // currently-playing level's badge instead so the gear stays informative.
+    let activeHeight = activeTrack?.height || 0;
+    if (!activeHeight && activeTrack?.id === -1) {
+      try {
+        const hlsLevel = (this.player as any).hls?.levels?.[(this.player as any).hls?.currentLevel];
+        activeHeight = hlsLevel?.height || 0;
+      } catch {}
+    }
+    this._updateQualityBtnBadge(this._heightBadge(activeHeight));
+
     qualityList.innerHTML = uniqueTracks
       .map((track) => {
         const isActive = activeTrack?.id === track.id;
         const label =
           track.label || (track.height ? `${track.height}p` : "Auto");
+        const h = track.height || 0;
+        let badge = "";
+        if (h >= 4320) badge = "8K";
+        else if (h >= 2160) badge = "4K";
+        else if (h >= 1080) badge = "HD";
+        const badgeHtml = badge
+          ? `<span class="movi-quality-badge movi-quality-badge-${badge.toLowerCase()}">${badge}</span>`
+          : "";
 
         return `
          <div class="movi-quality-item ${isActive ? "movi-quality-active" : ""}" data-track-id="${track.id}">
-            <span class="movi-quality-label">${label}</span>
+            <span class="movi-quality-label-wrap">
+              <span class="movi-quality-label">${label}</span>
+              ${badgeHtml}
+            </span>
             ${
               isActive
                 ? `
@@ -4801,6 +4896,250 @@ export class MoviElement extends HTMLElement {
         }
       });
     });
+  }
+
+  /**
+   * Map a video height to its YouTube-style quality badge (HD/4K/8K) or
+   * empty string when the resolution doesn't qualify.
+   */
+  private _heightBadge(height: number): string {
+    if (height >= 4320) return "8K";
+    if (height >= 2160) return "4K";
+    if (height >= 1080) return "HD";
+    return "";
+  }
+
+  /**
+   * Paint or hide the small badge pill on the gear button itself so the
+   * user can see the active quality tier at a glance — same convention
+   * as YouTube's player.
+   */
+  private _updateQualityBtnBadge(badge: string): void {
+    const el = this.shadowRoot?.querySelector(
+      ".movi-quality-btn-badge",
+    ) as HTMLElement | null;
+    if (!el) return;
+    if (badge) {
+      el.textContent = badge;
+      el.className = `movi-quality-btn-badge movi-quality-badge-${badge.toLowerCase()}`;
+      el.style.display = "inline-flex";
+    } else {
+      el.textContent = "";
+      el.style.display = "none";
+    }
+  }
+
+  /**
+   * Render a quality menu for pre-muxed multi-source MP4s (no HLS manifest).
+   * Driven by the cached `_videoQualities` list; switching just swaps the
+   * active <source> URL and lets the existing src-change pipeline reload
+   * the player while preserving currentTime / paused state.
+   */
+  private renderPremuxedQualityMenu(
+    qualityList: HTMLElement,
+    qualityContainer: HTMLElement,
+  ): void {
+    qualityContainer.style.display = "flex";
+
+    const activeSrc = typeof this._src === "string" ? this._src : "";
+    const activeQuality = this._videoQualities.find((q) => q.src === activeSrc);
+    this._updateQualityBtnBadge(activeQuality?.badge || this._heightBadge(activeQuality?.height || 0));
+
+    qualityList.innerHTML = this._videoQualities
+      .map((q) => {
+        const isActive = q.src === activeSrc;
+        // Label may already include the fps suffix (e.g. "1080p60"). Only
+        // append fps if it isn't already present in the label.
+        const fpsSuffix =
+          q.fps && q.fps > 30 && !new RegExp(`${q.fps}$`).test(q.label)
+            ? q.fps
+            : "";
+        const label = `${q.label}${fpsSuffix}`;
+        const badgeHtml = q.badge
+          ? `<span class="movi-quality-badge movi-quality-badge-${q.badge.toLowerCase()}">${q.badge}</span>`
+          : "";
+        return `
+          <div class="movi-quality-item ${isActive ? "movi-quality-active" : ""}" data-src="${q.src.replace(/"/g, "&quot;")}">
+            <span class="movi-quality-label-wrap">
+              <span class="movi-quality-label">${label}</span>
+              ${badgeHtml}
+            </span>
+            ${
+              isActive
+                ? `<svg class="movi-quality-check" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round">
+                    <polyline points="20 6 9 17 4 12"></polyline>
+                  </svg>`
+                : ""
+            }
+          </div>
+        `;
+      })
+      .join("");
+
+    qualityList.querySelectorAll(".movi-quality-item").forEach((item) => {
+      item.addEventListener("click", (e) => {
+        e.stopPropagation();
+        const newSrc = (item as HTMLElement).dataset.src;
+        if (!newSrc || newSrc === activeSrc) return;
+        this.switchPremuxedQuality(newSrc);
+
+        const menu = this.shadowRoot?.querySelector(
+          ".movi-quality-menu",
+        ) as HTMLElement;
+        if (menu) menu.style.display = "none";
+      });
+    });
+  }
+
+  // Audio element preserved across a quality switch. Re-adopted by the new
+  // MoviPlayer instance so its already-activated play() context survives —
+  // creating a fresh <audio> from scratch would be blocked by autoplay
+  // policy because the user-gesture token doesn't propagate across the
+  // async destroy → init pipeline.
+  private _carryAudioEl: HTMLAudioElement | null = null;
+
+  // True between the start of a quality switch and the moment the new
+  // player resumes playback. Suppresses the poster overlay so the user
+  // sees a frozen last-frame instead of the static thumbnail flashing in.
+  private _qualitySwitchInProgress: boolean = false;
+  // Pre-switch playback position. Used as a fallback while the new player
+  // is initialising so the time-display doesn't flash 00:00.
+  private _switchResumeTime: number = 0;
+  // Pre-switch total duration. Cached for the same reason — duration is
+  // identical across quality variants, but the new player's mediaInfo
+  // isn't populated until the demuxer opens.
+  private _switchResumeDuration: number = 0;
+
+  /**
+   * Swap the active video source and resume playback at the same position.
+   * The src setter pipeline tears down the player; we re-seek once metadata
+   * is available on the new instance.
+   */
+  private switchPremuxedQuality(newSrc: string): void {
+    const wasPaused = this.player ? (this.player as any).getState?.() === "paused" : true;
+    let resumeTime = 0;
+    try {
+      resumeTime = this.player ? (this.player as any).getCurrentTime?.() || 0 : 0;
+    } catch {}
+
+    const target = this._videoQualities.find((q) => q.src === newSrc);
+
+    // Detach the currently-playing native audio element so it survives the
+    // teardown unmolested, then re-adopt it on the next player instance.
+    try {
+      this._carryAudioEl =
+        (this.player as any)?.releaseNativeAudio?.() || null;
+    } catch {
+      this._carryAudioEl = null;
+    }
+
+    // Mark in-flight so the src attribute change doesn't re-paint the poster
+    // overlay (which would flash the thumbnail in over the last video frame).
+    this._qualitySwitchInProgress = true;
+    this._switchResumeTime = resumeTime;
+    try {
+      this._switchResumeDuration = this.player ? (this.player as any).getDuration?.() || 0 : 0;
+    } catch {
+      this._switchResumeDuration = 0;
+    }
+
+    // Snapshot the current canvas frame and pin it as the poster overlay so
+    // the user sees a frozen last-frame instead of black during the swap.
+    // The WebGL context gets recreated on player teardown which wipes the
+    // canvas; the snapshot bridges that gap until the new instance starts
+    // pushing frames again.
+    try {
+      const snapshot = this.canvas?.toDataURL?.("image/jpeg", 0.85);
+      if (snapshot && snapshot.length > 32) {
+        this._lastFrameSnapshot = snapshot;
+        this._showSnapshotPoster();
+      }
+    } catch {
+      // tainted canvas — fall back to plain blank during switch
+    }
+
+    // Safety net: if the new player never reaches "playing" (e.g. autoplay
+    // blocked AND user never resumes), make sure we don't leave the poster
+    // permanently suppressed.
+    setTimeout(() => {
+      if (this._qualitySwitchInProgress) {
+        this._qualitySwitchInProgress = false;
+        this._switchResumeTime = 0;
+        this._switchResumeDuration = 0;
+        this._hideSnapshotPoster();
+        this.updatePoster();
+      }
+    }, 8000);
+
+    // Setting the attribute funnels through the existing observedAttributes
+    // path which destroys the player and reinitialises with the new src.
+    this._suppressSwReload = true;
+    this.setAttribute("src", newSrc);
+
+    let restored = false;
+    const restore = () => {
+      if (restored) return;
+      restored = true;
+      try {
+        if (resumeTime > 0 && this.player) {
+          (this.player as any).seek?.(resumeTime);
+        }
+        if (wasPaused) {
+          (this.player as any)?.pause?.();
+        } else {
+          // Explicit play() from within the user-gesture event chain.
+          // The default autoplay path attempts play() too, but its async
+          // distance from the gear-click can exceed the browser's user
+          // activation window — causing the freshly-created native <audio>
+          // element to be blocked. Calling play() here keeps the activation
+          // alive long enough for the audio element to start.
+          Promise.resolve().then(() => {
+            (this.player as any)?.play?.().catch(() => {});
+          });
+        }
+      } catch {}
+      this.removeEventListener("loadeddata", restore);
+      this.removeEventListener("canplay", restore);
+      this.removeEventListener("durationchange", restore);
+    };
+    // Different player wrappers fire different events first — listen to the
+    // earliest signals that the new instance is ready to seek.
+    this.addEventListener("loadeddata", restore);
+    this.addEventListener("canplay", restore);
+    this.addEventListener("durationchange", restore);
+    // Hard-fallback in case none of the events bubble up to the host element
+    // (e.g. when the wrapper proxies events differently): poll for readiness.
+    if (resumeTime > 0) {
+      const start = Date.now();
+      const poll = () => {
+        if (restored) return;
+        try {
+          const dur = (this.player as any)?.getDuration?.() || 0;
+          if (dur > 0) {
+            restore();
+            return;
+          }
+        } catch {}
+        if (Date.now() - start < 5000) {
+          requestAnimationFrame(poll);
+        }
+      };
+      requestAnimationFrame(poll);
+    }
+
+    this.dispatchEvent(
+      new CustomEvent("qualitychange", {
+        detail: {
+          src: newSrc,
+          height: target?.height || 0,
+          label: target?.label || "",
+          fps: target?.fps || null,
+        },
+      }),
+    );
+
+    // Re-render the menu shortly after so the active checkmark moves
+    setTimeout(() => this.updateQualityMenu(), 0);
   }
 
   /*
@@ -4854,6 +5193,558 @@ export class MoviElement extends HTMLElement {
     }, 2000);
   }
 
+  // ── Subtitle appearance customization ──────────────────────────────
+  // YouTube-style settings panel. Settings are persisted under
+  // localStorage["movi.subtitleSettings"] and pushed onto the host
+  // element as CSS variables (--movi-sub-size-mult, --movi-sub-color,
+  // --movi-sub-bg-alpha, --movi-sub-edge) which the subtitle styles
+  // in the shadow DOM consume.
+
+  private static readonly SUBTITLE_SETTINGS_STORAGE_KEY = "movi.subtitleSettings";
+
+  /**
+   * Returns the kind of subtitle currently active so the customize
+   * panel can show only the options that apply.
+   *
+   *   - "vtt"   → WebVTT (karaoke-paced from YouTube proxy etc): all
+   *               text styling options apply, INCLUDING the backdrop.
+   *   - "text"  → SRT/ASS/SSA/TTML or muxed text subs: size/color/edge
+   *               and shift apply; backdrop doesn't (it's gated to VTT
+   *               in CSS).
+   *   - "image" → PGS/DVD/DVB or other muxed image subs: only the
+   *               subtitle-shift control applies; styling is baked
+   *               into the bitmap.
+   *   - null    → no subtitle selected → no customize gear shown.
+   */
+  private getActiveSubtitleKind(): "vtt" | "text" | "image" | null {
+    if (!this.player) return null;
+    // External (declared via <track> children) — has a `format` hint.
+    const ext = this.player.getSubtitleLangs().find((t) => t.active);
+    if (ext) {
+      const meta = this._subtitleTracks.find((t) => t.lang === ext.lang);
+      const fmt = (meta?.format || "").toLowerCase();
+      return fmt === "vtt" ? "vtt" : "text";
+    }
+    // Muxed — SubtitleTrack carries `subtitleType` ("text" | "image").
+    const mux = this.player.trackManager.getActiveSubtitleTrack();
+    if (mux) {
+      return mux.subtitleType === "image" ? "image" : "text";
+    }
+    return null;
+  }
+
+  private static readonly SUBTITLE_EDGE_STYLES: Record<
+    "none" | "shadow" | "outline" | "raised",
+    string
+  > = {
+    none: "none",
+    shadow: "0 0 4px rgba(0, 0, 0, 0.85)",
+    outline:
+      "-1px -1px 0 #000, 1px -1px 0 #000, -1px 1px 0 #000, 1px 1px 0 #000, 0 0 2px rgba(0,0,0,0.9)",
+    raised:
+      "1px 1px 0 rgba(255,255,255,0.35), 2px 2px 4px rgba(0,0,0,0.85)",
+  };
+
+  private static readonly SUBTITLE_COLOR_PALETTE: {
+    label: string;
+    value: string;
+  }[] = [
+    { label: "White", value: "#FFFFFF" },
+    { label: "Yellow", value: "#FFEB3B" },
+    { label: "Green", value: "#69F0AE" },
+    { label: "Cyan", value: "#80DEEA" },
+    { label: "Blue", value: "#82B1FF" },
+    { label: "Magenta", value: "#FF80AB" },
+    { label: "Red", value: "#FF5252" },
+    { label: "Black", value: "#000000" },
+  ];
+
+  private loadSubtitleSettings(): void {
+    try {
+      const raw = localStorage.getItem(
+        MoviElement.SUBTITLE_SETTINGS_STORAGE_KEY,
+      );
+      if (!raw) return;
+      const parsed = JSON.parse(raw);
+      if (parsed && typeof parsed === "object") {
+        if (typeof parsed.sizeMult === "number" && parsed.sizeMult > 0) {
+          this._subtitleSettings.sizeMult = parsed.sizeMult;
+        }
+        if (typeof parsed.color === "string") {
+          this._subtitleSettings.color = parsed.color;
+        }
+        if (typeof parsed.bgAlpha === "number") {
+          this._subtitleSettings.bgAlpha = Math.min(
+            1,
+            Math.max(0, parsed.bgAlpha),
+          );
+        }
+        if (
+          parsed.edge === "none" ||
+          parsed.edge === "shadow" ||
+          parsed.edge === "outline" ||
+          parsed.edge === "raised"
+        ) {
+          this._subtitleSettings.edge = parsed.edge;
+        }
+      }
+    } catch {
+      /* ignore — fall back to defaults */
+    }
+  }
+
+  private saveSubtitleSettings(): void {
+    try {
+      localStorage.setItem(
+        MoviElement.SUBTITLE_SETTINGS_STORAGE_KEY,
+        JSON.stringify(this._subtitleSettings),
+      );
+    } catch {
+      /* localStorage may be disabled — apply still works */
+    }
+  }
+
+  private applySubtitleSettings(): void {
+    const s = this._subtitleSettings;
+    this.style.setProperty("--movi-sub-size-mult", String(s.sizeMult));
+    this.style.setProperty("--movi-sub-color", s.color);
+    this.style.setProperty("--movi-sub-bg-alpha", String(s.bgAlpha));
+    this.style.setProperty(
+      "--movi-sub-bg-rgb",
+      MoviElement.contrastBackdropRgb(s.color),
+    );
+    this.style.setProperty(
+      "--movi-sub-edge",
+      MoviElement.SUBTITLE_EDGE_STYLES[s.edge],
+    );
+  }
+
+  /**
+   * Pick a backdrop RGB that contrasts with the text color so the cue
+   * stays readable regardless of the user's color choice. Dark text on
+   * dark backdrop (or vice versa) would render the subtitle invisible.
+   */
+  private static contrastBackdropRgb(color: string): string {
+    const m = /^#([0-9a-f]{3,8})$/i.exec(color.trim());
+    if (!m) return "8, 8, 8";
+    let h = m[1];
+    if (h.length === 3)
+      h = h
+        .split("")
+        .map((c) => c + c)
+        .join("");
+    if (h.length !== 6) return "8, 8, 8";
+    const r = parseInt(h.slice(0, 2), 16);
+    const g = parseInt(h.slice(2, 4), 16);
+    const b = parseInt(h.slice(4, 6), 16);
+    // Perceived (Rec. 601) luminance — 0..1
+    const lum = (0.299 * r + 0.587 * g + 0.114 * b) / 255;
+    // Dark text → light backdrop; otherwise dark backdrop.
+    return lum < 0.5 ? "245, 245, 245" : "8, 8, 8";
+  }
+
+  private renderSubtitleCustomizePanel(): string {
+    const s = this._subtitleSettings;
+    const kind = this.getActiveSubtitleKind();
+    const showText = kind === "vtt" || kind === "text"; // size/color/edge
+    const showBackdrop = kind === "vtt"; // backdrop only paints for VTT
+    const showShift = kind !== null; // shift applies to any active sub
+    const currentDelay = this.player ? this.player.getSubtitleDelay() : 0;
+
+    const edges: {
+      label: string;
+      value: "none" | "shadow" | "outline" | "raised";
+    }[] = [
+      { label: "None", value: "none" },
+      { label: "Shadow", value: "shadow" },
+      { label: "Outline", value: "outline" },
+      { label: "Raised", value: "raised" },
+    ];
+
+    // Live preview shows actual settings so the user sees every change
+    // immediately. Uses the SAME CSS classes the real subtitles use,
+    // so it matches the in-video output 1:1. The backdrop is only
+    // painted for VTT — SRT and other text formats render plain in
+    // the video too, so the preview must mirror that.
+    const previewBgRgb = MoviElement.contrastBackdropRgb(s.color);
+    const previewBlockBg =
+      showBackdrop && s.bgAlpha > 0
+        ? `background: rgba(${previewBgRgb}, ${s.bgAlpha});`
+        : "background: transparent;";
+    const previewLineStyle =
+      `color: ${s.color};` +
+      `font-size: calc(18px * ${s.sizeMult});` +
+      `text-shadow: ${MoviElement.SUBTITLE_EDGE_STYLES[s.edge]};`;
+
+    const colorSwatches = MoviElement.SUBTITLE_COLOR_PALETTE.map(
+      (c) => `
+      <button type="button"
+              class="movi-sub-cust-swatch${c.value === s.color ? " is-active" : ""}"
+              data-group="color"
+              data-value="${c.value}"
+              aria-label="${c.label}"
+              title="${c.label}"
+              style="--swatch:${c.value}"></button>
+    `,
+    ).join("");
+
+    const edgeTiles = edges
+      .map(
+        (e) => `
+      <button type="button"
+              class="movi-sub-cust-edge-tile${e.value === s.edge ? " is-active" : ""}"
+              data-group="edge"
+              data-value="${e.value}">
+        <span class="movi-sub-cust-edge-sample"
+              style="text-shadow: ${MoviElement.SUBTITLE_EDGE_STYLES[e.value]};">Aa</span>
+        <span class="movi-sub-cust-edge-name">${e.label}</span>
+      </button>
+    `,
+      )
+      .join("");
+
+    const sizePct = Math.round(s.sizeMult * 100);
+    const bgPct = Math.round(s.bgAlpha * 100);
+
+    const fontSizeSection = showText
+      ? `
+      <div class="movi-sub-cust-section">
+        <div class="movi-sub-cust-section-head">
+          <span class="movi-sub-cust-section-title">Font size</span>
+          <span class="movi-sub-cust-section-value" data-readout="size">${sizePct}%</span>
+        </div>
+        <input type="range"
+               class="movi-sub-cust-range"
+               data-group="size"
+               min="50" max="200" step="25"
+               value="${sizePct}"
+               aria-label="Font size">
+      </div>`
+      : "";
+
+    const textColorSection = showText
+      ? `
+      <div class="movi-sub-cust-section">
+        <div class="movi-sub-cust-section-head">
+          <span class="movi-sub-cust-section-title">Text color</span>
+        </div>
+        <div class="movi-sub-cust-swatch-grid">
+          ${colorSwatches}
+        </div>
+      </div>`
+      : "";
+
+    const backgroundSection = showBackdrop
+      ? `
+      <div class="movi-sub-cust-section">
+        <div class="movi-sub-cust-section-head">
+          <span class="movi-sub-cust-section-title">Background</span>
+          <span class="movi-sub-cust-section-value" data-readout="bg">${bgPct}%</span>
+        </div>
+        <input type="range"
+               class="movi-sub-cust-range"
+               data-group="bg"
+               min="0" max="100" step="25"
+               value="${bgPct}"
+               aria-label="Background opacity">
+      </div>`
+      : "";
+
+    const edgeStyleSection = showText
+      ? `
+      <div class="movi-sub-cust-section">
+        <div class="movi-sub-cust-section-head">
+          <span class="movi-sub-cust-section-title">Edge style</span>
+        </div>
+        <div class="movi-sub-cust-edge-grid">
+          ${edgeTiles}
+        </div>
+      </div>`
+      : "";
+
+    // Shift the cue timing forwards / backwards. VLC/mpv convention:
+    // positive = subs appear LATER, negative = earlier. The number
+    // field on the right accepts arbitrary entries (e.g. -1.7) for
+    // sources where the preset ±0.1/±1 nudges aren't fine enough.
+    const shiftSection = showShift
+      ? `
+      <div class="movi-sub-cust-section">
+        <div class="movi-sub-cust-section-head">
+          <span class="movi-sub-cust-section-title">Subtitle shift</span>
+          <div class="movi-sub-cust-shift-input-wrap">
+            <input type="number"
+                   class="movi-sub-cust-shift-input"
+                   data-readout="shift"
+                   step="0.1" min="-30" max="30"
+                   value="${currentDelay.toFixed(1)}"
+                   aria-label="Subtitle shift in seconds">
+            <span class="movi-sub-cust-shift-input-suffix">s</span>
+          </div>
+        </div>
+        <div class="movi-sub-cust-shift-controls">
+          <button type="button" class="movi-sub-cust-shift-btn" data-shift="-1" aria-label="Shift earlier by 1 s">−1s</button>
+          <button type="button" class="movi-sub-cust-shift-btn" data-shift="-0.1" aria-label="Shift earlier by 0.1 s">−0.1s</button>
+          <button type="button" class="movi-sub-cust-shift-btn movi-sub-cust-shift-zero" data-shift="zero" aria-label="Reset shift">0</button>
+          <button type="button" class="movi-sub-cust-shift-btn" data-shift="0.1" aria-label="Shift later by 0.1 s">+0.1s</button>
+          <button type="button" class="movi-sub-cust-shift-btn" data-shift="1" aria-label="Shift later by 1 s">+1s</button>
+        </div>
+      </div>`
+      : "";
+
+    // Empty-state: nothing to customize when no subtitle is active.
+    if (kind === null) {
+      return `
+        <div class="movi-sub-cust-panel">
+          <button type="button" class="movi-sub-cust-back" data-action="back" aria-label="Back to subtitles">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" width="14" height="14">
+              <path d="M15 18l-6-6 6-6"/>
+            </svg>
+            <span>Back</span>
+          </button>
+          <div class="movi-sub-cust-empty">Select a subtitle track to customize.</div>
+        </div>
+      `;
+    }
+
+    return `
+      <div class="movi-sub-cust-panel">
+        <button type="button" class="movi-sub-cust-back" data-action="back" aria-label="Back to subtitles">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" width="14" height="14">
+            <path d="M15 18l-6-6 6-6"/>
+          </svg>
+          <span>Back</span>
+        </button>
+
+        ${
+          showText
+            ? `
+        <div class="movi-sub-cust-preview">
+          <div class="movi-sub-cust-preview-stage">
+            <div class="movi-sub-cust-preview-block" style="${previewBlockBg}">
+              <div class="movi-sub-cust-preview-line" style="${previewLineStyle}">Sample subtitles</div>
+            </div>
+          </div>
+        </div>`
+            : ""
+        }
+
+        ${fontSizeSection}
+        ${textColorSection}
+        ${backgroundSection}
+        ${edgeStyleSection}
+        ${shiftSection}
+
+        <div class="movi-sub-cust-footer">
+          <button type="button" class="movi-sub-cust-reset" data-action="reset">Reset to default</button>
+        </div>
+      </div>
+    `;
+  }
+
+
+  private wireSubtitleCustomizePanel(root: HTMLElement): void {
+    // Update the preview, the live in-video subtitle, and persist —
+    // without re-rendering the whole panel so a slider drag stays
+    // smooth (no DOM rebuild on every input event).
+    const refreshPreview = () => {
+      const s = this._subtitleSettings;
+      const block = root.querySelector<HTMLElement>(
+        ".movi-sub-cust-preview-block",
+      );
+      const line = root.querySelector<HTMLElement>(
+        ".movi-sub-cust-preview-line",
+      );
+      // Mirror the in-video CSS: backdrop only paints for VTT, so the
+      // preview also goes transparent for SRT / other text formats.
+      const previewShowsBackdrop = this.getActiveSubtitleKind() === "vtt";
+      if (block) {
+        const rgb = MoviElement.contrastBackdropRgb(s.color);
+        block.style.background =
+          previewShowsBackdrop && s.bgAlpha > 0
+            ? `rgba(${rgb}, ${s.bgAlpha})`
+            : "transparent";
+      }
+      if (line) {
+        line.style.color = s.color;
+        line.style.fontSize = `calc(18px * ${s.sizeMult})`;
+        line.style.textShadow = MoviElement.SUBTITLE_EDGE_STYLES[s.edge];
+      }
+    };
+    const refreshReadout = (group: "size" | "bg") => {
+      const r = root.querySelector<HTMLElement>(
+        `[data-readout="${group}"]`,
+      );
+      if (!r) return;
+      r.textContent =
+        group === "size"
+          ? `${Math.round(this._subtitleSettings.sizeMult * 100)}%`
+          : `${Math.round(this._subtitleSettings.bgAlpha * 100)}%`;
+    };
+    const persistAndApply = () => {
+      this.saveSubtitleSettings();
+      this.applySubtitleSettings();
+    };
+
+    // Range sliders — input fires continuously while dragging.
+    root
+      .querySelectorAll<HTMLInputElement>(".movi-sub-cust-range")
+      .forEach((range) => {
+        range.addEventListener("input", (e) => {
+          e.stopPropagation();
+          const group = range.dataset.group as "size" | "bg" | undefined;
+          if (!group) return;
+          const pct = parseFloat(range.value);
+          if (group === "size") this._subtitleSettings.sizeMult = pct / 100;
+          else this._subtitleSettings.bgAlpha = pct / 100;
+          refreshReadout(group);
+          refreshPreview();
+          persistAndApply();
+        });
+      });
+
+    // Color swatches.
+    root
+      .querySelectorAll<HTMLElement>(".movi-sub-cust-swatch")
+      .forEach((btn) => {
+        btn.addEventListener("click", (e) => {
+          e.stopPropagation();
+          const v = btn.dataset.value;
+          if (!v) return;
+          this._subtitleSettings.color = v;
+          root
+            .querySelectorAll(".movi-sub-cust-swatch")
+            .forEach((el) => el.classList.remove("is-active"));
+          btn.classList.add("is-active");
+          refreshPreview();
+          persistAndApply();
+        });
+      });
+
+    // Edge style tiles.
+    root
+      .querySelectorAll<HTMLElement>(".movi-sub-cust-edge-tile")
+      .forEach((tile) => {
+        tile.addEventListener("click", (e) => {
+          e.stopPropagation();
+          const v = tile.dataset.value as
+            | "none"
+            | "shadow"
+            | "outline"
+            | "raised"
+            | undefined;
+          if (!v) return;
+          this._subtitleSettings.edge = v;
+          root
+            .querySelectorAll(".movi-sub-cust-edge-tile")
+            .forEach((el) => el.classList.remove("is-active"));
+          tile.classList.add("is-active");
+          refreshPreview();
+          persistAndApply();
+        });
+      });
+
+    // Back to subtitles list.
+    const backBtn = root.querySelector<HTMLElement>(".movi-sub-cust-back");
+    backBtn?.addEventListener("click", (e) => {
+      e.stopPropagation();
+      this._showingSubtitleCustomize = false;
+      this.updateSubtitleTrackMenu();
+    });
+
+    // Subtitle shift (timing nudge). Preset buttons (±0.1s / ±1s / 0)
+    // plus a number input for custom entry. Per-source state (lives on
+    // the player, NOT in localStorage — drift is content-specific).
+    const shiftInput = root.querySelector<HTMLInputElement>(
+      'input[data-readout="shift"]',
+    );
+    const refreshShiftReadout = () => {
+      if (!shiftInput || !this.player) return;
+      const v = this.player.getSubtitleDelay();
+      // Don't clobber the field while the user is typing in it.
+      if (document.activeElement !== shiftInput) {
+        shiftInput.value = v.toFixed(1);
+      }
+    };
+    const applyShift = (next: number) => {
+      if (!this.player) return;
+      const clamped = Math.max(-30, Math.min(30, next));
+      // Round to 1 decimal so consecutive nudges don't accumulate fp noise.
+      const rounded = Math.round(clamped * 10) / 10;
+      this.player.setSubtitleDelay(rounded);
+      refreshShiftReadout();
+    };
+    root
+      .querySelectorAll<HTMLElement>(".movi-sub-cust-shift-btn")
+      .forEach((btn) => {
+        btn.addEventListener("click", (e) => {
+          e.stopPropagation();
+          if (!this.player) return;
+          const v = btn.dataset.shift;
+          if (!v) return;
+          if (v === "zero") applyShift(0);
+          else {
+            const delta = parseFloat(v);
+            if (Number.isFinite(delta))
+              applyShift(this.player.getSubtitleDelay() + delta);
+          }
+        });
+      });
+    if (shiftInput) {
+      // Apply on Enter / blur so the user can type out a value without
+      // every keystroke racing with re-formatting.
+      const commit = () => {
+        const parsed = parseFloat(shiftInput.value);
+        if (Number.isFinite(parsed)) {
+          applyShift(parsed);
+          shiftInput.value = (
+            this.player ? this.player.getSubtitleDelay() : 0
+          ).toFixed(1);
+        } else {
+          // Restore last good value if the user typed garbage.
+          shiftInput.value = (
+            this.player ? this.player.getSubtitleDelay() : 0
+          ).toFixed(1);
+        }
+      };
+      shiftInput.addEventListener("keydown", (e) => {
+        // Player has global key bindings (←/→ seek, Space play/pause,
+        // ↑/↓ volume) — they must NOT fire while the user is typing
+        // in this field. Stopping propagation keeps the key event
+        // local to the input.
+        e.stopPropagation();
+        if (e.key === "Enter") {
+          e.preventDefault();
+          shiftInput.blur(); // triggers commit via blur
+        }
+      });
+      // Same shielding for keyup/keypress so capture-phase listeners
+      // upstream don't pick the keys up either.
+      shiftInput.addEventListener("keyup", (e) => e.stopPropagation());
+      shiftInput.addEventListener("keypress", (e) => e.stopPropagation());
+      shiftInput.addEventListener("blur", commit);
+      // Stop the document-level close handler from eating focus events
+      // that originate inside the field.
+      shiftInput.addEventListener("click", (e) => e.stopPropagation());
+    }
+
+    // Reset.
+    const resetBtn = root.querySelector<HTMLElement>(".movi-sub-cust-reset");
+    resetBtn?.addEventListener("click", (e) => {
+      e.stopPropagation();
+      this._subtitleSettings = {
+        sizeMult: 1,
+        color: "#FFFFFF",
+        bgAlpha: 0.75,
+        edge: "shadow",
+      };
+      this.saveSubtitleSettings();
+      this.applySubtitleSettings();
+      this.updateSubtitleTrackMenu(); // full redraw — slider/swatch/tile state all need to flip
+    });
+  }
+
+  private _showingSubtitleCustomize: boolean = false;
+
   private updateSubtitleTrackMenu(): void {
     if (!this.player) return;
 
@@ -4882,6 +5773,39 @@ export class MoviElement extends HTMLElement {
 
     subtitleTrackContainer.style.display = "flex";
     subtitleTrackBtn.style.display = "flex";
+
+    // Reflect the customize state on the header gear icon and hide it
+    // entirely when there is no active subtitle — there's nothing to
+    // customize until the user picks a track.
+    const gearBtn = this.shadowRoot?.querySelector(
+      ".movi-subtitle-customize-btn",
+    ) as HTMLElement | null;
+    const hasActiveSubtitle = this.getActiveSubtitleKind() !== null;
+    if (gearBtn) {
+      gearBtn.style.display = hasActiveSubtitle ? "" : "none";
+      gearBtn.classList.toggle("is-active", this._showingSubtitleCustomize);
+      gearBtn.setAttribute(
+        "aria-pressed",
+        this._showingSubtitleCustomize ? "true" : "false",
+      );
+    }
+    // If the user had the customize panel open and then hit "Off",
+    // bounce them back to the track list automatically.
+    if (this._showingSubtitleCustomize && !hasActiveSubtitle) {
+      this._showingSubtitleCustomize = false;
+    }
+
+    // If the user pressed the gear, render the settings panel inside
+    // the same dropdown. Pressing the gear (or the panel's Back) returns.
+    if (this._showingSubtitleCustomize) {
+      subtitleTrackList.innerHTML = this.renderSubtitleCustomizePanel();
+      this.wireSubtitleCustomizePanel(subtitleTrackList);
+      const subtitleFooter = this.shadowRoot?.querySelector(
+        ".movi-subtitle-track-footer",
+      ) as HTMLElement | null;
+      if (subtitleFooter) subtitleFooter.textContent = "";
+      return;
+    }
 
     const anyExternalActive = externalSubs.some((t) => t.active);
     const offActive = activeTrack === null && !anyExternalActive;
@@ -6026,7 +6950,14 @@ export class MoviElement extends HTMLElement {
         border-radius: 14px;
         min-width: 260px;
         max-width: 340px;
-        max-height: 360px;
+        /* Capped against the PLAYER's own height (--movi-player-height
+           is set by JS on connect/resize) — minus a controls-bar
+           reserve so the menu never extends below the player. Falls
+           back to 460px / 70vh if the variable isn't yet set. */
+        max-height: min(
+          calc(var(--movi-player-height, 70vh) - 100px),
+          460px
+        );
         overflow: hidden;
         display: flex;
         flex-direction: column;
@@ -6055,6 +6986,48 @@ export class MoviElement extends HTMLElement {
         opacity: 0.85;
       }
 
+      /* Gear icon at the top-right of the Subtitles header opens the
+         customize panel. Toggling it returns to the track list. */
+      .movi-subtitle-track-header {
+        position: relative;
+      }
+
+      .movi-subtitle-track-header > span {
+        flex: 1;
+      }
+
+      .movi-subtitle-customize-btn {
+        all: unset;
+        cursor: pointer;
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        width: 28px;
+        height: 28px;
+        border-radius: 8px;
+        color: var(--movi-controls-color);
+        opacity: 0.7;
+        transition: background var(--movi-transition-fast), opacity var(--movi-transition-fast), color var(--movi-transition-fast);
+      }
+
+      .movi-subtitle-customize-btn:hover {
+        background: color-mix(in srgb, var(--movi-controls-color) 0.1, transparent);
+        opacity: 1;
+      }
+
+      .movi-subtitle-customize-btn.is-active,
+      .movi-subtitle-customize-btn[aria-pressed="true"] {
+        color: var(--movi-primary);
+        opacity: 1;
+        background: color-mix(in srgb, var(--movi-primary) 0.18, transparent);
+      }
+
+      .movi-subtitle-customize-btn svg {
+        width: 16px;
+        height: 16px;
+        opacity: 1;
+      }
+
       .movi-track-menu-footer {
         padding: 8px 16px 10px;
         font-size: 11px;
@@ -6073,8 +7046,43 @@ export class MoviElement extends HTMLElement {
       .movi-subtitle-track-list {
         padding: 6px;
         overflow-y: auto;
-        flex: 1;
+        overscroll-behavior: contain;
+        /* Bound the list directly off the player's own height (minus
+           ~180px of chrome: header + footer + the controls-bar reserve
+           the parent menu also subtracts). Capped at 360px on tall
+           players. Bypasses flex shrinking quirks: the list ALWAYS has
+           a concrete max-height so overflow-y kicks in cleanly.
+           Mobile media query below overrides this with max-height:
+           none so the outer menu's single scrollbar handles long
+           lists on small screens. */
+        max-height: min(
+          calc(var(--movi-player-height, 70vh) - 180px),
+          360px
+        );
+        flex: 1 1 auto;
         min-height: 0;
+        scrollbar-width: thin;
+        scrollbar-color: color-mix(in srgb, var(--movi-controls-color) 0.35, transparent) transparent;
+      }
+
+      /* Always-visible thin scrollbar so users can see at a glance that
+         long track lists (16+ languages) keep going below the fold. */
+      .movi-audio-track-list::-webkit-scrollbar,
+      .movi-subtitle-track-list::-webkit-scrollbar {
+        width: 6px;
+      }
+      .movi-audio-track-list::-webkit-scrollbar-track,
+      .movi-subtitle-track-list::-webkit-scrollbar-track {
+        background: transparent;
+      }
+      .movi-audio-track-list::-webkit-scrollbar-thumb,
+      .movi-subtitle-track-list::-webkit-scrollbar-thumb {
+        background: color-mix(in srgb, var(--movi-controls-color) 0.28, transparent);
+        border-radius: 3px;
+      }
+      .movi-audio-track-list::-webkit-scrollbar-thumb:hover,
+      .movi-subtitle-track-list::-webkit-scrollbar-thumb:hover {
+        background: color-mix(in srgb, var(--movi-controls-color) 0.5, transparent);
       }
 
       .movi-audio-track-item,
@@ -6166,6 +7174,488 @@ export class MoviElement extends HTMLElement {
         display: none; /* Hidden by default, shown when subtitle tracks available */
         align-items: center;
         margin-left: 4px;
+      }
+
+      .movi-subtitle-track-divider {
+        height: 1px;
+        background: var(--movi-glass-border);
+        margin: 6px 4px;
+        opacity: 0.7;
+      }
+
+      .movi-subtitle-customize-item {
+        opacity: 0.92;
+      }
+
+      .movi-sub-cust-panel {
+        display: flex;
+        flex-direction: column;
+        gap: 18px;
+        padding: 14px 14px 12px;
+      }
+
+      /* Back-to-list pill at the top of the customize panel. */
+      .movi-sub-cust-back {
+        all: unset;
+        cursor: pointer;
+        align-self: flex-start;
+        display: inline-flex;
+        align-items: center;
+        gap: 6px;
+        padding: 6px 10px 6px 8px;
+        margin-bottom: -8px;
+        font-size: 12px;
+        font-weight: 600;
+        color: var(--movi-text-secondary);
+        background: color-mix(in srgb, var(--movi-controls-color) 0.06, transparent);
+        border-radius: 999px;
+        transition: background var(--movi-transition-fast), color var(--movi-transition-fast);
+      }
+
+      .movi-sub-cust-back:hover {
+        color: var(--movi-controls-color);
+        background: color-mix(in srgb, var(--movi-primary) 0.16, transparent);
+      }
+
+      .movi-sub-cust-back svg {
+        flex-shrink: 0;
+      }
+
+      /* Live preview — sample text rendered using the EXACT same look
+         the in-video subtitle will get. Always a dark-ish "video"
+         backdrop (regardless of theme) so user-selected text colors
+         and shadows render in a realistic context — subtitles are
+         designed to sit on a dark video frame. */
+      .movi-sub-cust-preview {
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        height: 86px;
+        border-radius: 10px;
+        overflow: hidden;
+        background:
+          linear-gradient(135deg, rgba(255,255,255,0.05), rgba(255,255,255,0)),
+          repeating-conic-gradient(
+            rgba(255,255,255,0.04) 0% 25%,
+            rgba(255,255,255,0.02) 0% 50%
+          ),
+          #1a1a1a;
+        background-size: auto, 16px 16px, auto;
+        border: 1px solid rgba(255, 255, 255, 0.08);
+      }
+
+      .movi-sub-cust-preview-stage {
+        padding: 12px 16px;
+      }
+
+      .movi-sub-cust-preview-block {
+        display: inline-block;
+        padding: 4px 12px;
+        border-radius: 4px;
+      }
+
+      .movi-sub-cust-preview-line {
+        font-family: 'YouTube Sans', 'Roboto', -apple-system, BlinkMacSystemFont, 'Segoe UI', Arial, sans-serif;
+        font-weight: 500;
+        line-height: 1.35;
+        letter-spacing: 0.01em;
+        white-space: nowrap;
+      }
+
+      .movi-sub-cust-section {
+        display: flex;
+        flex-direction: column;
+        gap: 8px;
+      }
+
+      .movi-sub-cust-section-head {
+        display: flex;
+        align-items: baseline;
+        justify-content: space-between;
+        gap: 8px;
+      }
+
+      .movi-sub-cust-section-title {
+        font-size: 13px;
+        font-weight: 600;
+        color: var(--movi-controls-color);
+        letter-spacing: 0;
+        text-transform: none;
+      }
+
+      .movi-sub-cust-section-value {
+        font-size: 12px;
+        font-weight: 600;
+        color: var(--movi-primary);
+        font-variant-numeric: tabular-nums;
+      }
+
+      /* Range slider — themed thumb in primary color, visible rail.
+         color-mix() rendered the rail as effectively transparent in
+         some Chromium builds, so the rail uses plain rgba() now. */
+      .movi-sub-cust-range {
+        appearance: none;
+        -webkit-appearance: none;
+        -moz-appearance: none;
+        display: block;
+        width: 100%;
+        height: 22px;
+        padding: 0;
+        margin: 0;
+        background: transparent;
+        cursor: pointer;
+        outline: none;
+      }
+
+      .movi-sub-cust-range::-webkit-slider-runnable-track {
+        width: 100%;
+        height: 6px;
+        border-radius: 999px;
+        /* Rail color via CSS variable so light theme can swap it
+           without fighting pseudo-element specificity. */
+        background: var(--movi-sub-cust-rail, rgba(255, 255, 255, 0.22));
+        border: none;
+      }
+
+      .movi-sub-cust-range::-webkit-slider-thumb {
+        appearance: none;
+        -webkit-appearance: none;
+        width: 18px;
+        height: 18px;
+        border-radius: 50%;
+        background: var(--movi-primary);
+        border: 3px solid #FFFFFF;
+        margin-top: -6px;
+        box-shadow: 0 1px 4px rgba(0, 0, 0, 0.4);
+        cursor: pointer;
+        transition: transform var(--movi-transition-fast);
+      }
+
+      .movi-sub-cust-range::-webkit-slider-thumb:hover {
+        transform: scale(1.1);
+      }
+
+      .movi-sub-cust-range::-moz-range-track {
+        width: 100%;
+        height: 6px;
+        border-radius: 999px;
+        background: var(--movi-sub-cust-rail, rgba(255, 255, 255, 0.22));
+        border: none;
+      }
+
+      .movi-sub-cust-range::-moz-range-thumb {
+        width: 18px;
+        height: 18px;
+        border-radius: 50%;
+        background: var(--movi-primary);
+        border: 3px solid #FFFFFF;
+        box-shadow: 0 1px 4px rgba(0, 0, 0, 0.4);
+        cursor: pointer;
+      }
+
+      .movi-sub-cust-range::-moz-range-progress {
+        height: 6px;
+        border-radius: 999px;
+        background: var(--movi-primary);
+      }
+
+      :host([theme="light"]) {
+        /* Slider rail color overridden via the host — :host(...) X::pseudo
+           selectors don't reliably target ::-webkit-slider-runnable-track
+           across browsers, but a CSS variable on the host cascades into
+           the shadow DOM cleanly. */
+        --movi-sub-cust-rail: rgba(0, 0, 0, 0.35);
+      }
+
+      :host([theme="light"]) .movi-sub-cust-range::-webkit-slider-thumb,
+      :host([theme="light"]) .movi-sub-cust-range::-moz-range-thumb {
+        border-color: rgba(255, 255, 255, 0.95);
+        box-shadow: 0 1px 4px rgba(0, 0, 0, 0.3),
+                    0 0 0 1px rgba(0, 0, 0, 0.1);
+      }
+
+      /* Light-theme readability for the customize panel — without these
+         the labels inherit a faded color and disappear against the
+         glass-bg. */
+      :host([theme="light"]) .movi-sub-cust-section-title {
+        color: #11142d;
+      }
+
+      /* Gear icon contrast — default opacity 0.7 reads as nearly
+         white-on-white in light theme. Force full opacity + dark
+         color for proper visibility. */
+      :host([theme="light"]) .movi-subtitle-customize-btn {
+        color: #11142d;
+        opacity: 1;
+      }
+
+      :host([theme="light"]) .movi-subtitle-customize-btn:hover {
+        background: rgba(0, 0, 0, 0.06);
+      }
+
+      :host([theme="light"]) .movi-subtitle-customize-btn.is-active,
+      :host([theme="light"]) .movi-subtitle-customize-btn[aria-pressed="true"] {
+        color: var(--movi-primary);
+        background: color-mix(in srgb, var(--movi-primary) 0.16, transparent);
+      }
+
+      :host([theme="light"]) .movi-sub-cust-back {
+        color: #11142d;
+        background: rgba(0, 0, 0, 0.05);
+      }
+
+      :host([theme="light"]) .movi-sub-cust-back:hover {
+        background: color-mix(in srgb, var(--movi-primary) 0.16, rgba(0,0,0,0.04));
+      }
+
+      :host([theme="light"]) .movi-sub-cust-reset {
+        color: #11142d;
+        background: rgba(0, 0, 0, 0.06);
+      }
+
+      :host([theme="light"]) .movi-sub-cust-reset:hover {
+        color: var(--movi-primary);
+        background: color-mix(in srgb, var(--movi-primary) 0.18, transparent);
+      }
+
+      :host([theme="light"]) .movi-sub-cust-swatch {
+        box-shadow:
+          inset 0 0 0 1px rgba(0, 0, 0, 0.5),
+          0 0 0 0 transparent;
+      }
+
+      :host([theme="light"]) .movi-sub-cust-swatch.is-active {
+        box-shadow:
+          inset 0 0 0 1px rgba(0, 0, 0, 0.5),
+          0 0 0 3px var(--movi-primary);
+      }
+
+      /* Subtitle-shift buttons inherit color from the controls color
+         var which doesn't always cascade reliably across the customize
+         panel; force visible dark text + light-bg pill in light theme. */
+      :host([theme="light"]) .movi-sub-cust-shift-btn {
+        color: #11142d;
+        background: rgba(0, 0, 0, 0.06);
+        border-color: rgba(0, 0, 0, 0.1);
+      }
+
+      :host([theme="light"]) .movi-sub-cust-shift-btn:hover {
+        background: color-mix(in srgb, var(--movi-primary) 0.16, rgba(0, 0, 0, 0.04));
+        border-color: color-mix(in srgb, var(--movi-primary) 0.4, rgba(0, 0, 0, 0.1));
+      }
+
+      :host([theme="light"]) .movi-sub-cust-shift-zero {
+        color: rgba(0, 0, 0, 0.5);
+      }
+
+      /* Color swatch grid — generously tappable, primary-ring on active. */
+      .movi-sub-cust-swatch-grid {
+        display: grid;
+        grid-template-columns: repeat(8, 1fr);
+        gap: 8px;
+      }
+
+      .movi-sub-cust-swatch {
+        all: unset;
+        cursor: pointer;
+        aspect-ratio: 1 / 1;
+        border-radius: 50%;
+        background: var(--swatch);
+        box-shadow:
+          inset 0 0 0 1px rgba(0, 0, 0, 0.5),
+          0 0 0 0 transparent;
+        transition: transform var(--movi-transition-fast), box-shadow var(--movi-transition-fast);
+      }
+
+      .movi-sub-cust-swatch:hover {
+        transform: scale(1.08);
+      }
+
+      .movi-sub-cust-swatch.is-active {
+        box-shadow:
+          inset 0 0 0 1px rgba(0, 0, 0, 0.5),
+          0 0 0 3px var(--movi-primary);
+      }
+
+      /* Edge style tiles — each tile shows the actual effect on a
+         sample "Aa" so the user picks by what they SEE. */
+      .movi-sub-cust-edge-grid {
+        display: grid;
+        grid-template-columns: repeat(4, 1fr);
+        gap: 8px;
+      }
+
+      .movi-sub-cust-edge-tile {
+        all: unset;
+        cursor: pointer;
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        justify-content: center;
+        gap: 6px;
+        padding: 12px 6px 10px;
+        border-radius: 10px;
+        /* Always-dark tile background so the white "Aa" sample (which
+           shows the actual edge effect) keeps proper contrast in
+           light theme too. */
+        background: #181a20;
+        border: 1px solid rgba(255, 255, 255, 0.08);
+        transition: background var(--movi-transition-fast), border-color var(--movi-transition-fast);
+      }
+
+      .movi-sub-cust-edge-tile:hover {
+        background: #22252e;
+        border-color: color-mix(in srgb, var(--movi-primary) 0.5, rgba(255,255,255,0.08));
+      }
+
+      .movi-sub-cust-edge-tile.is-active {
+        background: #22252e;
+        border-color: var(--movi-primary);
+        box-shadow: 0 0 0 1px var(--movi-primary);
+      }
+
+      .movi-sub-cust-edge-tile .movi-sub-cust-edge-name {
+        color: rgba(255, 255, 255, 0.55);
+      }
+
+      .movi-sub-cust-edge-tile.is-active .movi-sub-cust-edge-name {
+        color: #FFFFFF;
+      }
+
+      .movi-sub-cust-edge-sample {
+        font-family: 'YouTube Sans', 'Roboto', -apple-system, BlinkMacSystemFont, 'Segoe UI', Arial, sans-serif;
+        font-size: 22px;
+        font-weight: 700;
+        color: #FFFFFF;
+        line-height: 1;
+      }
+
+      .movi-sub-cust-edge-name {
+        font-size: 11px;
+        font-weight: 500;
+        color: var(--movi-text-tertiary);
+        letter-spacing: 0.02em;
+      }
+
+      /* Editable readout (number input + "s" suffix) sitting in the
+         section header. Looks like a flat readout but accepts custom
+         values for fine drift correction. */
+      .movi-sub-cust-shift-input-wrap {
+        display: inline-flex;
+        align-items: baseline;
+        gap: 2px;
+        padding: 2px 6px;
+        border-radius: 6px;
+        background: color-mix(in srgb, var(--movi-controls-color) 0.06, transparent);
+        transition: background var(--movi-transition-fast);
+      }
+
+      .movi-sub-cust-shift-input-wrap:focus-within {
+        background: color-mix(in srgb, var(--movi-primary) 0.18, transparent);
+        outline: 1px solid color-mix(in srgb, var(--movi-primary) 0.5, transparent);
+      }
+
+      .movi-sub-cust-shift-input {
+        all: unset;
+        width: 3.5ch;
+        text-align: right;
+        font-size: 12px;
+        font-weight: 600;
+        font-variant-numeric: tabular-nums;
+        color: var(--movi-primary);
+        cursor: text;
+      }
+
+      /* Hide the spinner buttons on Chromium / Firefox — keyboard or
+         the preset pills are how we want users to nudge values. */
+      .movi-sub-cust-shift-input::-webkit-outer-spin-button,
+      .movi-sub-cust-shift-input::-webkit-inner-spin-button {
+        -webkit-appearance: none;
+        margin: 0;
+      }
+      .movi-sub-cust-shift-input {
+        -moz-appearance: textfield;
+      }
+
+      .movi-sub-cust-shift-input-suffix {
+        font-size: 12px;
+        font-weight: 600;
+        color: var(--movi-primary);
+      }
+
+      :host([theme="light"]) .movi-sub-cust-shift-input-wrap {
+        background: rgba(0, 0, 0, 0.06);
+      }
+
+      /* Subtitle-shift controls — five compact buttons in one row.
+         The middle "0" is treated as a soft reset for timing only. */
+      .movi-sub-cust-shift-controls {
+        display: grid;
+        grid-template-columns: repeat(5, 1fr);
+        gap: 6px;
+      }
+
+      .movi-sub-cust-shift-btn {
+        all: unset;
+        cursor: pointer;
+        text-align: center;
+        padding: 8px 6px;
+        border-radius: 8px;
+        font-size: 12px;
+        font-weight: 600;
+        font-variant-numeric: tabular-nums;
+        color: var(--movi-controls-color);
+        background: color-mix(in srgb, var(--movi-controls-color) 0.08, transparent);
+        border: 1px solid color-mix(in srgb, var(--movi-controls-color) 0.1, transparent);
+        transition: background var(--movi-transition-fast), border-color var(--movi-transition-fast), transform var(--movi-transition-fast);
+      }
+
+      .movi-sub-cust-shift-btn:hover {
+        background: color-mix(in srgb, var(--movi-primary) 0.16, transparent);
+        border-color: color-mix(in srgb, var(--movi-primary) 0.4, transparent);
+      }
+
+      .movi-sub-cust-shift-btn:active {
+        transform: scale(0.96);
+      }
+
+      .movi-sub-cust-shift-zero {
+        color: var(--movi-text-tertiary);
+      }
+
+      /* Empty-state when no track is selected. */
+      .movi-sub-cust-empty {
+        padding: 28px 12px;
+        text-align: center;
+        font-size: 12px;
+        color: var(--movi-text-tertiary);
+      }
+
+      /* Footer — single, prominent reset action. */
+      .movi-sub-cust-footer {
+        display: flex;
+        justify-content: center;
+        padding-top: 4px;
+        border-top: 1px solid color-mix(in srgb, var(--movi-controls-color) 0.06, transparent);
+        margin-top: 2px;
+        padding-top: 14px;
+      }
+
+      .movi-sub-cust-reset {
+        all: unset;
+        cursor: pointer;
+        font-size: 12px;
+        font-weight: 600;
+        color: var(--movi-controls-color);
+        padding: 8px 16px;
+        border-radius: 8px;
+        background: color-mix(in srgb, var(--movi-controls-color) 0.06, transparent);
+        transition: background var(--movi-transition-fast), color var(--movi-transition-fast);
+      }
+
+      .movi-sub-cust-reset:hover {
+        background: color-mix(in srgb, var(--movi-primary) 0.18, transparent);
+        color: var(--movi-primary);
       }
 
       .movi-subtitle-track-btn {
@@ -7208,6 +8698,60 @@ export class MoviElement extends HTMLElement {
         :host(:fullscreen) .movi-speed-menu {
            max-height: 70vh !important;
         }
+
+        /* On mobile the menu itself scrolls (see overflow-y above) —
+           so the inner list shouldn't carry its own bounded scroll
+           area; collapsing the desktop max-height lets the menu's
+           single scrollbar handle long lists. */
+        .movi-audio-track-list,
+        .movi-subtitle-track-list {
+          max-height: none !important;
+          overflow-y: visible !important;
+        }
+
+        /* Subtitle customize panel — compact layout for narrow players. */
+        .movi-sub-cust-panel {
+          padding: 2px 4px 6px;
+          gap: 6px;
+        }
+        .movi-sub-cust-back {
+          padding: 6px 8px;
+          font-size: 12px;
+        }
+        .movi-sub-cust-row {
+          padding: 2px 4px;
+        }
+        .movi-sub-cust-label {
+          font-size: 10px;
+          margin-bottom: 4px;
+        }
+        .movi-sub-cust-options {
+          gap: 3px;
+        }
+        .movi-sub-cust-opt {
+          min-width: 36px;
+          padding: 5px 7px;
+          font-size: 11px;
+          flex: 1 1 calc(20% - 3px);
+        }
+        .movi-sub-cust-swatch {
+          width: 22px;
+          height: 22px;
+          border-width: 2px;
+        }
+        .movi-sub-cust-reset {
+          font-size: 11px;
+          padding: 5px 8px;
+        }
+        /* Header gear stays tappable but trims weight on small players. */
+        .movi-subtitle-customize-btn {
+          width: 26px;
+          height: 26px;
+        }
+        .movi-subtitle-customize-btn svg {
+          width: 14px;
+          height: 14px;
+        }
       }
 
       /* Desktop: Hide More button */
@@ -7486,23 +9030,81 @@ export class MoviElement extends HTMLElement {
 
       /* Subtitle shift is handled via JS in showControls/hideControls */
 
+      /* Full-width anchor row; padding-left set inline by the renderer
+         pushes the inline-block backdrop to the position where the
+         final sentence's centered start would sit. */
+      .movi-subtitle-anchor {
+        display: block;
+        width: 100%;
+        text-align: left;
+        box-sizing: border-box;
+      }
+
+      /* The single rounded backdrop. Inline-block so it hugs its
+         widest line; multi-line cues share ONE backdrop instead of
+         stacking individual boxes per line. The actual backdrop fill
+         is opt-in: only WebVTT tracks get it (see the
+         .movi-subtitle-format-vtt rule below). SRT / embedded text
+         tracks render plain — backdrop on traditional movie subs
+         reads as noise. */
+      .movi-subtitle-block {
+        display: inline-block;
+        max-width: 100%;
+        border-radius: 4px;
+        padding: 4px 12px;
+        text-align: left;
+        box-sizing: border-box;
+      }
+
+      .movi-subtitle-overlay.movi-subtitle-format-vtt .movi-subtitle-block {
+        background: rgba(
+          var(--movi-sub-bg-rgb, 8, 8, 8),
+          var(--movi-sub-bg-alpha, 0.75)
+        );
+      }
+
       .movi-subtitle-line {
-        color: #FFFFFF;
-        font-family: 'Roboto', -apple-system, BlinkMacSystemFont, 'Segoe UI', Arial, sans-serif;
-        font-size: clamp(18px, 3vw, 42px);
+        display: block;
+        color: var(--movi-sub-color, #FFFFFF);
+        font-family: 'YouTube Sans', 'Roboto', -apple-system, BlinkMacSystemFont, 'Segoe UI', Arial, sans-serif;
+        /* Base size scales against the player width via --movi-player-width;
+           the user's customize-panel choice is applied as a multiplier via
+           --movi-sub-size-mult. Defaults to 1 (= 100%). */
+        font-size: calc(clamp(18px, calc(var(--movi-player-width, 100vw) * 0.028), 36px) * var(--movi-sub-size-mult, 1));
         font-weight: 500;
-        line-height: 1.4;
-        text-shadow: 
-          0 0 4px rgba(0, 0, 0, 0.8),
-          0 2px 4px rgba(0, 0, 0, 0.8);
-        margin: 2px 0;
-        padding: 2px 6px;
+        line-height: 1.35;
+        letter-spacing: 0.01em;
+        /* Edge style is user-selectable: drop shadow, outline, raised,
+           or none. Defaults to a single soft shadow. */
+        text-shadow: var(--movi-sub-edge, 0 0 4px rgba(0, 0, 0, 0.85));
+        text-align: left;
         white-space: pre-wrap;
         word-wrap: break-word;
         -webkit-font-smoothing: antialiased;
         -moz-osx-font-smoothing: grayscale;
         text-rendering: optimizeLegibility;
-        transform: translateZ(0); /* Force hardware acceleration for better rendering */
+      }
+
+      /* Words already on screen from the previous cue — paint instantly. */
+      .movi-subtitle-static {
+        opacity: 1;
+      }
+
+      /* Newly-added word(s) — gentle opacity fade only. No translate;
+         lateral slides on every karaoke tick are what was straining the
+         eye. */
+      .movi-subtitle-new {
+        animation: movi-subtitle-word-in 320ms ease-out forwards;
+        will-change: opacity;
+      }
+
+      @keyframes movi-subtitle-word-in {
+        from {
+          opacity: 0;
+        }
+        to {
+          opacity: 1;
+        }
       }
 
       /* Context Menu */
@@ -7795,6 +9397,54 @@ export class MoviElement extends HTMLElement {
          width: 14px;
          height: 14px;
          margin-left: 8px;
+      }
+
+      .movi-quality-label-wrap {
+        display: inline-flex;
+        align-items: center;
+        gap: 6px;
+      }
+
+      .movi-quality-badge {
+        font-size: 9px;
+        font-weight: 700;
+        line-height: 1;
+        padding: 2px 4px;
+        border-radius: 3px;
+        letter-spacing: 0.4px;
+        background: rgba(255, 255, 255, 0.18);
+        color: rgba(255, 255, 255, 0.95);
+        text-transform: uppercase;
+        vertical-align: middle;
+        position: relative;
+        top: -1px;
+      }
+
+      .movi-quality-badge-hd,
+      .movi-quality-badge-4k,
+      .movi-quality-badge-8k {
+        background: rgba(255, 255, 255, 0.18);
+        color: rgba(255, 255, 255, 0.95);
+      }
+
+      .movi-quality-btn {
+        position: relative;
+      }
+
+      .movi-quality-btn-badge {
+        position: absolute;
+        top: 4px;
+        right: 0;
+        font-size: 8px;
+        font-weight: 700;
+        line-height: 1;
+        padding: 2px 3px;
+        border-radius: 3px;
+        letter-spacing: 0.4px;
+        text-transform: uppercase;
+        background: var(--movi-primary);
+        color: #fff;
+        pointer-events: none;
       }
 
       /* Hide speed/quality menus on mobile by default and position them centrally */
@@ -8522,15 +10172,36 @@ export class MoviElement extends HTMLElement {
     this.updateFastSeek();
     this.updatePoster();
 
+    // Publish the player's own width as a CSS custom property so
+    // descendant CSS (subtitle font sizing in particular) can scale
+    // against the player rather than the viewport.
+    const publishPlayerWidth = () => {
+      const w = this.clientWidth;
+      const h = this.clientHeight;
+      if (w > 0) this.style.setProperty("--movi-player-width", `${w}px`);
+      // Track menus (subtitle / audio / quality) cap themselves at this
+      // height so the panel never grows taller than the player itself.
+      if (h > 0) this.style.setProperty("--movi-player-height", `${h}px`);
+    };
+    publishPlayerWidth();
+
+    // Hydrate persisted subtitle appearance settings, then push them
+    // onto the host element as CSS variables so the shadow-DOM
+    // subtitle styles pick them up immediately.
+    this.loadSubtitleSettings();
+    this.applySubtitleSettings();
+
     // Listen for resize events
     if (typeof ResizeObserver !== "undefined") {
       const resizeObserver = new ResizeObserver(() => {
+        publishPlayerWidth();
         this.updateCanvasSize();
       });
       resizeObserver.observe(this);
     } else {
       // Fallback for browsers without ResizeObserver
       window.addEventListener("resize", () => {
+        publishPlayerWidth();
         this.updateCanvasSize();
       });
     }
@@ -8557,6 +10228,12 @@ export class MoviElement extends HTMLElement {
           src: el.getAttribute("src") || "",
           type: el.getAttribute("type") || undefined,
           kind: el.getAttribute("kind") || undefined,
+          height: parseInt(el.getAttribute("data-height") || "", 10) || 0,
+          label: el.getAttribute("data-label") || el.getAttribute("label") || "",
+          fps: parseInt(el.getAttribute("data-fps") || "", 10) || 0,
+          badge: el.getAttribute("data-badge") || "",
+          srclang: el.getAttribute("srclang") || el.getAttribute("lang") || "",
+          isDefault: el.hasAttribute("data-default") || el.hasAttribute("default"),
         })).filter((s) => s.src);
 
         // Separate audio sources (kind="audio") from video sources
@@ -8564,15 +10241,93 @@ export class MoviElement extends HTMLElement {
         const videoSources = allSources.filter((s) => s.kind !== "audio");
 
         if (videoSources.length > 0) {
-          const picked = this.pickSource(videoSources);
-          this._src = picked ? picked.src : videoSources[0].src;
+          // Capture quality metadata for non-HLS quality menu
+          this._videoQualities = videoSources
+            .filter((s) => s.height > 0 || s.label)
+            .map((s) => ({
+              src: s.src,
+              type: s.type,
+              height: s.height,
+              label: s.label || (s.height ? `${s.height}p` : ""),
+              fps: s.fps || undefined,
+              badge: s.badge || undefined,
+            }))
+            .sort((a, b) => b.height - a.height);
+
+          // Prefer explicit data-default, otherwise pickSource heuristic
+          const defaultSource = videoSources.find((s) => s.isDefault);
+          if (defaultSource) {
+            this._src = defaultSource.src;
+          } else {
+            const picked = this.pickSource(videoSources);
+            this._src = picked ? picked.src : videoSources[0].src;
+          }
         }
 
+        // Multi-language audio: when more than one <source kind="audio"> is
+        // declared with `srclang`/`label`, treat them as parallel language
+        // tracks so the player surfaces the audio-language menu. Otherwise
+        // fall back to the legacy single split-audio source path.
         if (audioSources.length > 0) {
-          this._audioSrc = audioSources[0].src;
+          const langed = audioSources.filter((s) => s.srclang || s.label);
+          if (audioSources.length > 1 && langed.length >= 2) {
+            this._audioTracks = audioSources.map((s, i) => ({
+              src: s.src,
+              type: s.type,
+              lang: s.srclang || `track-${i}`,
+              label: s.label || s.srclang || `Track ${i + 1}`,
+            }));
+            // Pick a default for initial playback. Honour `default` /
+            // `data-default` attributes; otherwise prefer the first track
+            // matching the page locale, else the first one.
+            const explicitDefault = audioSources.findIndex((s) => s.isDefault);
+            const localePrefix = (navigator.language || "en").slice(0, 2).toLowerCase();
+            const localeMatch = audioSources.findIndex(
+              (s) => s.srclang && s.srclang.toLowerCase().startsWith(localePrefix),
+            );
+            const idx =
+              explicitDefault >= 0
+                ? explicitDefault
+                : localeMatch >= 0
+                  ? localeMatch
+                  : 0;
+            this._audioSrc = audioSources[idx].src;
+          } else {
+            this._audioSrc = audioSources[0].src;
+          }
         }
       }
     }
+
+    // Parse <track> child elements (Video.js / standard <video>-style) into
+    // external subtitle tracks. Lets integrators declare captions
+    // declaratively without having to wire up the JS source setter.
+    const trackEls = this.querySelectorAll(
+      'track[kind="subtitles"], track[kind="captions"], track:not([kind])',
+    );
+    if (trackEls.length > 0 && this._subtitleTracks.length === 0) {
+      this._subtitleTracks = Array.from(trackEls)
+        .map((el) => ({
+          src: el.getAttribute("src") || "",
+          lang: el.getAttribute("srclang") || el.getAttribute("lang") || "",
+          label:
+            el.getAttribute("label") ||
+            el.getAttribute("srclang") ||
+            "Subtitle",
+          format: (el.getAttribute("data-format") as
+            | "vtt"
+            | "srt"
+            | undefined) || "vtt",
+        }))
+        .filter((t) => t.src);
+    }
+
+    // Re-evaluate the poster overlay now that _src may have been populated
+    // from <source> children. updatePoster() ran earlier in connectedCallback
+    // (when _src was still null) and short-circuited because hasSource was
+    // false; without this second pass the explicit poster="…" attribute
+    // never paints when the player is loaded via <source> tags.
+    this.updatePoster();
 
     // Automatically initialize player if src is set or encrypted mode
     if (this._src || (this._encrypted && this._tokenUrl && this._videoUrl)) {
@@ -9267,6 +11022,16 @@ export class MoviElement extends HTMLElement {
       Logger.info(TAG, `Initializing MoviPlayer (${mode} Mode)`);
       this.player = new MoviPlayer(playerConfig);
 
+      // Hand off any audio element preserved across a quality switch BEFORE
+      // init() so setupNativeAudio reuses it instead of allocating a fresh
+      // (and autoplay-blocked) Audio element.
+      if (this._carryAudioEl) {
+        try {
+          (this.player as any).adoptNativeAudio?.(this._carryAudioEl);
+        } catch {}
+        this._carryAudioEl = null;
+      }
+
       // In DRM mode, use HLS wrapper's video element directly
       if (playerConfig.drm) {
         const hlsVideo = this.player.getHLSVideoElement();
@@ -9538,6 +11303,14 @@ export class MoviElement extends HTMLElement {
       }
       // Hide poster on state change to playing
       if (state === "playing" && this.posterElement) {
+        // Drop the frozen-frame snapshot overlay used during quality switch
+        // so the live canvas underneath is visible again.
+        if (this._qualitySwitchInProgress) {
+          this._hideSnapshotPoster();
+          this._qualitySwitchInProgress = false;
+          this._switchResumeTime = 0;
+          this._switchResumeDuration = 0;
+        }
         this.posterElement.style.display = "none";
       }
 
@@ -11828,6 +13601,18 @@ export class MoviElement extends HTMLElement {
   }
 
   get currentTime(): number {
+    // While a quality switch is in flight the new player has been created
+    // but its clock hasn't been seeked yet, so getCurrentTime() reads 0 and
+    // the UI flashes "00:00". Return the captured pre-switch time until the
+    // restore step seeks the new clock back to the right position.
+    if (this._qualitySwitchInProgress && this._switchResumeTime > 0) {
+      const liveTime = this.player?.getCurrentTime() || 0;
+      // Once the new clock has actually advanced past 0 (post-seek), trust
+      // it again — guards against permanently masking the real time if the
+      // safety-timeout fires before "playing".
+      if (liveTime > 0.05) return liveTime;
+      return this._switchResumeTime;
+    }
     return this.player?.getCurrentTime() || 0;
   }
 
@@ -11983,6 +13768,12 @@ export class MoviElement extends HTMLElement {
     const hasSource = !!this._src || (this._encrypted && !!this._videoUrl);
     if (!hasSource) {
       this.posterElement.style.display = "none";
+      return;
+    }
+    // While a quality switch is in flight the snapshot-poster mechanism owns
+    // the overlay (it's pinned to the last canvas frame). Bail out so we
+    // don't overwrite its src with the static thumbnail.
+    if (this._qualitySwitchInProgress && this._snapshotPosterActive) {
       return;
     }
     if (this._poster) {
@@ -12425,7 +14216,15 @@ export class MoviElement extends HTMLElement {
   }
 
   get duration(): number {
-    return this.player?.getDuration() || 0;
+    const live = this.player?.getDuration() || 0;
+    // While a quality switch is in flight the new player's mediaInfo isn't
+    // populated yet so getDuration() returns 0 — fall back to the cached
+    // pre-switch duration. (Quality variants share the same length, so this
+    // is always correct.)
+    if (this._qualitySwitchInProgress && this._switchResumeDuration > 0 && live <= 0) {
+      return this._switchResumeDuration;
+    }
+    return live;
   }
 
   get paused(): boolean {

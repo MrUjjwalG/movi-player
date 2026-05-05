@@ -70,6 +70,22 @@ export class CanvasRenderer {
 
   // Subtitle rendering
   private activeSubtitleCue: SubtitleCue | null = null;
+  // Cached text/cue used in the last innerHTML write. renderSubtitles() runs
+  // every animation frame; without this guard we re-write innerHTML 60×/sec
+  // even when the cue text hasn't changed, restarting the fade-in animation
+  // each time and leaving the subtitle perpetually invisible during playback.
+  private _lastRenderedSubtitleKey: string = "";
+  // Plain text of what's currently on screen — used to find the suffix
+  // delta of the next karaoke cue so only the new word fades in, instead
+  // of the whole line re-animating each tick.
+  private _lastRenderedSubtitlePlain: string = "";
+  // Canvas + cached font string used to measure a karaoke cue's full
+  // final-sentence width so the line can hold a stable min-width
+  // anchor. The font cache is keyed by viewport width because the
+  // subtitle font-size uses clamp() against vw.
+  private _subtitleMeasureCanvas: HTMLCanvasElement | null = null;
+  private _subtitleFontCache: { viewport: number; font: string } | null =
+    null;
   private subtitleCues: SubtitleCue[] = [];
   private subtitleOverlay: HTMLElement | null = null;
   private subtitleControlsPadding: number = 0; // Extra padding when controls visible
@@ -1461,6 +1477,38 @@ export class CanvasRenderer {
   }
 
   /**
+   * Tag the subtitle overlay with the source format. The styled black
+   * backdrop is opt-in and only painted for WebVTT cues — that's the
+   * karaoke-paced format from our YouTube proxy where the box reads as
+   * a stable anchor for word-by-word reveal.
+   *
+   * All other formats render plain (text + shadow only):
+   *   - Text-based: srt / ass / ssa / ttml — traditional movie subs;
+   *     a backdrop reads as noise here.
+   *   - Image-based: pgs / dvd / dvb (vobsub, hdmv, dvb_subtitle) —
+   *     rendered through the cue.image path, untouched by this class.
+   */
+  setSubtitleFormat(
+    format:
+      | "vtt"
+      | "srt"
+      | "ass"
+      | "ssa"
+      | "ttml"
+      | "pgs"
+      | "dvd"
+      | "dvb"
+      | string
+      | null,
+  ): void {
+    if (!this.subtitleOverlay) return;
+    this.subtitleOverlay.classList.toggle(
+      "movi-subtitle-format-vtt",
+      format === "vtt",
+    );
+  }
+
+  /**
    * Rotate video by 90 degrees clockwise
    */
   rotate90(): number {
@@ -1784,6 +1832,8 @@ export class CanvasRenderer {
   clearSubtitles(): void {
     this.subtitleCues = [];
     this.activeSubtitleCue = null;
+    this._lastRenderedSubtitleKey = "";
+    this._lastRenderedSubtitlePlain = "";
     // Clear all subtitle elements from overlay if it exists
     if (this.subtitleOverlay) {
       this.subtitleOverlay.innerHTML = "";
@@ -1896,8 +1946,12 @@ export class CanvasRenderer {
     if (!this.activeSubtitleCue) {
       // Clear overlay if no active cue
       if (this.subtitleOverlay) {
-        this.subtitleOverlay.textContent = "";
-        this.subtitleOverlay.innerHTML = ""; // Clear any image elements too
+        if (this._lastRenderedSubtitleKey !== "") {
+          this.subtitleOverlay.textContent = "";
+          this.subtitleOverlay.innerHTML = ""; // Clear any image elements too
+          this._lastRenderedSubtitleKey = "";
+          this._lastRenderedSubtitlePlain = "";
+        }
         this.subtitleOverlay.style.display = "none";
       }
       return;
@@ -1926,8 +1980,17 @@ export class CanvasRenderer {
         return;
       }
 
-      // Position overlay at bottom center (above controls)
-      const minPadding = Math.min(80, displayHeight * 0.1);
+      // Size the overlay to the visible canvas rect (CSS pixels), not the
+      // internal buffer dimensions. For 4K/8K content the buffer is much
+      // larger than the rendered area, and pinning the overlay to buffer
+      // pixels parks the subtitle thousands of pixels below the viewport
+      // (where the host's overflow:hidden swallows it).
+      const canvasEl =
+        this.canvas instanceof HTMLCanvasElement ? this.canvas : null;
+      const rect = canvasEl?.getBoundingClientRect();
+      const overlayW = rect?.width || displayWidth;
+      const overlayH = rect?.height || displayHeight;
+      const minPadding = Math.min(80, overlayH * 0.1);
       const bottomPadding = Math.max(minPadding, 60);
 
       this.subtitleOverlay.style.position = "absolute";
@@ -1935,8 +1998,8 @@ export class CanvasRenderer {
       this.subtitleOverlay.style.left = "0";
       this.subtitleOverlay.style.right = "auto";
       this.subtitleOverlay.style.bottom = "auto";
-      this.subtitleOverlay.style.width = `${displayWidth}px`;
-      this.subtitleOverlay.style.height = `${displayHeight}px`;
+      this.subtitleOverlay.style.width = `${overlayW}px`;
+      this.subtitleOverlay.style.height = `${overlayH}px`;
       this.subtitleOverlay.style.margin = "0";
       this.subtitleOverlay.style.padding = "0";
       const effectivePad = this.subtitleControlsPadding > 0 ? this.subtitleControlsPadding : bottomPadding;
@@ -1946,15 +2009,139 @@ export class CanvasRenderer {
       this.subtitleOverlay.style.display = "flex";
       this.subtitleOverlay.style.flexDirection = "column";
       this.subtitleOverlay.style.justifyContent = "flex-end";
+      // Block stays horizontally centred in the player; text inside the
+      // line block flows left → right so the karaoke type-out reads
+      // naturally. Existing words don't re-animate (see word-static
+      // class) so the gentle re-center as a new word appends is barely
+      // perceptible.
       this.subtitleOverlay.style.alignItems = "center";
-      this.subtitleOverlay.style.textAlign = "center";
+      this.subtitleOverlay.style.textAlign = "left";
       this.subtitleOverlay.style.pointerEvents = "none";
       // zIndex controlled by CSS (.movi-subtitle-overlay)
 
+      // Skip re-rendering if the same cue text is already on screen — the
+      // presentation loop calls renderSubtitles() ~60×/sec, and overwriting
+      // innerHTML each tick recreates DOM nodes (restarting the
+      // movi-subtitle-fade keyframes in a tight loop). Result: subtitle
+      // never finishes fading in during playback and only becomes visible
+      // when the loop pauses.
+      const renderKey = `${cue.start.toFixed(3)}|${cue.text}`;
+      if (renderKey === this._lastRenderedSubtitleKey) {
+        return;
+      }
+      this._lastRenderedSubtitleKey = renderKey;
+
+      // Karaoke cues from the proxy embed the FULL final sentence after
+      // a `⟨⟨GHOST⟩⟩` delimiter. Only the *visible* portion goes into
+      // the DOM — the full sentence's width is measured offscreen via a
+      // 2D canvas and applied as `min-width` on the line. This anchors
+      // the box at full-sentence width from cue #1 without putting any
+      // ghost text into the DOM where it could leak through.
+      const KARAOKE_DELIM = "⟨⟨GHOST⟩⟩";
+      const delimIdx = cue.text.indexOf(KARAOKE_DELIM);
+      const visibleText =
+        delimIdx >= 0 ? cue.text.slice(0, delimIdx) : cue.text;
+      const renderText =
+        delimIdx >= 0
+          ? cue.text.slice(delimIdx + KARAOKE_DELIM.length)
+          : cue.text;
+
+      // Resolve the line's actual font (clamp() depends on viewport)
+      // by reading computed style off a temporary probe in the shadow
+      // root. Cached per-render-pass via `_subtitleFontCache`.
+      const fontSig = (() => {
+        const cached = this._subtitleFontCache;
+        if (cached && cached.viewport === window.innerWidth) {
+          return cached.font;
+        }
+        const probe = document.createElement("div");
+        probe.className = "movi-subtitle-line";
+        probe.style.position = "absolute";
+        probe.style.left = "-99999px";
+        probe.style.top = "-99999px";
+        probe.style.visibility = "hidden";
+        probe.textContent = "M";
+        this.subtitleOverlay.parentNode?.appendChild(probe);
+        const cs = window.getComputedStyle(probe);
+        const f = `${cs.fontStyle} ${cs.fontWeight} ${cs.fontSize} ${cs.fontFamily}`;
+        probe.remove();
+        this._subtitleFontCache = {
+          viewport: window.innerWidth,
+          font: f,
+        };
+        return f;
+      })();
+
+      // Walk forward through the cue list to find the longest cumulative
+      // extension of the current cue's text — covers normal WebVTT
+      // karaoke streams (no GHOST delimiter) where each subsequent cue
+      // simply adds more words. Without this lookahead the box would
+      // grow with every word reveal; with it, the box is sized to the
+      // final sentence from cue #1.
+      const stripGhost = (t: string) => {
+        const idx = t.indexOf(KARAOKE_DELIM);
+        return idx >= 0 ? t.slice(0, idx) : t;
+      };
+      let ultimateText = renderText;
+      const activeIndex = this.subtitleCues.indexOf(this.activeSubtitleCue);
+      if (activeIndex >= 0) {
+        let chainTail = visibleText;
+        for (let i = activeIndex + 1; i < this.subtitleCues.length; i++) {
+          const next = this.subtitleCues[i];
+          if (!next?.text) break;
+          const nextVisible = stripGhost(next.text);
+          if (
+            nextVisible.length > chainTail.length &&
+            nextVisible.startsWith(chainTail)
+          ) {
+            chainTail = nextVisible;
+            // Prefer the GHOST-resolved variant if the next cue carries
+            // its own GHOST tail (longer than the visible portion).
+            ultimateText =
+              next.text.length > nextVisible.length ? next.text : nextVisible;
+          } else if (!nextVisible.startsWith(chainTail)) {
+            break; // chain ended — different sentence starts here
+          }
+        }
+      }
+
+      // Measure the FULL final sentence's width once (per ultimateText),
+      // so the line can be sized to it from the very first cue. Strip
+      // any HTML formatting tags first — they don't affect width
+      // meaningfully for sans-serif at this size.
+      const plainFull = stripGhost(ultimateText)
+        .replace(/<[^>]*>/g, "")
+        .replace(/\n/g, " ");
+      const measureCanvas = (this._subtitleMeasureCanvas ||=
+        document.createElement("canvas"));
+      const mctx = measureCanvas.getContext("2d");
+      let fullWidth = 0;
+      if (mctx) {
+        mctx.font = fontSig;
+        fullWidth = Math.ceil(mctx.measureText(plainFull).width);
+      }
+
       // Update HTML overlay with subtitle text
-      // Split text into lines and create HTML
-      const lines = cue.text.split("\n");
-      this.subtitleOverlay.innerHTML = lines
+      // Split full (renderable) text into lines and create HTML
+      const lines = visibleText.split("\n");
+      // Word index across all lines of this cue; drives staggered
+      // typing-style reveal via per-word animation-delay.
+      let wordIdx = 0;
+      // Word-count split point: the first N tokens of the new cue match
+      // what's already on screen (karaoke cumulative growth). Render those
+      // statically and animate only the suffix — otherwise the whole line
+      // re-fades on every word and looks flickery.
+      const previousPlain = this._lastRenderedSubtitlePlain;
+      const isCumulativeGrowth =
+        !!previousPlain &&
+        visibleText.startsWith(previousPlain) &&
+        visibleText.length > previousPlain.length;
+      const staticWordCount = isCumulativeGrowth
+        ? previousPlain.split(/\s+/).filter(Boolean).length
+        : 0;
+      this._lastRenderedSubtitlePlain = visibleText;
+      let cumulativeWordCount = 0;
+      const linesHtml = lines
         .map((line) => {
           // Allow safe HTML formatting tags (<i>, <b>, <u>, <font>) while escaping other content
           // First, protect safe formatting tags by replacing them with placeholders
@@ -2024,9 +2211,138 @@ export class CanvasRenderer {
             escaped = escaped.replace(`__PLACEHOLDER_${index}__`, placeholder);
           });
 
-          return `<div class="movi-subtitle-line">${escaped}</div>`;
+          // Tokenize on whitespace. YouTube auto-CC sprinkles formatting
+          // tags (`<i>`, `<b>`, `<font>`) around words; after escaping
+          // these survive in some tokens. Tokens that contain ONLY tags
+          // (no real text) shouldn't get their own `<span>` — that would
+          // render an empty inline-block which still triggers the
+          // surrounding inter-element whitespace, producing visible gaps
+          // between adjacent words. We fold tag-only tokens into the
+          // adjacent real-word token so the styling is preserved without
+          // creating an empty span between words.
+          const rawTokens = escaped.split(/(\s+)/).filter(Boolean);
+          const isWhitespace = (t: string) => /^\s+$/.test(t);
+          const isTagOnly = (t: string) =>
+            !!t && !t.replace(/<[^>]*>/g, "").trim();
+
+          // Forward-merge orphan opening tags into the next real word.
+          // Walk the tokens once, accumulate any tag-only token seen,
+          // attach it as a prefix to the next real word.
+          type Tok = { kind: "word" | "ws"; text: string };
+          const merged: Tok[] = [];
+          let pendingPrefix = "";
+          for (const t of rawTokens) {
+            if (isWhitespace(t)) {
+              if (pendingPrefix) {
+                // Whitespace between pending opening-tag glob and the
+                // next word — drop it; the tag should hug the word it
+                // styles, not introduce its own gap.
+                continue;
+              }
+              merged.push({ kind: "ws", text: t });
+              continue;
+            }
+            if (isTagOnly(t)) {
+              pendingPrefix += t;
+              continue;
+            }
+            merged.push({ kind: "word", text: pendingPrefix + t });
+            pendingPrefix = "";
+          }
+          // Trailing closing tags glue onto the last word so styling
+          // wraps correctly.
+          if (pendingPrefix && merged.length) {
+            const last = merged[merged.length - 1];
+            if (last.kind === "word") last.text = last.text + pendingPrefix;
+          }
+
+          // Split tokens into 2 inline groups: STATIC (already on screen
+          // from the previous cue) and NEW (the diff this cue introduces).
+          // No ghost span — the line's width is locked via `min-width`
+          // computed from a canvas measurement of the full sentence, so
+          // there is *no* trailing text in the DOM that could leak out.
+          const staticParts: string[] = [];
+          const newParts: string[] = [];
+          for (const tok of merged) {
+            const groupForCount = (count: number) =>
+              count < staticWordCount ? staticParts : newParts;
+            if (tok.kind === "ws") {
+              const target = groupForCount(cumulativeWordCount);
+              if (
+                target === staticParts &&
+                staticParts.length === 0 &&
+                cumulativeWordCount === 0
+              ) {
+                continue;
+              }
+              target.push(tok.text);
+              continue;
+            }
+            const target = groupForCount(cumulativeWordCount);
+            if (
+              target === newParts &&
+              newParts.length === 0 &&
+              staticParts.length > 0
+            ) {
+              const lastStatic = staticParts[staticParts.length - 1];
+              if (!/\s$/.test(lastStatic)) staticParts.push(" ");
+            }
+            target.push(tok.text);
+            cumulativeWordCount += 1;
+          }
+
+          wordIdx += 1;
+
+          const staticHtml = staticParts.join("").replace(/\s+$/, " ");
+          const newHtml = newParts.join("");
+
+          // The min-width anchor lives on the outer .movi-subtitle-block
+          // wrapper now, so individual lines just hug their content (and
+          // expand to the wrapper's width because they're block-level).
+          const lineParts: string[] = [
+            `<div class="movi-subtitle-line">`,
+          ];
+          if (staticHtml)
+            lineParts.push(
+              `<span class="movi-subtitle-static">${staticHtml}</span>`,
+            );
+          if (newHtml)
+            lineParts.push(
+              `<span class="movi-subtitle-new">${newHtml}</span>`,
+            );
+          lineParts.push(`</div>`);
+          return lineParts.join("");
         })
         .join("");
+
+      // Layout:
+      //   .anchor  — full-width container.
+      //              When the full sentence FITS in the player's usable
+      //              width (≤ 92% of overlay), we left-anchor it via
+      //              padding-left so karaoke types in from a stable
+      //              left edge. When the sentence is WIDER than the
+      //              player (large user font, narrow embed), we fall
+      //              back to text-align:center so the block stays
+      //              centred and doesn't clip the right edge.
+      //   .block   — inline-block backdrop (single rounded rectangle)
+      //              that hugs the widest visible line.
+      //   .line    — plain text row, no own background.
+      const overlayPxW = parseFloat(this.subtitleOverlay.style.width) || 0;
+      const usableW = overlayPxW * 0.92; // matches .movi-subtitle-block max-width
+      const fitsInPlayer =
+        overlayPxW > 0 && fullWidth > 0 && fullWidth <= usableW;
+      const leftPad = fitsInPlayer
+        ? Math.max(0, Math.floor((overlayPxW - fullWidth) / 2))
+        : 0;
+      const anchorStyle = fitsInPlayer
+        ? leftPad > 0
+          ? ` style="padding-left:${leftPad}px"`
+          : ""
+        : ` style="text-align:center"`;
+      this.subtitleOverlay.innerHTML =
+        `<div class="movi-subtitle-anchor"${anchorStyle}>` +
+        `<div class="movi-subtitle-block">${linesHtml}</div>` +
+        `</div>`;
 
       return;
     }
