@@ -1097,6 +1097,19 @@ export class CanvasRenderer {
    * This ensures smooth 60fps video playback while maintaining A/V sync
    */
   private getCurrentPlaybackTime(): number {
+    // When the presentation loop is stopped (player paused), the
+    // wall-clock formula below would advance time forever — but no one
+    // is consuming frames, so updateActiveSubtitle (called from
+    // setSubtitleCues during prefetch / track switches while paused)
+    // would pick increasingly-out-of-sync cues and the in-video
+    // subtitle would silently swap underneath the user. Return the last
+    // actually-presented PTS (or, before the first frame, the anchor
+    // pts) so the active cue stays pinned to the visible frame.
+    if (!this.isPlaying) {
+      if (this.lastPresentedPts >= 0) return this.lastPresentedPts;
+      if (this.presentationStartPts > 0) return this.presentationStartPts;
+      return -1;
+    }
     // Always use wall clock for video timing (smooth 60fps)
     let videoTime = -1;
     if (this.presentationStartTime > 0) {
@@ -1178,8 +1191,31 @@ export class CanvasRenderer {
 
     const frameInterval = 1.0 / this.videoFrameRate;
 
-    // First frame special case - present immediately
+    // First frame special case - present immediately.
     if (this.lastPresentedPts < 0 && this.frameQueue.length > 0) {
+      // Open-GOP recovery after seek can leave the decoder backing up to an
+      // earlier reference frame (e.g. seek to 1067s but the decoder's first
+      // usable frame is the GOP keyframe at 1066s). Presenting that as-is
+      // makes video play 1-2s behind audio for several seconds. If audio
+      // is already ahead, skip stale frames so the first-presented frame
+      // is near the current playback position.
+      if (this.getAudioTime) {
+        const audioTime = this.getAudioTime();
+        if (audioTime >= 0) {
+          const tolerance = 0.2; // 200ms — beyond this and the lag is visible
+          while (this.frameQueue.length > 1) {
+            const head = this.frameQueue[0];
+            const headSec = head.timestamp / 1_000_000;
+            if (headSec < audioTime - tolerance) {
+              head.close();
+              this.frameQueue.shift();
+            } else {
+              break;
+            }
+          }
+        }
+      }
+
       const firstFrame = this.frameQueue.shift()!;
       this.lastPresentedPts = firstFrame.timestamp / 1_000_000;
       this.currentTime = this.lastPresentedPts;
@@ -1644,6 +1680,22 @@ export class CanvasRenderer {
   /** Get current subtitle delay in seconds. */
   getSubtitleDelay(): number {
     return this.subtitleDelay;
+  }
+
+  /**
+   * Snapshot every cue currently in the cache as a plain array. Used by
+   * the all-cues browser UI; we strip image cues since the browser is
+   * text-only.
+   */
+  getAllCues(): { start: number; end: number; text: string }[] {
+    const out: { start: number; end: number; text: string }[] = [];
+    for (const cue of this.subtitleCues) {
+      const text = cue.text;
+      if (typeof text === "string" && text.length > 0) {
+        out.push({ start: cue.start, end: cue.end, text });
+      }
+    }
+    return out;
   }
 
   /**
@@ -2146,7 +2198,20 @@ export class CanvasRenderer {
           // Allow safe HTML formatting tags (<i>, <b>, <u>, <font>) while escaping other content
           // First, protect safe formatting tags by replacing them with placeholders
           const placeholders: string[] = [];
-          let textWithPlaceholders = line;
+          // YouTube's WebVTT for auto-captions often arrives with text
+          // chars already entity-encoded (e.g. ">>" written as the
+          // literal "&gt;&gt;" speaker-change indicator). Without
+          // decoding first, our own escape pass below would double-
+          // encode the leading "&" to "&amp;", and the browser would
+          // render the entity name as text instead of the character.
+          let textWithPlaceholders = line
+            .replace(/&lt;/g, "<")
+            .replace(/&gt;/g, ">")
+            .replace(/&quot;/g, '"')
+            .replace(/&#0?39;/g, "'")
+            .replace(/&#x27;/g, "'")
+            .replace(/&nbsp;/g, " ")
+            .replace(/&amp;/g, "&"); // amp last so the rest don't double-decode
 
           // Protect <i> tags
           textWithPlaceholders = textWithPlaceholders.replace(
@@ -2403,6 +2468,41 @@ export class CanvasRenderer {
       resolution: this.width > 0 ? `${this.width}x${this.height}` : "N/A",
       syncedToAudio: this.syncedToAudio,
     };
+  }
+
+  /**
+   * Drop frames whose pts is more than `toleranceSec` behind `targetTimeSec`.
+   * Used on resume from pause to discard frames that became stale while the
+   * audio clock advanced (e.g. mid-decode-warmup when the user fullscreens or
+   * toggles tracks, causing the queue to retain pre-resume frames).
+   * Returns the number of frames dropped.
+   */
+  dropStaleFrames(targetTimeSec: number, toleranceSec: number = 0.2): number {
+    let dropped = 0;
+    while (this.frameQueue.length > 0) {
+      const frame = this.frameQueue[0];
+      const frameTime = frame.timestamp / 1_000_000;
+      if (frameTime < targetTimeSec - toleranceSec) {
+        frame.close();
+        this.frameQueue.shift();
+        dropped++;
+      } else {
+        break;
+      }
+    }
+    if (dropped > 0) {
+      // Reset presentation anchors so the next surviving frame starts cleanly
+      // against the new clock position.
+      this.presentationStartTime = 0;
+      this.presentationStartPts = 0;
+      this.lastPresentedPts = -1;
+      this.syncedToAudio = false;
+      Logger.debug(
+        TAG,
+        `Dropped ${dropped} stale frames before ${targetTimeSec.toFixed(3)}s (tolerance ${toleranceSec.toFixed(2)}s)`,
+      );
+    }
+    return dropped;
   }
 
   /**

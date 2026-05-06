@@ -198,6 +198,15 @@ void movi_destroy(MoviContext *ctx) {
     avsubtitle_free(ctx->subtitle);
     av_freep(&ctx->subtitle);
   }
+  if (ctx->prefetched_cues) {
+    for (int i = 0; i < ctx->prefetched_cue_count; i++) {
+      free(ctx->prefetched_cues[i].text);
+    }
+    free(ctx->prefetched_cues);
+    ctx->prefetched_cues = NULL;
+    ctx->prefetched_cue_count = 0;
+    ctx->prefetched_cue_capacity = 0;
+  }
   if (ctx->frame)
     av_frame_free(&ctx->frame);
   if (ctx->resampled_frame)

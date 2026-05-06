@@ -60,6 +60,15 @@ typedef struct {
   int size;
 } PacketInfo;
 
+// Prefetched subtitle cue (populated by movi_prefetch_subtitle_cues).
+// Used for negative subtitle delay where the renderer needs cues from
+// future stream positions before the demuxer would naturally deliver them.
+typedef struct {
+  double start_sec;
+  double end_sec;
+  char *text; // null-terminated, malloc-owned
+} PrefetchedSubCue;
+
 // Demuxer context with custom AVIO
 typedef struct {
   AVFormatContext *fmt_ctx;
@@ -84,6 +93,12 @@ typedef struct {
   AVFrame *rgb_frame;
   uint8_t *rgb_buffer;
   int rgb_buffer_size;
+
+  // Prefetched subtitle cues (lazy — populated on demand for non-zero
+  // subtitle delay). Owned by the context; freed in movi_destroy.
+  PrefetchedSubCue *prefetched_cues;
+  int prefetched_cue_count;
+  int prefetched_cue_capacity;
 } MoviContext;
 
 EMSCRIPTEN_KEEPALIVE double movi_get_start_time(MoviContext *ctx);

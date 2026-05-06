@@ -953,6 +953,78 @@ export class WasmBindings {
   }
 
   /**
+   * Scan the entire subtitle stream and return every cue at once. Used to
+   * support negative subtitle delay, where the renderer needs cues from
+   * stream positions ahead of the demuxer's natural read cursor. Leaves
+   * the demuxer at EOF — the caller must seek back to playback position.
+   * Returns the array of cues, or null on failure.
+   */
+  async prefetchSubtitleCues(
+    streamIndex: number,
+  ): Promise<{ start: number; end: number; text: string }[] | null> {
+    if (!this.contextPtr) return null;
+
+    const count = (await this.module.ccall(
+      "movi_prefetch_subtitle_cues",
+      "number",
+      ["number", "number"],
+      [this.contextPtr, streamIndex],
+      { async: true },
+    )) as number;
+
+    if (count < 0) {
+      Logger.warn(TAG, `prefetchSubtitleCues: failed (${count})`);
+      return null;
+    }
+
+    const cues: { start: number; end: number; text: string }[] = [];
+    if (count === 0) return cues;
+
+    const startPtr = this.module._malloc(8);
+    const endPtr = this.module._malloc(8);
+    const textBufSize = 8192;
+    const textPtr = this.module._malloc(textBufSize);
+    if (!startPtr || !endPtr || !textPtr) {
+      if (startPtr) this.module._free(startPtr);
+      if (endPtr) this.module._free(endPtr);
+      if (textPtr) this.module._free(textPtr);
+      return null;
+    }
+
+    try {
+      for (let i = 0; i < count; i++) {
+        const len = this.module.ccall(
+          "movi_get_prefetched_cue",
+          "number",
+          ["number", "number", "number", "number", "number", "number"],
+          [this.contextPtr, i, startPtr, endPtr, textPtr, textBufSize],
+          { async: false },
+        ) as number;
+        if (len < 0) continue;
+        const start = new DataView(this.module.HEAPU8.buffer, startPtr, 8).getFloat64(0, true);
+        const end = new DataView(this.module.HEAPU8.buffer, endPtr, 8).getFloat64(0, true);
+        const textBytes = this.module.HEAPU8.subarray(textPtr, textPtr + len);
+        const text = new TextDecoder().decode(textBytes).trim();
+        if (text) cues.push({ start, end, text });
+      }
+    } finally {
+      this.module._free(startPtr);
+      this.module._free(endPtr);
+      this.module._free(textPtr);
+      // Drop the C-side cache now that we've copied everything across.
+      this.module.ccall(
+        "movi_clear_prefetched_cues",
+        "void",
+        ["number"],
+        [this.contextPtr],
+        { async: false },
+      );
+    }
+
+    return cues;
+  }
+
+  /**
    * Get subtitle image info (for bitmap/image subtitles like PGS)
    * Returns { width, height, x, y } or null if not an image subtitle
    */

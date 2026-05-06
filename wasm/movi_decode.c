@@ -860,3 +860,224 @@ void movi_flush_decoder(MoviContext *ctx, int stream_index) {
     avcodec_flush_buffers(dec);
   }
 }
+
+// Free any previously-prefetched subtitle cues. Safe to call when none exist.
+static void movi_free_prefetched_cues_internal(MoviContext *ctx) {
+  if (!ctx || !ctx->prefetched_cues)
+    return;
+  for (int i = 0; i < ctx->prefetched_cue_count; i++) {
+    free(ctx->prefetched_cues[i].text);
+  }
+  free(ctx->prefetched_cues);
+  ctx->prefetched_cues = NULL;
+  ctx->prefetched_cue_count = 0;
+  ctx->prefetched_cue_capacity = 0;
+}
+
+EMSCRIPTEN_KEEPALIVE
+void movi_clear_prefetched_cues(MoviContext *ctx) {
+  movi_free_prefetched_cues_internal(ctx);
+}
+
+// One-shot scan of the entire subtitle stream. Seeks the demuxer to the start,
+// reads every packet, decodes only those matching `stream_index`, and stores
+// {start, end, text} in ctx->prefetched_cues for later retrieval via
+// movi_get_prefetched_cue. The caller is expected to re-seek the demuxer back
+// to its desired playback position after this returns — we leave the cursor
+// at EOF.
+//
+// Used to support negative subtitle delay, where the renderer needs cues from
+// stream positions ahead of where the demuxer would naturally be. Subtitle
+// streams are typically tiny (50–300 KB for a feature-length film), so a full
+// scan is cheap.
+EMSCRIPTEN_KEEPALIVE
+int movi_prefetch_subtitle_cues(MoviContext *ctx, int stream_index) {
+  if (!ctx || !ctx->fmt_ctx || !ctx->pkt)
+    return -1;
+  if (stream_index < 0 || stream_index >= (int)ctx->fmt_ctx->nb_streams)
+    return -1;
+
+  AVCodecContext *dec = ctx->decoders[stream_index];
+  if (!dec || dec->codec_type != AVMEDIA_TYPE_SUBTITLE)
+    return -2;
+
+  movi_free_prefetched_cues_internal(ctx);
+
+  // Tell the demuxer to skip every other stream's packet bodies. For
+  // matroska this triggers an avio_skip over the cluster body instead of
+  // reading + decoding it, which turns a 700 MB linear scan into one that
+  // touches only the (typically tens of KB) subtitle packets. Without this
+  // the prefetch streams the entire file through js_read_async — visible
+  // to the user as the seekbar's loaded indicator racing forward while
+  // playback sits paused for tens of seconds.
+  enum AVDiscard *saved_discard =
+      (enum AVDiscard *)malloc(sizeof(enum AVDiscard) * ctx->fmt_ctx->nb_streams);
+  if (saved_discard) {
+    for (unsigned i = 0; i < ctx->fmt_ctx->nb_streams; i++) {
+      saved_discard[i] = ctx->fmt_ctx->streams[i]->discard;
+      if ((int)i != stream_index) {
+        ctx->fmt_ctx->streams[i]->discard = AVDISCARD_ALL;
+      } else {
+        ctx->fmt_ctx->streams[i]->discard = AVDISCARD_DEFAULT;
+      }
+    }
+  }
+
+  // Seek to start of file. avformat_seek_file with INT64_MIN..INT64_MAX
+  // mirrors the convention used by movi_seek_to and tolerates demuxers that
+  // can't seek to exactly 0 (matroska likes the first cluster boundary).
+  if (ctx->avio_ctx)
+    avio_flush(ctx->avio_ctx);
+  int seek_ret = avformat_seek_file(ctx->fmt_ctx, -1, INT64_MIN, 0, INT64_MAX,
+                                    AVSEEK_FLAG_BACKWARD);
+  if (seek_ret < 0) {
+    seek_ret = av_seek_frame(ctx->fmt_ctx, -1, 0, AVSEEK_FLAG_BACKWARD);
+  }
+  if (seek_ret < 0) {
+    if (saved_discard) {
+      for (unsigned i = 0; i < ctx->fmt_ctx->nb_streams; i++) {
+        ctx->fmt_ctx->streams[i]->discard = saved_discard[i];
+      }
+      free(saved_discard);
+    }
+    return -3;
+  }
+  if (ctx->fmt_ctx->pb)
+    ctx->fmt_ctx->pb->eof_reached = 0;
+
+  int capacity = 256;
+  ctx->prefetched_cues =
+      (PrefetchedSubCue *)malloc(capacity * sizeof(PrefetchedSubCue));
+  if (!ctx->prefetched_cues)
+    return -4;
+  ctx->prefetched_cue_capacity = capacity;
+  ctx->prefetched_cue_count = 0;
+
+  AVStream *sub_stream = ctx->fmt_ctx->streams[stream_index];
+  AVRational tb = sub_stream->time_base;
+
+  while (av_read_frame(ctx->fmt_ctx, ctx->pkt) >= 0) {
+    if (ctx->pkt->stream_index != stream_index) {
+      av_packet_unref(ctx->pkt);
+      continue;
+    }
+
+    AVSubtitle local_sub;
+    memset(&local_sub, 0, sizeof(local_sub));
+    int got_sub = 0;
+    int dec_ret =
+        avcodec_decode_subtitle2(dec, &local_sub, &got_sub, ctx->pkt);
+
+    if (dec_ret >= 0 && got_sub && local_sub.num_rects > 0) {
+      double start_sec = 0;
+      if (ctx->pkt->pts != AV_NOPTS_VALUE) {
+        start_sec = ctx->pkt->pts * av_q2d(tb);
+      }
+      double duration_sec = 0;
+      if (ctx->pkt->duration > 0) {
+        duration_sec = ctx->pkt->duration * av_q2d(tb);
+      }
+      // Prefer codec-reported end_display_time when it looks sane; matches
+      // the heuristics in movi_get_subtitle_times.
+      if (local_sub.end_display_time > 0 &&
+          local_sub.end_display_time != UINT32_MAX) {
+        double codec_dur = local_sub.end_display_time / 1000.0;
+        if (codec_dur > 0.1 && codec_dur < 60.0) {
+          duration_sec = codec_dur;
+        }
+      }
+      if (duration_sec < 0.3)
+        duration_sec = 0.3; // mirror the floor in movi_get_subtitle_times
+      double end_sec = start_sec + duration_sec;
+
+      // Reuse movi_get_subtitle_text by temporarily aliasing ctx->subtitle
+      // — single-threaded WASM, and we restore before returning.
+      AVSubtitle *saved_sub = ctx->subtitle;
+      ctx->subtitle = &local_sub;
+      char text_buf[8192];
+      text_buf[0] = '\0';
+      int text_len = movi_get_subtitle_text(ctx, text_buf, (int)sizeof(text_buf));
+      ctx->subtitle = saved_sub;
+
+      if (text_len > 0) {
+        if (ctx->prefetched_cue_count >= ctx->prefetched_cue_capacity) {
+          int new_cap = ctx->prefetched_cue_capacity * 2;
+          PrefetchedSubCue *new_buf = (PrefetchedSubCue *)realloc(
+              ctx->prefetched_cues, new_cap * sizeof(PrefetchedSubCue));
+          if (!new_buf) {
+            avsubtitle_free(&local_sub);
+            av_packet_unref(ctx->pkt);
+            break;
+          }
+          ctx->prefetched_cues = new_buf;
+          ctx->prefetched_cue_capacity = new_cap;
+        }
+
+        PrefetchedSubCue *c =
+            &ctx->prefetched_cues[ctx->prefetched_cue_count++];
+        c->start_sec = start_sec;
+        c->end_sec = end_sec;
+        c->text = strdup(text_buf);
+      }
+
+      avsubtitle_free(&local_sub);
+    }
+
+    av_packet_unref(ctx->pkt);
+  }
+
+  // EOF after the scan; clear the flag so the next seek can resume cleanly.
+  if (ctx->fmt_ctx->pb)
+    ctx->fmt_ctx->pb->eof_reached = 0;
+
+  // Restore the per-stream discard mode so the playback path keeps
+  // receiving audio/video packets after the caller seeks back.
+  if (saved_discard) {
+    for (unsigned i = 0; i < ctx->fmt_ctx->nb_streams; i++) {
+      ctx->fmt_ctx->streams[i]->discard = saved_discard[i];
+    }
+    free(saved_discard);
+  }
+
+  // Flush the subtitle decoder so any state left over from the scan doesn't
+  // bleed into the next playback decode.
+  avcodec_flush_buffers(dec);
+
+  return ctx->prefetched_cue_count;
+}
+
+EMSCRIPTEN_KEEPALIVE
+int movi_get_prefetched_cue_count(MoviContext *ctx) {
+  if (!ctx)
+    return 0;
+  return ctx->prefetched_cue_count;
+}
+
+// Read a single prefetched cue. start_out/end_out receive the timing in
+// seconds; text is copied (NUL-terminated) into text_buffer. Returns the
+// text length, or a negative value on error.
+EMSCRIPTEN_KEEPALIVE
+int movi_get_prefetched_cue(MoviContext *ctx, int idx, double *start_out,
+                            double *end_out, char *text_buffer,
+                            int buffer_size) {
+  if (!ctx || !ctx->prefetched_cues || idx < 0 ||
+      idx >= ctx->prefetched_cue_count)
+    return -1;
+  PrefetchedSubCue *c = &ctx->prefetched_cues[idx];
+  if (start_out)
+    *start_out = c->start_sec;
+  if (end_out)
+    *end_out = c->end_sec;
+  if (!text_buffer || buffer_size <= 0)
+    return 0;
+  if (!c->text) {
+    text_buffer[0] = '\0';
+    return 0;
+  }
+  int len = (int)strlen(c->text);
+  if (len >= buffer_size)
+    len = buffer_size - 1;
+  memcpy(text_buffer, c->text, len);
+  text_buffer[len] = '\0';
+  return len;
+}

@@ -258,6 +258,10 @@ export class MoviElement extends HTMLElement {
       "volume",
       "playbackrate",
       "subtitledelay",
+      "subtitlesize",
+      "subtitlecolor",
+      "subtitlebg",
+      "subtitleedge",
       "ambientmode",
       "ambientwrapper",
       "renderer",
@@ -370,6 +374,17 @@ export class MoviElement extends HTMLElement {
     this.subtitleOverlay = document.createElement("div");
     this.subtitleOverlay.className = "movi-subtitle-overlay";
     shadowRoot.appendChild(this.subtitleOverlay);
+
+    // Click on the live caption text → open the transcript browser
+    // (scrolled to the current cue). The overlay itself stays
+    // pointer-events:none so clicks elsewhere keep falling through to
+    // the canvas / play-pause toggle; only the rendered .block opts in.
+    this.subtitleOverlay.addEventListener("click", (e) => {
+      const target = e.target as HTMLElement | null;
+      if (!target?.closest(".movi-subtitle-block")) return;
+      e.stopPropagation();
+      void this.openCuesPanel();
+    });
 
     // Create loading indicator (positioned over video area)
     const loadingIndicator = document.createElement("div");
@@ -844,6 +859,19 @@ export class MoviElement extends HTMLElement {
                     </svg>
                     <span>Subtitles</span>
                     <button type="button"
+                            class="movi-subtitle-browse-btn"
+                            aria-label="Open transcript"
+                            title="Transcript">
+                      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" width="16" height="16">
+                        <line x1="8" y1="6" x2="21" y2="6"/>
+                        <line x1="8" y1="12" x2="21" y2="12"/>
+                        <line x1="8" y1="18" x2="21" y2="18"/>
+                        <circle cx="3.5" cy="6" r="1"/>
+                        <circle cx="3.5" cy="12" r="1"/>
+                        <circle cx="3.5" cy="18" r="1"/>
+                      </svg>
+                    </button>
+                    <button type="button"
                             class="movi-subtitle-customize-btn"
                             aria-label="Customize captions"
                             title="Customize captions">
@@ -1078,6 +1106,7 @@ export class MoviElement extends HTMLElement {
           <div class="movi-shortcut-row"><kbd>Ctrl+&larr;/&rarr;</kbd><span>Frame Step</span></div>
           <div class="movi-shortcut-row"><kbd>+/-</kbd><span>Speed Up/Down</span></div>
           <div class="movi-shortcut-row"><kbd>V</kbd><span>Cycle Subtitles</span></div>
+          <div class="movi-shortcut-row"><kbd>Z / X</kbd><span>Subtitle Delay</span></div>
           <div class="movi-shortcut-row"><kbd>B</kbd><span>Cycle Audio</span></div>
         </div>
         <div class="movi-shortcuts-col">
@@ -1098,6 +1127,35 @@ export class MoviElement extends HTMLElement {
     shortcutsPanel.querySelector(".movi-shortcuts-close")?.addEventListener("click", (e) => {
       e.stopPropagation();
       shortcutsPanel.style.display = "none";
+    });
+
+    // Subtitle Cues Browser — full-cover modal listing every cue, with
+    // search + click-to-seek. Useful for finding the exact dialogue
+    // anchor when subs are out of sync against the audio (calculate
+    // offset from a known line) and for skimming non-native dialogue.
+    const cuesPanel = document.createElement("div");
+    cuesPanel.className = "movi-cues-panel";
+    cuesPanel.style.display = "none";
+    cuesPanel.innerHTML = `
+      <div class="movi-cues-header">
+        <span class="movi-cues-title">Transcript</span>
+        <div class="movi-cues-search-wrap">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" width="14" height="14">
+            <circle cx="11" cy="11" r="7"/>
+            <path d="m21 21-4.3-4.3"/>
+          </svg>
+          <input type="search" class="movi-cues-search" placeholder="Search transcript…" aria-label="Search transcript">
+        </div>
+        <button class="movi-cues-close" aria-label="Close">&times;</button>
+      </div>
+      <div class="movi-cues-meta"><span class="movi-cues-meta-count">—</span></div>
+      <div class="movi-cues-list" role="listbox"></div>
+    `;
+    shadowRoot.appendChild(cuesPanel);
+
+    cuesPanel.querySelector(".movi-cues-close")?.addEventListener("click", (e) => {
+      e.stopPropagation();
+      this.closeCuesPanel();
     });
 
     // Setup control handlers
@@ -1705,6 +1763,7 @@ export class MoviElement extends HTMLElement {
       // Toggle menu visibility
       if (audioTrackMenu) {
         const isVisible = audioTrackMenu.style.display !== "none";
+        if (!isVisible) this.closeAllBottomMenus(".movi-audio-track-menu");
         audioTrackMenu.style.display = isVisible ? "none" : "block";
         if (!isVisible) {
           this.updateAudioTrackMenu();
@@ -1739,6 +1798,7 @@ export class MoviElement extends HTMLElement {
       // Toggle menu visibility
       if (subtitleTrackMenu) {
         const isVisible = subtitleTrackMenu.style.display !== "none";
+        if (!isVisible) this.closeAllBottomMenus(".movi-subtitle-track-menu");
         subtitleTrackMenu.style.display = isVisible ? "none" : "block";
         if (!isVisible) {
           // Always open on the track list, never on the customize panel.
@@ -1756,6 +1816,21 @@ export class MoviElement extends HTMLElement {
       e.stopPropagation();
       this._showingSubtitleCustomize = !this._showingSubtitleCustomize;
       this.updateSubtitleTrackMenu();
+    });
+
+    // Header list icon → open full-cover cues browser.
+    const subtitleBrowseBtn = shadowRoot.querySelector(
+      ".movi-subtitle-browse-btn",
+    ) as HTMLElement | null;
+    subtitleBrowseBtn?.addEventListener("click", (e) => {
+      e.stopPropagation();
+      // Close the dropdown first — the cues panel covers the player and
+      // any leftover dropdown stacked above it just looks broken.
+      const subtitleMenu = this.shadowRoot?.querySelector(
+        ".movi-subtitle-track-menu",
+      ) as HTMLElement | null;
+      if (subtitleMenu) subtitleMenu.style.display = "none";
+      void this.openCuesPanel();
     });
 
     // Close subtitle menu when clicking outside. Uses composedPath()
@@ -2000,6 +2075,16 @@ export class MoviElement extends HTMLElement {
         return; // Don't toggle if clicking on controls
       }
 
+      // If a bottom-controls menu is open, swallow this click to close
+      // it instead of toggling play/pause. The user wanted "click on
+      // player closes the panel, not play/pause" — a second click then
+      // toggles playback like normal.
+      if (this.isAnyMenuOpen()) {
+        this.closeAllBottomMenus();
+        e.stopPropagation();
+        return;
+      }
+
       // Mouse Triple Click logic removed to prevent accidental seeking
 
       // Delay single click to allow double click detection
@@ -2096,8 +2181,14 @@ export class MoviElement extends HTMLElement {
       }
 
       this.isOverControls = false;
-      // Only hide if not dragging
-      if (!this.isDragging) {
+      // Only hide if not dragging AND no menu is open. Without the menu
+      // check, switching from a tall customize panel to a shorter track
+      // list (via the panel's "Back" button) collapses the menu height
+      // — the mouse pointer that was on the Back button now sits above
+      // the new shorter list, fires mouseleave on the controls container,
+      // and the auto-hide animates the entire controls bar (including the
+      // open menu) to opacity 0.
+      if (!this.isDragging && !this.isAnyMenuOpen()) {
         this.hideControls();
       }
     });
@@ -2116,8 +2207,8 @@ export class MoviElement extends HTMLElement {
       if (relatedTarget && controlsContainer?.contains(relatedTarget)) {
         return;
       }
-      // Only hide if not over controls and not dragging
-      if (!this.isOverControls && !this.isDragging) {
+      // Only hide if not over controls and not dragging and no menu open
+      if (!this.isOverControls && !this.isDragging && !this.isAnyMenuOpen()) {
         this.hideControls();
       }
     });
@@ -2299,6 +2390,12 @@ export class MoviElement extends HTMLElement {
         if (tapTimer) clearTimeout(tapTimer);
         tapTimer = null;
 
+        // Tap on video area while a menu is open closes the menu first.
+        if (this.isAnyMenuOpen()) {
+          this.closeAllBottomMenus();
+          return;
+        }
+
         const controlsContainer = this.controlsContainer;
         const controlsHidden = controlsContainer?.classList.contains(
           "movi-controls-hidden",
@@ -2384,6 +2481,13 @@ export class MoviElement extends HTMLElement {
 
         tapTimer = window.setTimeout(() => {
           // Single tap action (show controls or toggle play)
+          // Tap closes any open bottom-controls menu first.
+          if (this.isAnyMenuOpen()) {
+            this.closeAllBottomMenus();
+            lastTap = 0;
+            return;
+          }
+
           const controlsContainer = this.controlsContainer;
           const controlsHidden = controlsContainer?.classList.contains(
             "movi-controls-hidden",
@@ -2626,6 +2730,20 @@ export class MoviElement extends HTMLElement {
 
       // Only handle if player exists (content loaded)
       if (!this.player) return;
+
+      // Don't fire shortcuts when the user is typing into a text field
+      // — the event's target gets retargeted to the host element when it
+      // bubbles out of shadow DOM, so check composedPath() to see the
+      // real focus target. Without this, typing "p" in the transcript
+      // search would pause playback, "f" would fullscreen, etc.
+      const path = e.composedPath();
+      for (const node of path) {
+        if (!(node instanceof HTMLElement)) continue;
+        const tag = node.tagName;
+        if (tag === "INPUT" || tag === "TEXTAREA" || node.isContentEditable) {
+          return;
+        }
+      }
 
       // Resume dialog keyboard navigation
       const resumeDialog = this.shadowRoot?.querySelector(".movi-resume-dialog") as HTMLElement;
@@ -2980,16 +3098,16 @@ export class MoviElement extends HTMLElement {
             }
           }
           break;
-        case "g":
-        case "G":
-        case "h":
-        case "H": {
-          // G / H: Subtitle delay — shift subs earlier (G) or later (H) by
-          // 100ms per press. VLC convention: positive value = subs later.
+        case "z":
+        case "Z":
+        case "x":
+        case "X": {
+          // Z / X: Subtitle delay — shift subs earlier (Z) or later (X) by
+          // 100ms per press. mpv convention: positive value = subs later.
           e.preventDefault();
           if (this.player) {
             const step = 0.1;
-            const direction = e.key === "g" || e.key === "G" ? -1 : 1;
+            const direction = e.key === "z" || e.key === "Z" ? -1 : 1;
             // Round to 3 decimals to keep the displayed value stable across
             // many presses despite floating-point accumulation.
             const next = Math.round((this._subtitleDelay + direction * step) * 1000) / 1000;
@@ -4197,6 +4315,16 @@ export class MoviElement extends HTMLElement {
 
     Logger.info(TAG, `restorePiPCanvas: canvas isConnected=${canvas.isConnected}`);
 
+    // Invalidate the cached host dimensions so updateCanvasSize() actually
+    // re-runs the resize. While in PiP, resizeInPiP() set canvas.width to
+    // the small PiP window size (e.g. 400x225) directly, bypassing
+    // updateCanvasSize — so _lastCanvasW still matches the host's bounding
+    // rect from before we entered PiP. Without this reset, the coalescing
+    // guard at the top of updateCanvasSize early-returns and the buffer
+    // stays at PiP resolution → pixelated render at full size.
+    this._lastCanvasW = 0;
+    this._lastCanvasH = 0;
+
     // Restore original size
     requestAnimationFrame(() => {
       this.updateCanvasSize();
@@ -5320,6 +5448,53 @@ export class MoviElement extends HTMLElement {
   }
 
   /**
+   * Apply one of the public subtitle-customize attributes onto
+   * _subtitleSettings. Returns true if the attribute name matched
+   * (caller can decide whether to call applySubtitleSettings()).
+   *
+   *   subtitlesize="150"      (50–200, treated as %; also accepts 1.5)
+   *   subtitlecolor="#FFEB3B" (any CSS color hex, 3 or 6 digits)
+   *   subtitlebg="50"         (0–100, treated as %; also accepts 0.5)
+   *   subtitleedge="outline"  (none | shadow | outline | raised)
+   */
+  private applySubtitleAttribute(name: string, raw: string | null): boolean {
+    const s = this._subtitleSettings;
+    switch (name) {
+      case "subtitlesize": {
+        if (raw === null) return true; // attribute removed → keep current
+        const parsed = parseFloat(raw);
+        if (!Number.isFinite(parsed) || parsed <= 0) return true;
+        // > 5 → percentage (e.g. 150). Else treat as multiplier (1.5).
+        s.sizeMult = parsed > 5 ? parsed / 100 : parsed;
+        return true;
+      }
+      case "subtitlecolor": {
+        if (raw === null) return true;
+        const m = /^#([0-9a-f]{3}|[0-9a-f]{6})$/i.exec(raw.trim());
+        if (m) s.color = raw.trim();
+        return true;
+      }
+      case "subtitlebg": {
+        if (raw === null) return true;
+        const parsed = parseFloat(raw);
+        if (!Number.isFinite(parsed)) return true;
+        // > 1 → percentage (e.g. 75). Else treat as 0–1 alpha.
+        s.bgAlpha = Math.max(0, Math.min(1, parsed > 1 ? parsed / 100 : parsed));
+        return true;
+      }
+      case "subtitleedge": {
+        if (raw === null) return true;
+        const v = raw.trim().toLowerCase();
+        if (v === "none" || v === "shadow" || v === "outline" || v === "raised") {
+          s.edge = v;
+        }
+        return true;
+      }
+    }
+    return false;
+  }
+
+  /**
    * Pick a backdrop RGB that contrasts with the text color so the cue
    * stays readable regardless of the user's color choice. Dark text on
    * dark backdrop (or vice versa) would render the subtitle invisible.
@@ -5470,14 +5645,14 @@ export class MoviElement extends HTMLElement {
       ? `
       <div class="movi-sub-cust-section">
         <div class="movi-sub-cust-section-head">
-          <span class="movi-sub-cust-section-title">Subtitle shift</span>
+          <span class="movi-sub-cust-section-title">Subtitle delay</span>
           <div class="movi-sub-cust-shift-input-wrap">
             <input type="number"
                    class="movi-sub-cust-shift-input"
                    data-readout="shift"
-                   step="0.1" min="-30" max="30"
+                   step="0.1" min="-300" max="300"
                    value="${currentDelay.toFixed(1)}"
-                   aria-label="Subtitle shift in seconds">
+                   aria-label="Subtitle delay in seconds">
             <span class="movi-sub-cust-shift-input-suffix">s</span>
           </div>
         </div>
@@ -5643,12 +5818,26 @@ export class MoviElement extends HTMLElement {
         });
       });
 
-    // Back to subtitles list.
+    // Back to subtitles list. The handler MUST run before the click bubbles
+    // out — the document-level closeSubtitleMenuHandler will hide the whole
+    // dropdown if it ever sees a click whose composedPath doesn't include
+    // the menu, which can happen on this button alone because innerHTML is
+    // about to replace the click target before bubbling completes (the
+    // path captured at dispatch time is fine, but some browsers retarget).
+    // stopImmediatePropagation + preventDefault belt-and-suspenders the
+    // path; the explicit display:block restore guarantees the menu stays
+    // visible even if some other listener slips through.
     const backBtn = root.querySelector<HTMLElement>(".movi-sub-cust-back");
     backBtn?.addEventListener("click", (e) => {
       e.stopPropagation();
+      e.stopImmediatePropagation();
+      e.preventDefault();
       this._showingSubtitleCustomize = false;
       this.updateSubtitleTrackMenu();
+      const menu = this.shadowRoot?.querySelector(
+        ".movi-subtitle-track-menu",
+      ) as HTMLElement | null;
+      if (menu) menu.style.display = "block";
     });
 
     // Subtitle shift (timing nudge). Preset buttons (±0.1s / ±1s / 0)
@@ -5667,11 +5856,21 @@ export class MoviElement extends HTMLElement {
     };
     const applyShift = (next: number) => {
       if (!this.player) return;
-      const clamped = Math.max(-30, Math.min(30, next));
+      const clamped = Math.max(-300, Math.min(300, next));
       // Round to 1 decimal so consecutive nudges don't accumulate fp noise.
       const rounded = Math.round(clamped * 10) / 10;
       this.player.setSubtitleDelay(rounded);
       refreshShiftReadout();
+      // If the transcript panel is showing, repaint its rows so the
+      // displayed timestamps reflect the new delay (each row shows the
+      // video time at which the cue actually appears, not the raw
+      // stream time).
+      const cuesPanel = this.shadowRoot?.querySelector(
+        ".movi-cues-panel",
+      ) as HTMLElement | null;
+      if (cuesPanel && cuesPanel.style.display !== "none") {
+        this.renderCuesPanel();
+      }
     };
     root
       .querySelectorAll<HTMLElement>(".movi-sub-cust-shift-btn")
@@ -5745,6 +5944,336 @@ export class MoviElement extends HTMLElement {
 
   private _showingSubtitleCustomize: boolean = false;
 
+  // Cues browser state
+  private _cuesPanelCues: { start: number; end: number; text: string }[] = [];
+  private _cuesPanelFiltered: { start: number; end: number; text: string }[] = [];
+  private _cuesPanelQuery: string = "";
+  private _cuesPanelActiveIdx: number = -1;
+  private _cuesPanelTimeUpdateUnsub: (() => void) | null = null;
+  private _cuesPanelEscHandler: ((e: KeyboardEvent) => void) | null = null;
+
+  private async openCuesPanel(): Promise<void> {
+    const panel = this.shadowRoot?.querySelector(
+      ".movi-cues-panel",
+    ) as HTMLElement | null;
+    const list = panel?.querySelector(
+      ".movi-cues-list",
+    ) as HTMLElement | null;
+    const meta = panel?.querySelector(
+      ".movi-cues-meta-count",
+    ) as HTMLElement | null;
+    const search = panel?.querySelector(
+      ".movi-cues-search",
+    ) as HTMLInputElement | null;
+    if (!panel || !list || !this.player) return;
+
+    panel.style.display = "flex";
+    list.innerHTML = `<div class="movi-cues-empty">Loading…</div>`;
+    if (meta) meta.textContent = "Scanning subtitle stream…";
+
+    let cues: { start: number; end: number; text: string }[] = [];
+    try {
+      cues = await this.player.getAllSubtitleCues();
+    } catch (err) {
+      Logger.error(TAG, "Failed to load cues for browser", err);
+    }
+
+    // Panel may have been closed while we awaited — bail out cleanly.
+    if (panel.style.display === "none") return;
+
+    this._cuesPanelCues = cues;
+    this._cuesPanelQuery = "";
+    if (search) {
+      search.value = "";
+      // Wire input/keydown once per open — handlers reference the latest
+      // _cuesPanelQuery via closure each time, so we replace listeners on
+      // every open to avoid stacking.
+      const newSearch = search.cloneNode(true) as HTMLInputElement;
+      search.replaceWith(newSearch);
+      newSearch.addEventListener("input", () => {
+        this._cuesPanelQuery = newSearch.value;
+        this.renderCuesPanel();
+      });
+      newSearch.addEventListener("keydown", (e) => {
+        if (e.key === "Escape") {
+          if (newSearch.value.length > 0) {
+            newSearch.value = "";
+            this._cuesPanelQuery = "";
+            this.renderCuesPanel();
+            e.stopPropagation();
+          }
+        }
+      });
+      // Focus after rAF so the search field is ready to type into.
+      requestAnimationFrame(() => newSearch.focus());
+    }
+
+    // Delegated click on list rows — survives re-renders since we listen
+    // on the static list element itself.
+    list.onclick = (e) => {
+      const row = (e.target as HTMLElement)?.closest(
+        ".movi-cues-row",
+      ) as HTMLElement | null;
+      if (!row || !this.player) return;
+      const startStr = row.dataset.start;
+      if (!startStr) return;
+      const start = parseFloat(startStr);
+      if (!Number.isFinite(start)) return;
+      // Seek to (cue start − delay) so the cue lands at this video time.
+      const delay = this.player.getSubtitleDelay();
+      const target = Math.max(0, start - delay);
+      this.player.seek(target).catch(() => {});
+      this.closeCuesPanel();
+    };
+
+    this.renderCuesPanel();
+
+    // Active cue follow — re-pick the active row whenever clock advances.
+    if (this._cuesPanelTimeUpdateUnsub) this._cuesPanelTimeUpdateUnsub();
+    const onTime = () => this.updateCuesPanelActive();
+    this.player.on("timeUpdate", onTime);
+    this._cuesPanelTimeUpdateUnsub = () =>
+      this.player?.off("timeUpdate", onTime);
+
+    // ESC to close.
+    if (this._cuesPanelEscHandler) {
+      document.removeEventListener("keydown", this._cuesPanelEscHandler);
+    }
+    this._cuesPanelEscHandler = (e: KeyboardEvent) => {
+      if (e.key === "Escape") {
+        // Only swallow ESC when the search input is empty — otherwise
+        // let the search input's own ESC handler clear the query first.
+        const s = this.shadowRoot?.querySelector(
+          ".movi-cues-search",
+        ) as HTMLInputElement | null;
+        if (!s || s.value.length === 0) {
+          this.closeCuesPanel();
+          e.stopPropagation();
+        }
+      }
+    };
+    document.addEventListener("keydown", this._cuesPanelEscHandler);
+  }
+
+  private closeCuesPanel(): void {
+    const panel = this.shadowRoot?.querySelector(
+      ".movi-cues-panel",
+    ) as HTMLElement | null;
+    if (panel) panel.style.display = "none";
+    if (this._cuesPanelTimeUpdateUnsub) {
+      this._cuesPanelTimeUpdateUnsub();
+      this._cuesPanelTimeUpdateUnsub = null;
+    }
+    if (this._cuesPanelEscHandler) {
+      document.removeEventListener("keydown", this._cuesPanelEscHandler);
+      this._cuesPanelEscHandler = null;
+    }
+    this._cuesPanelCues = [];
+    this._cuesPanelFiltered = [];
+    this._cuesPanelQuery = "";
+    this._cuesPanelActiveIdx = -1;
+  }
+
+  private renderCuesPanel(): void {
+    const list = this.shadowRoot?.querySelector(
+      ".movi-cues-list",
+    ) as HTMLElement | null;
+    const meta = this.shadowRoot?.querySelector(
+      ".movi-cues-meta-count",
+    ) as HTMLElement | null;
+    if (!list) return;
+
+    const q = this._cuesPanelQuery.trim().toLowerCase();
+    const filtered = q
+      ? this._cuesPanelCues.filter((c) => c.text.toLowerCase().includes(q))
+      : this._cuesPanelCues;
+    this._cuesPanelFiltered = filtered;
+
+    if (meta) {
+      const total = this._cuesPanelCues.length;
+      meta.textContent = q
+        ? `${filtered.length} of ${total} matching “${this._cuesPanelQuery}”`
+        : `${total} cues`;
+    }
+
+    if (filtered.length === 0) {
+      list.innerHTML = `<div class="movi-cues-empty">${q ? "No matches." : "No cues."}</div>`;
+      this._cuesPanelActiveIdx = -1;
+      return;
+    }
+
+    const escapeHtml = (s: string) =>
+      s
+        .replace(/&/g, "&amp;")
+        .replace(/</g, "&lt;")
+        .replace(/>/g, "&gt;")
+        .replace(/"/g, "&quot;");
+
+    // Some subtitle decoders emit HTML-entity-encoded text (&gt;, &amp;,
+    // &#39;, &nbsp;…). Decode those first so the user sees the real
+    // characters — and so a "<i>" written as "&lt;i&gt;" still gets
+    // recognised as an italic tag below. &amp; is decoded last to avoid
+    // double-decoding (e.g. "&amp;gt;" should land at "&gt;", not ">").
+    const decodeEntities = (s: string): string =>
+      s
+        .replace(/&lt;/gi, "<")
+        .replace(/&gt;/gi, ">")
+        .replace(/&quot;/gi, '"')
+        .replace(/&#39;/g, "'")
+        .replace(/&apos;/gi, "'")
+        .replace(/&nbsp;/gi, " ")
+        .replace(/&amp;/gi, "&");
+
+    // Tokenize the cue text into plain spans + safe inline-style tags
+    // (<i>, <b>, <u>). The C-side decoder emits these for SubRip/ASS
+    // italic/bold/underline, and they should render — escaping them as
+    // raw <i> on screen looks broken. Anything else gets escaped.
+    const SAFE_TAG_RE = /<\/?[biu]>/gi;
+    type Token = { type: "text" | "tag"; value: string };
+    const tokenize = (raw: string): Token[] => {
+      const text = decodeEntities(raw);
+      const tokens: Token[] = [];
+      let pos = 0;
+      let m: RegExpExecArray | null;
+      SAFE_TAG_RE.lastIndex = 0;
+      while ((m = SAFE_TAG_RE.exec(text)) !== null) {
+        if (m.index > pos)
+          tokens.push({ type: "text", value: text.slice(pos, m.index) });
+        tokens.push({ type: "tag", value: m[0].toLowerCase() });
+        pos = SAFE_TAG_RE.lastIndex;
+      }
+      if (pos < text.length)
+        tokens.push({ type: "text", value: text.slice(pos) });
+      return tokens;
+    };
+
+    const highlight = (text: string): string => {
+      const tokens = tokenize(text);
+
+      if (!q) {
+        return tokens
+          .map((t) => (t.type === "tag" ? t.value : escapeHtml(t.value)))
+          .join("");
+      }
+
+      // Build a plain-text view (tags stripped) so the search query
+      // matches across italic boundaries, then map matches back onto
+      // the original token stream so the rendered output preserves
+      // tags AND highlights the matched substrings.
+      let plain = "";
+      const textRanges: { tokenIdx: number; start: number }[] = [];
+      tokens.forEach((t, i) => {
+        if (t.type === "text") {
+          textRanges.push({ tokenIdx: i, start: plain.length });
+          plain += t.value;
+        }
+      });
+      const plainLower = plain.toLowerCase();
+      const matches: { start: number; end: number }[] = [];
+      let cur = 0;
+      while (cur <= plainLower.length - q.length) {
+        const idx = plainLower.indexOf(q, cur);
+        if (idx < 0) break;
+        matches.push({ start: idx, end: idx + q.length });
+        cur = idx + q.length;
+      }
+
+      const parts: string[] = [];
+      for (let i = 0; i < tokens.length; i++) {
+        const t = tokens[i];
+        if (t.type === "tag") {
+          parts.push(t.value);
+          continue;
+        }
+        const range = textRanges.find((r) => r.tokenIdx === i);
+        if (!range) continue;
+        const tStart = range.start;
+        const tEnd = tStart + t.value.length;
+        let cursor = tStart;
+        for (const mm of matches) {
+          if (mm.end <= tStart || mm.start >= tEnd) continue;
+          const ovStart = Math.max(mm.start, tStart);
+          const ovEnd = Math.min(mm.end, tEnd);
+          if (ovStart > cursor)
+            parts.push(escapeHtml(plain.slice(cursor, ovStart)));
+          parts.push(`<mark>${escapeHtml(plain.slice(ovStart, ovEnd))}</mark>`);
+          cursor = ovEnd;
+        }
+        if (cursor < tEnd) parts.push(escapeHtml(plain.slice(cursor, tEnd)));
+      }
+      return parts.join("");
+    };
+
+    const fmt = (sec: number): string => {
+      const total = Math.max(0, Math.floor(sec));
+      const h = Math.floor(total / 3600);
+      const m = Math.floor((total % 3600) / 60);
+      const s = total % 60;
+      const mm = m.toString().padStart(2, "0");
+      const ss = s.toString().padStart(2, "0");
+      return h > 0 ? `${h}:${mm}:${ss}` : `${mm}:${ss}`;
+    };
+
+    // Display the video-time at which each cue actually appears so the
+    // numbers stay meaningful when the user has dialled in a delay
+    // offset. Raw stream time is preserved on data-start for active-row
+    // matching against the renderer's own (also delay-aware) clock.
+    const delay = this.player ? this.player.getSubtitleDelay() : 0;
+    list.innerHTML = filtered
+      .map(
+        (c) => `
+      <div class="movi-cues-row" role="option" data-start="${c.start}">
+        <span class="movi-cues-row-time">${fmt(Math.max(0, c.start - delay))}</span>
+        <span class="movi-cues-row-text">${highlight(c.text)}</span>
+      </div>`,
+      )
+      .join("");
+
+    this.updateCuesPanelActive();
+  }
+
+  private updateCuesPanelActive(): void {
+    const list = this.shadowRoot?.querySelector(
+      ".movi-cues-list",
+    ) as HTMLElement | null;
+    if (!list || !this.player) return;
+    const cues = this._cuesPanelFiltered;
+    if (cues.length === 0) return;
+    // Apply the live subtitle delay so the highlighted row matches what's
+    // actually showing on screen (cue.start refers to raw stream time).
+    const delay = this.player.getSubtitleDelay();
+    const adjusted = this.player.getCurrentTime() + delay;
+    // Pick the latest cue whose start <= adjusted. Linear scan is fine
+    // for ~thousands of cues; switch to binary search if that ever
+    // becomes a hotspot.
+    let idx = -1;
+    for (let i = 0; i < cues.length; i++) {
+      if (cues[i].start <= adjusted) idx = i;
+      else break;
+    }
+    // Only count it active while the cue is still in its display window.
+    if (idx >= 0 && cues[idx].end + 0.5 < adjusted) idx = -1;
+    if (idx === this._cuesPanelActiveIdx) return;
+    this._cuesPanelActiveIdx = idx;
+
+    const rows = list.querySelectorAll<HTMLElement>(".movi-cues-row");
+    rows.forEach((r, i) => {
+      r.classList.toggle("is-active", i === idx);
+    });
+    if (idx >= 0) {
+      const row = rows[idx];
+      if (row) {
+        const rowTop = row.offsetTop;
+        const rowBot = rowTop + row.offsetHeight;
+        const viewTop = list.scrollTop;
+        const viewBot = viewTop + list.clientHeight;
+        if (rowTop < viewTop || rowBot > viewBot) {
+          list.scrollTop = rowTop - list.clientHeight / 2 + row.offsetHeight / 2;
+        }
+      }
+    }
+  }
+
   private updateSubtitleTrackMenu(): void {
     if (!this.player) return;
 
@@ -5780,6 +6309,9 @@ export class MoviElement extends HTMLElement {
     const gearBtn = this.shadowRoot?.querySelector(
       ".movi-subtitle-customize-btn",
     ) as HTMLElement | null;
+    const browseBtn = this.shadowRoot?.querySelector(
+      ".movi-subtitle-browse-btn",
+    ) as HTMLElement | null;
     const hasActiveSubtitle = this.getActiveSubtitleKind() !== null;
     if (gearBtn) {
       gearBtn.style.display = hasActiveSubtitle ? "" : "none";
@@ -5788,6 +6320,9 @@ export class MoviElement extends HTMLElement {
         "aria-pressed",
         this._showingSubtitleCustomize ? "true" : "false",
       );
+    }
+    if (browseBtn) {
+      browseBtn.style.display = hasActiveSubtitle ? "" : "none";
     }
     // If the user had the customize panel open and then hit "Off",
     // bounce them back to the track list automatically.
@@ -5923,11 +6458,12 @@ export class MoviElement extends HTMLElement {
               const muxSubOsdC = muxSubLangC && muxSubLabelC !== muxSubLangC ? `${muxSubLabelC} [${muxSubLangC}]` : muxSubLabelC;
               this.showOSD(subIconOn, muxSubOsdC);
             }
-            // Close menu
-            const menu = this.shadowRoot?.querySelector(
-              ".movi-subtitle-track-menu",
-            ) as HTMLElement;
-            if (menu) menu.style.display = "none";
+            // Re-render so the active row's checkmark + the gear/browse
+            // icons reflect the new selection. Do NOT close the menu —
+            // user wants to glance at the panel, swap a track, and
+            // possibly tweak something else (Transcript, customize)
+            // without re-opening the dropdown each time.
+            this.updateSubtitleTrackMenu();
           }
         });
       });
@@ -6007,6 +6543,29 @@ export class MoviElement extends HTMLElement {
         }
         this.controlsTimeout = null;
       }, 3000); // 3 seconds of inactivity
+    }
+  }
+
+  /**
+   * Close every bottom-controls dropdown (speed, audio, subtitle,
+   * quality) plus the context menu. Used to enforce one-menu-at-a-time
+   * and to swallow a player-area click when a menu is open.
+   * Pass a `keep` selector to skip closing the menu currently being
+   * opened, otherwise everything goes away.
+   */
+  private closeAllBottomMenus(keep?: string): void {
+    if (!this.shadowRoot) return;
+    const selectors = [
+      ".movi-speed-menu",
+      ".movi-audio-track-menu",
+      ".movi-subtitle-track-menu",
+      ".movi-quality-menu",
+      ".movi-context-menu",
+    ];
+    for (const sel of selectors) {
+      if (sel === keep) continue;
+      const el = this.shadowRoot.querySelector(sel) as HTMLElement | null;
+      if (el && el.style.display !== "none") el.style.display = "none";
     }
   }
 
@@ -6155,6 +6714,15 @@ export class MoviElement extends HTMLElement {
       }
 
       :host {
+        /* Treat the host as a query container so the responsive
+           breakpoints below trigger off the PLAYER's own width
+           instead of the viewport's. Without this, embedding the
+           player inside a desktop layout with a sidebar (player
+           width < 640px while viewport > 640px) keeps the desktop
+           controls layout and clips the rightmost icons. */
+        container-type: inline-size;
+        container-name: movi-host;
+
         /* Premium Color Palette */
         --movi-primary: #8B5CF6;
         /* Derived so themecolor attribute cascades to light/dark variants */
@@ -6996,7 +7564,8 @@ export class MoviElement extends HTMLElement {
         flex: 1;
       }
 
-      .movi-subtitle-customize-btn {
+      .movi-subtitle-customize-btn,
+      .movi-subtitle-browse-btn {
         all: unset;
         cursor: pointer;
         display: inline-flex;
@@ -7010,9 +7579,15 @@ export class MoviElement extends HTMLElement {
         transition: background var(--movi-transition-fast), opacity var(--movi-transition-fast), color var(--movi-transition-fast);
       }
 
-      .movi-subtitle-customize-btn:hover {
+      .movi-subtitle-customize-btn:hover,
+      .movi-subtitle-browse-btn:hover {
         background: color-mix(in srgb, var(--movi-controls-color) 0.1, transparent);
         opacity: 1;
+      }
+
+      .movi-subtitle-browse-btn svg {
+        width: 16px;
+        height: 16px;
       }
 
       .movi-subtitle-customize-btn.is-active,
@@ -7557,7 +8132,7 @@ export class MoviElement extends HTMLElement {
 
       .movi-sub-cust-shift-input {
         all: unset;
-        width: 3.5ch;
+        width: 5.5ch;
         text-align: right;
         font-size: 12px;
         font-weight: 600;
@@ -7955,7 +8530,7 @@ export class MoviElement extends HTMLElement {
         object-fit: unset;
       }
 
-      @media (max-width: 640px) {
+      @container movi-host (max-width: 720px) {
         .movi-nerd-stats {
           top: 4px;
           left: 4px;
@@ -8213,7 +8788,7 @@ export class MoviElement extends HTMLElement {
         flex-shrink: 0;
       }
 
-      @media (max-width: 640px) {
+      @container movi-host (max-width: 720px) {
         .movi-timeline-panel {
           left: 8px;
           right: 8px;
@@ -8319,7 +8894,134 @@ export class MoviElement extends HTMLElement {
         flex: 1;
       }
 
-      @media (max-width: 640px) {
+      .movi-cues-panel {
+        position: absolute;
+        inset: 0;
+        z-index: 200;
+        background: rgba(0, 0, 0, 0.78);
+        backdrop-filter: blur(24px);
+        -webkit-backdrop-filter: blur(24px);
+        display: flex;
+        flex-direction: column;
+        font-family: 'Inter', -apple-system, sans-serif;
+        color: rgba(255, 255, 255, 0.92);
+        pointer-events: auto;
+      }
+      .movi-cues-header {
+        display: flex;
+        align-items: center;
+        gap: 12px;
+        padding: 14px 18px;
+        border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+        flex-shrink: 0;
+      }
+      .movi-cues-title {
+        font-size: 14px;
+        font-weight: 700;
+        letter-spacing: 0.02em;
+        white-space: nowrap;
+      }
+      .movi-cues-search-wrap {
+        flex: 1;
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        padding: 6px 12px;
+        background: rgba(255, 255, 255, 0.06);
+        border: 1px solid rgba(255, 255, 255, 0.08);
+        border-radius: 8px;
+        max-width: 380px;
+        margin-left: auto;
+        margin-right: auto;
+      }
+      .movi-cues-search-wrap svg {
+        color: rgba(255, 255, 255, 0.5);
+        flex-shrink: 0;
+      }
+      .movi-cues-search {
+        all: unset;
+        flex: 1;
+        font-size: 13px;
+        color: #fff;
+        font-family: inherit;
+      }
+      .movi-cues-search::placeholder { color: rgba(255, 255, 255, 0.4); }
+      .movi-cues-search::-webkit-search-cancel-button { display: none; }
+      .movi-cues-close {
+        background: none;
+        border: none;
+        color: rgba(255, 255, 255, 0.55);
+        font-size: 24px;
+        line-height: 1;
+        cursor: pointer;
+        padding: 0 6px;
+        transition: color 0.15s;
+      }
+      .movi-cues-close:hover { color: #fff; }
+      .movi-cues-meta {
+        padding: 6px 18px;
+        font-size: 11px;
+        color: rgba(255, 255, 255, 0.45);
+        letter-spacing: 0.04em;
+        text-transform: uppercase;
+        flex-shrink: 0;
+      }
+      .movi-cues-list {
+        flex: 1;
+        overflow-y: auto;
+        padding: 4px 8px 12px;
+        scroll-behavior: smooth;
+      }
+      .movi-cues-list::-webkit-scrollbar { width: 8px; }
+      .movi-cues-list::-webkit-scrollbar-thumb {
+        background: rgba(255, 255, 255, 0.12);
+        border-radius: 4px;
+      }
+      .movi-cues-row {
+        display: flex;
+        gap: 12px;
+        padding: 10px 12px;
+        border-radius: 8px;
+        cursor: pointer;
+        align-items: flex-start;
+        transition: background 0.12s;
+      }
+      .movi-cues-row:hover { background: rgba(255, 255, 255, 0.06); }
+      .movi-cues-row.is-active {
+        background: color-mix(in srgb, var(--movi-primary) 0.18, transparent);
+      }
+      .movi-cues-row.is-active .movi-cues-row-time {
+        color: var(--movi-primary);
+      }
+      .movi-cues-row-time {
+        font-variant-numeric: tabular-nums;
+        font-size: 12px;
+        font-weight: 600;
+        color: rgba(255, 255, 255, 0.5);
+        flex-shrink: 0;
+        min-width: 56px;
+        padding-top: 1px;
+      }
+      .movi-cues-row-text {
+        font-size: 13px;
+        line-height: 1.45;
+        white-space: pre-wrap;
+        word-break: break-word;
+      }
+      .movi-cues-row mark {
+        background: color-mix(in srgb, var(--movi-primary) 0.4, transparent);
+        color: inherit;
+        padding: 0 2px;
+        border-radius: 3px;
+      }
+      .movi-cues-empty {
+        text-align: center;
+        padding: 40px 20px;
+        color: rgba(255, 255, 255, 0.5);
+        font-size: 13px;
+      }
+
+      @container movi-host (max-width: 720px) {
         .movi-shortcuts-panel {
           min-width: unset;
           max-width: unset;
@@ -8431,7 +9133,7 @@ export class MoviElement extends HTMLElement {
         color: rgba(255, 255, 255, 0.8);
       }
 
-      @media (max-width: 640px) {
+      @container movi-host (max-width: 720px) {
         .movi-resume-dialog {
           bottom: 80px;
           padding: 10px 14px;
@@ -8453,7 +9155,7 @@ export class MoviElement extends HTMLElement {
       ======================================== */
 
       /* Mobile devices (up to 640px) */
-      @media (max-width: 640px) {
+      @container movi-host (max-width: 720px) {
         :host {
           --movi-controls-height: var(--movi-controls-height-mobile);
           --movi-btn-size: var(--movi-btn-size-mobile);
@@ -8755,7 +9457,7 @@ export class MoviElement extends HTMLElement {
       }
 
       /* Desktop: Hide More button */
-      @media (min-width: 641px) {
+      @container movi-host (min-width: 721px) {
         .movi-more-btn {
           display: none !important;
         }
@@ -8764,20 +9466,39 @@ export class MoviElement extends HTMLElement {
         }
       }
 
-      
-      /* Tablet devices (641px to 1024px) */
-      @media (min-width: 641px) and (max-width: 1024px) {
+
+      /* Tablet-sized players (721px to 1024px) */
+      @container movi-host (min-width: 721px) and (max-width: 1024px) {
         .movi-controls-bar {
           padding: 14px 18px;
         }
-        
+
         .movi-time {
           font-size: 12px;
         }
+
+        /* Tighten button + gap sizing so all the right-side icons fit
+           within the bar at medium widths — without this, the right
+           icons (loop, fullscreen) clip off the edge. */
+        .movi-btn {
+          width: 40px;
+          height: 40px;
+          padding: 8px;
+        }
+        .movi-btn svg {
+          width: 20px;
+          height: 20px;
+        }
+        .movi-controls-right {
+          gap: 4px;
+        }
+        .movi-controls-left {
+          gap: 4px;
+        }
       }
-      
-      /* Large screens (1025px and above) */
-      @media (min-width: 1025px) {
+
+      /* Large players (1025px and above) */
+      @container movi-host (min-width: 1025px) {
         .movi-controls-bar {
           padding: 16px 24px;
         }
@@ -8906,7 +9627,7 @@ export class MoviElement extends HTMLElement {
       }
 
       /* Mobile loader - smaller size */
-      @media (max-width: 640px) {
+      @container movi-host (max-width: 720px) {
         .movi-loader-container {
           width: 48px;
           height: 48px;
@@ -9002,7 +9723,7 @@ export class MoviElement extends HTMLElement {
       }
       
       /* Mobile center button sizing */
-      @media (max-width: 640px) {
+      @container movi-host (max-width: 720px) {
         .movi-center-play-pause {
           width: 72px;
           height: 72px;
@@ -9054,6 +9775,11 @@ export class MoviElement extends HTMLElement {
         padding: 4px 12px;
         text-align: left;
         box-sizing: border-box;
+        /* Make the block itself clickable while keeping the overlay
+           transparent — clicking the live caption opens the transcript
+           browser, scrolled to the current cue. */
+        pointer-events: auto;
+        cursor: pointer;
       }
 
       .movi-subtitle-overlay.movi-subtitle-format-vtt .movi-subtitle-block {
@@ -9448,7 +10174,7 @@ export class MoviElement extends HTMLElement {
       }
 
       /* Hide speed/quality menus on mobile by default and position them centrally */
-      @media (max-width: 640px) {
+      @container movi-host (max-width: 720px) {
          .movi-quality-menu {
             position: fixed;
             bottom: 80px;
@@ -9771,7 +10497,7 @@ export class MoviElement extends HTMLElement {
 
       /* Short / narrow players: shrink the placeholder so it fits above
          the controls bar without clipping into it. */
-      @media (max-width: 640px) {
+      @container movi-host (max-width: 720px) {
         .movi-empty-state {
           padding: 16px 16px calc(var(--movi-controls-height) + 12px);
         }
@@ -10185,10 +10911,21 @@ export class MoviElement extends HTMLElement {
     };
     publishPlayerWidth();
 
-    // Hydrate persisted subtitle appearance settings, then push them
-    // onto the host element as CSS variables so the shadow-DOM
+    // Hydrate persisted subtitle appearance settings, then let any
+    // explicit attributes override (precedence: attribute >
+    // localStorage > built-in defaults). Finally push the resulting
+    // values onto the host element as CSS variables so the shadow-DOM
     // subtitle styles pick them up immediately.
     this.loadSubtitleSettings();
+    for (const attr of [
+      "subtitlesize",
+      "subtitlecolor",
+      "subtitlebg",
+      "subtitleedge",
+    ]) {
+      const val = this.getAttribute(attr);
+      if (val !== null) this.applySubtitleAttribute(attr, val);
+    }
     this.applySubtitleSettings();
 
     // Listen for resize events
@@ -10634,6 +11371,16 @@ export class MoviElement extends HTMLElement {
         this._poster = newValue || "";
         this.updatePoster();
         break;
+      case "subtitlesize":
+      case "subtitlecolor":
+      case "subtitlebg":
+      case "subtitleedge":
+        // Mutate _subtitleSettings via the shared parser, then push the
+        // resulting CSS variables onto the host. Attributes win over
+        // localStorage values for the lifetime of this element.
+        this.applySubtitleAttribute(name, newValue);
+        this.applySubtitleSettings();
+        break;
       case "postertime":
         this._posterTime = newValue;
         // Don't auto-regenerate here. If the attribute change is followed by
@@ -10873,6 +11620,31 @@ export class MoviElement extends HTMLElement {
 
   private updateFitMode() {
     if (this.player) {
+      // Sync canvas/renderer dims to the player's CURRENT visual size
+      // BEFORE we flip the fit mode. setFitMode kicks off an animated
+      // re-fit that interpolates against containerWidth/containerHeight
+      // — if those are stale (e.g. the player CSS-resized but no
+      // ResizeObserver tick fired since), the animation aims at the
+      // wrong target and the visible result snaps to the right size
+      // only on the next window resize. By resizing first, the
+      // animation runs against fresh dims AND the eventual settle
+      // lands at the correct fit.
+      const rect = this.getBoundingClientRect();
+      const w =
+        document.fullscreenElement === this ? window.innerWidth : rect.width;
+      const h =
+        document.fullscreenElement === this ? window.innerHeight : rect.height;
+      if (w > 0 && h > 0) {
+        // Bypass the dedup guard so resize fires even when the box
+        // size is unchanged (the cached containerWidth on the
+        // renderer might still be wrong).
+        this._lastCanvasW = -1;
+        this._lastCanvasH = -1;
+        this.player.resizeCanvas(w, h);
+        this._lastCanvasW = w;
+        this._lastCanvasH = h;
+      }
+
       if (this._objectFit === "control") {
         this.player.setFitMode(this._currentFit);
       } else {
@@ -11322,6 +12094,12 @@ export class MoviElement extends HTMLElement {
       if (state === "playing") {
         this.dispatchEvent(new Event("play"));
         this.showControls();
+        // Reset ambient sampling cadence on resume — the adaptive backoff
+        // can ratchet up to ~2s during seek/decode-recovery and would take
+        // tens of seconds to shrink back via the per-sample 0.8x recovery.
+        if (this._ambientMode) {
+          this._ambientSampleInterval = 100;
+        }
         // Update Media Session metadata with clean title
         if ("mediaSession" in navigator && this._title) {
           navigator.mediaSession.metadata = new MediaMetadata({
@@ -11627,10 +12405,15 @@ export class MoviElement extends HTMLElement {
         centerPlayIcon?.style.setProperty("display", "none");
         centerPauseIcon?.style.setProperty("display", "block");
 
-        // Only show if controls are visible
-        const controlsHidden = this.controlsContainer?.classList.contains(
-          "movi-controls-hidden",
-        );
+        // Only show if controls are enabled AND currently visible.
+        // Embeds that opt out of the controls bar entirely
+        // (controls={false} on the host attribute) shouldn't get a
+        // floating center play/pause either — Shorts-style hosts
+        // surface their own actions UI.
+        const controlsDisabled = !this._controls
+        const controlsHidden =
+          controlsDisabled ||
+          this.controlsContainer?.classList.contains("movi-controls-hidden")
         if (!controlsHidden) {
           requestAnimationFrame(() => {
             centerPlayPauseBtn.classList.add("movi-center-visible");
@@ -12165,6 +12948,11 @@ export class MoviElement extends HTMLElement {
   private startAmbientColorSampling(): void {
     if (this._ambientRafId !== null) return;
 
+    // Reset adaptive interval — a previously-throttled session may have left
+    // it ratcheted up to 2s, which would make ambient appear "frozen" until
+    // the per-sample recovery slowly walked it back down.
+    this._ambientSampleInterval = 100;
+
     // Create helper canvas if needed for performance optimization
     if (!this._ambientSampleCanvas) {
       this._ambientSampleCanvas = document.createElement("canvas"); // Not attached to DOM
@@ -12180,7 +12968,11 @@ export class MoviElement extends HTMLElement {
       // If software decoding is active, pause ambient sampling to save main thread cycles
       // This is crucial for CPU-heavy 4K software decoding
       const isSoftware = this.player?.isSoftwareDecoding() ?? false;
-      if (isSoftware) {
+      // Also skip during seek/buffering — the renderer is recovering and any
+      // canvas readback contends with frame presentation, magnifying stutter.
+      const playerState = this.player?.getState();
+      const isRecovering = playerState === "seeking" || playerState === "buffering";
+      if (isSoftware || isRecovering) {
         this._lastAmbientSampleTime = timestamp; // Keep advancing time but skip work
         this._ambientRafId = requestAnimationFrame(loop);
         return;
@@ -12210,11 +13002,14 @@ export class MoviElement extends HTMLElement {
               `Ambient sampling taking too long (${duration.toFixed(1)}ms), slowing down to ${this._ambientSampleInterval.toFixed(0)}ms`,
             );
           }
-        } else if (duration < 2 && this._ambientSampleInterval > 100) {
-          // If very fast, we can speed up slightly, but cap at 10fps (100ms) as ambient doesn't need 60fps
+        } else if (duration < 5 && this._ambientSampleInterval > 100) {
+          // If reasonably fast (<5ms), shrink interval. Threshold was 2ms but
+          // GPU readback variance means a healthy machine rarely dips that
+          // low, so the interval would ratchet up forever after one slow
+          // frame. 5ms still leaves ample headroom on a 16ms (60Hz) budget.
           this._ambientSampleInterval = Math.max(
             100,
-            this._ambientSampleInterval * 0.9,
+            this._ambientSampleInterval * 0.8,
           );
         }
       }

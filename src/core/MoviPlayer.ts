@@ -72,6 +72,12 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
   private subtitleDecoder: SubtitleDecoder | null = null;
   private videoRenderer: CanvasRenderer | null = null;
 
+  // Stream id of the subtitle track whose entire cue list has already been
+  // prefetched into the renderer cache. Used to avoid scanning twice when
+  // the user nudges the delay value while the same track is active.
+  private prefetchedSubtitleStream: number | null = null;
+  private prefetchInFlight: boolean = false;
+
   // HLS Wrapper
   private hlsWrapper: HLSPlayerWrapper | null = null;
 
@@ -252,10 +258,19 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
             return;
           }
 
-          // Video reached target! Clear the flag to ensure sync and transition to final state
+          // Video reached target! If a seek is awaiting sync, fire the
+          // completion path. Otherwise the guard was set in filter-only
+          // mode (first-play / post-prefetch resume) just to drop pre-target
+          // frames produced by Open-GOP recovery — we just clear the guard
+          // so subsequent frames flow through without re-entering this
+          // branch (which would log a warn-spam every frame).
           if (this.seekTargetTime !== -1) {
-            Logger.debug(TAG, `onFrame: frameTime=${frameTime.toFixed(3)}s >= seekTargetTime=${this.seekTargetTime.toFixed(3)}s, calling notifySeekCompletion`);
-            this.notifySeekCompletion(frameTime);
+            if (this.waitingForVideoSync) {
+              Logger.debug(TAG, `onFrame: frameTime=${frameTime.toFixed(3)}s >= seekTargetTime=${this.seekTargetTime.toFixed(3)}s, calling notifySeekCompletion`);
+              this.notifySeekCompletion(frameTime);
+            } else {
+              this.seekTargetTime = -1;
+            }
           }
 
           this.videoRenderer.queueFrame(frame);
@@ -915,6 +930,17 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
       // accept the very first decoded packet before the demuxer cursor
       // had finished rewinding.
       await this.demuxer.seek(targetTime);
+      // After Open-GOP recovery (decoder rejected the first keyframe past
+      // the seek target and reset), the next decoded frames will begin at
+      // the previous GOP's keyframe — often 1-2s behind targetTime. Without
+      // the seekTargetTime guard those pre-target frames get presented and
+      // video lags audio for the rest of the GOP. Re-arm only the filter
+      // (not waitingForVideoSync) — onFrame's pre-target drop check at the
+      // top of the handler reads seekTargetTime alone, while leaving
+      // waitingForVideoSync false keeps notifySeekCompletion from firing
+      // and clobbering the state machine that play() is about to drive
+      // into "playing" right below.
+      this.seekTargetTime = targetTime;
       if (!this.disableAudio) {
         await this.audioRenderer.play();
       }
@@ -931,6 +957,15 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
         await this.audioRenderer.play();
       } else {
         Logger.debug(TAG, "Audio playback skipped (disabled for debugging)");
+      }
+
+      // Drop frames left in the queue that are stale relative to the clock.
+      // This handles the rapid open→play→fullscreen→track-toggle case where
+      // a decoder reset (Open GOP) re-decodes from an earlier reference
+      // frame, leaves those frames queued during pause, and then presents
+      // them on resume — causing a multi-second video lag behind audio.
+      if (this.videoRenderer) {
+        this.videoRenderer.dropStaleFrames(this.clock.getTime(), 0.2);
       }
     }
 
@@ -2672,6 +2707,12 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
     const result = this.trackManager.selectSubtitleTrack(trackId);
     Logger.debug(TAG, `TrackManager.selectSubtitleTrack returned: ${result}`);
 
+    // Track changed — invalidate any prefetched cue list so the next
+    // setSubtitleDelay re-scans the new stream.
+    if (this.prefetchedSubtitleStream !== trackId) {
+      this.prefetchedSubtitleStream = null;
+    }
+
     // Clear subtitles when track is deselected
     if (trackId === null) {
       Logger.info(TAG, "Disabling subtitles");
@@ -2746,6 +2787,14 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
           // const currentTime = this.getCurrentTime();
           // Logger.debug(TAG, `Seeking to ${currentTime.toFixed(2)}s to pick up subtitle packets`);
           // this.seek(currentTime).catch(() => {});
+
+          // If a non-zero subtitle delay is already configured (e.g. set
+          // before the track was selected, or persisted via attribute),
+          // prefetch the full cue list now so the renderer has
+          // out-of-order cues available immediately.
+          if (this.videoRenderer && this.videoRenderer.getSubtitleDelay() !== 0) {
+            void this.prefetchActiveSubtitleStream();
+          }
         } else {
           Logger.warn(
             TAG,
@@ -3347,11 +3396,155 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
     if (this.videoRenderer) {
       this.videoRenderer.setSubtitleDelay(seconds);
     }
+    // Non-zero delay needs cues from stream positions the demuxer hasn't
+    // necessarily reached yet (negative delay) or has already passed
+    // (positive delay across a seek). Prefetch the full cue list once so
+    // the renderer cache is authoritative regardless of demuxer position.
+    // Zero delay falls back to the streaming path — no prefetch overhead.
+    if (seconds !== 0) {
+      void this.prefetchActiveSubtitleStream();
+    }
   }
 
   /** Get current subtitle delay in seconds. */
   getSubtitleDelay(): number {
     return this.videoRenderer ? this.videoRenderer.getSubtitleDelay() : 0;
+  }
+
+  /**
+   * Return every cue for the active subtitle stream, scanning it via the
+   * C-side prefetch path if we haven't already done so. Used by the cues
+   * browser UI — gives the caller a stable list to render and seek into.
+   * Resolves to an empty array when no subtitle is active, the active
+   * track is bitmap-only (PGS), or scanning fails.
+   */
+  async getAllSubtitleCues(): Promise<{ start: number; end: number; text: string }[]> {
+    const subtitleTrack = this.trackManager.getActiveSubtitleTrack();
+    if (!subtitleTrack) return [];
+    if (subtitleTrack.subtitleType && subtitleTrack.subtitleType !== "text") return [];
+    if (this.prefetchedSubtitleStream !== subtitleTrack.id) {
+      await this.prefetchActiveSubtitleStream();
+    }
+    if (!this.videoRenderer) return [];
+    // The renderer's cue cache is the canonical post-prefetch source —
+    // prefetchActiveSubtitleStream pushes the full list into it via
+    // setSubtitleCues. Reading it back avoids holding a duplicate copy
+    // on MoviPlayer.
+    return this.videoRenderer.getAllCues();
+  }
+
+  /**
+   * Scan the active subtitle stream and seed the renderer with every cue.
+   * No-op when the same stream has already been prefetched, when no
+   * subtitle is selected, or when a prefetch is in flight. The demuxer is
+   * left at EOF after the C-side scan, so we re-seek back to the current
+   * playback position before returning.
+   */
+  private async prefetchActiveSubtitleStream(): Promise<void> {
+    if (this.prefetchInFlight) return;
+    if (!this.demuxer || !this.videoRenderer) return;
+    const subtitleTrack = this.trackManager.getActiveSubtitleTrack();
+    if (!subtitleTrack) return;
+    if (this.prefetchedSubtitleStream === subtitleTrack.id) return;
+    const bindings = this.demuxer.getBindings();
+    if (!bindings) return;
+    // Only support text subtitles — bitmap (PGS/dvd_subtitle) decoding
+    // returns image data, which the prefetch text path can't carry across
+    // and which the user-shift UI doesn't apply to anyway.
+    if (subtitleTrack.subtitleType && subtitleTrack.subtitleType !== "text") return;
+
+    this.prefetchInFlight = true;
+    const resumeTime = this.clock.getTime();
+    const wasPlaying = this.stateManager.getState() === "playing";
+
+    // Quiesce all paths that touch the demuxer/decoders. Without this the
+    // prefetch's seek-to-0 + sequential reads race the playback processLoop
+    // (which is already mid-readPacket via Asyncify), corrupting the
+    // js_read_async pending-read state and stalling playback indefinitely
+    // ("No pending read to fulfill").
+    this.stopPauseBuffering();
+    if (this.animationFrameId !== null) {
+      cancelAnimationFrame(this.animationFrameId);
+      this.animationFrameId = null;
+    }
+    // Bumping the seek session ID forces any in-flight processLoop iteration
+    // to bail out at its next checkpoint instead of writing stale results.
+    this.seekSessionId++;
+    if (wasPlaying) {
+      this.clock.pause();
+      if (!this.disableAudio) this.audioRenderer.pause();
+      if (this.nativeAudioEl) this.nativeAudioEl.pause();
+      if (this.videoRenderer) this.videoRenderer.stopPresentationLoop();
+    }
+    // Wait for any demuxer call already in flight to land before we issue
+    // our own. Asyncify won't let two reads/seeks overlap on the same
+    // context; this poll is short because js_read_async resolves within a
+    // single rAF once the JS side delivers the buffer.
+    const maxWaitMs = 2000;
+    const waitStart = performance.now();
+    while (this.demuxInFlight && performance.now() - waitStart < maxWaitMs) {
+      await new Promise((r) => setTimeout(r, 10));
+    }
+
+    try {
+      Logger.info(TAG, `Prefetching subtitle cues for stream ${subtitleTrack.id}...`);
+      const cues = await bindings.prefetchSubtitleCues(subtitleTrack.id);
+      if (cues && cues.length > 0) {
+        // Seed the renderer's cache with every cue at once. The renderer
+        // already maintains an active-cue cursor that re-evaluates against
+        // the current adjusted time, so we don't need a separate "play
+        // from cache" mode — the existing display path just works.
+        this.videoRenderer.setSubtitleCues(cues);
+        this.prefetchedSubtitleStream = subtitleTrack.id;
+        Logger.info(TAG, `Prefetched ${cues.length} subtitle cues for stream ${subtitleTrack.id}`);
+      } else {
+        Logger.warn(TAG, `Subtitle prefetch returned no cues for stream ${subtitleTrack.id}`);
+      }
+
+      // The C-side scan leaves the demuxer at EOF. Re-seek back to where
+      // playback should be so the audio/video pipeline can keep going.
+      // Flush decoders + clear queue since the demuxer is in an
+      // undefined-for-playback state.
+      await this.videoDecoder.flush();
+      await this.audioDecoder.flush();
+      if (this.videoRenderer) this.videoRenderer.clearQueue();
+      this.audioRenderer.reset();
+      await this.demuxer.seek(resumeTime);
+      this.clock.seek(resumeTime);
+      this.pendingAudioPackets = [];
+      this.pendingPrebufferPackets = [];
+      this.eofReached = false;
+    } catch (err) {
+      Logger.error(TAG, "Subtitle prefetch failed", err);
+    } finally {
+      this.prefetchInFlight = false;
+    }
+
+    // Resume audio/video pipelines if we paused them above. We bypass the
+    // public play() because the player's state is still "playing" — we
+    // only paused the underlying clocks/decoders and need to nudge them
+    // back without the full first-play song-and-dance.
+    if (wasPlaying) {
+      try {
+        if (!this.disableAudio) await this.audioRenderer.play();
+        if (this.nativeAudioEl) await this.nativeAudioEl.play().catch(() => {});
+        if (this.videoRenderer) this.videoRenderer.startPresentationLoop();
+        this.clock.start();
+        // Re-arm the seek-target guard (filter-only, not waitingForVideoSync)
+        // so any pre-target frames produced by Open-GOP recovery after the
+        // resumeTime seek get dropped without firing notifySeekCompletion's
+        // state transitions.
+        this.seekTargetTime = resumeTime;
+        this.animationFrameId = requestAnimationFrame(this.processLoop);
+        this.requestWakeLock();
+      } catch (err) {
+        Logger.error(TAG, "Failed to resume after subtitle prefetch", err);
+      }
+    } else {
+      // Even when paused, kick off pause-time buffering again so the
+      // demuxer keeps reading ahead behind the scenes (HTTP sources only).
+      this.startPauseBuffering();
+    }
   }
 
   /**
