@@ -699,6 +699,14 @@ export class CanvasRenderer {
       const bufferWidth = Math.round(targetWidth * dpr);
       const bufferHeight = Math.round(targetHeight * dpr);
 
+      // Track whether the drawing-buffer actually changed. When the caller
+      // resizes with the same dims (e.g. the fit-mode toggle's pre-flip
+      // refresh in MoviElement.updateFitMode), we must NOT reset the
+      // smoothing state — doing so makes drawFrame snap to the new fit's
+      // target on the very first tick, which kills the fit animation.
+      const bufferChanged =
+        this.width !== bufferWidth || this.height !== bufferHeight;
+
       this.width = bufferWidth;
       this.height = bufferHeight;
       this.canvas.width = bufferWidth;
@@ -771,16 +779,21 @@ export class CanvasRenderer {
         // Trigger a redraw
       }
 
-      // Immediately redraw without smoothing to avoid black flicker
+      // Immediately redraw without smoothing to avoid black flicker, but
+      // only force-snap when the buffer dims genuinely changed. Same-size
+      // resizes (fit-mode pre-flip refresh) must keep the existing scale
+      // so the next drawFrame can lerp toward the new fit's target.
       try {
-        // Reset smoothing state so it doesn't interpolate from old dimensions
-        this.currentScaleX = 0;
-        this.currentScaleY = 0;
+        if (bufferChanged) {
+          // Reset smoothing state so it doesn't interpolate from old dimensions
+          this.currentScaleX = 0;
+          this.currentScaleY = 0;
 
-        if (this.frameQueue.length > 0) {
-          this.drawFrame(this.frameQueue[0], true);
-        } else if (this.lastRenderedFrame) {
-          this.drawFrame(this.lastRenderedFrame, true);
+          if (this.frameQueue.length > 0) {
+            this.drawFrame(this.frameQueue[0], true);
+          } else if (this.lastRenderedFrame) {
+            this.drawFrame(this.lastRenderedFrame, true);
+          }
         }
       } catch (error) {
         Logger.error(TAG, "Error redrawing frame after resize", error);
@@ -944,6 +957,17 @@ export class CanvasRenderer {
    */
   render(frame: VideoFrame): void {
     this.drawFrame(frame);
+    // Retain a clone so paused redraws (resize, fit-mode change via
+    // startFitAnimation) have a frame to lerp against. The presentation-
+    // loop path stores this on every present; this direct-render path
+    // (used by HLSPlayerWrapper) was missing the clone, leaving the
+    // fit-mode animation as a hard snap on HLS streams.
+    if (this.lastRenderedFrame) this.lastRenderedFrame.close();
+    try {
+      this.lastRenderedFrame = frame.clone();
+    } catch {
+      this.lastRenderedFrame = null;
+    }
   }
 
   /**

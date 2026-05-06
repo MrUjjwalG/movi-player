@@ -234,6 +234,18 @@ export class HLSPlayerWrapper extends EventEmitter<PlayerEventMap> {
         resolve();
       });
 
+      // ABR / level switches in Auto mode change the active rendition
+      // without changing the track list. Re-fire tracksChange so the
+      // gear-badge UI in MoviElement repaints against the new height
+      // (e.g. 720p → 1080p flips the gear pill from blank to "HD").
+      this.hls!.on(Hls.Events.LEVEL_SWITCHED, (_e, data) => {
+        Logger.debug(TAG, `LEVEL_SWITCHED → level ${data.level}`);
+        this.trackManager.emit(
+          "tracksChange",
+          this.trackManager.getTracks(),
+        );
+      });
+
       let networkRetries = 0;
       let mediaRetries = 0;
       const MAX_NETWORK_RETRIES = 3;

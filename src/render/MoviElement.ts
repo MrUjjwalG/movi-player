@@ -4961,10 +4961,13 @@ export class MoviElement extends HTMLElement {
 
     // For HLS Auto mode, the active track id is -1 with height 0; surface the
     // currently-playing level's badge instead so the gear stays informative.
+    // MoviPlayer exposes the wrapper as `hlsWrapper`; the previous `.hls`
+    // path silently resolved to undefined, leaving the badge blank in Auto.
     let activeHeight = activeTrack?.height || 0;
     if (!activeHeight && activeTrack?.id === -1) {
       try {
-        const hlsLevel = (this.player as any).hls?.levels?.[(this.player as any).hls?.currentLevel];
+        const hls = (this.player as any).hlsWrapper?.hls
+        const hlsLevel = hls?.levels?.[hls?.currentLevel];
         activeHeight = hlsLevel?.height || 0;
       } catch {}
     }
