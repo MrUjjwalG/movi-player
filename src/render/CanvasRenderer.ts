@@ -687,10 +687,22 @@ export class CanvasRenderer {
       const targetWidth = isRotated90 ? height : width;
       const targetHeight = isRotated90 ? width : height;
 
-      this.width = targetWidth;
-      this.height = targetHeight;
-      this.canvas.width = targetWidth;
-      this.canvas.height = targetHeight;
+      // Backbuffer scales with devicePixelRatio so we don't lose detail
+      // when downsampling high-resolution sources (4K/8K). Capped at 2x —
+      // 3x retina screens get the same backbuffer as 2x, which keeps the
+      // GPU cost reasonable while still delivering a visibly sharper
+      // image. CSS dimensions stay at logical pixels (handled below).
+      const dpr = Math.min(
+        typeof window !== "undefined" ? window.devicePixelRatio || 1 : 1,
+        2,
+      );
+      const bufferWidth = Math.round(targetWidth * dpr);
+      const bufferHeight = Math.round(targetHeight * dpr);
+
+      this.width = bufferWidth;
+      this.height = bufferHeight;
+      this.canvas.width = bufferWidth;
+      this.canvas.height = bufferHeight;
 
       // Apply CSS sizing
       if (this.canvas instanceof HTMLCanvasElement) {
@@ -698,6 +710,7 @@ export class CanvasRenderer {
           // Explicit pixel size is needed to override percentage stretching
           // so the buffer aspect ratio (HxW) is preserved in layout before rotation
           // We use !important to ensure this overrides any fullscreen CSS that forces 100vw/100vh
+          // CSS uses logical pixels (targetWidth/Height); backbuffer is dpr-scaled.
           this.canvas.style.setProperty(
             "width",
             `${targetWidth}px`,

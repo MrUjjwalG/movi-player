@@ -4102,9 +4102,9 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
     // Check audio/video targets
     let audioDuration = 0;
     let videoFrames = 0;
+    const activeVideo = this.trackManager.getActiveVideoTrack();
+    const activeAudio = this.trackManager.getActiveAudioTrack();
     for (const pkt of this.pendingPrebufferPackets) {
-      const activeVideo = this.trackManager.getActiveVideoTrack();
-      const activeAudio = this.trackManager.getActiveAudioTrack();
       if (activeVideo && pkt.streamIndex === activeVideo.id) {
         videoFrames++;
       } else if (activeAudio && pkt.streamIndex === activeAudio.id) {
@@ -4112,8 +4112,14 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
       }
     }
 
-    if (audioDuration >= MoviPlayer.PAUSE_BUFFER_AUDIO_SECONDS &&
-        videoFrames >= MoviPlayer.PAUSE_BUFFER_VIDEO_FRAMES) {
+    // Only require targets for tracks that actually exist. A video-only or
+    // audio-only stream would otherwise never satisfy the AND check, so the
+    // loop ran until the 3000-packet safety cap (~30s of demux work) — which
+    // shows up as a long burst of "Read: served from full-file cache" log
+    // spam after pause.
+    const videoTargetMet = !activeVideo || videoFrames >= MoviPlayer.PAUSE_BUFFER_VIDEO_FRAMES;
+    const audioTargetMet = !activeAudio || audioDuration >= MoviPlayer.PAUSE_BUFFER_AUDIO_SECONDS;
+    if (videoTargetMet && audioTargetMet) {
       Logger.debug(TAG, `Pause buffer targets met: audio=${audioDuration.toFixed(1)}s, video=${videoFrames} frames`);
       this.stopPauseBuffering();
       return;
