@@ -1,13 +1,25 @@
-# Movi Player
+<div align="center">
 
-Play any video format directly in the browser. No transcoding, no server processing.
+<img src="docs/images/banner.png" alt="Movi Player" width="100%" />
 
-[![npm](https://img.shields.io/npm/v/movi-player.svg)](https://www.npmjs.com/package/movi-player)
-[![License](https://img.shields.io/badge/License-Apache%202.0-blue.svg)](LICENSE)
+### Play any video format directly in the browser.
+##### No transcoding. No server processing. Just `<movi-player src="video.mkv" controls>`.
 
-[Documentation](https://mrujjwalg.github.io/movi-player/) | [Live Demo](https://movi-player-examples.vercel.app/element.html) | [Examples](https://github.com/MrUjjwalG/movi-player-examples)
+[![npm version](https://img.shields.io/npm/v/movi-player.svg?style=flat-square&color=cb3837&logo=npm)](https://www.npmjs.com/package/movi-player)
+[![npm downloads](https://img.shields.io/npm/dm/movi-player.svg?style=flat-square&color=blue)](https://www.npmjs.com/package/movi-player)
+[![bundle size](https://img.shields.io/badge/bundle-50--410KB-success?style=flat-square)](https://www.npmjs.com/package/movi-player)
+[![License](https://img.shields.io/badge/license-Apache%202.0-blue.svg?style=flat-square)](LICENSE)
+[![GitHub stars](https://img.shields.io/github/stars/MrUjjwalG/movi-player?style=flat-square&color=yellow&logo=github)](https://github.com/MrUjjwalG/movi-player/stargazers)
+
+**[Documentation](https://mrujjwalg.github.io/movi-player/)** &nbsp;·&nbsp; **[Live Demo](https://movi-player-examples.vercel.app/element.html)** &nbsp;·&nbsp; **[Examples](https://github.com/MrUjjwalG/movi-player-examples)** &nbsp;·&nbsp; **[Changelog](CHANGELOG.md)**
 
 ![Movi Player](docs/images/element.gif)
+
+<sub>Built with care by <a href="https://github.com/mrujjwalg"><b>mrujjwalg</b></a> · MKV · HEVC · AV1 · 4K HDR · DRM · Encrypted Streaming</sub>
+
+</div>
+
+---
 
 ## Why Movi Player?
 
@@ -322,7 +334,7 @@ Videos served over HTTP need:
 | Chrome 94+ | Yes | Yes |
 | Edge 94+ | Yes | Yes |
 | Safari 16.4+ | Yes | Yes |
-| Firefox | No | No |
+| Firefox 130+ | Yes | Limited |
 
 ## Development
 
@@ -337,4 +349,4 @@ npm run dev
 
 ## License
 
-Apache 2.0 -- [Ujjwal Kashyap](https://github.com/mrujjwalg)
+Apache 2.0 -- [Ujjawal Kashyap](https://github.com/mrujjwalg)

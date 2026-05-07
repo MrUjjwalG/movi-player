@@ -151,7 +151,7 @@ Resources:
 Happy to write the case study draft, share metrics, or jump on a call. I think this is a strong showcase of "what's actually possible with WebCodecs today" beyond the usual real-time AR demos.
 
 Best,
-Ujjwal Kashyap
+Ujjawal Kashyap
 [email] | [Twitter] | [LinkedIn]
 ```
 
