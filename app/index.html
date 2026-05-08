@@ -493,7 +493,12 @@
         content: "";
         position: absolute;
         inset: 0;
-        background: linear-gradient(to bottom, var(--bg-base) 80%, transparent 100%);
+        /* Bottom-edge vignette only — keeps the top of the hero open so
+           the orb / aurora blobs / beam in `.hero-bg` are actually
+           visible. The previous gradient (bg-base 80% → transparent
+           100%) covered the top 80% of the section with solid bg and
+           hid every animated layer behind it. */
+        background: linear-gradient(to bottom, transparent 0%, transparent 65%, var(--bg-base) 100%);
         z-index: 1;
         pointer-events: none;
       }
@@ -504,39 +509,9 @@
         z-index: 0;
       }
 
-      .hero-bg::before {
-        content: "";
-        position: absolute;
-        inset: 0;
-        background:
-          radial-gradient(ellipse 80% 50% at 50% 15%, rgba(124, 108, 240, 0.25) 0%, transparent 55%),
-          radial-gradient(ellipse 50% 35% at 30% 40%, rgba(96, 165, 250, 0.08) 0%, transparent 50%),
-          radial-gradient(ellipse 60% 40% at 75% 55%, rgba(167, 139, 250, 0.10) 0%, transparent 50%);
-      }
-
-      /* Animated floating orb */
-      .hero-orb {
-        position: absolute;
-        width: 500px;
-        height: 500px;
-        border-radius: 50%;
-        background: radial-gradient(circle, rgba(124, 108, 240, 0.35) 0%, rgba(124, 108, 240, 0.12) 35%, transparent 65%);
-        top: -15%;
-        left: 50%;
-        transform: translateX(-50%);
-        animation: orbFloat 8s ease-in-out infinite;
-        pointer-events: none;
-      }
-
-      [data-theme="light"] .hero-orb {
-        background: radial-gradient(circle, rgba(124, 108, 240, 0.12) 0%, rgba(124, 108, 240, 0.04) 40%, transparent 70%);
-      }
-
-      @keyframes orbFloat {
-        0%, 100% { transform: translateX(-50%) translateY(0) scale(1); }
-        33% { transform: translateX(-45%) translateY(-10px) scale(1.05); }
-        66% { transform: translateX(-55%) translateY(10px) scale(0.95); }
-      }
+      /* Hero background is intentionally clean — no orb, no radial
+         glows, no aurora layers. Only the dust particles below remain
+         for a subtle sense of motion. */
 
       .hero-bg::after {
         display: none;
@@ -598,23 +573,31 @@
       }
 
       .hero-content > * {
-        opacity: 0;
-        animation: fadeUp 0.7s ease-out forwards;
+        /* `backwards` fill applies the from-keyframe (opacity:0) DURING
+           the delay, then animates in. Crucially, after the animation
+           ends, opacity reverts to its declared value — which is the
+           default of 1 — so when a hover/focus rule later replaces the
+           `animation` property (e.g. CTA hover, URL-bar focus pulse),
+           the element doesn't snap back to invisible. With `forwards`
+           and a declared `opacity:0` we had exactly that bug. */
+        animation: fadeUp 0.7s ease-out backwards;
       }
-      .hero-content > *:nth-child(1) { animation-delay: 0.1s; }
-      .hero-content > *:nth-child(2) { animation-delay: 0.2s; }
-      .hero-content > *:nth-child(3) { animation-delay: 0.3s; }
-      .hero-content > *:nth-child(4) { animation-delay: 0.4s; }
-      .hero-content > *:nth-child(5) { animation-delay: 0.5s; }
-      .hero-content > *:nth-child(6) { animation-delay: 0.6s; }
-      .hero-content > *:nth-child(7) { animation-delay: 0.7s; }
+      .hero-content > *:nth-child(1) { animation-delay: 0.05s; }
+      .hero-content > *:nth-child(2) { animation-delay: 0.15s; }
+      .hero-content > *:nth-child(3) { animation-delay: 0.28s; }
+      .hero-content > *:nth-child(4) { animation-delay: 0.40s; }
+      .hero-content > *:nth-child(5) { animation-delay: 0.48s; }
+      .hero-content > *:nth-child(6) { animation-delay: 0.56s; }
+      .hero-content > *:nth-child(7) { animation-delay: 0.62s; }
+      .hero-content > *:nth-child(8) { animation-delay: 0.70s; }
+      .hero-content > *:nth-child(9) { animation-delay: 0.78s; }
 
       .hero h1 {
-        font-size: clamp(2.4rem, 5.5vw, 4rem);
+        font-size: clamp(2.6rem, 6vw, 4.4rem);
         font-weight: 800;
-        line-height: 1.05;
-        letter-spacing: -1.8px;
-        text-shadow: 0 0 40px rgba(124, 108, 240, 0.15);
+        line-height: 1.02;
+        letter-spacing: -2px;
+        text-shadow: 0 0 40px rgba(124, 108, 240, 0.18);
         margin-bottom: 0.25rem;
       }
 
@@ -641,65 +624,254 @@
         max-width: 620px;
       }
 
+      /* Format strip — small footnote at the bottom of the hero so it
+         doesn't fight the headline. Was prominent earlier, intentionally
+         de-emphasised so first-time users see "Press play" before "MKV". */
       .hero-formats {
+        display: flex;
+        gap: 0.35rem;
+        flex-wrap: wrap;
+        justify-content: center;
+        margin-top: 0.25rem;
+        max-width: 540px;
+      }
+
+      .hero-formats::before {
+        content: "Plays";
+        align-self: center;
+        font-size: 0.68rem;
+        font-weight: 500;
+        color: var(--text-muted);
+        letter-spacing: 0.2px;
+        margin-right: 0.15rem;
+      }
+
+      .format-chip {
+        background: transparent;
+        color: var(--text-muted);
+        padding: 0.18rem 0.55rem;
+        border-radius: 999px;
+        font-size: 0.66rem;
+        font-weight: 600;
+        letter-spacing: 0.5px;
+        border: 1px solid var(--border-subtle);
+        transition: color 0.2s ease, border-color 0.2s ease, background 0.2s ease;
+        cursor: default;
+      }
+
+      [data-theme="light"] .format-chip {
+        color: var(--text-muted);
+        border-color: var(--border-subtle);
+      }
+
+      .format-chip:hover {
+        color: var(--text-secondary);
+        border-color: var(--border-hover);
+        background: var(--btn-ghost-bg);
+      }
+
+      /* ========== Hero primary CTA ==========
+         The single, prominent "Pick a video" pill. This is the main action
+         in the hero — large, glowing, with a soft pulse to draw the eye.
+         Wraps the file-input so the whole pill is a clickable label. */
+      .hero-cta-primary {
+        display: inline-flex;
+        align-items: center;
+        gap: 0.95rem;
+        padding: 0.7rem 1.6rem 0.7rem 0.7rem;
+        background: linear-gradient(135deg, #8a7cf2 0%, #6c5dd3 100%);
+        color: #fff;
+        border: 1px solid rgba(255, 255, 255, 0.14);
+        border-radius: 999px;
+        cursor: pointer;
+        user-select: none;
+        position: relative;
+        text-decoration: none;
+        margin-top: 0.5rem;
+        box-shadow:
+          0 14px 40px rgba(124, 108, 240, 0.45),
+          0 0 0 6px rgba(124, 108, 240, 0.10),
+          inset 0 1px 0 rgba(255, 255, 255, 0.18);
+        transition: transform 0.18s ease, filter 0.18s ease, box-shadow 0.25s ease;
+        /* No custom animation here — inherits fadeUp from `.hero-content > *`.
+           The earlier ctaPulse box-shadow loop was removed because hover
+           had to disable it (`animation: none`), which also cancelled
+           fadeUp and re-triggered the entry fade on hover-exit. The
+           `.hero-cta-icon::after` ring pulse below provides the cinematic
+           pulse on a pseudo-element where it can't conflict with hover. */
+      }
+
+      .hero-cta-primary:hover {
+        transform: translateY(-2px);
+        filter: brightness(1.06);
+        box-shadow:
+          0 22px 60px rgba(124, 108, 240, 0.6),
+          0 0 0 10px rgba(124, 108, 240, 0.14),
+          inset 0 1px 0 rgba(255, 255, 255, 0.22);
+      }
+
+      .hero-cta-primary:active { transform: translateY(0) scale(0.98); }
+
+      .hero-cta-primary:focus-visible {
+        outline: 2px solid #fff;
+        outline-offset: 4px;
+      }
+
+      .hero-cta-icon {
+        width: 56px;
+        height: 56px;
+        border-radius: 50%;
+        background: rgba(255, 255, 255, 0.18);
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        flex-shrink: 0;
+        position: relative;
+      }
+
+      /* Pulsing ring around the play icon — runs only when the button is
+         not being hovered, so it stops "competing" with the hover state. */
+      .hero-cta-icon::after {
+        content: "";
+        position: absolute;
+        inset: -4px;
+        border-radius: 50%;
+        border: 2px solid rgba(255, 255, 255, 0.25);
+        animation: ctaRingPulse 2.2s ease-out infinite;
+        pointer-events: none;
+      }
+      .hero-cta-primary:hover .hero-cta-icon::after { animation: none; opacity: 0; }
+
+      @keyframes ctaRingPulse {
+        0%   { transform: scale(0.85); opacity: 0; }
+        50%  { opacity: 1; }
+        100% { transform: scale(1.30); opacity: 0; }
+      }
+
+      .hero-cta-icon svg {
+        width: 22px;
+        height: 22px;
+        margin-left: 4px; /* visually centers the play triangle */
+        fill: #fff;
+        filter: drop-shadow(0 1px 2px rgba(0, 0, 0, 0.18));
+      }
+
+      .hero-cta-text {
+        display: flex;
+        flex-direction: column;
+        align-items: flex-start;
+        gap: 0.1rem;
+        text-align: left;
+        line-height: 1.2;
+        padding-right: 0.2rem;
+      }
+
+      .hero-cta-text strong {
+        font-size: 1.05rem;
+        font-weight: 700;
+        letter-spacing: -0.01em;
+      }
+
+      .hero-cta-text small {
+        font-size: 0.74rem;
+        font-weight: 500;
+        opacity: 0.88;
+      }
+
+      .hero-cta-primary input[type="file"] {
+        position: absolute;
+        width: 1px;
+        height: 1px;
+        opacity: 0;
+        pointer-events: none;
+      }
+
+      /* "or paste a video link" divider with hairlines on each side */
+      .hero-or {
+        display: flex;
+        align-items: center;
+        gap: 0.85rem;
+        width: 100%;
+        max-width: 560px;
+        color: var(--text-muted);
+        font-size: 0.74rem;
+        font-weight: 500;
+        letter-spacing: 0.04em;
+        margin-top: 0.25rem;
+      }
+      .hero-or::before,
+      .hero-or::after {
+        content: "";
+        flex: 1;
+        height: 1px;
+        background: linear-gradient(to right, transparent, var(--border-subtle), transparent);
+      }
+      .hero-or span { flex: 0 0 auto; }
+
+      /* Slimmer, pill-shaped URL bar in the hero — secondary path, not
+         the headline action. Smaller padding, smaller "Play" button.
+
+         The base `.url-bar` rule sets `flex: 1`, which made sense when
+         the bar lived inside the row-flex `.hero-actions`. As a direct
+         child of column-flex `.hero-content` it stretched VERTICALLY
+         into a giant arch — `flex: 0 0 auto` undoes that and we size
+         the bar with explicit width/max-width instead. */
+      .url-bar.hero-url-bar {
+        flex: 0 0 auto;
+        width: 100%;
+        max-width: 560px;
+        border-radius: 999px;
+      }
+      .url-bar.hero-url-bar input {
+        padding: 0.7rem 1.1rem;
+        font-size: 0.85rem;
+      }
+      .url-bar.hero-url-bar .url-bar-btn {
+        border-radius: 999px;
+        min-height: 42px;
+        padding: 0 1.1rem;
+        font-size: 0.82rem;
+        animation: none;
+        background: linear-gradient(135deg, rgba(124, 108, 240, 0.95), rgba(145, 132, 245, 0.95));
+      }
+
+      /* Subtle secondary actions row (Open folder, Show playlist, Embed) */
+      .hero-secondary {
         display: flex;
         gap: 0.5rem;
         flex-wrap: wrap;
         justify-content: center;
+        margin-top: -0.25rem;
       }
 
-      .format-chip {
-        background: rgba(124, 108, 240, 0.08);
-        color: #b9aff5;
-        padding: 0.3rem 0.75rem;
-        border-radius: 999px;
-        font-size: 0.72rem;
-        font-weight: 700;
-        letter-spacing: 0.6px;
-        border: 1px solid rgba(124, 108, 240, 0.22);
-        transition: transform 0.25s cubic-bezier(0.34, 1.56, 0.64, 1), box-shadow 0.25s, background 0.25s, border-color 0.25s, color 0.25s;
-        opacity: 0;
-        animation: chipPop 0.55s cubic-bezier(0.34, 1.56, 0.64, 1) forwards, chipFloat 3.5s ease-in-out infinite;
-        cursor: default;
+      .hero-link-btn {
+        display: inline-flex;
+        align-items: center;
+        gap: 0.4rem;
+        background: transparent;
+        border: 1px solid transparent;
+        color: var(--text-muted);
+        font-family: inherit;
+        font-size: 0.78rem;
+        font-weight: 500;
+        cursor: pointer;
+        padding: 0.4rem 0.7rem;
+        border-radius: 8px;
+        transition: color 0.18s ease, background 0.18s ease, border-color 0.18s ease;
       }
-
-      .hero-formats .format-chip:nth-child(1) { animation-delay: 0.25s, 1s; }
-      .hero-formats .format-chip:nth-child(2) { animation-delay: 0.32s, 1.3s; }
-      .hero-formats .format-chip:nth-child(3) { animation-delay: 0.39s, 1.6s; }
-      .hero-formats .format-chip:nth-child(4) { animation-delay: 0.46s, 1.9s; }
-      .hero-formats .format-chip:nth-child(5) { animation-delay: 0.53s, 2.2s; }
-      .hero-formats .format-chip:nth-child(6) { animation-delay: 0.60s, 2.5s; }
-
-      @keyframes chipPop {
-        0%   { opacity: 0; transform: translateY(8px) scale(0.85); }
-        70%  { opacity: 1; transform: translateY(-2px) scale(1.05); }
-        100% { opacity: 1; transform: translateY(0) scale(1); }
+      .hero-link-btn:hover {
+        color: var(--text-primary);
+        background: var(--btn-ghost-bg);
+        border-color: var(--border-subtle);
       }
+      .hero-link-btn[hidden] { display: none; }
+      .hero-link-btn svg { opacity: 0.85; }
 
-      @keyframes chipFloat {
-        0%, 100% { transform: translateY(0); }
-        50%      { transform: translateY(-3px); }
-      }
-
-      [data-theme="light"] .format-chip {
-        background: rgba(124, 108, 240, 0.08);
-        color: #5b4bd8;
-        border-color: rgba(124, 108, 240, 0.25);
-      }
-
-      .format-chip:hover {
-        transform: translateY(-4px) scale(1.08) !important;
-        background: linear-gradient(135deg, rgba(167, 139, 250, 0.25), rgba(96, 165, 250, 0.25));
-        border-color: rgba(167, 139, 250, 0.55);
-        color: #ffffff;
-        box-shadow: 0 8px 20px rgba(124, 108, 240, 0.4);
-        animation-play-state: paused;
-      }
-
-      [data-theme="light"] .format-chip:hover {
-        color: #4a3bba;
-        background: linear-gradient(135deg, rgba(124, 108, 240, 0.18), rgba(96, 165, 250, 0.18));
-      }
+      /* Embed button is gated by .visible (added by dev-mode JS).
+         Without this, .hero-link-btn { display:inline-flex } would
+         override the .btn-embed { display:none } base rule above. */
+      .hero-link-btn.btn-embed { display: none; }
+      .hero-link-btn.btn-embed.visible { display: inline-flex; }
 
       .hero-desc {
         font-size: 0.875rem;
@@ -1108,12 +1280,8 @@
         border-color: var(--accent);
         background: var(--input-focus-bg);
         box-shadow: 0 0 0 3px var(--accent-glow);
-        animation: urlFocusPulse 2.4s ease-in-out infinite;
-      }
-
-      @keyframes urlFocusPulse {
-        0%, 100% { box-shadow: 0 0 0 3px rgba(124, 108, 240, 0.35); }
-        50%      { box-shadow: 0 0 0 6px rgba(124, 108, 240, 0.18); }
+        /* No focus-pulse animation — replacing the inherited fadeUp here
+           caused the bar to re-fade-in on blur. Static glow only. */
       }
 
       .url-bar input {
@@ -1365,16 +1533,75 @@
         max-width: 1500px;
       }
 
+      /* Frame around the player — owns the flex slot and gives the
+         absolute-positioned ambient layer a positioning context. */
+      .player-frame {
+        position: relative;
+        flex: 1;
+        min-width: 0;
+      }
+
       .player-wrapper {
         position: relative;
         z-index: 2;
-        flex: 1;
-        min-width: 0;
         border-radius: 16px;
         overflow: hidden;
-        box-shadow: var(--shadow-heavy), 0 0 60px -10px rgba(124, 108, 240, 0.2);
+        /* No box-shadow here — the dark shadow created a visible
+           horizontal line under the player on light theme. The
+           .player-ambient halo below provides depth instead. */
         background: #000;
-        border: 1px solid var(--border-subtle);
+        border: none;
+      }
+
+      /* Ambient halo layer — receives a blurred, color-sampled snapshot
+         of the current video frame from <movi-player ambientmode>.
+         Sits behind .player-wrapper and spills out beyond its edges.
+
+         Two layers of softening so the glow looks like a real light
+         spill instead of a colored rectangle:
+           1) Negative inset extends the painted area ~80px beyond the
+              player on every side — that's the "halo room".
+           2) A radial mask fades the layer to transparent toward its
+              edges, so there's no visible bounding box — colors just
+              dissolve into the page background.
+         Heavy blur on top finishes the effect. */
+      .player-ambient {
+        position: absolute;
+        /* Inset extends the painted area beyond the player so colors
+           have room to spill outward. Keep modest so the painted
+           "halo room" stays at high opacity, only fading at the very
+           outer edge. */
+        inset: -90px;
+        z-index: 0;
+        opacity: 1;
+        filter: blur(80px) saturate(1.5);
+        pointer-events: none;
+        transition: opacity 0.6s ease;
+        /* `closest-side` makes 100% radial map to the nearest edge of
+           the ambient box (top/bottom for a landscape player), so the
+           mask numbers are predictable. Full opacity holds well past
+           the player's own edge (~70% radial), then ramps gently to 0. */
+        -webkit-mask-image: radial-gradient(
+          ellipse closest-side at center,
+          rgba(0, 0, 0, 1) 70%,
+          rgba(0, 0, 0, 0.6) 88%,
+          transparent       100%
+        );
+                mask-image: radial-gradient(
+          ellipse closest-side at center,
+          rgba(0, 0, 0, 1) 70%,
+          rgba(0, 0, 0, 0.6) 88%,
+          transparent       100%
+        );
+      }
+
+      [data-theme="light"] .player-ambient {
+        opacity: 0.95;
+        filter: blur(80px) saturate(1.7);
+      }
+
+      @media (prefers-reduced-motion: reduce) {
+        .player-ambient { transition: none; }
       }
 
       .player-layout.has-playlist {
@@ -2084,24 +2311,6 @@
         100% { background-position: 200% 0; }
       }
 
-      /* Ambient Background Layer */
-      #ambient-wrapper {
-        position: fixed;
-        top: 0;
-        left: 0;
-        width: 100%;
-        height: 100%;
-        z-index: 0;
-        pointer-events: none;
-        opacity: 0.5;
-        filter: blur(100px);
-        transition: opacity 1s ease;
-      }
-
-      [data-theme="light"] #ambient-wrapper {
-        opacity: 0.15;
-      }
-
       /* ===== FEATURES SECTION ===== */
       .features-section {
         position: relative;
@@ -2335,26 +2544,32 @@
         }
 
         .hero h1 {
-          font-size: 2.4rem;
-          letter-spacing: -0.8px;
+          font-size: 2.6rem;
+          letter-spacing: -1px;
         }
 
         .hero-tagline {
-          font-size: 0.85rem;
+          font-size: 0.9rem;
+          max-width: 92%;
         }
 
         .hero-trust {
-          gap: 0.75rem;
+          gap: 0.6rem;
+          font-size: 0.7rem;
         }
 
-        .hero-actions {
-          flex-direction: column;
-          align-items: stretch;
+        .hero-cta-primary {
+          padding: 0.6rem 1.4rem 0.6rem 0.6rem;
         }
+        .hero-cta-icon { width: 48px; height: 48px; }
+        .hero-cta-icon svg { width: 20px; height: 20px; }
+        .hero-cta-text strong { font-size: 0.98rem; }
+        .hero-cta-text small { font-size: 0.7rem; }
 
-        .url-bar {
+        .url-bar.hero-url-bar {
           max-width: 100%;
           min-width: unset;
+          flex: 1 1 100%;
         }
 
         .player-section {
@@ -2385,12 +2600,17 @@
         }
 
         .hero h1 {
-          font-size: 2rem;
-          letter-spacing: -0.5px;
+          font-size: 2.15rem;
+          letter-spacing: -0.7px;
         }
 
         .hero-tagline {
-          font-size: 0.8rem;
+          font-size: 0.85rem;
+        }
+
+        .hero-cta-primary {
+          width: 100%;
+          justify-content: flex-start;
         }
 
         .btn-cta, .btn-ghost {
@@ -2672,10 +2892,6 @@
   </head>
 
   <body>
-    <!-- Ambient Glow container -->
-    <div id="ambient-wrapper"></div>
-
-
     <!-- Drop Zone Overlay -->
     <div class="drop-overlay" id="drop-overlay">
       <div class="drop-overlay-content">
@@ -2851,7 +3067,6 @@
     <!-- ===== HERO ===== -->
     <section class="hero">
       <div class="hero-bg">
-        <div class="hero-orb"></div>
         <div class="hero-particles">
           <div class="particle" style="--size:2px;--opacity:0.4;--duration:14s;--delay:0s;--dx:60px;--dy:-100px;--scale-end:0.3;top:70%;left:10%"></div>
           <div class="particle" style="--size:3px;--opacity:0.25;--duration:18s;--delay:2s;--dx:-40px;--dy:-130px;--scale-end:0.6;top:80%;left:25%"></div>
@@ -2868,73 +3083,80 @@
         </div>
       </div>
       <div class="hero-content">
-        <h1 aria-label="MoviPlayer — Free online video player. Play any video without download.">Play any video<br><span class="highlight">without download.</span></h1>
-        <div class="hero-formats" aria-label="Supported formats">
-          <span class="format-chip">MKV</span>
-          <span class="format-chip">HEVC</span>
-          <span class="format-chip">AV1</span>
-          <span class="format-chip">HDR</span>
-          <span class="format-chip">VP9</span>
-          <span class="format-chip">4K</span>
-        </div>
-        <p class="hero-tagline">The free <strong>online video player</strong> that plays anything in your browser — no installs, no uploads, 100% private.</p>
-        <div class="hero-actions">
-          <div class="url-bar">
-            <input
-              type="text"
-              id="url-input"
-              placeholder="Paste any video URL — MKV, MP4, HEVC, AV1…"
-              aria-label="Video URL"
-            />
-            <!-- Protected toggle is dev-only: only visible when the
-                 corner developer-mode chip is enabled. -->
-            <label class="url-bar-toggle dev-only" id="encrypt-toggle-label" title="Route the URL through a signed token proxy — hides the source URL and requires auth per request.">
-              <input type="checkbox" id="encrypt-toggle" />
-              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-                <rect x="3" y="11" width="18" height="11" rx="2" ry="2"/>
-                <path d="M7 11V7a5 5 0 0 1 10 0v4"/>
-              </svg>
-              <span>Protected</span>
-            </label>
+        <h1 aria-label="MoviPlayer — Free online video player. Play any video without download.">
+          Play any video<br><span class="highlight">without download.</span>
+        </h1>
+        <p class="hero-tagline">
+          Movies, shows, downloads — open them right here in your browser. No app to install, no uploads, nothing leaves your device.
+        </p>
 
-            <button class="url-bar-btn" id="load-btn">
-              <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
-                <polygon points="5 3 19 12 5 21 5 3"></polygon>
-              </svg>
-              Play
-            </button>
-          </div>
-          <label class="btn-ghost">
-            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-              <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path>
-              <polyline points="17 8 12 3 7 8"></polyline>
-              <line x1="12" y1="3" x2="12" y2="15"></line>
+        <!-- Big primary CTA: opens file picker. Drag &amp; drop also works anywhere on the page. -->
+        <label class="hero-cta-primary" tabindex="0" aria-label="Pick a video to play">
+          <span class="hero-cta-icon" aria-hidden="true">
+            <svg viewBox="0 0 24 24" fill="currentColor">
+              <polygon points="6 4 22 12 6 20 6 4"></polygon>
             </svg>
-            Open File
-            <input type="file" id="file-input" accept="video/*,.mkv,.ts,.avi,.flv,.wmv,.mov" multiple />
+          </span>
+          <span class="hero-cta-text">
+            <strong>Pick a video to play</strong>
+            <small>or just drop one anywhere on the page</small>
+          </span>
+          <input type="file" id="file-input" accept="video/*,.mkv,.ts,.avi,.flv,.wmv,.mov" multiple />
+        </label>
+
+        <!-- "or paste a link" divider -->
+        <div class="hero-or" aria-hidden="true"><span>or paste a video link</span></div>
+
+        <!-- URL input -->
+        <div class="url-bar hero-url-bar">
+          <input
+            type="text"
+            id="url-input"
+            placeholder="https://…  paste any video link"
+            aria-label="Video URL"
+          />
+          <!-- Protected toggle is dev-only: only visible when the
+               corner developer-mode chip is enabled. -->
+          <label class="url-bar-toggle dev-only" id="encrypt-toggle-label" title="Route the URL through a signed token proxy — hides the source URL and requires auth per request.">
+            <input type="checkbox" id="encrypt-toggle" />
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+              <rect x="3" y="11" width="18" height="11" rx="2" ry="2"/>
+              <path d="M7 11V7a5 5 0 0 1 10 0v4"/>
+            </svg>
+            <span>Protected</span>
           </label>
-          <button class="btn-ghost" id="folder-btn" type="button" title="Open a folder as a playlist">
-            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+          <button class="url-bar-btn" id="load-btn">
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+              <polygon points="5 3 19 12 5 21 5 3"></polygon>
+            </svg>
+            Play
+          </button>
+        </div>
+
+        <!-- Subtle secondary actions -->
+        <div class="hero-secondary">
+          <button class="hero-link-btn" id="folder-btn" type="button" title="Open a folder as a playlist">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
               <path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"></path>
             </svg>
-            Open Folder
+            Open a folder
           </button>
           <input type="file" id="folder-input-fallback" webkitdirectory multiple hidden />
-          <button class="btn-ghost" id="playlist-show-btn" type="button" title="Show playlist" hidden>
-            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+          <button class="hero-link-btn" id="playlist-show-btn" type="button" title="Show playlist" hidden>
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
               <line x1="8" y1="6" x2="21" y2="6"></line><line x1="8" y1="12" x2="21" y2="12"></line><line x1="8" y1="18" x2="21" y2="18"></line><line x1="3" y1="6" x2="3.01" y2="6"></line><line x1="3" y1="12" x2="3.01" y2="12"></line><line x1="3" y1="18" x2="3.01" y2="18"></line>
             </svg>
-            Show Playlist
+            Show playlist
           </button>
-          <button class="btn-ghost btn-embed" id="embed-btn" title="Copy embed code (developer feature)">
-            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+          <button class="hero-link-btn btn-embed" id="embed-btn" title="Copy embed code (developer feature)">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
               <polyline points="16 18 22 12 16 6"></polyline>
               <polyline points="8 6 2 12 8 18"></polyline>
             </svg>
             Embed
           </button>
         </div>
-        <span class="kbd-hint">or drag & drop anywhere</span>
+
         <div class="cache-info dev-only" id="cache-info" hidden>
           <span class="cache-size" id="cache-size" title="Cached thumbnails">
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
@@ -2944,26 +3166,33 @@
           </span>
           <button type="button" class="cache-clear dev-only" id="cache-clear-btn" title="Clear thumbnail cache">Clear cache</button>
         </div>
+
+        <!-- Subtle trust strip -->
         <div class="hero-trust">
           <span class="trust-item">
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/></svg>
-            100% Private
+            Stays on your device
           </span>
           <span class="trust-dot"></span>
           <span class="trust-item">
-            <svg viewBox="0 0 24 24" fill="currentColor"><path d="M12 0C5.37 0 0 5.37 0 12c0 5.31 3.435 9.795 8.205 11.385.6.105.825-.255.825-.57 0-.285-.015-1.23-.015-2.235-3.015.555-3.795-.735-4.035-1.41-.135-.345-.72-1.41-1.23-1.695-.42-.225-1.02-.78-.015-.795.945-.015 1.62.87 1.845 1.23 1.08 1.815 2.805 1.305 3.495.99.105-.78.42-1.305.765-1.605-2.67-.3-5.46-1.335-5.46-5.925 0-1.305.465-2.385 1.23-3.225-.12-.3-.54-1.53.12-3.18 0 0 1.005-.315 3.3 1.23.96-.27 1.98-.405 3-.405s2.04.135 3 .405c2.295-1.56 3.3-1.23 3.3-1.23.66 1.65.24 2.88.12 3.18.765.84 1.23 1.905 1.23 3.225 0 4.605-2.805 5.625-5.475 5.925.435.375.81 1.095.81 2.22 0 1.605-.015 2.895-.015 3.3 0 .315.225.69.825.57A12.02 12.02 0 0024 12c0-6.63-5.37-12-12-12z"/></svg>
-            Open Source
-          </span>
-          <span class="trust-dot"></span>
-          <span class="trust-item">
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"/></svg>
-            WebCodecs Powered
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg>
+            Free, no sign-up
           </span>
           <span class="trust-dot"></span>
           <a class="trust-item trust-item-verified" href="https://chromewebstore.google.com/detail/movi-player/ckleeigcopjnpehkjokijokjegknfgej" target="_blank" rel="noopener" title="Verified publisher on the Chrome Web Store">
             <svg viewBox="0 0 24 24" aria-hidden="true"><path fill="#4d9bff" d="M23 12l-2.44-2.78.34-3.68-3.61-.82-1.89-3.18L12 3 8.6 1.54 6.71 4.72 3.1 5.53l.34 3.68L1 12l2.44 2.78-.34 3.69 3.61.82 1.89 3.18L12 21l3.4 1.46 1.89-3.18 3.61-.82-.34-3.68L23 12z"/><path fill="#fff" d="M10.09 16.72 6 12.59l1.41-1.41 2.68 2.68 6.68-6.68L18.18 8.6l-8.09 8.12z"/></svg>
-            Verified Chrome Extension
+            Verified Chrome extension
           </a>
+        </div>
+
+        <!-- Format strip — small footnote so it doesn't dominate the hero -->
+        <div class="hero-formats" aria-label="Supported formats">
+          <span class="format-chip">MKV</span>
+          <span class="format-chip">MP4</span>
+          <span class="format-chip">HEVC</span>
+          <span class="format-chip">AV1</span>
+          <span class="format-chip">HDR</span>
+          <span class="format-chip">4K</span>
         </div>
       </div>
     </section>
@@ -2971,27 +3200,33 @@
     <!-- ===== PLAYER ===== -->
     <section class="player-section">
       <div class="player-layout" id="player-layout">
-        <div class="player-wrapper">
-          <div class="player-stage">
-            <movi-player
-              id="movi-player"
-              renderer="canvas"
-              controls
-              objectfit="control"
-              gesturefs
-              thumb
-              fastseek
-              showtitle
-              ambientmode
-              ambientwrapper="ambient-wrapper"
-              resume
-              stablevolume
-            >
+        <div class="player-frame">
+          <!-- Ambient glow target — the player paints a blurred sample of
+               its current frame into this element so the colors spill out
+               around the video like a halo. Sits behind the wrapper. -->
+          <div class="player-ambient" id="player-ambient" aria-hidden="true"></div>
+          <div class="player-wrapper">
+            <div class="player-stage">
+              <movi-player
+                id="movi-player"
+                renderer="canvas"
+                controls
+                objectfit="control"
+                gesturefs
+                thumb
+                fastseek
+                showtitle
+                ambientmode
+                ambientwrapper="player-ambient"
+                resume
+                stablevolume
+              >
               <div class="shimmer-wrapper">
                 <div class="shimmer"></div>
               </div>
             </movi-player>
           </div>
+        </div>
         </div>
         <aside class="playlist-panel" id="playlist-panel" hidden tabindex="0" aria-label="Playlist">
           <div class="playlist-header">
@@ -3042,74 +3277,74 @@
 
     <!-- ===== FEATURES ===== -->
     <section class="features-section">
-      <h2>Why MoviPlayer?</h2>
-      <p class="section-desc">Built for the files other players refuse to touch. Play anything from MKV to HEVC to AV1 &mdash; right in your browser, with nothing to download or install.</p>
+      <h2>Why people love MoviPlayer</h2>
+      <p class="section-desc">A simple, free <strong>online video player</strong> for the files other players give up on. Drop a movie, paste a link &mdash; it just plays.</p>
       <div class="features-grid">
         <div class="feature-card">
           <div class="feature-icon">
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="2" width="20" height="20" rx="2.18" ry="2.18"/><line x1="7" y1="2" x2="7" y2="22"/><line x1="17" y1="2" x2="17" y2="22"/><line x1="2" y1="12" x2="22" y2="12"/><line x1="2" y1="7" x2="7" y2="7"/><line x1="2" y1="17" x2="7" y2="17"/><line x1="17" y1="7" x2="22" y2="7"/><line x1="17" y1="17" x2="22" y2="17"/></svg>
           </div>
-          <h3>Universal Formats</h3>
-          <p>MKV, AVI, HEVC, AV1, VP9, HDR &mdash; MoviPlayer handles video formats that your browser normally can't play. No codec packs, no plugins, no conversions needed. Just drop any video file and it plays instantly.</p>
+          <h3>Plays whatever you've got</h3>
+          <p>Old AVI clips, big MKV downloads, modern 4K HDR movies &mdash; even formats your browser usually refuses to open (HEVC, AV1, VP9). No converting, no plugins, nothing extra to install. Just open the file.</p>
         </div>
         <div class="feature-card">
           <div class="feature-icon">
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/></svg>
           </div>
-          <h3>100% Private</h3>
-          <p>Your videos never leave your device. Everything runs locally in your browser with zero uploads, no servers, and no tracking. Your media stays private &mdash; always.</p>
+          <h3>Stays with you</h3>
+          <p>Your videos never go anywhere. Nothing is uploaded to a server, nothing is stored online, no one is tracking you. It all runs right inside your browser, on your own device.</p>
         </div>
         <div class="feature-card">
           <div class="feature-icon">
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="1" y="4" width="22" height="16" rx="2" ry="2"/><line x1="1" y1="10" x2="23" y2="10"/></svg>
           </div>
-          <h3>Subtitles & Multi-Audio</h3>
-          <p>Full support for embedded subtitles (SRT, ASS, SSA), multiple audio tracks, and soft-sub rendering. Switch between languages and subtitle tracks without any extra tools or software.</p>
+          <h3>Subtitles? Sorted.</h3>
+          <p>Switch between subtitle languages, jump between audio tracks (English / Hindi / dub) &mdash; the controls are right there. Works with subtitles built into the file and with separate .srt or .ass files you've downloaded.</p>
         </div>
         <div class="feature-card">
           <div class="feature-icon">
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"/></svg>
           </div>
-          <h3>WebCodecs Powered</h3>
-          <p>Hardware-accelerated video decoding via the WebCodecs API delivers smooth, stutter-free playback even on large 4K files. No software decoding overhead &mdash; your GPU does the heavy lifting.</p>
+          <h3>Smooth, even on big files</h3>
+          <p>4K HDR? No problem. Your computer's graphics card does the heavy lifting (using your browser's WebCodecs engine), so playback stays smooth and your laptop doesn't turn into a heater.</p>
         </div>
       </div>
     </section>
 
     <!-- ===== HOW IT WORKS ===== -->
     <section class="features-section">
-      <h2>How It Works</h2>
-      <p class="section-desc">Playing any video in your browser takes just three simple steps. No sign-up, no software, no waiting.</p>
+      <h2>How it works</h2>
+      <p class="section-desc">Three steps. No sign-up, no installs, no waiting.</p>
       <div class="features-grid">
         <div class="feature-card">
           <div class="feature-icon">
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg>
           </div>
-          <h3>1. Drop or Paste</h3>
-          <p>Drag and drop a video file anywhere on the page, use the file picker to browse your device, or paste a direct video URL to stream remotely.</p>
+          <h3>1. Open your video</h3>
+          <p>Drag a file onto the page, click "Pick a video" to browse, or paste a video link. Whatever's easiest &mdash; folders work too, the whole folder becomes a playlist.</p>
         </div>
         <div class="feature-card">
           <div class="feature-icon">
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polygon points="5 3 19 12 5 21 5 3"/></svg>
           </div>
-          <h3>2. It Just Plays</h3>
-          <p>MoviPlayer automatically detects the format, codec, and container. Whether it's an MKV with HEVC, an AVI with legacy codecs, or a 4K HDR file &mdash; playback starts immediately.</p>
+          <h3>2. It just plays</h3>
+          <p>No "unsupported format" errors. No "install this codec" pop-ups. No converting. Whatever you give it &mdash; an MKV with HEVC, an old AVI, a 4K HDR file &mdash; it figures it out and plays right away.</p>
         </div>
         <div class="feature-card">
           <div class="feature-icon">
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>
           </div>
-          <h3>3. Full Control</h3>
-          <p>Enjoy a full-featured player with keyboard shortcuts, playback speed control, picture-in-picture, fullscreen, volume normalization, and seek thumbnails &mdash; all built in.</p>
+          <h3>3. Full control</h3>
+          <p>Speed up, slow down, picture-in-picture, fullscreen, keyboard shortcuts, scrub thumbnails, even-loudness audio &mdash; everything you'd expect from a real video player, all built in.</p>
         </div>
       </div>
     </section>
 
     <!-- ===== SUPPORTED FORMATS ===== -->
     <section class="features-section">
-      <h2>Supported Video Formats</h2>
-      <p class="section-desc">MoviPlayer is a free <strong>online video player</strong> built on FFmpeg WebAssembly for demuxing and the WebCodecs API for hardware-accelerated decoding. This means you can play any video format online &mdash; from old AVI files to modern 4K HDR content &mdash; without downloading any software.</p>
-      <p class="section-desc">Supported containers include MKV, MP4, AVI, FLV, MOV, MPEG-TS, and WebM. Supported codecs include H.264, H.265 (HEVC), AV1, VP8, VP9, and AAC/Opus/FLAC audio. HDR10 and HLG high dynamic range content is also supported on compatible displays.</p>
+      <h2>What can it play?</h2>
+      <p class="section-desc">Pretty much anything. From old AVI files to modern 4K HDR movies &mdash; right in your browser, with no software to install. Behind the scenes it uses FFmpeg (the same engine that powers VLC and most pro tools) along with your browser's WebCodecs API for fast, hardware-accelerated playback.</p>
+      <p class="section-desc"><strong>File types:</strong> MKV, MP4, AVI, FLV, MOV, MPEG-TS, WebM and more. <strong>Video codecs:</strong> H.264, H.265 (HEVC), AV1, VP8, VP9. <strong>Audio:</strong> AAC, Opus, FLAC, MP3, AC3, and more. <strong>HDR:</strong> HDR10 and HLG also work on compatible displays.</p>
     </section>
 
     <!-- ===== FAQ ===== -->
@@ -3118,63 +3353,63 @@
          as inline microdata, since Google flags duplicate FAQPage entries
          on the same URL as invalid for rich results. -->
     <section class="features-section">
-      <h2>Frequently Asked Questions</h2>
+      <h2>Common questions</h2>
 
       <details class="faq-item">
-        <summary><h3>What is the best free online video player?</h3></summary>
+        <summary><h3>What's the easiest way to play a video online?</h3></summary>
         <div>
-          <p class="section-desc">MoviPlayer is a free online video player that plays MKV, HEVC, AV1, HDR, VP9 and any video format directly in your browser &mdash; no downloads, no installs, no uploads. Everything runs locally on your device, so your videos stay private.</p>
+          <p class="section-desc">Just drop the file on this page, or paste the link. That's it &mdash; no sign-up, no app to download. MoviPlayer is a free <strong>online video player</strong> that runs right in your browser and handles tricky formats like MKV, HEVC, AV1, HDR and VP9 that most browsers can't open on their own.</p>
         </div>
       </details>
 
       <details class="faq-item">
-        <summary><h3>Can I play any video online without downloading it?</h3></summary>
+        <summary><h3>Can I play a video without downloading anything?</h3></summary>
         <div>
-          <p class="section-desc">Yes. MoviPlayer plays MKV, MP4, HEVC, AV1, HDR, VP9, AVI, MOV, FLV, TS &mdash; basically any video format &mdash; directly in your browser using WebCodecs. Just drop the file or paste a URL. Nothing gets uploaded to any server, the entire decoding happens locally on your device.</p>
+          <p class="section-desc">Yes. Drop the file (MKV, MP4, AVI, MOV, FLV, TS &mdash; anything really) or paste a video link. MoviPlayer decodes the video locally on your device using your browser's built-in WebCodecs engine, so nothing is uploaded anywhere.</p>
         </div>
       </details>
 
       <details class="faq-item">
-        <summary><h3>Does MoviPlayer support HEVC (H.265) and AV1 video?</h3></summary>
+        <summary><h3>It says my browser can't play this file. Will MoviPlayer help?</h3></summary>
         <div>
-          <p class="section-desc">Yes. MoviPlayer fully supports HEVC (H.265), AV1, VP9, H.264, and HDR video playback inside the browser, including formats most browsers refuse to play natively.</p>
+          <p class="section-desc">Most likely yes. The "can't play" message usually means your browser doesn't recognize the codec inside the file &mdash; HEVC (H.265), AV1, VP9 and HDR are common culprits. MoviPlayer handles all of these and plays them right in your browser, no extra software needed.</p>
         </div>
       </details>
 
       <details class="faq-item">
-        <summary><h3>Is MoviPlayer safe and private?</h3></summary>
+        <summary><h3>Is it safe? Where do my videos go?</h3></summary>
         <div>
-          <p class="section-desc">Yes. MoviPlayer is 100% private. Your video files never leave your device &mdash; they're not uploaded to any server. All decoding happens locally in your browser using the WebCodecs API.</p>
+          <p class="section-desc">Nowhere. Your videos stay on your device &mdash; nothing is uploaded, nothing is stored on any server. All the playback (decoding, subtitles, everything) happens locally in your browser using the WebCodecs API. Your file never leaves your computer.</p>
         </div>
       </details>
 
       <details class="faq-item">
-        <summary><h3>Do I need to install anything to use MoviPlayer?</h3></summary>
+        <summary><h3>Do I need to install anything?</h3></summary>
         <div>
-          <p class="section-desc">No. MoviPlayer runs entirely in your browser. No downloads, no installs, no plugins, no signup. Just open moviplayer.com and play your video.</p>
+          <p class="section-desc">No. Just open moviplayer.com in any modern browser and start playing. No downloads, no plug-ins, no sign-up. There's also an optional Chrome extension if you want a "Play here" button on every video link &mdash; but you don't need it.</p>
         </div>
       </details>
 
       <details class="faq-item">
-        <summary><h3>What video formats does MoviPlayer support?</h3></summary>
+        <summary><h3>Which video formats actually work?</h3></summary>
         <div>
-          <p class="section-desc">MoviPlayer supports MKV, MP4, WebM, AVI, MOV, FLV, WMV, TS, M4V containers and HEVC/H.265, AV1, VP9, H.264, MPEG-4 codecs. It also supports HDR video, multiple audio tracks, and external subtitle files (SRT, ASS, VTT).</p>
+          <p class="section-desc"><strong>File types:</strong> MKV, MP4, WebM, AVI, MOV, FLV, WMV, TS, M4V. <strong>Video inside:</strong> H.264, H.265 (HEVC), AV1, VP9, MPEG-4. Subtitles: built-in subtitles plus separate .srt, .ass and .vtt files. Multiple audio tracks (English / Hindi / dub) and HDR videos work too.</p>
         </div>
       </details>
 
       <details class="faq-item">
-        <summary><h3>Is MoviPlayer free?</h3></summary>
+        <summary><h3>How much does it cost?</h3></summary>
         <div>
-          <p class="section-desc">Yes. MoviPlayer is completely free to use, with no ads, no signup, and no usage limits.</p>
+          <p class="section-desc">Nothing. MoviPlayer is completely free. No ads, no sign-up, no "premium" tier, no limits on file size or how often you use it.</p>
         </div>
       </details>
     </section>
 
     <!-- ===== FOOTER ===== -->
     <footer class="footer">
-      <p>Powered by <a href="https://github.com/mrujjwalg/movi-player" target="_blank" rel="noopener">movi-player</a> &mdash; the open-source browser video player</p>
-      <p class="disclaimer"><a href="https://mrujjwalg.github.io/movi-player/" target="_blank" rel="noopener">Documentation</a> &middot; <a href="https://chromewebstore.google.com/detail/movi-player/ckleeigcopjnpehkjokijokjegknfgej" rel="noopener">Chrome Extension</a> &middot; <a href="https://github.com/mrujjwalg/movi-player/issues" rel="noopener">Report a Bug</a></p>
-      <p class="disclaimer" style="margin-top: 0.5rem;">All content is provided by users. We do not host or store any media. Users are solely responsible for the content they play.</p>
+      <p>Made with <a href="https://github.com/mrujjwalg/movi-player" target="_blank" rel="noopener">movi-player</a> &mdash; an open-source video player that runs in your browser.</p>
+      <p class="disclaimer"><a href="https://mrujjwalg.github.io/movi-player/" target="_blank" rel="noopener">Docs</a> &middot; <a href="https://chromewebstore.google.com/detail/movi-player/ckleeigcopjnpehkjokijokjegknfgej" rel="noopener">Chrome extension</a> &middot; <a href="https://github.com/mrujjwalg/movi-player/issues" rel="noopener">Report a problem</a></p>
+      <p class="disclaimer" style="margin-top: 0.5rem;">You bring the videos &mdash; we don't host or store any media. Whatever you play is your own responsibility.</p>
     </footer>
 
     <!-- Hero micro-interactions: ripple on Play, magnetic chip tilt -->
@@ -3195,20 +3430,6 @@
           });
         }
 
-        // Subtle "magnetic" tilt on format chips — the chip leans toward the
-        // cursor as it hovers across, then resets on leave. Pure transform,
-        // no layout work.
-        document.querySelectorAll(".format-chip").forEach(function (chip) {
-          chip.addEventListener("mousemove", function (e) {
-            var r = chip.getBoundingClientRect();
-            var x = ((e.clientX - r.left) / r.width  - 0.5) * 6;
-            var y = ((e.clientY - r.top)  / r.height - 0.5) * 6;
-            chip.style.transform = "translate(" + x + "px, " + (y - 4) + "px) scale(1.08)";
-          });
-          chip.addEventListener("mouseleave", function () {
-            chip.style.transform = "";
-          });
-        });
       })();
     </script>
 
