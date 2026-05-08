@@ -2244,9 +2244,13 @@
            but the video shouldn't stretch that wide on a tablet and
            the playlist shouldn't either. `align-items: center` above
            defeats the usual stretch, so the explicit width:100% plus
-           max-width gives us centered, capped panels. */
-        .player-layout .player-wrapper,
-        .player-layout.has-playlist .player-wrapper {
+           max-width gives us centered, capped panels.
+
+           Targets `.player-frame` (the new flex item that owns the
+           ambient halo + player wrapper) — without this the frame
+           collapses to 0 width on mobile and the player vanishes. */
+        .player-layout .player-frame,
+        .player-layout.has-playlist .player-frame {
           width: 100%;
           max-width: 960px;
         }
