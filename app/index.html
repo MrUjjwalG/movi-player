@@ -684,7 +684,22 @@
         border: 1px solid rgba(255, 255, 255, 0.14);
         border-radius: 999px;
         cursor: pointer;
-        user-select: none;
+        -webkit-user-select: none;
+                user-select: none;
+        /* Browsers (esp. Chromium) treat <label> with text/SVG as
+           draggable and switch the cursor to the "move" arrow on
+           mousedown, drawing a translucent selection rect around the
+           pill. Disabling drag keeps the click feel solid. The CSS
+           property is `-webkit-` only (no spec'd unprefixed form);
+           `draggable="false"` on the markup covers Firefox, and the
+           `dragstart` listener at the bottom of the file is the
+           belt-and-braces safety. `-webkit-user-drag` doesn't inherit
+           so the descendant rule below applies it to every child. */
+        -webkit-user-drag: none;
+        /* Mobile Chrome/Safari draw a colored tap-highlight rect on
+           tap — silence it here, the visual feedback already comes
+           from the active/hover transforms. */
+        -webkit-tap-highlight-color: transparent;
         position: relative;
         text-decoration: none;
         margin-top: 0.5rem;
@@ -701,6 +716,15 @@
            pulse on a pseudo-element where it can't conflict with hover. */
       }
 
+      /* `-webkit-user-drag` doesn't inherit, so apply it to every
+         child of the pill explicitly — without this, dragging the
+         inner SVG / text spans still triggers the drag ghost. */
+      .hero-cta-primary * {
+        -webkit-user-drag: none;
+        -webkit-user-select: none;
+                user-select: none;
+      }
+
       .hero-cta-primary:hover {
         transform: translateY(-2px);
         filter: brightness(1.06);
@@ -713,8 +737,15 @@
       .hero-cta-primary:active { transform: translateY(0) scale(0.98); }
 
       .hero-cta-primary:focus-visible {
-        outline: 2px solid #fff;
-        outline-offset: 4px;
+        /* `outline` ignores border-radius in Chromium/Safari, which
+           drew a square box around the pill. Use a layered box-shadow
+           instead — it follows the pill's rounded shape. */
+        outline: none;
+        box-shadow:
+          0 14px 40px rgba(124, 108, 240, 0.45),
+          inset 0 1px 0 rgba(255, 255, 255, 0.18),
+          0 0 0 3px rgba(255, 255, 255, 0.9),
+          0 0 0 5px var(--accent);
       }
 
       .hero-cta-icon {
@@ -778,12 +809,25 @@
         opacity: 0.88;
       }
 
+      /* Standard "visually hidden" pattern — clips the input to a
+         zero-size rect so the browser-drawn focus outline (which
+         appears on label click as the picker opens) doesn't render
+         as a tiny square in the pill's top-left corner. */
       .hero-cta-primary input[type="file"] {
         position: absolute;
         width: 1px;
         height: 1px;
-        opacity: 0;
+        margin: -1px;
+        padding: 0;
+        overflow: hidden;
+        clip: rect(0 0 0 0);
+        clip-path: inset(50%);
+        border: 0;
         pointer-events: none;
+      }
+      .hero-cta-primary input[type="file"]:focus,
+      .hero-cta-primary input[type="file"]:focus-visible {
+        outline: none;
       }
 
       /* "or paste a video link" divider with hairlines on each side */
@@ -1513,6 +1557,12 @@
         z-index: 2;
         padding: 0 4%;
         margin-top: 0;
+        /* Clip horizontally so the ambient halo's negative inset
+           (extends ~90px past the player on every side) can't trigger
+           a horizontal scroll on mobile. `clip` (not `hidden`) lets
+           vertical overflow stay visible — the halo can still bleed
+           naturally up/down into adjacent sections. */
+        overflow-x: clip;
       }
 
       .player-section::before {
@@ -2581,6 +2631,15 @@
           margin-top: 0;
         }
 
+        /* Compact ambient halo on mobile — -90px on a 375 px viewport
+           was overwhelming and pushed the painted area beyond what the
+           clip could contain comfortably. Smaller spread + lighter
+           blur keeps the effect visible without dominating the screen. */
+        .player-ambient {
+          inset: -40px;
+          filter: blur(50px) saturate(1.4);
+        }
+
         .player-wrapper {
           border-radius: 10px;
         }
@@ -3095,9 +3154,9 @@
         </p>
 
         <!-- Big primary CTA: opens file picker. Drag &amp; drop also works anywhere on the page. -->
-        <label class="hero-cta-primary" tabindex="0" aria-label="Pick a video to play">
-          <span class="hero-cta-icon" aria-hidden="true">
-            <svg viewBox="0 0 24 24" fill="currentColor">
+        <label class="hero-cta-primary" tabindex="0" draggable="false" aria-label="Pick a video to play">
+          <span class="hero-cta-icon" aria-hidden="true" draggable="false">
+            <svg viewBox="0 0 24 24" fill="currentColor" draggable="false">
               <polygon points="6 4 22 12 6 20 6 4"></polygon>
             </svg>
           </span>
@@ -3434,6 +3493,14 @@
           });
         }
 
+        // CSS `-webkit-user-drag: none` and `draggable="false"` should
+        // be enough, but Chromium still occasionally fires `dragstart`
+        // on the pill (cursor flicks to "move", a translucent ghost
+        // appears). Cancelling here is the final safety net.
+        var cta = document.querySelector(".hero-cta-primary");
+        if (cta) {
+          cta.addEventListener("dragstart", function (e) { e.preventDefault(); });
+        }
       })();
     </script>
 
