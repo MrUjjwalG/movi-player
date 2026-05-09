@@ -3080,13 +3080,29 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
       this.nativeAudioEl.playbackRate = rate;
     }
 
-    // Flush both decoders on rate change to clear stale packets from previous rate.
-    // On heavy content (8K), old packets block the decoder queue and cause hangs.
-    // Audio decoder also needs flush — stale packets cause persistent stalling at 1x.
+    // Flush only the audio decoder on rate change. Audio flush is required —
+    // stale packets cause persistent stalling at 1x. Video decoder flush was
+    // originally added to unstick 8K queues but causes a multi-second stall
+    // on Open GOP AV1/H.264 (the post-flush "keyframe" gets rejected because
+    // it references frames before it, then the decoder skips many frames
+    // searching for a closed keyframe). Video frames stay valid across rate
+    // changes — only timing shifts — so we let the decoder keep its queue.
     if (this.stateManager.getState() === "playing" || this.stateManager.getState() === "buffering") {
-      if (this.videoDecoder) this.videoDecoder.flush().catch(() => {});
       this.audioDecoder.flush().catch(() => {});
     }
+  }
+
+  /**
+   * Switch the audio time-stretching engine. 'signalsmith' uses the
+   * MIT-licensed Signalsmith Stretch baked into movi.wasm; 'soundtouch' is
+   * the LGPL fallback shipped as JS. Default is 'soundtouch'.
+   */
+  setStretcher(name: "soundtouch" | "signalsmith"): void {
+    this.audioRenderer.setStretcher(name);
+  }
+
+  getStretcher(): "soundtouch" | "signalsmith" {
+    return this.audioRenderer.getStretcher();
   }
 
   /**

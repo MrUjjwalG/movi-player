@@ -186,6 +186,12 @@ export class MoviElement extends HTMLElement {
   private ambientWrapperElement: HTMLElement | null = null; // Reference to external wrapper element
   private _ambientRafId: number | null = null;
   private _lastAmbientSampleTime: number = 0;
+  // Wall-clock timestamp (performance.now()) of the last playback-rate change.
+  // Ambient sampling skips for a brief cooldown after a rate change so the
+  // ~5–15ms GPU readback doesn't contend with audio decoder refill, which
+  // produces audible "audio late" gaps right after speed switches.
+  private _lastRateChangeTime: number = 0;
+  private static readonly AMBIENT_RATE_CHANGE_COOLDOWN_MS = 600;
   private _ambientSampleInterval: number = 100; // Start at 100ms (10fps) for better performance
   private _ambientSampleCanvas: HTMLCanvasElement | null = null;
   private _ambientSampleCtx: CanvasRenderingContext2D | null = null;
@@ -4505,6 +4511,14 @@ export class MoviElement extends HTMLElement {
   public setHostFullscreen(active: boolean): void {
     this._hostFullscreen = active;
     this.applyFullscreenUiState(active);
+  }
+
+  /** Audio time-stretcher selector — 'signalsmith' (MIT, baked into WASM) or 'soundtouch'. */
+  public setStretcher(name: "soundtouch" | "signalsmith"): void {
+    this.player?.setStretcher(name);
+  }
+  public getStretcher(): "soundtouch" | "signalsmith" | null {
+    return this.player?.getStretcher() ?? null;
   }
 
   private static readonly ASPECT_ICONS: Record<string, string> = {
@@ -11731,6 +11745,10 @@ export class MoviElement extends HTMLElement {
   }
 
   private updatePlaybackRate() {
+    // Mark the rate-change time so the ambient sampler can stand down briefly
+    // — its GPU readback otherwise blocks the main thread right when the
+    // audio decoder is refilling, causing audible silence gaps.
+    this._lastRateChangeTime = performance.now();
     if (this.player) {
       this.player.setPlaybackRate(this._playbackRate);
     }
@@ -13110,7 +13128,13 @@ export class MoviElement extends HTMLElement {
       // canvas readback contends with frame presentation, magnifying stutter.
       const playerState = this.player?.getState();
       const isRecovering = playerState === "seeking" || playerState === "buffering";
-      if (isSoftware || isRecovering) {
+      // Skip for a short window after a playback-rate change so audio refill
+      // isn't fighting the GPU readback for main-thread time.
+      const sinceRateChange = timestamp - this._lastRateChangeTime;
+      const isRateChangeCooldown =
+        this._lastRateChangeTime > 0 &&
+        sinceRateChange < MoviElement.AMBIENT_RATE_CHANGE_COOLDOWN_MS;
+      if (isSoftware || isRecovering || isRateChangeCooldown) {
         this._lastAmbientSampleTime = timestamp; // Keep advancing time but skip work
         this._ambientRafId = requestAnimationFrame(loop);
         return;

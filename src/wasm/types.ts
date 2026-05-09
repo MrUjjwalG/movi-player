@@ -20,6 +20,7 @@ export interface MoviWasmModule {
   HEAPU8: Uint8Array;
   HEAP32: Int32Array;
   HEAPU32: Uint32Array;
+  HEAPF32: Float32Array;
   HEAPF64: Float64Array;
 
   // Memory allocation
@@ -128,6 +129,21 @@ export interface MoviWasmModule {
   _movi_thumbnail_get_frame_width: (ctx: number) => number;
   _movi_thumbnail_get_frame_height: (ctx: number) => number;
   _movi_thumbnail_destroy: (ctx: number) => void;
+
+  // Signalsmith Stretch — pitch-preserving time-stretch (sync API).
+  _movi_stretch_new: (channels: number, sampleRate: number) => number;
+  _movi_stretch_delete: (handle: number) => void;
+  _movi_stretch_reset: (handle: number) => void;
+  _movi_stretch_set_transpose_semitones: (handle: number, semitones: number) => void;
+  _movi_stretch_input_latency: (handle: number) => number;
+  _movi_stretch_output_latency: (handle: number) => number;
+  _movi_stretch_process: (
+    handle: number,
+    inPtr: number,
+    inFrames: number,
+    outPtr: number,
+    outFrames: number,
+  ) => void;
 
   // Emscripten utilities
   ccall: (

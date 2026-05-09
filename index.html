@@ -523,6 +523,10 @@
     </div>
 
     <script type="module">
+      // Enable Signalsmith Stretch (MIT, compiled into movi.wasm) before the
+      // element upgrades. AudioRenderer reads this flag during init.
+      localStorage.setItem("MOVI_STRETCHER", "signalsmith");
+
       import "./src/element.ts";
 
       const urlInput = document.getElementById("url-input");
