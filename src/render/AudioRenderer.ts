@@ -790,7 +790,16 @@ export class AudioRenderer {
       }
     }
 
-    // Pivot the clock before changing rate
+    // Anchor the audio→media clock at the current play position so reads
+    // at the new rate stay correct. We deliberately do NOT stop active
+    // sources or rescale scheduledTime — that combination makes the audio
+    // clock leap forward to the next decoded chunk's mediaTime (which is
+    // wherever the demuxer has read ahead to). The video decoder cannot
+    // catch up to that jump on low-end hardware, so it presents stale
+    // reference frames out of context — visible as pixelation/blocking.
+    // Letting active sources play out at their original rate means a brief
+    // tail of "old rate" audio (≤ AudioContext output buffer, ~30–50 ms
+    // with latencyHint=interactive) instead of any mismatch.
     if (
       this.audioContext &&
       this.audioContext.state === "running" &&
@@ -800,51 +809,11 @@ export class AudioRenderer {
       const currentMediaTime =
         this.firstBufferMediaTime +
         (now - this.firstBufferScheduledAt) * oldRate;
-
-      const bufferAhead = this.scheduledTime - now;
-      if (bufferAhead > 0) {
-        this.scheduledTime = now + bufferAhead * (oldRate / newRate);
-      } else {
-        this.scheduledTime = now + 0.01;
-      }
-
       this.firstBufferScheduledAt = now;
       this.firstBufferMediaTime = currentMediaTime;
     }
 
     this._playbackRate = newRate;
-
-    // Stop all currently playing sources to force immediate re-buffering with new rate
-    // This causes a brief gap (~50-100ms) but ensures correct playback rate immediately
-    if (this.audioContext) {
-      const now = this.audioContext.currentTime;
-
-      // No rebuffering flag — brief audio gap (~50-100ms) is acceptable.
-      // Setting the flag causes loading state that gets stuck when SoundTouch
-      // delays output (especially on Safari). Clock drift correction handles sync.
-
-      // Stop all active sources
-      if (this.activeSources.length > 0) {
-        for (const source of this.activeSources) {
-          try {
-            source.stop(now);
-            source.disconnect();
-          } catch {
-            // Source may already be stopped
-          }
-        }
-
-        // Clear active sources array
-        this.activeSources = [];
-
-        // Reset scheduled time to force immediate re-buffering
-        this.scheduledTime = now;
-      } else if (this.isPlaying) {
-        // No active sources but playing (e.g., underrun or just started)
-        // Still need to reset scheduled time to ensure new audio uses new rate immediately
-        this.scheduledTime = now;
-      }
-    }
   }
 
   /**

@@ -3080,16 +3080,15 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
       this.nativeAudioEl.playbackRate = rate;
     }
 
-    // Flush only the audio decoder on rate change. Audio flush is required —
-    // stale packets cause persistent stalling at 1x. Video decoder flush was
-    // originally added to unstick 8K queues but causes a multi-second stall
-    // on Open GOP AV1/H.264 (the post-flush "keyframe" gets rejected because
-    // it references frames before it, then the decoder skips many frames
-    // searching for a closed keyframe). Video frames stay valid across rate
-    // changes — only timing shifts — so we let the decoder keep its queue.
-    if (this.stateManager.getState() === "playing" || this.stateManager.getState() === "buffering") {
-      this.audioDecoder.flush().catch(() => {});
-    }
+    // No decoder flushes on rate change. Flushing the audio decoder drops
+    // its read-ahead queue, so the next chunk arrives with whatever mediaTime
+    // the demuxer has progressed to (often a second or more ahead) — that
+    // audio leap then strands the video decoder behind, causing either
+    // pixelation (no video flush) or a multi-second freeze (with flush, on
+    // low-end hardware or Open GOP AV1). Letting buffered packets keep
+    // flowing means the audible transition is just whatever output buffer
+    // the AudioContext has — small with latencyHint="interactive" — and
+    // the new rate is applied to subsequent stretcher output naturally.
   }
 
   /**
