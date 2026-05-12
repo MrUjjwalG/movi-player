@@ -6687,19 +6687,31 @@ export class MoviElement extends HTMLElement {
 
   private startUIUpdates(): void {
     this.updateAspectRatioIcon();
-    const updateUI = () => {
+    // Throttle UI updates to ~4Hz (250ms). Time display, progress bar
+    // and icons don't need 60fps precision — at 60fps the six DOM
+    // mutations below burn ~30-50ms/sec of main-thread time on a
+    // low-end phone, enough to starve the <video> element's media
+    // pipeline and trigger GOP-boundary rebuffering on 4K AV1. This
+    // matches the cadence of HTMLMediaElement's own `timeupdate`
+    // event, so reactive listeners still feel immediate.
+    const UI_UPDATE_MIN_MS = 250;
+    let lastRun = 0;
+    const updateUI = (timestamp: number) => {
       if (!this.player) return;
 
-      this.updatePlayPauseIcon();
-      this.updateTimeDisplay();
-      this.updateProgressBar();
-      this.updateVolumeIcon();
-      this.updateLoadingIndicator(); // Check buffer fill percentage
-      this.updateTitle(); // Auto-load title from metadata if needed
+      if (timestamp - lastRun >= UI_UPDATE_MIN_MS) {
+        lastRun = timestamp;
+        this.updatePlayPauseIcon();
+        this.updateTimeDisplay();
+        this.updateProgressBar();
+        this.updateVolumeIcon();
+        this.updateLoadingIndicator(); // Check buffer fill percentage
+        this.updateTitle(); // Auto-load title from metadata if needed
+      }
 
       requestAnimationFrame(updateUI);
     };
-    updateUI();
+    requestAnimationFrame(updateUI);
   }
 
   private addStyles(shadowRoot: ShadowRoot): void {
