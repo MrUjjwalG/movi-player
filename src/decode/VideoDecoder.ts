@@ -28,6 +28,12 @@ export class MoviVideoDecoder {
   private onFrame: ((frame: VideoFrame) => void) | null = null;
   private onError: ((error: Error) => void) | null = null;
   private waitingForKeyframe: boolean = false;
+  // Optional listener: notified whenever the decoder enters or exits its
+  // "skip non-keyframes" recovery window. MoviPlayer uses this to flip into
+  // buffering state during playback so audio + clock pause instead of running
+  // through the silent video gap (an Open-GOP IDR rejection on .ts files can
+  // produce 2+ seconds of "audio plays, video frozen" if we don't).
+  public onKeyframeWaitChange: ((waiting: boolean) => void) | null = null;
   private errorCount: number = 0;
   private static MAX_ERRORS = 5; // Max consecutive errors before giving up
   private lastConfig: VideoDecoderConfig | null = null;
@@ -53,6 +59,18 @@ export class MoviVideoDecoder {
 
   setBindings(bindings: WasmBindings) {
     this.bindings = bindings;
+  }
+
+  private setWaitingForKeyframe(waiting: boolean): void {
+    if (this.waitingForKeyframe === waiting) return;
+    this.waitingForKeyframe = waiting;
+    if (this.onKeyframeWaitChange) {
+      try {
+        this.onKeyframeWaitChange(waiting);
+      } catch {
+        // listener errors must not break the decoder pipeline
+      }
+    }
   }
 
   /**
@@ -422,7 +440,7 @@ export class MoviVideoDecoder {
     }
     if (success) {
       this.isConfigured = true;
-      this.waitingForKeyframe = true; // Wait for keyframe on new decoder
+      this.setWaitingForKeyframe(true); // Wait for keyframe on new decoder
 
       // Process pending chunks
       if (this.pendingChunks.length > 0) {
@@ -484,7 +502,7 @@ export class MoviVideoDecoder {
       // Wait for next keyframe to resync — don't re-feed cached keyframe
       // as subsequent non-keyframes may fail on certain content (DoVi P8 etc.)
       // causing a recreate→re-feed→fail loop that triggers software fallback.
-      this.waitingForKeyframe = true;
+      this.setWaitingForKeyframe(true);
       return true;
     } catch (error) {
       Logger.error(TAG, "Failed to recreate decoder", error);
@@ -549,7 +567,7 @@ export class MoviVideoDecoder {
           return;
         }
         if (keyframe) {
-          this.waitingForKeyframe = false;
+          this.setWaitingForKeyframe(false);
         }
 
         this.swDecoder.decode(data, timestamp, dts ?? timestamp, keyframe);
@@ -603,7 +621,7 @@ export class MoviVideoDecoder {
 
     // Got a keyframe, reset recovery state
     if (keyframe) {
-      this.waitingForKeyframe = false;
+      this.setWaitingForKeyframe(false);
       // Cache converted keyframe for instant recovery after decoder recreation
     }
 
@@ -715,7 +733,7 @@ export class MoviVideoDecoder {
         try {
           this.decoder.reset();
           this.decoder.configure(this.lastConfig!);
-          this.waitingForKeyframe = true;
+          this.setWaitingForKeyframe(true);
           return;
         } catch (e) {
           Logger.warn(
@@ -767,7 +785,7 @@ export class MoviVideoDecoder {
         try {
           if (this.decoder && this.decoder.state !== "closed") {
             this.decoder.configure(this.lastConfig);
-            this.waitingForKeyframe = true;
+            this.setWaitingForKeyframe(true);
             this.errorCount = 0; // Reset error count as we are trying a new config/hack
             return;
           } else {
@@ -795,7 +813,7 @@ export class MoviVideoDecoder {
         this.decoder.reset();
         this.decoder.configure(this.lastConfig!);
 
-        this.waitingForKeyframe = true;
+        this.setWaitingForKeyframe(true);
         return;
       } catch (e) {
         Logger.warn(TAG, "Fast reset failed, trying full recreation");

@@ -162,6 +162,13 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
   private justSeeked: boolean = false;
   private seekTime: number = 0;
   private startTime: number = 0; // Media start time (PTS offset)
+  // Per-seek "keyframe jump" offset. FFmpeg lands on the nearest keyframe
+  // at-or-after the seek target, which on long-GOP containers (.ts mainly)
+  // can be seconds beyond what the user asked for. Reporting the raw time
+  // then makes the timeline jump from 0:00 → 0:02 right after a seek to 0.
+  // Track the gap and subtract it from getCurrentTime() so the UI stays
+  // pinned to what the user requested. Reset on every new seek.
+  private seekKeyframeOffset: number = 0;
   private static readonly POST_SEEK_THROTTLE_MS = 1000; // Throttle aggressive buffering for 1000ms after seek to stabilize playback
 
   // Pause-time buffering: continue demuxing while paused so seek within buffered
@@ -300,6 +307,36 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
         this.emit("error", error);
         // Note: Decoder now has built-in recovery, only pauses after MAX_ERRORS
       });
+
+      // When the decoder enters its "skip non-keyframes until next IDR"
+      // recovery during normal playback (typically Open-GOP IDR rejection on
+      // .ts files), the video presentation freezes silently while audio keeps
+      // running — visible as 1-2s of "audio plays, video frozen" then sync
+      // catches up with a jump. Flip into buffering instead so the clock /
+      // audio pause until the decoder reconnects; the existing buffering
+      // recovery path resumes once a real keyframe lands. Suppress during
+      // seeks — the seek pipeline already manages keyframe-wait.
+      this.videoDecoder.onKeyframeWaitChange = (waiting) => {
+        const state = this.stateManager.getState();
+        if (state === "seeking" || this.waitingForVideoSync) return;
+        if (waiting) {
+          if (state === "playing") {
+            Logger.debug(TAG, "Decoder waiting for keyframe mid-playback — entering buffering");
+            this.wasPlayingBeforeRebuffer = true;
+            this.stateManager.setState("buffering");
+            this.clock.pause();
+            if (!this.disableAudio) this.audioRenderer.pause();
+          }
+        } else {
+          if (state === "buffering" && this.wasPlayingBeforeRebuffer) {
+            Logger.debug(TAG, "Decoder recovered — resuming from buffering");
+            this.wasPlayingBeforeRebuffer = false;
+            this.stateManager.setState("playing");
+            this.clock.start();
+            if (!this.disableAudio) this.audioRenderer.play();
+          }
+        }
+      };
     }
 
     this.audioDecoder.setOnData((data) => {
@@ -539,6 +576,7 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
       // Set duration on clock for clamping (prevents timer exceeding duration)
       // Clock operates in media time (PTS), so it runs from startTime to startTime + duration
       this.startTime = this.mediaInfo.startTime || 0;
+      this.seekKeyframeOffset = 0;
       this.clock.setDuration(this.mediaInfo.duration + this.startTime);
       this.clock.seek(this.startTime);
 
@@ -1142,6 +1180,13 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
     this.seekTargetTime = -1;
     this.waitingForVideoSync = false;
     this.seekingToKeyframe = false; // Also clear keyframe skip flag
+
+    // How far past the requested target did the first frame actually land?
+    // Long-GOP .ts files can land seconds late; subtract that in
+    // getCurrentTime() so the UI timeline starts where the user clicked.
+    if (seekTarget >= 0) {
+      this.seekKeyframeOffset = Math.max(0, time - seekTarget);
+    }
 
     Logger.debug(
       TAG,
@@ -1984,6 +2029,10 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
 
     // Pause clock so UI time doesn't advance during seek while in loading state
     this.clock.pause();
+
+    // Drop the keyframe-jump offset from the previous seek; it gets
+    // re-measured when this seek completes.
+    this.seekKeyframeOffset = 0;
 
     const mySessionId = ++this.seekSessionId;
     this.stateManager.setState("seeking");
@@ -2913,7 +2962,14 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
     if (this.hlsWrapper) {
       return this.hlsWrapper.getCurrentTime();
     }
-    return Math.max(0, this.clock.getTime() - this.startTime);
+    // Subtract seekKeyframeOffset so the timeline reports the user-requested
+    // time after a seek instead of where the decoder actually landed (which
+    // can be seconds later on long-GOP containers like .ts). Offset is reset
+    // on every new seek and only ever non-negative.
+    return Math.max(
+      0,
+      this.clock.getTime() - this.startTime - this.seekKeyframeOffset,
+    );
   }
 
   /**
