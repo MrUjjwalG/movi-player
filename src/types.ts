@@ -170,6 +170,7 @@ export interface VideoDecoderConfig {
     matrix?: VideoMatrixCoefficients | null;
     fullRange?: boolean | null;
   };
+  hardwareAcceleration?: "no-preference" | "prefer-hardware" | "prefer-software";
 }
 
 export interface AudioDecoderConfig {

@@ -30,9 +30,33 @@ export class CanvasRenderer {
   private isHighBitDepth: boolean = false; // 12-bit+ content needs RGBA16F texture
   private _loggedFrameFormat: boolean = false;
 
+  // Ambient mode mini-render: a 16×16 RGBA8 framebuffer that mirrors each
+  // drawn frame. Lets MoviElement sample average color via a 256-pixel
+  // readPixels (sync, ~microseconds) instead of an 8K canvas readback
+  // (~100ms GPU stall). Created lazily when ambient mode turns on.
+  private static readonly AMBIENT_SIZE = 16;
+  private ambientFbo: WebGLFramebuffer | null = null;
+  private ambientTex: WebGLTexture | null = null;
+  private ambientEnabled: boolean = false;
+  private ambientPixels: Uint8Array | null = null;
+
   // Presentation loop
   private rafId: number | null = null;
   private isPlaying: boolean = false;
+
+  // Adaptive DPR — measure first second of playback at full 2x DPR. If
+  // average paint takes more than ~half a frame at 60Hz, the device is
+  // GPU-bound and a 2x backbuffer is the difference between smooth and
+  // stuttering. Drop to 1x DPR (quarter the pixels) and trigger a
+  // resize so the change takes effect. Measurement is one-shot: once
+  // we've decided, no more sampling overhead. Beats `deviceMemory` /
+  // `hardwareConcurrency` heuristics — those misclassify weak-GPU /
+  // strong-RAM phones and undercount iOS where deviceMemory is absent.
+  private _maxDpr: number = 2;
+  private _paintSamples: number[] = [];
+  private _adaptDprChecked: boolean = false;
+  private static readonly PAINT_SAMPLE_COUNT = 60; // ~1 second @ 60Hz
+  private static readonly PAINT_THRESHOLD_MS = 8; // >50% of 16.67ms frame budget
 
   // Audio time provider for A/V sync
   private getAudioTime: (() => number) | null = null;
@@ -694,13 +718,16 @@ export class CanvasRenderer {
       const targetHeight = isRotated90 ? width : height;
 
       // Backbuffer scales with devicePixelRatio so we don't lose detail
-      // when downsampling high-resolution sources (4K/8K). Capped at 2x —
-      // 3x retina screens get the same backbuffer as 2x, which keeps the
-      // GPU cost reasonable while still delivering a visibly sharper
-      // image. CSS dimensions stay at logical pixels (handled below).
+      // when downsampling high-resolution sources (4K/8K). Starts at 2x
+      // and adapts down to 1x at runtime if the paint loop measures
+      // slow on the actual device — `deviceMemory` and `hardwareConcurrency`
+      // are too coarse / unreliable as a-priori signals (rounded to
+      // powers of 2, absent on iOS, weak GPU often paired with healthy
+      // RAM), so the only honest answer is to measure the device under
+      // load. See `_adaptDprIfSlow` in the presentation loop.
       const dpr = Math.min(
         typeof window !== "undefined" ? window.devicePixelRatio || 1 : 1,
-        2,
+        this._maxDpr,
       );
       const bufferWidth = Math.round(targetWidth * dpr);
       const bufferHeight = Math.round(targetHeight * dpr);
@@ -1400,6 +1427,7 @@ export class CanvasRenderer {
   private drawFrame(frame: VideoFrame, force: boolean = false): void {
     if (!this.gl || !this.program || !this.texture) return;
     const gl = this.gl;
+    const paintStart = this._adaptDprChecked ? 0 : performance.now();
 
     try {
       // Update current time
@@ -1544,12 +1572,142 @@ export class CanvasRenderer {
       gl.useProgram(this.program);
       gl.bindVertexArray(this.vao);
       gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
+
+      // Mirror the just-drawn frame into a 16×16 framebuffer so ambient mode
+      // can read average color cheaply. Only the extra draw runs here; the
+      // sync readback is deferred until MoviElement asks via readAmbientPixels().
+      if (this.ambientEnabled) {
+        this._renderAmbientThumbnail();
+      }
     } catch (error) {
       if (error instanceof DOMException && error.name === "InvalidStateError") {
         return;
       }
       Logger.error(TAG, "WebGL Draw error", error);
     }
+
+    // Adaptive DPR — sample paint duration for the first N frames after
+    // playback starts. If the device can't keep paint under ~half a
+    // frame budget at 2x DPR, drop to 1x and resize. One-shot: stops
+    // sampling after the decision.
+    if (!this._adaptDprChecked && paintStart > 0) {
+      const paintDuration = performance.now() - paintStart;
+      this._paintSamples.push(paintDuration);
+      if (this._paintSamples.length >= CanvasRenderer.PAINT_SAMPLE_COUNT) {
+        const sum = this._paintSamples.reduce((a, b) => a + b, 0);
+        const avg = sum / this._paintSamples.length;
+        if (
+          avg > CanvasRenderer.PAINT_THRESHOLD_MS &&
+          this._maxDpr > 1 &&
+          this.containerWidth > 0 &&
+          this.containerHeight > 0
+        ) {
+          Logger.info(
+            TAG,
+            `Adaptive DPR: avg paint ${avg.toFixed(1)}ms over ${this._paintSamples.length} frames > ${CanvasRenderer.PAINT_THRESHOLD_MS}ms threshold — capping DPR to 1x`,
+          );
+          this._maxDpr = 1;
+          // Trigger re-resize so the smaller backbuffer takes effect.
+          this.resize(this.containerWidth, this.containerHeight);
+        }
+        this._adaptDprChecked = true;
+        this._paintSamples = []; // free memory
+      }
+    }
+  }
+
+  /**
+   * Enable the 16×16 ambient mirror render. Cheap: ~256 fragment shader
+   * invocations per drawn frame on top of the main draw. Call once when
+   * ambient mode turns on; the matching `readAmbientPixels()` returns the
+   * latest 16×16 RGBA buffer synchronously and effectively for free.
+   */
+  enableAmbientMirror(): void {
+    if (this.ambientEnabled) return;
+    if (!this.gl) return;
+    const gl = this.gl;
+    const size = CanvasRenderer.AMBIENT_SIZE;
+
+    this.ambientTex = gl.createTexture();
+    gl.bindTexture(gl.TEXTURE_2D, this.ambientTex);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
+    gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, size, size, 0, gl.RGBA, gl.UNSIGNED_BYTE, null);
+
+    this.ambientFbo = gl.createFramebuffer();
+    gl.bindFramebuffer(gl.FRAMEBUFFER, this.ambientFbo);
+    gl.framebufferTexture2D(
+      gl.FRAMEBUFFER,
+      gl.COLOR_ATTACHMENT0,
+      gl.TEXTURE_2D,
+      this.ambientTex,
+      0,
+    );
+    const status = gl.checkFramebufferStatus(gl.FRAMEBUFFER);
+    gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+
+    if (status !== gl.FRAMEBUFFER_COMPLETE) {
+      Logger.warn(TAG, `Ambient FBO incomplete (0x${status.toString(16)}); ambient mode will see no updates`);
+      if (this.ambientTex) gl.deleteTexture(this.ambientTex);
+      if (this.ambientFbo) gl.deleteFramebuffer(this.ambientFbo);
+      this.ambientTex = null;
+      this.ambientFbo = null;
+      return;
+    }
+
+    this.ambientPixels = new Uint8Array(size * size * 4);
+    this.ambientEnabled = true;
+  }
+
+  disableAmbientMirror(): void {
+    if (!this.ambientEnabled) return;
+    const gl = this.gl;
+    if (gl) {
+      if (this.ambientTex) gl.deleteTexture(this.ambientTex);
+      if (this.ambientFbo) gl.deleteFramebuffer(this.ambientFbo);
+    }
+    this.ambientTex = null;
+    this.ambientFbo = null;
+    this.ambientPixels = null;
+    this.ambientEnabled = false;
+  }
+
+  /**
+   * Read the latest mirrored frame as a 16×16 RGBA buffer. Synchronous and
+   * cheap (256-pixel readPixels). Returns null if ambient mirror isn't
+   * enabled or no frame has been drawn yet.
+   */
+  readAmbientPixels(): Uint8Array | null {
+    if (!this.ambientEnabled || !this.gl || !this.ambientFbo || !this.ambientPixels) {
+      return null;
+    }
+    const gl = this.gl;
+    const size = CanvasRenderer.AMBIENT_SIZE;
+    gl.bindFramebuffer(gl.FRAMEBUFFER, this.ambientFbo);
+    gl.readPixels(0, 0, size, size, gl.RGBA, gl.UNSIGNED_BYTE, this.ambientPixels);
+    gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+    return this.ambientPixels;
+  }
+
+  private _renderAmbientThumbnail(): void {
+    if (!this.gl || !this.program || !this.texture || !this.ambientFbo) return;
+    const gl = this.gl;
+    const size = CanvasRenderer.AMBIENT_SIZE;
+
+    // Re-bind to mirror FBO and redraw the same textured quad full-viewport.
+    // GPU downscales 8K → 16×16 in one pass; cost is dominated by the 256
+    // fragment shader invocations, not the texture sample. program/vao/
+    // texture are still bound from the main drawArrays above this call.
+    gl.bindFramebuffer(gl.FRAMEBUFFER, this.ambientFbo);
+    gl.viewport(0, 0, size, size);
+    gl.clearColor(0, 0, 0, 1);
+    gl.clear(gl.COLOR_BUFFER_BIT);
+    gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
+    gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+    // Restore main viewport for any subsequent GL work this tick.
+    gl.viewport(0, 0, this.width, this.height);
   }
 
   /**

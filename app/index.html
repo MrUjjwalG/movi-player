@@ -538,6 +538,29 @@
         background: radial-gradient(circle, rgba(124, 108, 240, var(--opacity, 0.25)) 0%, transparent 70%);
       }
 
+      /* During active video playback, pause all decorative page
+         animations + drop the .player-ambient blur. On a low-end device
+         these compositor / GPU costs were stealing frame budget from
+         video presentation and surfacing as audio/video stutter even
+         though decode + buffer were healthy. Player UI lives in a
+         shadow root so its own animations are unaffected by this
+         body-level rule. */
+      body.playing-video .particle,
+      body.playing-video .hero-cta-icon::after,
+      body.playing-video [class*="shimmer"],
+      body.playing-video .url-bar-btn-icon,
+      body.playing-video [style*="animation"] {
+        animation-play-state: paused !important;
+      }
+      body.playing-video .player-ambient {
+        /* Blur is GPU-expensive at 80px on mobile; freeze the painted
+           color but skip re-filtering on every frame. The transition
+           is already disabled inside the player when stutters are
+           detected, this just removes the cost when playback is live. */
+        filter: none !important;
+        opacity: 0.6;
+      }
+
       @keyframes dustFloat {
         0% {
           transform: translate(0, 0) scale(1);
@@ -4917,6 +4940,21 @@
         await refreshCacheInfo();
       });
       refreshCacheInfo();
+
+      // Pause decorative page animations (dust particles, hero shimmer,
+      // CTA pulses) while the video is actually playing — these run
+      // infinitely and steal GPU/main-thread time from frame
+      // presentation on low-end devices. Re-enable on pause/end so the
+      // page feels alive when the user isn't watching. Player UI
+      // animations live inside a shadow root and aren't affected by
+      // body-class CSS so the controls stay responsive.
+      const setPlayingClass = (on) => {
+        document.body.classList.toggle("playing-video", on);
+      };
+      player.addEventListener("play", () => setPlayingClass(true));
+      player.addEventListener("playing", () => setPlayingClass(true));
+      player.addEventListener("pause", () => setPlayingClass(false));
+      player.addEventListener("ended", () => setPlayingClass(false));
 
       player.addEventListener("ended", () => {
         // Mark watched on completion

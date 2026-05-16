@@ -44,6 +44,22 @@ import { ThumbnailRenderer } from "../utils/ThumbnailRenderer";
 const TAG = "MoviPlayer";
 
 export class MoviPlayer extends EventEmitter<PlayerEventMap> {
+  // One-shot UA classification: mobile devices get the same conservative
+  // decode/render budgets as 4K+ desktop, since mobile GPUs and Chrome's
+  // AV1 hardware whitelist make the heavy path unaffordable at any res.
+  // Memoized at class level so we don't re-parse navigator.userAgent in
+  // every demux loop tick.
+  private static readonly _isMobileDevice: boolean = (() => {
+    if (typeof navigator === "undefined") return false;
+    const uaData = (navigator as any)?.userAgentData;
+    if (uaData?.mobile === true) return true;
+    const ua = navigator.userAgent || "";
+    if (/Android|iPhone|iPod|Mobile|Opera Mini|IEMobile|BlackBerry/i.test(ua)) return true;
+    // iPadOS 13+ reports as Mac — disambiguate via touch points
+    if (/Macintosh/.test(ua) && (navigator.maxTouchPoints ?? 0) > 1) return true;
+    return false;
+  })();
+
   private config: PlayerConfig;
   private source: SourceAdapter | null = null;
   private cache: LRUCache;
@@ -1464,8 +1480,43 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
     const rate = Math.max(0.25, this.clock.getPlaybackRate());
     const rateScale = rate < 1.0 ? 1.0 / rate : 1.0; // e.g. 2x at 0.5x, 4x at 0.25x
     const maxAudioBuffered = (isSoftware ? 5.0 : isPostSeek ? 1.5 : 2.0) * rateScale;
-    // Renderer queue limits (in frames)
-    const maxVideoBuffered = Math.round((isSoftware ? 60 : isPostSeek ? 20 : 100) * rateScale);
+    // Renderer queue limits (in frames). Two separate constraints:
+    //
+    //  1. High-res (≥4K): per-frame VRAM cost is huge (8K HDR ≈ 50MB/frame).
+    //     A deep queue locks GBs of VRAM and starves the GPU compositor,
+    //     producing slips even when decode is keeping up. Hard frame cap.
+    //
+    //  2. Mobile at any res: weaker hardware + Chrome Android's conservative
+    //     AV1 HW whitelist mean software dav1d is common; deep buffering
+    //     just delays the inevitable underrun. Cap by wall-clock duration
+    //     (~800ms) so the cap scales with fps — a 25fps source doesn't end
+    //     up with the same tiny 16-frame buffer as 60fps, which would fire
+    //     demuxer backpressure long before audio is ready to refill (this
+    //     was the "audio drift" symptom).
+    //
+    // When both apply (e.g. 8K on mobile), use the tighter of the two.
+    const activeVideo = this.trackManager.getActiveVideoTrack();
+    const pixels = (activeVideo?.width ?? 0) * (activeVideo?.height ?? 0);
+    const fps = Math.max(15, Math.min(120, activeVideo?.frameRate ?? 30));
+    const isHighRes = pixels >= 3840 * 2160; // 4K and above
+    const isMobile = MoviPlayer._isMobileDevice;
+    let baseHwQueue: number;
+    if (isHighRes) {
+      // 4K+ desktop: 16 frames is a VRAM-bound sweet spot (≥4K HDR frames are
+      // ~50MB each; deeper queues stall the compositor). On mobile the same
+      // sources hit Chrome's software dav1d path most of the time, so the
+      // bottleneck shifts from VRAM to decode throughput — a shallow queue
+      // helps the decoder catch up rather than fall further behind.
+      if (isMobile) baseHwQueue = isPostSeek ? 8 : 12;
+      else baseHwQueue = isPostSeek ? 12 : 16;
+    } else if (isMobile) {
+      // 1080p (and lighter) on mobile is smooth at the 800ms target — keep it.
+      const targetMs = isPostSeek ? 400 : 800;
+      baseHwQueue = Math.max(12, Math.round((fps * targetMs) / 1000));
+    } else {
+      baseHwQueue = isPostSeek ? 20 : 100; // desktop default
+    }
+    const maxVideoBuffered = Math.round((isSoftware ? 60 : baseHwQueue) * rateScale);
 
     // Skip video backpressure when video isn't being consumed:
     // - Background (not PiP): video decode is skipped entirely
@@ -1496,8 +1547,19 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
     // faster than hardware can process, which would otherwise starve the audio pipeline.
     // ONLY at non-1x rates: at 1x, video/audio are consumed at the same rate so skipping
     // video is unnecessary and causes early EOF (video never decoded → queues empty → ended).
+    // Skipping non-keyframe AV1 packets also corrupts the decoder reference chain → decode
+    // errors every few seconds. Mobile audio drift is fixed via queue sizing, not by
+    // dropping packets at 1x.
+    //
+    // Threshold was 0.5s back when AudioContext used latencyHint="playback" (~200ms
+    // output buffer). With latencyHint="interactive" the scheduled buffer hovers in
+    // the 50-150ms range steady-state, so anything close to 500ms reads as "always
+    // starving" and the skip engaged every demux tick — dropping AV1 non-keyframes
+    // constantly, which fired EncodingError once per GOP on non-1x rates. 100ms
+    // matches the interactive buffer's real safety margin; below it audio is
+    // genuinely about to underrun and warrants the packet-drop tradeoff.
     const isNon1xRate = Math.abs(rate - 1.0) > 0.01;
-    const audioStarving = !this.disableAudio && audioBuffered < 0.5;
+    const audioStarving = !this.disableAudio && audioBuffered < 0.1;
     const videoDecoderFull = this.videoDecoder.queueSize > maxVideoQueue;
     const videoBufferFull = !skipVideoBackpressure && videoBuffered > maxVideoBuffered;
     const skipVideoDecodeForAudio = isNon1xRate && !this.muted && (videoBufferFull || videoDecoderFull) && audioStarving;
@@ -1694,6 +1756,14 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
             // Skip video decode when video buffer is full but audio is starving.
             // This keeps audio flowing at non-1x rates where video frames accumulate
             // faster than consumed. Some video frames are lost but audio stays smooth.
+            // NOTE: AV1's inter-frame dependency means dropping non-keyframes here
+            // breaks the decoder's reference chain → "EncodingError" logs every few
+            // seconds. The decoder's existing error-recovery silently re-seeks to
+            // the next keyframe, so visually playback continues without long stalls.
+            // We tried wrapping each drop in flush + seekingToKeyframe, but that
+            // produced visible multi-second freezes at every audio-starve event
+            // (GOP gap = stall length). For non-1x rates, glitches are preferable
+            // to stalls; the noisy decoder error log is the only real downside.
             if (skipVideoDecodeForAudio) {
               continue;
             }

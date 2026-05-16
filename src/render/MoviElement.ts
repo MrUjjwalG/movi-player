@@ -192,9 +192,7 @@ export class MoviElement extends HTMLElement {
   // produces audible "audio late" gaps right after speed switches.
   private _lastRateChangeTime: number = 0;
   private static readonly AMBIENT_RATE_CHANGE_COOLDOWN_MS = 600;
-  private _ambientSampleInterval: number = 100; // Start at 100ms (10fps) for better performance
-  private _ambientSampleCanvas: HTMLCanvasElement | null = null;
-  private _ambientSampleCtx: CanvasRenderingContext2D | null = null;
+  private _ambientSampleInterval: number = 200; // 5fps; cheap now that we read from a renderer-side 16×16 mirror
   private currentAmbientColors: { r: number; g: number; b: number } = {
     r: 0,
     g: 0,
@@ -6701,12 +6699,25 @@ export class MoviElement extends HTMLElement {
 
       if (timestamp - lastRun >= UI_UPDATE_MIN_MS) {
         lastRun = timestamp;
+        // When the controls *bar* is auto-hidden, progress bar / time /
+        // volume icon are invisible — skip those DOM writes. Play/pause
+        // icon stays out of the gate because its update ALSO drives the
+        // centred big play/pause button overlay, which sits separately
+        // from the controls bar and is visible even when the bar is
+        // hidden — without this update the centre button gets stuck on
+        // its initial "pause" SVG. Loading indicator + title overlay
+        // also stay live; they aren't part of the bar.
+        const controlsHidden = this.controlsContainer?.classList.contains(
+          "movi-controls-hidden",
+        );
         this.updatePlayPauseIcon();
-        this.updateTimeDisplay();
-        this.updateProgressBar();
-        this.updateVolumeIcon();
-        this.updateLoadingIndicator(); // Check buffer fill percentage
-        this.updateTitle(); // Auto-load title from metadata if needed
+        this.updateLoadingIndicator();
+        this.updateTitle();
+        if (!controlsHidden) {
+          this.updateTimeDisplay();
+          this.updateProgressBar();
+          this.updateVolumeIcon();
+        }
       }
 
       requestAnimationFrame(updateUI);
@@ -6776,6 +6787,19 @@ export class MoviElement extends HTMLElement {
            controls layout and clips the rightmost icons. */
         container-type: inline-size;
         container-name: movi-host;
+
+        /* CSS containment isolates the player's layout/style/paint
+           subtree from the host page. On a busy marketing page (heavy
+           CSS, infinite animations, large DOM), every body-level
+           style invalidation otherwise triggers a recalc cascade that
+           reaches into the player's shadow tree and competes with
+           frame presentation. Telling the browser "this subtree
+           cannot affect outside, and outside cannot affect this
+           subtree's internal layout/paint" is a large win on low-end
+           devices when the player is embedded in a non-minimal page.
+           Skipped contain:size so the host can still derive its
+           dimensions from its parent. */
+        contain: layout style paint;
 
         /* Premium Color Palette */
         --movi-primary: #8B5CF6;
@@ -12193,7 +12217,7 @@ export class MoviElement extends HTMLElement {
     // Handle subtitle track changes
     const subtitleTrackChangeHandler = () => {
       this.updateSubtitleTrackMenu();
-      this.dispatchEvent(new Event("subtitleTrackChange"));
+      this.dispatchEvent(new Event("subtitletrackchange"));
     };
     this.player.trackManager.on(
       "subtitleTrackChange",
@@ -12258,7 +12282,7 @@ export class MoviElement extends HTMLElement {
         // can ratchet up to ~2s during seek/decode-recovery and would take
         // tens of seconds to shrink back via the per-sample 0.8x recovery.
         if (this._ambientMode) {
-          this._ambientSampleInterval = 100;
+          this._ambientSampleInterval = 200;
         }
         // Update Media Session metadata with clean title
         if ("mediaSession" in navigator && this._title) {
@@ -13092,11 +13116,20 @@ export class MoviElement extends HTMLElement {
   private updateAmbientMode(): void {
     if (this._ambientMode) {
       if (this.ambientWrapperElement) {
+        // Restore to display:block + opaque so the painted background +
+        // CSS filter (typically blur(80px) saturate()) come back.
+        this.ambientWrapperElement.style.display = "";
         this.ambientWrapperElement.style.opacity = "1";
       }
       this.startAmbientColorSampling();
     } else {
       if (this.ambientWrapperElement) {
+        // `opacity: 0` leaves the element composited and its expensive
+        // filter (e.g. blur(80px) on marketing index.html) STILL runs
+        // on the GPU every frame, competing with video rendering. Use
+        // `display: none` so the browser skips it entirely — gives a
+        // visible perf win on low-end devices when ambient is off.
+        this.ambientWrapperElement.style.display = "none";
         this.ambientWrapperElement.style.opacity = "0";
       }
       // Reset letterbox to black
@@ -13111,17 +13144,16 @@ export class MoviElement extends HTMLElement {
     // Reset adaptive interval — a previously-throttled session may have left
     // it ratcheted up to 2s, which would make ambient appear "frozen" until
     // the per-sample recovery slowly walked it back down.
-    this._ambientSampleInterval = 100;
+    this._ambientSampleInterval = 200;
 
-    // Create helper canvas if needed for performance optimization
-    if (!this._ambientSampleCanvas) {
-      this._ambientSampleCanvas = document.createElement("canvas"); // Not attached to DOM
-      this._ambientSampleCanvas.width = 10;
-      this._ambientSampleCanvas.height = 10;
-      // Hint browser that we will read this frequently
-      this._ambientSampleCtx = this._ambientSampleCanvas.getContext("2d", {
-        willReadFrequently: true,
-      });
+    // Ask the renderer to maintain a 16×16 mirror of each drawn frame.
+    // sampleCanvasColors() will read from that 256-pixel buffer instead of
+    // triggering a full canvas readback per sample — the old path caused
+    // visible frame slips on 8K HDR sources from GPU contention with
+    // presentation.
+    const renderer = (this.player as any)?.videoRenderer;
+    if (renderer && typeof renderer.enableAmbientMirror === "function") {
+      renderer.enableAmbientMirror();
     }
 
     const loop = (timestamp: number) => {
@@ -13168,13 +13200,13 @@ export class MoviElement extends HTMLElement {
               `Ambient sampling taking too long (${duration.toFixed(1)}ms), slowing down to ${this._ambientSampleInterval.toFixed(0)}ms`,
             );
           }
-        } else if (duration < 5 && this._ambientSampleInterval > 100) {
+        } else if (duration < 5 && this._ambientSampleInterval > 200) {
           // If reasonably fast (<5ms), shrink interval. Threshold was 2ms but
           // GPU readback variance means a healthy machine rarely dips that
           // low, so the interval would ratchet up forever after one slow
           // frame. 5ms still leaves ample headroom on a 16ms (60Hz) budget.
           this._ambientSampleInterval = Math.max(
-            100,
+            200,
             this._ambientSampleInterval * 0.8,
           );
         }
@@ -13193,25 +13225,26 @@ export class MoviElement extends HTMLElement {
       cancelAnimationFrame(this._ambientRafId);
       this._ambientRafId = null;
     }
+    const renderer = (this.player as any)?.videoRenderer;
+    if (renderer && typeof renderer.disableAmbientMirror === "function") {
+      renderer.disableAmbientMirror();
+    }
   }
 
   private sampleCanvasColors(): void {
-    if (!this.canvas || !this.player) return;
+    if (!this.player) return;
 
-    // Use helper canvas context if available, otherwise fallback (should exist from start)
-    const ctx = this._ambientSampleCtx;
-    if (!ctx) return;
+    // Read from the renderer's 16×16 mirror FBO. A 256-pixel readPixels
+    // costs microseconds; the previous canvas readback path stalled the
+    // GPU for ~100ms per sample on 8K HDR sources.
+    const renderer = (this.player as any)?.videoRenderer;
+    const data: Uint8Array | null =
+      renderer && typeof renderer.readAmbientPixels === "function"
+        ? renderer.readAmbientPixels()
+        : null;
+    if (!data) return;
 
     try {
-      // Draw the main canvas into the 10x10 helper canvas
-      // This allows the GPU to handle the downscaling which is much faster than processing 40k pixels in JS
-      ctx.clearRect(0, 0, 10, 10);
-      ctx.drawImage(this.canvas, 0, 0, 10, 10);
-
-      const imageData = ctx.getImageData(0, 0, 10, 10);
-      const data = imageData.data;
-
-      // Calculate average color
       let r = 0,
         g = 0,
         b = 0;

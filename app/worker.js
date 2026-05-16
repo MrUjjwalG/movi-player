@@ -1,9 +1,11 @@
 import HTML_RAW from "./index.html";
+import TEST_NATIVE_HTML from "./test-native.html";
 import SITEMAP from "./sitemap.xml";
 import ROBOTS from "./robots.txt";
 
 const BUILD_VERSION = "__BUILD_VERSION__";
 const HTML_WITH_VERSION = HTML_RAW.replace(/__BUILD_VERSION__/g, BUILD_VERSION);
+const TEST_NATIVE_WITH_VERSION = TEST_NATIVE_HTML.replace(/__BUILD_VERSION__/g, BUILD_VERSION);
 
 // Turnstile site key is injected per-request from env so it can be
 // rotated via wrangler secret without a redeploy. When empty the
@@ -276,6 +278,17 @@ export default {
         headers: {
           "Content-Type": "text/html;charset=UTF-8",
           "Cache-Control": "public, max-age=3600",
+          ...SECURITY_HEADERS,
+        },
+      });
+    }
+
+    // --- Test page for isolating native <video> playback issues ---
+    if (path === "/test-native.html" || path === "/test-native") {
+      return new Response(TEST_NATIVE_WITH_VERSION, {
+        headers: {
+          "Content-Type": "text/html;charset=UTF-8",
+          "Cache-Control": "no-store",
           ...SECURITY_HEADERS,
         },
       });

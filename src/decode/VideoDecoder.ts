@@ -122,6 +122,7 @@ export class MoviVideoDecoder {
       codec: codecString,
       codedWidth: track.width,
       codedHeight: track.height,
+      hardwareAcceleration: "prefer-hardware",
     };
 
     // Add color space if available
@@ -177,6 +178,22 @@ export class MoviVideoDecoder {
         // If it throws (e.g. TypeError for invalid enum), treat as not supported
         // and let the color stripping logic below retry
         support = { supported: false, config: config };
+      }
+
+      // If the hardware-preferred config wasn't supported, retry without the
+      // preference — some browsers report unsupported when hw decode is
+      // unavailable instead of silently falling back to software.
+      if (!support.supported && config.hardwareAcceleration === "prefer-hardware") {
+        const configNoHw = { ...config };
+        delete configNoHw.hardwareAcceleration;
+        const supportNoHw = await VideoDecoder.isConfigSupported(configNoHw).catch(
+          () => ({ supported: false, config: configNoHw }) as VideoDecoderSupport,
+        );
+        if (supportNoHw.supported) {
+          Logger.info(TAG, `Hardware decode unavailable for ${config.codec}; using no-preference.`);
+          delete config.hardwareAcceleration;
+          support = supportNoHw;
+        }
       }
 
       // If failed and we have color space info, try removing it as it might be causing validation issues
@@ -347,7 +364,7 @@ export class MoviVideoDecoder {
       this.isConfigured = true;
       Logger.info(
         TAG,
-        `Configured: ${codecString} ${track.width}x${track.height}`,
+        `Configured: ${codecString} ${track.width}x${track.height} hwAccel=${config.hardwareAcceleration ?? "no-preference"}`,
       );
       return true;
     } catch (error) {
