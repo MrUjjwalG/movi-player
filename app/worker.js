@@ -1,11 +1,13 @@
 import HTML_RAW from "./index.html";
 import TEST_NATIVE_HTML from "./test-native.html";
+import COMPARE_HTML from "./compare.html";
 import SITEMAP from "./sitemap.xml";
 import ROBOTS from "./robots.txt";
 
 const BUILD_VERSION = "__BUILD_VERSION__";
 const HTML_WITH_VERSION = HTML_RAW.replace(/__BUILD_VERSION__/g, BUILD_VERSION);
 const TEST_NATIVE_WITH_VERSION = TEST_NATIVE_HTML.replace(/__BUILD_VERSION__/g, BUILD_VERSION);
+const COMPARE_WITH_VERSION = COMPARE_HTML.replace(/__BUILD_VERSION__/g, BUILD_VERSION);
 
 // Turnstile site key is injected per-request from env so it can be
 // rotated via wrangler secret without a redeploy. When empty the
@@ -294,12 +296,29 @@ export default {
       });
     }
 
+    // --- Side-by-side comparison: native <video> vs <movi-player> ---
+    if (path === "/compare" || path === "/compare.html" || path === "/compare/") {
+      return new Response(COMPARE_WITH_VERSION, {
+        headers: {
+          "Content-Type": "text/html;charset=UTF-8",
+          "Cache-Control": "public, max-age=600",
+          ...SECURITY_HEADERS,
+        },
+      });
+    }
+
     // --- Serve dist files from R2 (strip version prefix for key lookup) ---
     if (path.startsWith("/dist/")) {
       const parts = path.slice(6).split("/");
       // /dist/<version>/element.js → key = "element.js"
       const key = parts.length > 1 ? parts.slice(1).join("/") : parts[0];
       return handleR2(env, key, request);
+    }
+
+    // --- Demo media: range-aware so big videos can be seeked. ---
+    if (path.startsWith("/samples/")) {
+      const key = path.slice(1); // strip leading "/"
+      return handleR2Sample(env, key, request);
     }
 
     // --- Embed player ---
@@ -421,6 +440,12 @@ const MIME_TYPES = {
   svg: "image/svg+xml",
   png: "image/png",
   ico: "image/x-icon",
+  mp4: "video/mp4",
+  m4v: "video/mp4",
+  mkv: "video/x-matroska",
+  webm: "video/webm",
+  mov: "video/quicktime",
+  ts: "video/mp2t",
 };
 
 async function handleR2(env, key, request) {
@@ -446,6 +471,68 @@ async function handleR2(env, key, request) {
   }
 
   return new Response(object.body, { headers });
+}
+
+/**
+ * Range-aware R2 handler for demo media (samples/ prefix). Browsers absolutely
+ * require HTTP 206 for video seek/scrub on multi-GB files; handleR2's single
+ * 200 response would force a full re-download on every seek.
+ */
+async function handleR2Sample(env, key, request) {
+  if (!env.ASSETS) {
+    return jsonResponse({ error: "R2 bucket not configured" }, 500);
+  }
+  const rangeHeader = request.headers.get("Range");
+  const ext = key.split(".").pop();
+  const contentType = MIME_TYPES[ext] || "application/octet-stream";
+  const commonHeaders = {
+    "Content-Type": contentType,
+    "Accept-Ranges": "bytes",
+    "Cache-Control": "public, max-age=604800",
+    "Cross-Origin-Resource-Policy": "cross-origin",
+    ...CORS_HEADERS,
+  };
+  if (request.method === "HEAD") {
+    const head = await env.ASSETS.head(key);
+    if (!head) return new Response("Not Found", { status: 404 });
+    return new Response(null, {
+      status: 200,
+      headers: { ...commonHeaders, "Content-Length": String(head.size) },
+    });
+  }
+  if (!rangeHeader) {
+    const object = await env.ASSETS.get(key);
+    if (!object) return new Response("Not Found", { status: 404 });
+    return new Response(object.body, {
+      headers: { ...commonHeaders, "Content-Length": String(object.size) },
+    });
+  }
+  const match = /^bytes=(\d+)-(\d*)$/.exec(rangeHeader);
+  if (!match) {
+    return new Response("Invalid Range", { status: 416 });
+  }
+  const head = await env.ASSETS.head(key);
+  if (!head) return new Response("Not Found", { status: 404 });
+  const total = head.size;
+  const start = parseInt(match[1], 10);
+  const end = match[2] === "" ? total - 1 : Math.min(parseInt(match[2], 10), total - 1);
+  if (Number.isNaN(start) || start >= total || end < start) {
+    return new Response("Range Not Satisfiable", {
+      status: 416,
+      headers: { "Content-Range": `bytes */${total}` },
+    });
+  }
+  const length = end - start + 1;
+  const object = await env.ASSETS.get(key, { range: { offset: start, length } });
+  if (!object) return new Response("Not Found", { status: 404 });
+  return new Response(object.body, {
+    status: 206,
+    headers: {
+      ...commonHeaders,
+      "Content-Length": String(length),
+      "Content-Range": `bytes ${start}-${end}/${total}`,
+    },
+  });
 }
 
 async function handleStaticAsset(env, key) {

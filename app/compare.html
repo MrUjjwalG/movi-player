@@ -1,0 +1,851 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Native &lt;video&gt; vs MoviPlayer — Side-by-side comparison</title>
+    <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
+
+    <meta name="description" content="Drop any MKV/HEVC/AV1 file. See exactly what your browser's native <video> tag silently ignores — multi-audio tracks, embedded subtitles, chapters — and what MoviPlayer surfaces." />
+    <meta name="robots" content="index, follow" />
+    <link rel="canonical" href="https://moviplayer.com/compare" />
+
+    <meta property="og:type" content="website" />
+    <meta property="og:url" content="https://moviplayer.com/compare" />
+    <meta property="og:title" content="Your browser only plays the surface of an MKV" />
+    <meta property="og:description" content="8 audio tracks, 12 subtitle languages, 7 chapters — all silently ignored by your browser. See for yourself." />
+    <meta property="og:image" content="https://moviplayer.com/og-image.png" />
+
+    <meta name="twitter:card" content="summary_large_image" />
+    <meta name="twitter:title" content="Your browser only plays the surface of an MKV" />
+    <meta name="twitter:description" content="Drop an MKV. See what the native <video> tag silently ignores." />
+
+    <meta name="theme-color" content="#0f0f12" />
+
+    <style>
+      :root {
+        --primary-accent: #6c5dd3;
+        --secondary-accent: #00d4ff;
+        --bg-base: #0f0f12;
+        --bg-panel: #16161b;
+        --bg-elevated: #1c1c22;
+        --text-primary: #ffffff;
+        --text-secondary: #a0a0b0;
+        --text-muted: #6a6a78;
+        --border: rgba(255, 255, 255, 0.08);
+        --success: #4ade80;
+        --fail: #f87171;
+        --font-family: "Inter", system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+        --mono-family: "JetBrains Mono", "SF Mono", Menlo, Consolas, monospace;
+      }
+
+      * { margin: 0; padding: 0; box-sizing: border-box; }
+
+      html { scroll-behavior: smooth; }
+
+      body {
+        background: var(--bg-base);
+        background-image:
+          radial-gradient(circle at 20% 10%, rgba(108, 93, 211, 0.12) 0%, transparent 35%),
+          radial-gradient(circle at 80% 90%, rgba(0, 212, 255, 0.08) 0%, transparent 35%);
+        color: var(--text-primary);
+        font-family: var(--font-family);
+        min-height: 100vh;
+        line-height: 1.55;
+      }
+
+      /* Navbar — matches app/index.html so the brand identity is consistent
+         across the player and the compare page. Theme-toggle and dev-mode
+         chip from the main app are deliberately omitted (they require JS
+         hooks that don't apply here). */
+      .navbar {
+        position: fixed;
+        top: 0;
+        left: 0;
+        right: 0;
+        z-index: 100;
+        padding: 0 4%;
+        height: 64px;
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        background: rgba(15, 15, 18, 0.6);
+        backdrop-filter: blur(20px) saturate(1.8);
+        -webkit-backdrop-filter: blur(20px) saturate(1.8);
+        border-bottom: 1px solid rgba(255, 255, 255, 0.06);
+        transition: background 0.3s ease, border-color 0.3s ease;
+      }
+      .navbar.scrolled {
+        background: rgba(15, 15, 18, 0.85);
+        border-bottom-color: rgba(255, 255, 255, 0.1);
+      }
+      .nav-left {
+        display: flex;
+        align-items: center;
+        gap: 2rem;
+      }
+      .brand {
+        display: inline-flex;
+        align-items: center;
+        gap: 0.55rem;
+        text-decoration: none;
+        user-select: none;
+        transition: opacity 0.15s ease;
+      }
+      .brand:hover { opacity: 0.88; }
+      .brand-logo {
+        width: 28px;
+        height: 28px;
+        flex-shrink: 0;
+        filter: drop-shadow(0 2px 8px rgba(124, 108, 240, 0.35));
+      }
+      .brand-text {
+        font-size: 1.35rem;
+        font-weight: 800;
+        background: linear-gradient(135deg, #ffffff 0%, #c8c8e0 100%);
+        background-clip: text;
+        -webkit-background-clip: text;
+        -webkit-text-fill-color: transparent;
+        letter-spacing: -0.3px;
+        line-height: 1;
+      }
+      @media (max-width: 480px) {
+        .brand-text { font-size: 1.15rem; }
+        .brand-logo { width: 24px; height: 24px; }
+      }
+      .nav-links {
+        display: flex;
+        gap: 1.5rem;
+        list-style: none;
+      }
+      .nav-links a {
+        color: var(--text-secondary);
+        text-decoration: none;
+        font-size: 0.8125rem;
+        font-weight: 500;
+        letter-spacing: 0.2px;
+        transition: color 0.2s;
+      }
+      .nav-links a:hover,
+      .nav-links a.active { color: var(--text-primary); }
+      .nav-right {
+        display: flex;
+        align-items: center;
+        gap: 0.5rem;
+      }
+      .nav-icon-link {
+        color: var(--text-primary);
+        width: 36px;
+        height: 36px;
+        border-radius: 10px;
+        border: 1px solid transparent;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        text-decoration: none;
+        transition: background 0.2s, border-color 0.2s;
+      }
+      .nav-icon-link:hover {
+        background: rgba(255, 255, 255, 0.06);
+        border-color: var(--border);
+      }
+
+      main {
+        max-width: 1400px;
+        margin: 0 auto;
+        padding: calc(64px + 3rem) 2rem 6rem; /* 64px = navbar height */
+      }
+
+      .hero {
+        text-align: center;
+        margin-bottom: 3rem;
+      }
+      .hero-eyebrow {
+        display: inline-block;
+        font-size: 0.78rem;
+        font-weight: 600;
+        letter-spacing: 0.08em;
+        text-transform: uppercase;
+        color: var(--primary-accent);
+        padding: 0.35rem 0.85rem;
+        border: 1px solid rgba(108, 93, 211, 0.3);
+        border-radius: 999px;
+        background: rgba(108, 93, 211, 0.08);
+        margin-bottom: 1.5rem;
+      }
+      .hero h1 {
+        font-size: clamp(1.8rem, 4vw, 2.8rem);
+        font-weight: 700;
+        letter-spacing: -0.02em;
+        line-height: 1.15;
+        margin-bottom: 1rem;
+      }
+      .hero h1 .accent {
+        background: linear-gradient(135deg, var(--primary-accent), var(--secondary-accent));
+        -webkit-background-clip: text;
+        background-clip: text;
+        -webkit-text-fill-color: transparent;
+      }
+      .hero p.sub {
+        color: var(--text-secondary);
+        font-size: 1.05rem;
+        max-width: 640px;
+        margin: 0 auto;
+      }
+
+      .picker-card {
+        background: var(--bg-panel);
+        border: 1px dashed var(--border);
+        border-radius: 16px;
+        padding: 2rem 1.5rem;
+        text-align: center;
+        margin-bottom: 2.5rem;
+        transition: border-color 0.2s, background 0.2s;
+        cursor: pointer;
+        display: block;
+      }
+      .picker-card:hover, .picker-card.drag-over {
+        border-color: var(--primary-accent);
+        background: rgba(108, 93, 211, 0.05);
+      }
+      .picker-card input[type=file] { display: none; }
+      .picker-label {
+        font-size: 1.05rem;
+        font-weight: 500;
+        color: var(--text-primary);
+      }
+      .picker-hint {
+        font-size: 0.88rem;
+        color: var(--text-muted);
+        margin-top: 0.4rem;
+      }
+      .picker-meta {
+        margin-top: 0.6rem;
+        font-family: var(--mono-family);
+        font-size: 0.82rem;
+        color: var(--text-secondary);
+        word-break: break-all;
+      }
+
+      .panes {
+        display: grid;
+        grid-template-columns: 1fr 1fr;
+        gap: 1.25rem;
+        margin-bottom: 2.5rem;
+      }
+      @media (max-width: 900px) {
+        .panes { grid-template-columns: 1fr; }
+      }
+
+      .pane {
+        background: var(--bg-panel);
+        border: 1px solid var(--border);
+        border-radius: 14px;
+        overflow: hidden;
+        display: flex;
+        flex-direction: column;
+      }
+      .pane-header {
+        padding: 0.9rem 1.1rem;
+        border-bottom: 1px solid var(--border);
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+      }
+      .pane-title {
+        font-weight: 600;
+        font-size: 0.95rem;
+      }
+      .pane-title .badge {
+        display: inline-block;
+        font-size: 0.7rem;
+        font-weight: 600;
+        padding: 0.15rem 0.5rem;
+        border-radius: 4px;
+        margin-left: 0.5rem;
+        vertical-align: middle;
+      }
+      .pane-title .badge.native { background: rgba(248, 113, 113, 0.12); color: var(--fail); }
+      .pane-title .badge.movi   { background: rgba(74, 222, 128, 0.12); color: var(--success); }
+      .pane-stage {
+        position: relative;
+        aspect-ratio: 16 / 9;
+        background: #000;
+      }
+      .pane-stage video,
+      .pane-stage movi-player {
+        position: absolute;
+        inset: 0;
+        width: 100%;
+        height: 100%;
+        display: block;
+      }
+      .pane-fallback {
+        position: absolute;
+        inset: 0;
+        flex-direction: column;
+        align-items: center;
+        justify-content: center;
+        padding: 1.5rem;
+        text-align: center;
+        color: var(--text-secondary);
+        font-size: 0.92rem;
+        background: rgba(0, 0, 0, 0.65);
+      }
+      .pane-fallback:not([hidden]) { display: flex; }
+      .pane-fallback strong {
+        color: var(--text-primary);
+        font-size: 1rem;
+        margin-bottom: 0.5rem;
+        display: block;
+      }
+      .pane-fallback.error strong { color: var(--fail); }
+
+      .pane-tracks {
+        padding: 1rem 1.1rem;
+        font-size: 0.88rem;
+        color: var(--text-secondary);
+      }
+      .pane-tracks .track-row {
+        display: flex;
+        justify-content: space-between;
+        padding: 0.4rem 0;
+        border-bottom: 1px solid rgba(255, 255, 255, 0.04);
+      }
+      .pane-tracks .track-row:last-child { border-bottom: none; }
+      .pane-tracks .track-label { color: var(--text-secondary); }
+      .pane-tracks .track-value {
+        font-family: var(--mono-family);
+        font-weight: 600;
+        color: var(--text-primary);
+      }
+      .pane-tracks .track-value.ok    { color: var(--success); }
+      .pane-tracks .track-value.miss  { color: var(--fail); }
+
+      .summary {
+        background: var(--bg-elevated);
+        border: 1px solid var(--border);
+        border-radius: 14px;
+        padding: 1.5rem;
+        margin-bottom: 2.5rem;
+      }
+      .summary h2 {
+        font-size: 1.05rem;
+        margin-bottom: 1rem;
+        font-weight: 600;
+      }
+      .summary table {
+        width: 100%;
+        border-collapse: collapse;
+        font-size: 0.92rem;
+      }
+      .summary th, .summary td {
+        text-align: left;
+        padding: 0.7rem 0.75rem;
+        border-bottom: 1px solid rgba(255, 255, 255, 0.05);
+      }
+      .summary th {
+        font-weight: 600;
+        color: var(--text-secondary);
+        font-size: 0.82rem;
+        text-transform: uppercase;
+        letter-spacing: 0.04em;
+      }
+      .summary td.feature { color: var(--text-primary); font-weight: 500; }
+      .summary td.cell-native, .summary td.cell-movi {
+        font-family: var(--mono-family);
+        text-align: center;
+      }
+      .summary .yes { color: var(--success); }
+      .summary .no  { color: var(--fail); }
+
+      .footer-cta {
+        text-align: center;
+        padding: 2rem 1rem;
+      }
+      .footer-cta p {
+        color: var(--text-secondary);
+        margin-bottom: 1.25rem;
+      }
+      .btn {
+        display: inline-block;
+        padding: 0.85rem 1.5rem;
+        border-radius: 10px;
+        text-decoration: none;
+        font-weight: 600;
+        font-size: 0.95rem;
+        transition: transform 0.15s, box-shadow 0.15s;
+        margin: 0 0.3rem;
+      }
+      .btn-primary {
+        background: linear-gradient(135deg, var(--primary-accent), #4a3bba);
+        color: #fff;
+        box-shadow: 0 8px 16px rgba(108, 93, 211, 0.3);
+      }
+      .btn-primary:hover { transform: translateY(-1px); box-shadow: 0 12px 22px rgba(108, 93, 211, 0.42); }
+      .btn-secondary {
+        background: rgba(255, 255, 255, 0.06);
+        color: #fff;
+        border: 1px solid var(--border);
+      }
+      .btn-secondary:hover { background: rgba(255, 255, 255, 0.1); }
+
+      code, kbd {
+        font-family: var(--mono-family);
+        font-size: 0.88em;
+        background: rgba(255, 255, 255, 0.08);
+        padding: 0.1em 0.4em;
+        border-radius: 4px;
+      }
+
+      .browser-note {
+        font-size: 0.82rem;
+        color: var(--text-muted);
+        text-align: center;
+        margin-top: 1rem;
+      }
+    </style>
+  </head>
+  <body>
+    <nav class="navbar" id="navbar">
+      <div class="nav-left">
+        <a href="/" class="brand" aria-label="MoviPlayer — home">
+          <svg class="brand-logo" viewBox="0 0 100 100" aria-hidden="true">
+            <defs>
+              <linearGradient id="brand-logo-grad" x1="0%" y1="0%" x2="100%" y2="100%">
+                <stop offset="0%" stop-color="#8a7cf2"/>
+                <stop offset="100%" stop-color="#6c5dd3"/>
+              </linearGradient>
+            </defs>
+            <circle cx="50" cy="50" r="46" fill="url(#brand-logo-grad)"/>
+            <polygon points="40,29 40,71 73,50" fill="#ffffff"/>
+          </svg>
+          <span class="brand-text">MoviPlayer</span>
+        </a>
+        <ul class="nav-links">
+          <li><a href="/">Player</a></li>
+          <li><a href="/compare" class="active">Compare</a></li>
+          <li><a href="https://mrujjwalg.github.io/movi-player/" target="_blank" rel="noopener">Docs</a></li>
+        </ul>
+      </div>
+      <div class="nav-right">
+        <a href="https://chromewebstore.google.com/detail/movi-player/ckleeigcopjnpehkjokijokjegknfgej" target="_blank" rel="noopener" class="nav-icon-link" aria-label="Chrome Extension" title="Get Chrome Extension">
+          <svg width="18" height="18" viewBox="0 0 512 512" fill="currentColor"><path d="M188.8,255.93A67.2,67.2,0,1,0,256,188.75,67.38,67.38,0,0,0,188.8,255.93Z"/><path d="M476.75,217.79s0,0,0,.05a206.63,206.63,0,0,0-7-28.84h-.11a202.16,202.16,0,0,1,7.07,29h0a203.5,203.5,0,0,0-7.07-29H314.24c19.05,17,31.36,40.17,31.36,67.05a86.55,86.55,0,0,1-12.31,44.73L231,478.45a2.44,2.44,0,0,1,0,.27V479h0v-.26A224,224,0,0,0,256,480c6.84,0,13.61-.39,20.3-1a222.91,222.91,0,0,0,29.78-4.74C405.68,451.52,480,362.4,480,255.94A225.25,225.25,0,0,0,476.75,217.79Z"/><path d="M256,345.5c-33.6,0-61.6-17.91-77.29-44.79L76,123.05l-.14-.24A224,224,0,0,0,207.4,474.55l0-.05,77.69-134.6A84.13,84.13,0,0,1,256,345.5Z"/><path d="M91.29,104.57l77.35,133.25A89.19,89.19,0,0,1,256,166H461.17a246.51,246.51,0,0,0-25.78-43.94l.12.08A245.26,245.26,0,0,1,461.17,166h.17a245.91,245.91,0,0,0-25.66-44,2.63,2.63,0,0,1-.35-.26A223.93,223.93,0,0,0,91.14,104.34l.14.24Z"/></svg>
+        </a>
+        <a href="https://github.com/mrujjwalg/movi-player" target="_blank" rel="noopener" class="nav-icon-link" aria-label="GitHub" title="View on GitHub">
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor"><path d="M12 0C5.37 0 0 5.37 0 12c0 5.31 3.435 9.795 8.205 11.385.6.105.825-.255.825-.57 0-.285-.015-1.23-.015-2.235-3.015.555-3.795-.735-4.035-1.41-.135-.345-.72-1.41-1.23-1.695-.42-.225-1.02-.78-.015-.795.945-.015 1.62.87 1.845 1.23 1.08 1.815 2.805 1.305 3.495.99.105-.78.42-1.305.765-1.605-2.67-.3-5.46-1.335-5.46-5.925 0-1.305.465-2.385 1.23-3.225-.12-.3-.54-1.53.12-3.18 0 0 1.005-.315 3.3 1.23.96-.27 1.98-.405 3-.405s2.04.135 3 .405c2.295-1.56 3.3-1.23 3.3-1.23.66 1.65.24 2.88.12 3.18.765.84 1.23 1.905 1.23 3.225 0 4.605-2.805 5.625-5.475 5.925.435.375.81 1.095.81 2.22 0 1.605-.015 2.895-.015 3.3 0 .315.225.69.825.57A12.02 12.02 0 0024 12c0-6.63-5.37-12-12-12z"/></svg>
+        </a>
+      </div>
+    </nav>
+
+    <main>
+      <section class="hero">
+        <span class="hero-eyebrow">Side-by-side comparison</span>
+        <h1>Your browser only plays the <span class="accent">surface</span> of an MKV.</h1>
+        <p class="sub">Drop an MKV with multiple audio tracks, embedded subtitles, or chapters. See exactly what the native <code>&lt;video&gt;</code> tag silently ignores — and what <code>&lt;movi-player&gt;</code> surfaces from the same bytes.</p>
+      </section>
+
+      <label class="picker-card" id="picker">
+        <input type="file" id="file-input" accept="video/*,.mkv,.ts,.mov,.m4v,.webm" />
+        <div class="picker-label">Drop your own video file or click to pick</div>
+        <div class="picker-hint">MKV / HEVC / AV1 / HDR / multi-audio / subs — anything your &lt;video&gt; tag normally chokes on. The file never leaves your device. By default we load Sintel (Blender open movie, ~1.1 GB) so you have something to look at immediately.</div>
+        <div class="picker-meta" id="picker-meta" hidden></div>
+      </label>
+
+      <section class="panes" aria-label="Side-by-side players">
+        <div class="pane" id="pane-native">
+          <div class="pane-header">
+            <div class="pane-title">Native &lt;video&gt; <span class="badge native">Built into your browser</span></div>
+          </div>
+          <div class="pane-stage">
+            <video id="native-video" controls playsinline muted autoplay></video>
+            <div class="pane-fallback" id="native-fallback" hidden></div>
+          </div>
+          <div class="pane-tracks" id="native-tracks">
+            <div class="track-row"><span class="track-label">Container plays</span><span class="track-value" id="native-plays">—</span></div>
+            <div class="track-row"><span class="track-label">Video codec</span><span class="track-value" id="native-codec">—</span></div>
+            <div class="track-row"><span class="track-label">Audio tracks exposed</span><span class="track-value" id="native-audio">—</span></div>
+            <div class="track-row"><span class="track-label">Subtitle tracks exposed</span><span class="track-value" id="native-subs">—</span></div>
+            <div class="track-row"><span class="track-label">Chapters exposed</span><span class="track-value" id="native-chapters">—</span></div>
+          </div>
+        </div>
+
+        <div class="pane" id="pane-movi">
+          <div class="pane-header">
+            <div class="pane-title">&lt;movi-player&gt; <span class="badge movi">Same file, same browser</span></div>
+          </div>
+          <div class="pane-stage">
+            <movi-player id="movi-player" controls playsinline muted autoplay objectfit="contain" thumb fastseek showtitle stablevolume></movi-player>
+            <div class="pane-fallback" id="movi-fallback" hidden></div>
+          </div>
+          <div class="pane-tracks" id="movi-tracks">
+            <div class="track-row"><span class="track-label">Container plays</span><span class="track-value" id="movi-plays">—</span></div>
+            <div class="track-row"><span class="track-label">Video codec</span><span class="track-value" id="movi-codec">—</span></div>
+            <div class="track-row"><span class="track-label">Audio tracks exposed</span><span class="track-value" id="movi-audio">—</span></div>
+            <div class="track-row"><span class="track-label">Subtitle tracks exposed</span><span class="track-value" id="movi-subs">—</span></div>
+            <div class="track-row"><span class="track-label">Chapters exposed</span><span class="track-value" id="movi-chapters">—</span></div>
+          </div>
+        </div>
+      </section>
+
+      <section class="summary" id="summary" hidden>
+        <h2>What the file actually contains</h2>
+        <table>
+          <thead>
+            <tr>
+              <th>Feature</th>
+              <th style="text-align:center">In the file</th>
+              <th style="text-align:center">&lt;video&gt; gives you</th>
+              <th style="text-align:center">&lt;movi-player&gt; gives you</th>
+            </tr>
+          </thead>
+          <tbody id="summary-body"></tbody>
+        </table>
+        <p class="browser-note">Probed using MoviPlayer's WASM demuxer in the browser. The bytes never left your device.</p>
+      </section>
+
+      <section class="footer-cta">
+        <p>Want this in your own site? <code>npm install movi-player</code> and drop a <code>&lt;movi-player&gt;</code> tag.</p>
+        <a class="btn btn-primary" href="https://mrujjwalg.github.io/movi-player/" target="_blank" rel="noopener">Read the docs</a>
+        <a class="btn btn-secondary" href="https://github.com/mrujjwalg/movi-player" target="_blank" rel="noopener">View on GitHub</a>
+      </section>
+    </main>
+
+    <script type="module">
+      import "/dist/__BUILD_VERSION__/element.js";
+
+      const DEFAULT_SAMPLE = {
+        url: "/samples/sintel-2010-1080p.mkv",
+        label: "Sintel.2010.1080p.mkv (Blender open movie · CC-BY)",
+      };
+
+      const $ = (id) => document.getElementById(id);
+      const picker        = $("picker");
+      const fileInput     = $("file-input");
+      const pickerMeta    = $("picker-meta");
+      const nativeVideo   = $("native-video");
+      const moviPlayer    = $("movi-player");
+      const nativeFallback = $("native-fallback");
+      const moviFallback   = $("movi-fallback");
+      const summary       = $("summary");
+      let summaryBody     = $("summary-body");
+
+      // Safe DOM element creation — never use innerHTML with values that
+      // came from a file (codec strings, language tags etc. could in
+      // principle smuggle markup from a hostile file).
+      function el(tag, attrs = {}, children = []) {
+        const node = document.createElement(tag);
+        for (const [k, v] of Object.entries(attrs)) {
+          if (k === "class") node.className = v;
+          else if (k === "style") node.setAttribute("style", v);
+          else node.setAttribute(k, v);
+        }
+        for (const c of children) {
+          if (c == null) continue;
+          node.appendChild(typeof c === "string" ? document.createTextNode(c) : c);
+        }
+        return node;
+      }
+
+      // Tiny helpers to set a value cell + its ok/miss color in one go.
+      function setVal(id, text, kind) {
+        const node = $(id);
+        if (!node) return;
+        node.textContent = text;
+        node.className = "track-value" + (kind ? " " + kind : "");
+      }
+
+      function setNativeCounts(stats, hadVideo) {
+        // stats: { codec, audio:{exposed,total}, subs:{exposed,total},
+        //         chapters:{exposed,total} }
+        if (!hadVideo) {
+          setVal("native-plays",    "rejected",      "miss");
+          setVal("native-codec",    stats.codec || "—");
+          setVal("native-audio",    "—");
+          setVal("native-subs",     "—");
+          setVal("native-chapters", "—");
+          return;
+        }
+        setVal("native-plays", "yes (default track)", "ok");
+        setVal("native-codec", stats.codec ? `${stats.codec} (decoded)` : "decoded", "ok");
+
+        const a = stats.audio, s = stats.subs, c = stats.chapters;
+        setVal("native-audio",    `${a.exposed} of ${a.total}`,
+          a.total > 0 ? (a.exposed >= a.total ? "ok" : "miss") : "");
+        setVal("native-subs",     `${s.exposed} of ${s.total}`,
+          s.total > 0 ? (s.exposed >= s.total ? "ok" : "miss") : "");
+        setVal("native-chapters", `${c.exposed} of ${c.total}`,
+          c.total > 0 ? (c.exposed >= c.total ? "ok" : "miss") : "");
+      }
+
+      function setMoviCounts(stats) {
+        setVal("movi-plays", "yes (full)", "ok");
+        setVal("movi-codec", stats.codec ? `${stats.codec} (decoded)` : "decoded", "ok");
+        setVal("movi-audio",    `${stats.audio.total} of ${stats.audio.total}`,    stats.audio.total > 0 ? "ok" : "");
+        setVal("movi-subs",     `${stats.subs.total} of ${stats.subs.total}`,     stats.subs.total > 0 ? "ok" : "");
+        setVal("movi-chapters", `${stats.chapters.total} of ${stats.chapters.total}`, stats.chapters.total > 0 ? "ok" : "");
+      }
+
+      function setFallback(node, isError, titleText, bodyText) {
+        node.hidden = false;
+        node.classList.toggle("error", !!isError);
+        node.replaceChildren(
+          el("strong", {}, [titleText]),
+          document.createTextNode(bodyText),
+        );
+      }
+
+      function renderSummary(info, chapters, nativeOk, nativeAudioExposed, nativeSubsExposed) {
+        const videoTrack = (info.tracks || []).find((t) => t.type === "video");
+        const audioTracks = (info.tracks || []).filter((t) => t.type === "audio");
+        const subTracks   = (info.tracks || []).filter((t) => t.type === "subtitle");
+
+        const codecDesc = videoTrack
+          ? [videoTrack.codec || "?", `${videoTrack.width || ""}×${videoTrack.height || ""}`.trim() === "×" ? "" : `${videoTrack.width}×${videoTrack.height}`]
+              .filter(Boolean).join(" ")
+          : "—";
+
+        const rows = [
+          {
+            label: "Container plays at all",
+            real: "—",
+            nativeOk,
+            moviOk: true,
+            nativeText: nativeOk ? "yes (default track only)" : "no — rejected",
+            moviText: "yes (full)",
+          },
+          {
+            label: "Video codec",
+            real: codecDesc,
+            nativeOk,
+            moviOk: true,
+            nativeText: nativeOk ? "decoded" : "—",
+            moviText: "decoded",
+          },
+          {
+            label: "Audio tracks",
+            real: String(audioTracks.length),
+            nativeOk: nativeAudioExposed === audioTracks.length,
+            moviOk: true,
+            nativeText: audioTracks.length === 0
+              ? "none in file"
+              : `${nativeAudioExposed} of ${audioTracks.length} exposed`,
+            moviText: `${audioTracks.length} of ${audioTracks.length} switchable`,
+          },
+          {
+            label: "Subtitle tracks (embedded)",
+            real: String(subTracks.length),
+            nativeOk: nativeSubsExposed === subTracks.length,
+            moviOk: true,
+            nativeText: subTracks.length === 0
+              ? "none in file"
+              : `${nativeSubsExposed} of ${subTracks.length} exposed`,
+            moviText: `${subTracks.length} of ${subTracks.length} rendered`,
+          },
+          {
+            label: "Chapters",
+            real: String(chapters.length),
+            nativeOk: chapters.length === 0,
+            moviOk: true,
+            nativeText: chapters.length === 0
+              ? "none in file"
+              : `0 of ${chapters.length} exposed`,
+            moviText: `${chapters.length} of ${chapters.length} on scrubber`,
+          },
+        ];
+
+        const newBody = document.createElement("tbody");
+        newBody.id = "summary-body";
+        for (const r of rows) {
+          newBody.appendChild(el("tr", {}, [
+            el("td", { class: "feature" }, [r.label]),
+            el("td", { class: "cell-native", style: "color: var(--text-secondary)" }, [r.real]),
+            el("td", { class: "cell-native" }, [
+              el("span", { class: r.nativeOk ? "yes" : "no" }, [r.nativeOk ? "✓ " : "✗ "]),
+              r.nativeText,
+            ]),
+            el("td", { class: "cell-movi" }, [
+              el("span", { class: r.moviOk ? "yes" : "no" }, [r.moviOk ? "✓ " : "✗ "]),
+              r.moviText,
+            ]),
+          ]));
+        }
+        summaryBody.replaceWith(newBody);
+        // refresh module-scoped reference for next render
+        summaryBody = newBody;
+        summary.hidden = false;
+      }
+
+      // Wait until the movi-player element has parsed the source and its
+      // track lists are populated. No separate Demuxer / HttpSource — the
+      // player has already done that work, asking it twice would re-download
+      // the file and run the WASM module a second time. We race trackschange
+      // against a hard timeout because some sources never emit it.
+      function waitForPlayerMetadata(timeoutMs = 15000) {
+        return new Promise((resolve) => {
+          let done = false;
+          const settle = (result) => {
+            if (done) return;
+            done = true;
+            moviPlayer.removeEventListener("trackschange", onTracks);
+            moviPlayer.removeEventListener("loadeddata", onLoaded);
+            moviPlayer.removeEventListener("error", onErr);
+            resolve(result);
+          };
+          const onTracks = () => settle({ ok: true });
+          const onLoaded = () => {
+            // loadeddata fires after tracks are known; pull immediately.
+            settle({ ok: true });
+          };
+          const onErr = (e) => settle({ ok: false, error: e?.detail || new Error("player error") });
+          moviPlayer.addEventListener("trackschange", onTracks);
+          moviPlayer.addEventListener("loadeddata", onLoaded);
+          moviPlayer.addEventListener("error", onErr);
+          setTimeout(() => settle({ ok: false, error: new Error(`metadata timeout after ${timeoutMs}ms`) }), timeoutMs);
+        });
+      }
+
+      function readMoviStats() {
+        const p = moviPlayer.player;
+        if (!p) return null;
+        const info  = typeof p.getMediaInfo === "function" ? p.getMediaInfo() : null;
+        const audio = typeof p.getAudioTracks === "function" ? p.getAudioTracks() : [];
+        const subs  = typeof p.getSubtitleTracks === "function" ? p.getSubtitleTracks() : [];
+        const chaps = typeof p.getChapters === "function" ? p.getChapters() : [];
+        return { info, audio, subs, chapters: chaps };
+      }
+
+      function nativeExposureCounts() {
+        const audioCount = nativeVideo.audioTracks ? nativeVideo.audioTracks.length : 1;
+        const textCount = nativeVideo.textTracks ? nativeVideo.textTracks.length : 0;
+        return { audioCount, textCount };
+      }
+
+      // Accepts either a File (from picker/drop) or a `{ url, label }`
+      // descriptor (default sample / future "try another file" buttons).
+      async function loadSource(src) {
+        const isFile = src instanceof File;
+        const isUrl  = !isFile && typeof src === "object" && typeof src.url === "string";
+        if (!isFile && !isUrl) return;
+
+        pickerMeta.hidden = false;
+        pickerMeta.textContent = isFile
+          ? `${src.name} · ${(src.size / (1024 * 1024)).toFixed(1)} MB · ${src.type || "unknown type"}`
+          : src.label;
+
+        const nativeSrc = isFile ? URL.createObjectURL(src) : src.url;
+        const moviSrc   = isFile ? src : src.url;
+
+        nativeFallback.hidden = true;
+        moviFallback.hidden = true;
+
+        nativeVideo.src = nativeSrc;
+        nativeVideo.load();
+        // Race loadedmetadata / error / timeout. We don't trust the default
+        // value of nativeOk — Safari rejects MKV silently (no error event,
+        // no loadedmetadata), so the timeout would resolve with the default
+        // unchanged. Decide nativeOk authoritatively AFTER the race using
+        // the real element state (videoWidth + .error) below.
+        const nativeLoadOnce = new Promise((res) => {
+          nativeVideo.addEventListener("loadedmetadata", () => res(), { once: true });
+          nativeVideo.addEventListener("error", () => res(), { once: true });
+          setTimeout(res, 5000);
+        });
+
+        moviPlayer.src = moviSrc;
+
+        // Use the player's own demux/track parsing instead of spinning up a
+        // second Demuxer. The player will fire trackschange / loadeddata
+        // once its source is open; we then pull tracks via its public API.
+        const moviResult = await waitForPlayerMetadata();
+        if (!moviResult.ok) {
+          setFallback(
+            moviFallback,
+            true,
+            "Couldn't load the sample",
+            isUrl
+              ? `Fetching ${src.url} failed (${moviResult.error?.message || moviResult.error}). On localhost the sample is only served when running through wrangler / deployed; via vite dev pick a file from disk instead.`
+              : `Player error: ${moviResult.error?.message || moviResult.error}`,
+          );
+        }
+        const probe = readMoviStats() || { info: { tracks: [] }, audio: [], subs: [], chapters: [] };
+
+        await nativeLoadOnce;
+
+        // Authoritative detection: the element either has decoded video
+        // dimensions OR enough metadata to play (readyState >= HAVE_METADATA)
+        // AND no .error attached. Safari rejecting MKV → both checks fail.
+        const HAVE_METADATA = 1;
+        const nativeOk = !nativeVideo.error &&
+          (nativeVideo.videoWidth > 0 || nativeVideo.readyState >= HAVE_METADATA);
+
+        if (!nativeOk) {
+          setFallback(
+            nativeFallback,
+            true,
+            "Your browser refused this file",
+            "This format isn't supported by the native <video> tag in this browser.",
+          );
+        }
+
+        const tracks     = (probe.info && probe.info.tracks) || [];
+        const videoTrack = tracks.find((t) => t.type === "video");
+        const audioTotal = probe.audio.length;
+        const subTotal   = probe.subs.length;
+        const chapTotal  = probe.chapters.length;
+
+        const codecDesc = videoTrack ? (videoTrack.codec || "?").toUpperCase() : null;
+
+        const nativeExposed = nativeExposureCounts();
+        const nativeAudioExposed = nativeOk
+          ? Math.min(nativeExposed.audioCount, audioTotal || nativeExposed.audioCount)
+          : 0;
+        const nativeSubsExposed = 0; // embedded subs never appear in textTracks
+
+        const stats = {
+          codec:    codecDesc,
+          audio:    { exposed: nativeAudioExposed, total: audioTotal },
+          subs:     { exposed: nativeSubsExposed,  total: subTotal },
+          chapters: { exposed: 0,                  total: chapTotal },
+        };
+
+        setNativeCounts(stats, nativeOk);
+        setMoviCounts(stats);
+        renderSummary(probe.info, probe.chapters, nativeOk, nativeAudioExposed, nativeSubsExposed);
+      }
+
+      // Back-compat shim — old name used by picker/drop handlers below.
+      const loadFile = loadSource;
+
+      fileInput.addEventListener("change", (e) => {
+        const file = e.target.files?.[0];
+        if (file) loadFile(file);
+      });
+      ["dragenter", "dragover"].forEach((ev) =>
+        picker.addEventListener(ev, (e) => { e.preventDefault(); picker.classList.add("drag-over"); }),
+      );
+      ["dragleave", "drop"].forEach((ev) =>
+        picker.addEventListener(ev, (e) => { e.preventDefault(); picker.classList.remove("drag-over"); }),
+      );
+      picker.addEventListener("drop", (e) => {
+        const file = e.dataTransfer?.files?.[0];
+        if (file) loadFile(file);
+      });
+
+      // Toggle .scrolled on the navbar past the first ~12px — matches the
+      // visual treatment on index.html (backdrop darkens slightly).
+      const navbarEl = document.getElementById("navbar");
+      const onScroll = () => {
+        navbarEl.classList.toggle("scrolled", window.scrollY > 12);
+      };
+      window.addEventListener("scroll", onScroll, { passive: true });
+      onScroll();
+
+      // Auto-load the default sample on first visit. Streams via HTTP Range,
+      // so first frame appears in a couple of seconds even though the file
+      // itself is ~1.1 GB. User can override anytime with the picker / drop.
+      loadSource(DEFAULT_SAMPLE);
+    </script>
+  </body>
+</html>
+
