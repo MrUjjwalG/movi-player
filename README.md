@@ -3,7 +3,7 @@
 <img src="docs/images/banner.png" alt="Movi Player" width="100%" />
 
 ### Play any video format directly in the browser.
-##### No transcoding. No server processing. Just `<movi-player src="video.mkv" controls>`.
+##### No transcoding. No server processing. <br /> Just `<movi-player src="video.mkv" controls>`.
 
 [![npm version](https://img.shields.io/npm/v/movi-player.svg?style=flat-square&color=cb3837&logo=npm)](https://www.npmjs.com/package/movi-player)
 [![npm downloads](https://img.shields.io/npm/dm/movi-player.svg?style=flat-square&color=blue)](https://www.npmjs.com/package/movi-player)
@@ -346,6 +346,21 @@ npm run build:wasm    # Requires Docker
 npm run build:ts
 npm run dev
 ```
+
+## AI assistants
+
+[AGENTS.md](./AGENTS.md) is a tour of the architecture, public API, and the
+non-obvious tradeoffs (4K rate cap, ambient-mode cost, `.ts` long-GOP handling,
+audio threshold ↔ AudioContext `latencyHint` coupling, etc.). It's written for
+AI coding assistants — Claude, Cursor, Codex, Copilot — but humans onboarding
+to the codebase will find it useful too.
+
+The file ships inside the npm package as well, so when you install
+`movi-player` you can point your assistant at
+`node_modules/movi-player/AGENTS.md` (most tools either pick it up
+automatically from the workspace or accept it via an `@-mention`). Filename
+follows the [AGENTS.md convention](https://agents.md/) so newer tools that
+auto-discover it work out of the box.
 
 ## License
 
