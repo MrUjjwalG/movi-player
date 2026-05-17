@@ -9382,12 +9382,21 @@ export class MoviElement extends HTMLElement {
         }
 
         /* Disable animations on mobile */
-        .movi-controls-container,
         .movi-controls-overlay,
         .movi-center-play-pause,
         .movi-btn,
         .movi-progress-handle {
           transition: none !important;
+          animation: none !important;
+          transform: none !important;
+        }
+
+        /* Keep a short opacity-only fade on the controls bar — the
+           transform/scale animations are dropped for mobile perf, but
+           a plain opacity transition is cheap and the snap-on/snap-off
+           without it reads as broken. */
+        .movi-controls-container {
+          transition: opacity 0.18s ease !important;
           animation: none !important;
           transform: none !important;
         }
