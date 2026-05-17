@@ -15460,8 +15460,19 @@ export class MoviElement extends HTMLElement {
     }
 
     if (this._showTitle && this._title) {
+      // Detect "title just appeared" — either the text content changed,
+      // or the bar was previously hidden. Covers both explicit-attribute
+      // and auto-load paths: in autoplay+muted with no user interaction
+      // the controls never become visible on their own, so without this
+      // nudge the title would stay at opacity 0 until the user moved
+      // the mouse.
+      const titleAppeared =
+        titleText.textContent !== this._title ||
+        titleBar.style.display === "none";
       titleText.textContent = this._title;
       titleBar.style.display = "block";
+
+      if (titleAppeared) this.showControls();
 
       // Show title if controls are currently visible
       const container = this.controlsContainer;
@@ -15503,6 +15514,22 @@ export class MoviElement extends HTMLElement {
 
     // Clean up orphan trailing brackets, hyphens, and extra spaces
     title = title.replace(/\s*[\(\[]\s*$/, "").replace(/\s*[-–—]\s*$/, "").replace(/\s+/g, " ").trim();
+
+    // Convert any remaining internal hyphens into spaces. Done AFTER the
+    // release-group strip above (which keys off `-` as the separator
+    // marker) so we don't erase its signal before it runs. Source files
+    // like `sintel-2010-1080p.mkv` would otherwise read as "sintel 2010"
+    // — readable, but visually clunky next to the dot-separated style
+    // (`Sintel.2010.1080p.mkv` → "Sintel 2010") that picker-dropped
+    // files produce. Normalising both styles keeps the overlay
+    // consistent regardless of how the source was named.
+    title = title.replace(/[-–—]+/g, " ").replace(/\s+/g, " ").trim();
+
+    // Title-case words that arrived all-lowercase (e.g. URL filenames
+    // are usually `sintel`, not `Sintel`). Mixed-case tokens like
+    // `iPhone` or `MoviePlayer` are intentional capitalisation — the
+    // `\b[a-z]+\b` guard skips them. Numbers and ALLCAPS stay as-is.
+    title = title.replace(/\b[a-z]+\b/g, (w) => w.charAt(0).toUpperCase() + w.slice(1));
 
     return title || filename;
   }

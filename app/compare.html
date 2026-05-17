@@ -96,6 +96,11 @@
         font-family: var(--font-family);
         min-height: 100vh;
         line-height: 1.55;
+        /* Safety belt — nothing inside should be allowed to push the whole
+           document wider than the viewport (the summary table was doing
+           this on narrow screens, dragging the fixed navbar out of view
+           when the user scrolled horizontally). */
+        overflow-x: hidden;
       }
 
       /* Navbar — matches app/index.html so the brand identity is consistent
@@ -400,6 +405,10 @@
         border-radius: 14px;
         padding: 1.5rem;
         margin-bottom: 2.5rem;
+        /* Contain table overflow within the card on narrow screens
+           instead of letting it widen the whole document. */
+        overflow-x: auto;
+        -webkit-overflow-scrolling: touch;
       }
       .summary h2 {
         font-size: 1.05rem;
@@ -475,6 +484,33 @@
         color: var(--text-muted);
         text-align: center;
         margin-top: 1rem;
+      }
+
+      /* Mobile tightening — at narrow widths the 2rem main padding plus
+         the 1.5rem summary padding stacked with a 4-column table was
+         overflowing the viewport. Trim everything and let the table
+         shrink with shorter cell padding / smaller type. */
+      @media (max-width: 760px) {
+        main { padding: calc(64px + 2rem) 1rem 4rem; }
+        .navbar { padding: 0 0.75rem; }
+        .nav-left { gap: 0.85rem; }
+        .nav-links { gap: 0.9rem; }
+        .nav-right { gap: 0.25rem; }
+        .nav-icon-link, .nav-icon-btn { width: 32px; height: 32px; }
+        .nav-icon-btn svg, .nav-icon-link svg { width: 16px; height: 16px; }
+        .picker-card { padding: 1.5rem 1rem; }
+        .summary { padding: 1rem; }
+        .summary h2 { font-size: 0.98rem; }
+        .summary table { font-size: 0.78rem; }
+        .summary th, .summary td { padding: 0.55rem 0.4rem; }
+        .summary th { font-size: 0.7rem; }
+        .footer-cta { padding: 1.5rem 0.5rem; }
+        .btn { padding: 0.7rem 1.1rem; font-size: 0.9rem; margin: 0.25rem 0.15rem; }
+      }
+      /* Below 560px the three nav links collide with the brand + icons.
+         Drop them first; brand + theme/chrome/github icons still fit. */
+      @media (max-width: 560px) {
+        .nav-links { display: none; }
       }
     </style>
   </head>
