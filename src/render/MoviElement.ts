@@ -1602,6 +1602,12 @@ export class MoviElement extends HTMLElement {
         if (this.isLoading || this._isUnsupported || !this.player) return;
         if (e.cancelable) e.preventDefault(); // Prevent ghost mouse events
         e.stopPropagation();
+        // stopPropagation above keeps the controls-container's touch
+        // handler from firing, so its lastTouchTime bookkeeping never
+        // runs for scrubs. Set it here so anything that gates on
+        // "recent touch" (e.g. the post-play 200ms hide) treats scrub
+        // start the same as any other in-chrome touch.
+        this.lastTouchTime = Date.now();
         this.isTouchDragging = true;
         hideThumbnail(0); // Ensure thumbnail is hidden at start of touch
         this.showControls();
@@ -1634,6 +1640,12 @@ export class MoviElement extends HTMLElement {
     document.addEventListener("touchend", async (e) => {
       if (this.isTouchDragging) {
         this.isTouchDragging = false; // Stop dragging immediately
+        // Mark the touch as recent on release too — the seek below kicks
+        // the player back into "playing", whose 200ms-delayed hideControls
+        // would otherwise trigger right when the user releases the
+        // scrubber and cause a visible flicker (hide → 1s later re-show
+        // via the controls-container touchend handler).
+        this.lastTouchTime = Date.now();
         const touch = e.changedTouches[0];
         if (touch) {
           await this.seekFromTouchEvent(e); // Actual seek on release
@@ -7078,6 +7090,13 @@ export class MoviElement extends HTMLElement {
         color: #11142d !important;
         box-shadow: 0 8px 32px rgba(0, 0, 0, 0.12) !important;
         border: 1px solid rgba(255, 255, 255, 0.4) !important;
+      }
+
+      /* Chapter title inside the seek tooltip has its own hardcoded
+         white color for the dark theme — needs an explicit dark
+         override here or it disappears against the light backdrop. */
+      :host([theme="light"]) .movi-seek-chapter-title {
+        color: #11142d !important;
       }
 
       :host([theme="light"]) .movi-thumbnail-img {
@@ -12580,7 +12599,14 @@ export class MoviElement extends HTMLElement {
             !this.isOverControls &&
             !this.isDragging &&
             !this.isTouchDragging &&
-            !this.isAnyMenuOpen()
+            !this.isAnyMenuOpen() &&
+            // Skip the auto-hide if the user just touched the player —
+            // covers the scrub-then-release path where the seek flips
+            // state back to "playing" and would otherwise yank the bar
+            // away under the user's finger. 1500ms is wide enough to
+            // span the controls-container touchend's 1s re-show window
+            // so the two timers don't fight.
+            Date.now() - this.lastTouchTime > 1500
           ) {
             this.hideControls();
           }
