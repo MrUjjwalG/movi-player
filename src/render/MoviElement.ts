@@ -6482,6 +6482,60 @@ export class MoviElement extends HTMLElement {
   private showControls(): void {
     if (!this._controls) return;
     const container = this.controlsContainer;
+
+    // Flush time/progress/volume DOM only when the bar is actually
+    // coming back from hidden — if it's already visible, the rAF loop
+    // has been keeping it current and another flush here just thrashes
+    // the inline `transition: none` toggle on every mousemove (the
+    // restore-on-next-frame loses if a fresh strip lands in the same
+    // task, killing the smooth playback animation entirely).
+    //
+    // The throttled rAF loop in startUIUpdates skips time/progress/
+    // volume writes while the bar is hidden (perf), so without this
+    // catch-up the bar would fade in showing stale values and only
+    // catch up on the next ≤250ms tick — visible as a "bump" right
+    // after the bar appears. Painting fresh values while still at
+    // opacity 0 means the fade-in reveals the already-current state.
+    //
+    // `.movi-progress-filled`/`-handle` carry a `transition: width|all
+    // …` for smooth playback growth, which would otherwise animate the
+    // catch-up write from the stale position to the current one
+    // (visible as a sliding "bump" alongside the fade-in). Strip the
+    // transition while writing, force a reflow so the snap commits,
+    // then restore on the NEXT frame via `removeProperty` — setting
+    // `style.transition = ""` in the same task is unreliable, some
+    // engines coalesce both writes and keep the transition active.
+    const wasHidden = container?.classList.contains("movi-controls-hidden");
+    if (this.player && wasHidden) {
+      const filled = this.shadowRoot?.querySelector(
+        ".movi-progress-filled",
+      ) as HTMLElement | null;
+      const handle = this.shadowRoot?.querySelector(
+        ".movi-progress-handle",
+      ) as HTMLElement | null;
+      const buffer = this.shadowRoot?.querySelector(
+        ".movi-progress-buffer",
+      ) as HTMLElement | null;
+
+      if (filled) filled.style.transition = "none";
+      if (handle) handle.style.transition = "none";
+      if (buffer) buffer.style.transition = "none";
+
+      this.updateTimeDisplay();
+      this.updateProgressBar();
+      this.updateVolumeIcon();
+
+      // Force a sync layout so the snap commits with transition:none
+      // applied before the rAF restore lands.
+      if (filled) void filled.offsetWidth;
+
+      requestAnimationFrame(() => {
+        filled?.style.removeProperty("transition");
+        handle?.style.removeProperty("transition");
+        buffer?.style.removeProperty("transition");
+      });
+    }
+
     if (container) {
       container.classList.add("movi-controls-visible");
       container.classList.remove("movi-controls-hidden");
