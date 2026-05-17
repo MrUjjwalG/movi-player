@@ -494,9 +494,21 @@ export class AudioRenderer {
       await this.init();
     }
 
-    // Only resume if not muted (to avoid autoplay policy errors)
-    // When muted, AudioContext stays suspended until user unmutes
-    if (this.audioContext?.state === "suspended" && !this._muted) {
+    // Resume the AudioContext when either (a) we're not muted so audio
+    // can actually play, OR (b) we suspended it ourselves via pause()
+    // and need to wake it back up. The original `!_muted` gate was a
+    // browser-autoplay-policy safety net for the very first play before
+    // any user gesture had unlocked audio — but a resume-after-pause
+    // has already crossed that gate (pause() only suspends a running
+    // context, which only reached running via a prior gesture). Without
+    // the second branch, a muted pause→play leaves the context stuck
+    // suspended, audio time stops advancing, and the canvas renderer's
+    // audio-synced presentation loop wedges on its last frame even
+    // though the Clock keeps ticking via fallback time.
+    if (
+      this.audioContext?.state === "suspended" &&
+      (!this._muted || this.intentionalSuspend)
+    ) {
       try {
         await this.audioContext.resume();
       } catch (err) {

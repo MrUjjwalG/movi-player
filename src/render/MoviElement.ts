@@ -58,6 +58,7 @@ export class MoviElement extends HTMLElement {
   private _isUnsupported: boolean = false;
   private eventHandlers: Map<string, () => void> = new Map();
   private controlsContainer: HTMLElement | null = null;
+  private unmuteOverlay: HTMLButtonElement | null = null;
   private brokenIndicator: HTMLElement | null = null;
   private emptyStateIndicator: HTMLElement | null = null;
   private controlsTimeout: number | null = null;
@@ -1017,6 +1018,43 @@ export class MoviElement extends HTMLElement {
     `;
     shadowRoot.appendChild(container);
     this.controlsContainer = container;
+
+    // Unmute pill — shown when the player autoplayed muted (browser
+    // policy) and controls are enabled. Mirrors what YouTube/Twitter
+    // surface so the user has a one-tap path to audio without hunting
+    // for the volume button. updateUnmuteOverlay() flips its visibility
+    // based on the current attribute combo and the muted state.
+    const unmuteOverlay = document.createElement("button");
+    unmuteOverlay.className = "movi-unmute-overlay";
+    unmuteOverlay.type = "button";
+    unmuteOverlay.setAttribute("aria-label", "Unmute");
+    unmuteOverlay.style.display = "none";
+    // textContent + appendChild — no innerHTML to keep the security
+    // hook happy and avoid an XSS surface even with a static template.
+    const unmuteSvg = document.createElementNS("http://www.w3.org/2000/svg", "svg");
+    unmuteSvg.setAttribute("viewBox", "0 0 24 24");
+    unmuteSvg.setAttribute("fill", "none");
+    unmuteSvg.setAttribute("stroke", "currentColor");
+    unmuteSvg.setAttribute("stroke-width", "2");
+    unmuteSvg.setAttribute("stroke-linecap", "round");
+    unmuteSvg.setAttribute("stroke-linejoin", "round");
+    unmuteSvg.innerHTML =
+      '<polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5"/>' +
+      '<line x1="23" y1="9" x2="17" y2="15"/>' +
+      '<line x1="17" y1="9" x2="23" y2="15"/>';
+    unmuteOverlay.appendChild(unmuteSvg);
+    const unmuteText = document.createElement("span");
+    unmuteText.textContent = "Tap to unmute";
+    unmuteOverlay.appendChild(unmuteText);
+    unmuteOverlay.addEventListener("click", (e) => {
+      e.stopPropagation();
+      this.muted = false;
+      // Defensive — updateMuted() should hide it via updateUnmuteOverlay,
+      // but if state is mid-flight this guarantees the click feels instant.
+      unmuteOverlay.style.display = "none";
+    });
+    shadowRoot.appendChild(unmuteOverlay);
+    this.unmuteOverlay = unmuteOverlay;
 
     // Create title bar as a separate element outside controls container
     const titleBar = document.createElement("div");
@@ -2170,25 +2208,15 @@ export class MoviElement extends HTMLElement {
       }
     });
 
-    // Show controls when mouse enters video area (overlay)
-    overlay?.addEventListener("mouseenter", () => {
-      if (!this.isOverControls) {
-        this.showControls();
-      }
-    });
-
-    // Hide controls when mouse leaves video area (but not if going to controls)
-    overlay?.addEventListener("mouseleave", (e) => {
-      const relatedTarget = e.relatedTarget as Element;
-      // Don't hide if mouse is moving to controls
-      if (relatedTarget && controlsContainer?.contains(relatedTarget)) {
-        return;
-      }
-      // Only hide if not over controls and not dragging and no menu open
-      if (!this.isOverControls && !this.isDragging && !this.isAnyMenuOpen()) {
-        this.hideControls();
-      }
-    });
+    // Overlay's mouseenter/mouseleave used to drive showControls /
+    // hideControls, but the host-level enter/move/leave (added in
+    // setupKeyboardShortcuts) covers the same surface AND every child
+    // that absorbs events. Worse, on overlay it was a re-show vector:
+    // when stateChange→playing strips the center play/pause button's
+    // pointer-events, the browser fires a synthetic mouseenter on the
+    // overlay (cursor's "real" target shifts) which immediately
+    // re-showed the controls a frame after the just-fired hide. Drop
+    // the overlay handlers; host handles it.
 
     // Mousemove → showControls is handled at the host level (see the
     // listener added in setupKeyboardShortcuts), so it covers EVERY
@@ -4669,6 +4697,11 @@ export class MoviElement extends HTMLElement {
     if (volumeContainer) {
       volumeContainer.style.display = hasAudio ? "flex" : "none";
     }
+    // Same reasoning for the "Tap to unmute" pill — if the source has
+    // no audio at all, there's nothing to unmute, so don't bait the
+    // user into clicking it. Refresh whenever audio-track discovery
+    // finishes (this method is the natural hook).
+    this.updateUnmuteOverlay();
 
     // Show audio selector only if multiple tracks total
     if (totalTracks <= 1) {
@@ -6439,6 +6472,20 @@ export class MoviElement extends HTMLElement {
       if (this.video) this.video.style.cursor = "default";
     }
 
+    // Mirror the hide path — when controls come back, the center play
+    // button should reappear if the player is paused/ready, since
+    // hideControls now strips its visible class. Without this, the
+    // big play button stayed gone until the next state change.
+    const centerPlayPause = this.shadowRoot?.querySelector(
+      ".movi-center-play-pause",
+    ) as HTMLElement | null;
+    if (centerPlayPause && !this.isLoading && !this._isUnsupported) {
+      const state = this.player?.getState();
+      if (state !== "playing" && state !== "buffering") {
+        centerPlayPause.classList.add("movi-center-visible");
+      }
+    }
+
     // Shift timeline panel up above controls
     const bar = this.shadowRoot?.querySelector(".movi-controls-bar") as HTMLElement;
     const barHeight = bar?.offsetHeight ?? 80;
@@ -6716,6 +6763,16 @@ export class MoviElement extends HTMLElement {
       if (this.canvas) this.canvas.style.cursor = "none";
       if (this.video) this.video.style.cursor = "none";
     }
+
+    // The center play/pause button lives in a separate sibling, so the
+    // controls-container's hidden class doesn't reach it. Without this,
+    // pausing then moving the cursor out of the player left a big round
+    // play button floating over the frame even though the bottom bar
+    // had faded away.
+    const centerPlayPause = this.shadowRoot?.querySelector(
+      ".movi-center-play-pause",
+    ) as HTMLElement | null;
+    if (centerPlayPause) centerPlayPause.classList.remove("movi-center-visible");
 
     // Shift timeline panel down when controls hide
     const timelinePanel = this.shadowRoot?.querySelector(".movi-timeline-panel") as HTMLElement;
@@ -7259,6 +7316,52 @@ export class MoviElement extends HTMLElement {
          the visibility class isn't an ancestor — use :has on the host. */
       :host:has(.movi-controls-container.movi-controls-visible) .movi-controls-overlay {
         opacity: 1;
+      }
+
+      /* Unmute pill — surfaces a one-tap path to sound when the player
+         autoplayed muted (browser policy). Top-left so it doesn't fight
+         with the title bar's text on the gradient OR with the close/PiP
+         buttons on the top-right that some integrators add. z-index sits
+         above the canvas/overlay but below the controls-container so the
+         bottom bar can render over it if they ever collide. */
+      .movi-unmute-overlay {
+        position: absolute;
+        top: 16px;
+        left: 16px;
+        z-index: 8;
+        display: none;
+        align-items: center;
+        gap: 8px;
+        padding: 8px 14px;
+        background: rgba(0, 0, 0, 0.75);
+        backdrop-filter: blur(10px);
+        -webkit-backdrop-filter: blur(10px);
+        color: #fff;
+        font-size: 13px;
+        font-weight: 600;
+        border: 1px solid rgba(255, 255, 255, 0.15);
+        border-radius: 999px;
+        cursor: pointer;
+        pointer-events: auto;
+        transition: background 0.18s ease, transform 0.18s ease;
+        font-family: inherit;
+      }
+      .movi-unmute-overlay:hover {
+        background: rgba(0, 0, 0, 0.9);
+        transform: scale(1.03);
+      }
+      .movi-unmute-overlay svg {
+        width: 16px;
+        height: 16px;
+      }
+      @container movi-host (max-width: 480px) {
+        .movi-unmute-overlay {
+          top: 10px;
+          left: 10px;
+          padding: 6px 11px;
+          font-size: 12px;
+        }
+        .movi-unmute-overlay svg { width: 14px; height: 14px; }
       }
 
       .movi-title-bar {
@@ -9519,9 +9622,14 @@ export class MoviElement extends HTMLElement {
           height: 12px;
         }
 
-        .movi-hdr-label {
-          display: none !important;
-        }
+        /* Keep the "HDR" pill label on small/mobile players. Hiding it
+           on mobile (the previous rule) left the button as an empty
+           24×28px pill that turned into a solid white circle whenever
+           .movi-hdr-active flipped the bg to white — a desktop user
+           would see "HDR" text inside the pill, but mobile got a blank
+           blob with no indication of what it was. Showing the label
+           keeps both platforms visually consistent at minimal cost
+           (11px font, fits easily). */
 
         /* Horizontal Expansion Style */
         .movi-controls-right {
@@ -9767,7 +9875,6 @@ export class MoviElement extends HTMLElement {
       /* Touch device optimizations */
       @media (hover: none) and (pointer: coarse) {
         /* Aggressively disable animations on touch interactions */
-        .movi-controls-container,
         .movi-controls-overlay,
         .movi-center-play-pause,
         .movi-btn,
@@ -9776,6 +9883,15 @@ export class MoviElement extends HTMLElement {
         .movi-volume-slider,
         .movi-volume-slider-container {
           transition: none !important;
+          animation: none !important;
+        }
+        /* Keep a short opacity-only fade on the controls bar even on
+           touch — without it the bar snaps on/off on every show/hide.
+           Same reasoning as the small-player container query above:
+           transform/scale animations are too expensive on phones but
+           a plain opacity transition is cheap. */
+        .movi-controls-container {
+          transition: opacity 0.18s ease !important;
           animation: none !important;
         }
 
@@ -11169,6 +11285,9 @@ export class MoviElement extends HTMLElement {
 
     // Update controls visibility based on initial attributes
     this.updateControlsVisibility();
+    // Surface the unmute pill if this player will autoplay muted with
+    // controls — checked here once initial attributes have been read.
+    this.updateUnmuteOverlay();
 
     // Get external ambient wrapper element by ID
     this.updateAmbientWrapperElement();
@@ -11634,10 +11753,12 @@ export class MoviElement extends HTMLElement {
       }
       case "autoplay":
         this._autoplay = newValue !== null;
+        this.updateUnmuteOverlay();
         break;
       case "controls":
         this._controls = newValue !== null;
         this.updateControlsVisibility();
+        this.updateUnmuteOverlay();
         break;
       case "loop":
         this._loop = newValue !== null;
@@ -11658,6 +11779,14 @@ export class MoviElement extends HTMLElement {
         // initializePlayer / restoreState instead).
         if (this.player) {
           this.updateMuted();
+        } else {
+          // No player yet — still keep the UI in sync. updateMuted() also
+          // talks to the player, so when it's absent fall back to just
+          // refreshing the icon and the unmute pill so the integrator
+          // setting `muted` before src is wired up doesn't leave the
+          // overlay/icon stale.
+          this.updateVolumeIcon();
+          this.updateUnmuteOverlay();
         }
         break;
       case "playsinline":
@@ -11854,6 +11983,27 @@ export class MoviElement extends HTMLElement {
     // Update icon regardless of player presence so UI reflects state even
     // before src is set / player is initialized.
     this.updateVolumeIcon();
+    this.updateUnmuteOverlay();
+  }
+
+  /**
+   * Show a "Tap to unmute" pill when the player is set up to autoplay
+   * muted (browsers block autoplay-with-sound) and the user has asked
+   * for controls. Hides as soon as the player isn't muted, one of the
+   * prerequisite attributes drops, or audio-track discovery proves
+   * there's no audio to surface — reusing the same hasAudibleSource()
+   * check that gates the volume button (see updateAudioTrackMenu).
+   * Before the player is initialized hasAudibleSource() can't be
+   * answered, so we optimistically show the pill on attrs alone and
+   * let updateAudioTrackMenu re-call this once tracks are known.
+   */
+  private updateUnmuteOverlay() {
+    const overlay = this.unmuteOverlay;
+    if (!overlay) return;
+    const hasAudio = this.player ? this.player.hasAudibleSource() : true;
+    const shouldShow =
+      this._controls && this._autoplay && this._muted && hasAudio;
+    overlay.style.display = shouldShow ? "flex" : "none";
   }
 
   private updateVolume() {
@@ -12399,7 +12549,25 @@ export class MoviElement extends HTMLElement {
 
       if (state === "playing") {
         this.dispatchEvent(new Event("play"));
-        this.showControls();
+        // Native-like: when playback starts, hide the controls unless the
+        // user is actively interacting. Delayed ~200ms so the play→pause
+        // icon swap above (updatePlayPauseIcon) has time to render and
+        // be perceived by the user — instant hide felt like the click
+        // never registered, since the bottom bar started fading before
+        // the eye could catch the icon flip. 200ms is long enough to
+        // see "I just pressed play and now it's a pause icon", short
+        // enough that the bar isn't lingering after the fact.
+        window.setTimeout(() => {
+          if (
+            this.player?.getState() === "playing" &&
+            !this.isOverControls &&
+            !this.isDragging &&
+            !this.isTouchDragging &&
+            !this.isAnyMenuOpen()
+          ) {
+            this.hideControls();
+          }
+        }, 200);
         // Reset ambient sampling cadence on resume — the adaptive backoff
         // can ratchet up to ~2s during seek/decode-recovery and would take
         // tens of seconds to shrink back via the per-sample 0.8x recovery.
@@ -12702,30 +12870,24 @@ export class MoviElement extends HTMLElement {
       contextMenuPauseIcon?.style.setProperty("display", "block");
       if (contextMenuLabel) contextMenuLabel.textContent = "Pause";
 
-      // Show center pause icon when playing (if not loading/unsupported)
-      if (isLoading || this._isUnsupported) {
-        if (centerPlayPauseBtn) {
-          centerPlayPauseBtn.classList.remove("movi-center-visible");
-        }
-      } else if (centerPlayPauseBtn) {
+      // While playing, the center button briefly surfaces as a pause
+      // icon for visual confirmation of the user's click, then fades
+      // out with the controls bar (the stateChange handler's 200ms
+      // setTimeout strips both together). The controlsHidden gate
+      // below ensures the periodic UI refresh (250ms tick) doesn't
+      // re-add the button after that fade-out — otherwise the icon
+      // kept flickering back on every tick while controls were still
+      // hidden but state was still "playing".
+      if (centerPlayPauseBtn) {
         centerPlayIcon?.style.setProperty("display", "none");
         centerPauseIcon?.style.setProperty("display", "block");
-
-        // Only show if controls are enabled AND currently visible.
-        // Embeds that opt out of the controls bar entirely
-        // (controls={false} on the host attribute) shouldn't get a
-        // floating center play/pause either — Shorts-style hosts
-        // surface their own actions UI.
-        const controlsDisabled = !this._controls
         const controlsHidden =
-          controlsDisabled ||
-          this.controlsContainer?.classList.contains("movi-controls-hidden")
-        if (!controlsHidden) {
-          requestAnimationFrame(() => {
-            centerPlayPauseBtn.classList.add("movi-center-visible");
-          });
-        } else {
+          !this._controls ||
+          this.controlsContainer?.classList.contains("movi-controls-hidden");
+        if (isLoading || this._isUnsupported || controlsHidden) {
           centerPlayPauseBtn.classList.remove("movi-center-visible");
+        } else {
+          centerPlayPauseBtn.classList.add("movi-center-visible");
         }
       }
     } else {
@@ -12747,10 +12909,23 @@ export class MoviElement extends HTMLElement {
           centerPlayIcon?.style.setProperty("display", "block");
           centerPauseIcon?.style.setProperty("display", "none");
 
-          // Use a small delay for smooth transition
-          requestAnimationFrame(() => {
-            centerPlayPauseBtn.classList.add("movi-center-visible");
-          });
+          // Mirror the playing branch's gating: only surface the
+          // center button when controls are enabled AND currently
+          // visible. Without this guard, the periodic UI refresh
+          // (which calls updatePlayPauseIcon) re-added the center
+          // button moments after hideControls had stripped it, so
+          // the play button kept popping back over a hidden bar.
+          const controlsDisabled = !this._controls;
+          const controlsHidden =
+            controlsDisabled ||
+            this.controlsContainer?.classList.contains("movi-controls-hidden");
+          if (!controlsHidden) {
+            requestAnimationFrame(() => {
+              centerPlayPauseBtn.classList.add("movi-center-visible");
+            });
+          } else {
+            centerPlayPauseBtn.classList.remove("movi-center-visible");
+          }
         }
       }
     }

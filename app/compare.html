@@ -33,10 +33,54 @@
         --text-secondary: #a0a0b0;
         --text-muted: #6a6a78;
         --border: rgba(255, 255, 255, 0.08);
+        --navbar-bg: rgba(15, 15, 18, 0.6);
+        --navbar-bg-scrolled: rgba(15, 15, 18, 0.85);
+        --navbar-border: rgba(255, 255, 255, 0.06);
+        --navbar-border-scrolled: rgba(255, 255, 255, 0.1);
+        --surface-soft: rgba(255, 255, 255, 0.06);
+        --surface-soft-hover: rgba(255, 255, 255, 0.1);
+        --fallback-bg: rgba(0, 0, 0, 0.65);
+        --row-divider: rgba(255, 255, 255, 0.04);
         --success: #4ade80;
         --fail: #f87171;
         --font-family: "Inter", system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
         --mono-family: "JetBrains Mono", "SF Mono", Menlo, Consolas, monospace;
+      }
+
+      /* Light theme — toggled by setting [data-theme="light"] on <html>.
+         Mirrors the same key used by app/index.html (localStorage
+         "theme-preference") so a user who flips the toggle on one page
+         finds the other page already matching when they navigate over. */
+      [data-theme="light"] {
+        --bg-base: #f5f5f5;
+        --bg-panel: #ffffff;
+        --bg-elevated: #ffffff;
+        --text-primary: #141414;
+        --text-secondary: #5a5a68;
+        --text-muted: #9e9e9e;
+        --border: rgba(0, 0, 0, 0.08);
+        --navbar-bg: rgba(255, 255, 255, 0.7);
+        --navbar-bg-scrolled: rgba(255, 255, 255, 0.92);
+        --navbar-border: rgba(0, 0, 0, 0.06);
+        --navbar-border-scrolled: rgba(0, 0, 0, 0.1);
+        --surface-soft: rgba(0, 0, 0, 0.04);
+        --surface-soft-hover: rgba(0, 0, 0, 0.08);
+        --fallback-bg: rgba(255, 255, 255, 0.85);
+        --row-divider: rgba(0, 0, 0, 0.06);
+      }
+      [data-theme="light"] body {
+        background-image:
+          radial-gradient(circle at 20% 10%, rgba(108, 93, 211, 0.08) 0%, transparent 35%),
+          radial-gradient(circle at 80% 90%, rgba(0, 212, 255, 0.05) 0%, transparent 35%);
+      }
+      [data-theme="light"] .brand-text {
+        /* Purple-to-cyan gradient — the brand colors, just at higher
+           saturation so they read on a light bg without falling back
+           to plain black. */
+        background: linear-gradient(135deg, #6c5dd3 0%, #00a8d8 100%);
+        background-clip: text;
+        -webkit-background-clip: text;
+        -webkit-text-fill-color: transparent;
       }
 
       * { margin: 0; padding: 0; box-sizing: border-box; }
@@ -69,15 +113,15 @@
         display: flex;
         align-items: center;
         justify-content: space-between;
-        background: rgba(15, 15, 18, 0.6);
+        background: var(--navbar-bg);
         backdrop-filter: blur(20px) saturate(1.8);
         -webkit-backdrop-filter: blur(20px) saturate(1.8);
-        border-bottom: 1px solid rgba(255, 255, 255, 0.06);
+        border-bottom: 1px solid var(--navbar-border);
         transition: background 0.3s ease, border-color 0.3s ease;
       }
       .navbar.scrolled {
-        background: rgba(15, 15, 18, 0.85);
-        border-bottom-color: rgba(255, 255, 255, 0.1);
+        background: var(--navbar-bg-scrolled);
+        border-bottom-color: var(--navbar-border-scrolled);
       }
       .nav-left {
         display: flex;
@@ -146,9 +190,28 @@
         transition: background 0.2s, border-color 0.2s;
       }
       .nav-icon-link:hover {
-        background: rgba(255, 255, 255, 0.06);
+        background: var(--surface-soft);
         border-color: var(--border);
       }
+      .nav-icon-btn {
+        background: transparent;
+        border: 1px solid transparent;
+        color: var(--text-primary);
+        width: 36px;
+        height: 36px;
+        border-radius: 50%;
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        cursor: pointer;
+        padding: 0;
+        transition: background 0.2s, border-color 0.2s;
+      }
+      .nav-icon-btn:hover {
+        background: var(--surface-soft);
+        border-color: var(--border);
+      }
+      .nav-icon-btn svg { width: 18px; height: 18px; }
 
       main {
         max-width: 1400px;
@@ -272,6 +335,15 @@
         aspect-ratio: 16 / 9;
         background: #000;
       }
+      /* Pin the player's chrome to its dark colour palette regardless of
+         the page theme — same override app/index.html applies. The
+         player's built-in light theme makes the title text near-black,
+         which then vanishes against the title bar's dark gradient. */
+      .pane-stage movi-player {
+        --movi-controls-color: #ffffff;
+        --movi-controls-bg: rgba(0, 0, 0, 0.85);
+        --movi-slider-track: rgba(255, 255, 255, 0.15);
+      }
       .pane-stage video,
       .pane-stage movi-player {
         position: absolute;
@@ -290,7 +362,7 @@
         text-align: center;
         color: var(--text-secondary);
         font-size: 0.92rem;
-        background: rgba(0, 0, 0, 0.65);
+        background: var(--fallback-bg);
       }
       .pane-fallback:not([hidden]) { display: flex; }
       .pane-fallback strong {
@@ -310,7 +382,7 @@
         display: flex;
         justify-content: space-between;
         padding: 0.4rem 0;
-        border-bottom: 1px solid rgba(255, 255, 255, 0.04);
+        border-bottom: 1px solid var(--row-divider);
       }
       .pane-tracks .track-row:last-child { border-bottom: none; }
       .pane-tracks .track-label { color: var(--text-secondary); }
@@ -342,7 +414,7 @@
       .summary th, .summary td {
         text-align: left;
         padding: 0.7rem 0.75rem;
-        border-bottom: 1px solid rgba(255, 255, 255, 0.05);
+        border-bottom: 1px solid var(--row-divider);
       }
       .summary th {
         font-weight: 600;
@@ -384,16 +456,16 @@
       }
       .btn-primary:hover { transform: translateY(-1px); box-shadow: 0 12px 22px rgba(108, 93, 211, 0.42); }
       .btn-secondary {
-        background: rgba(255, 255, 255, 0.06);
-        color: #fff;
+        background: var(--surface-soft);
+        color: var(--text-primary);
         border: 1px solid var(--border);
       }
-      .btn-secondary:hover { background: rgba(255, 255, 255, 0.1); }
+      .btn-secondary:hover { background: var(--surface-soft-hover); }
 
       code, kbd {
         font-family: var(--mono-family);
         font-size: 0.88em;
-        background: rgba(255, 255, 255, 0.08);
+        background: var(--surface-soft);
         padding: 0.1em 0.4em;
         border-radius: 4px;
       }
@@ -429,6 +501,7 @@
         </ul>
       </div>
       <div class="nav-right">
+        <button id="theme-toggle" class="nav-icon-btn" aria-label="Switch Theme" type="button"></button>
         <a href="https://chromewebstore.google.com/detail/movi-player/ckleeigcopjnpehkjokijokjegknfgej" target="_blank" rel="noopener" class="nav-icon-link" aria-label="Chrome Extension" title="Get Chrome Extension">
           <svg width="18" height="18" viewBox="0 0 512 512" fill="currentColor"><path d="M188.8,255.93A67.2,67.2,0,1,0,256,188.75,67.38,67.38,0,0,0,188.8,255.93Z"/><path d="M476.75,217.79s0,0,0,.05a206.63,206.63,0,0,0-7-28.84h-.11a202.16,202.16,0,0,1,7.07,29h0a203.5,203.5,0,0,0-7.07-29H314.24c19.05,17,31.36,40.17,31.36,67.05a86.55,86.55,0,0,1-12.31,44.73L231,478.45a2.44,2.44,0,0,1,0,.27V479h0v-.26A224,224,0,0,0,256,480c6.84,0,13.61-.39,20.3-1a222.91,222.91,0,0,0,29.78-4.74C405.68,451.52,480,362.4,480,255.94A225.25,225.25,0,0,0,476.75,217.79Z"/><path d="M256,345.5c-33.6,0-61.6-17.91-77.29-44.79L76,123.05l-.14-.24A224,224,0,0,0,207.4,474.55l0-.05,77.69-134.6A84.13,84.13,0,0,1,256,345.5Z"/><path d="M91.29,104.57l77.35,133.25A89.19,89.19,0,0,1,256,166H461.17a246.51,246.51,0,0,0-25.78-43.94l.12.08A245.26,245.26,0,0,1,461.17,166h.17a245.91,245.91,0,0,0-25.66-44,2.63,2.63,0,0,1-.35-.26A223.93,223.93,0,0,0,91.14,104.34l.14.24Z"/></svg>
         </a>
@@ -902,6 +975,58 @@
       // so first frame appears in a couple of seconds even though the file
       // itself is ~1.1 GB. User can override anytime with the picker / drop.
       loadSource(DEFAULT_SAMPLE);
+
+      // --- Theme Logic --- mirrors app/index.html (same localStorage key,
+      // same auto/light/dark cycle) so the choice carries between pages.
+      const themeToggle = document.getElementById("theme-toggle");
+      // SVG markup is parsed via DOMParser instead of assigning to
+      // innerHTML so we don't trip the project's no-innerHTML security
+      // hook. The strings are static literals, but the rule is
+      // mechanical and easier to comply with than to argue with.
+      const svgNs = "http://www.w3.org/2000/svg";
+      const parseSvg = (markup) => {
+        const doc = new DOMParser().parseFromString(
+          `<svg xmlns="${svgNs}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">${markup}</svg>`,
+          "image/svg+xml",
+        );
+        return document.importNode(doc.documentElement, true);
+      };
+      const themeIcons = {
+        auto: () => parseSvg('<rect x="2" y="3" width="20" height="14" rx="2" ry="2"/><line x1="8" y1="21" x2="16" y2="21"/><line x1="12" y1="17" x2="12" y2="21"/>'),
+        light: () => parseSvg('<circle cx="12" cy="12" r="5"/><line x1="12" y1="1" x2="12" y2="3"/><line x1="12" y1="21" x2="12" y2="23"/><line x1="4.22" y1="4.22" x2="5.64" y2="5.64"/><line x1="18.36" y1="18.36" x2="19.78" y2="19.78"/><line x1="1" y1="12" x2="3" y2="12"/><line x1="21" y1="12" x2="23" y2="12"/><line x1="4.22" y1="19.78" x2="5.64" y2="18.36"/><line x1="18.36" y1="5.64" x2="19.78" y2="4.22"/>'),
+        dark: () => parseSvg('<path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"/>'),
+      };
+      const themeModes = ["auto", "light", "dark"];
+      let themeMode = localStorage.getItem("theme-preference") || "auto";
+
+      const applyTheme = (mode) => {
+        const effective = mode === "auto"
+          ? (window.matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light")
+          : mode;
+        if (effective === "light") {
+          document.documentElement.setAttribute("data-theme", "light");
+        } else {
+          document.documentElement.removeAttribute("data-theme");
+        }
+        themeToggle.replaceChildren(themeIcons[mode]());
+        themeToggle.setAttribute("title", `Theme: ${mode[0].toUpperCase() + mode.slice(1)}`);
+        // Push the resolved theme to both players so their internal
+        // [theme="..."] selectors flip in sync with the page chrome.
+        if (moviPlayer) moviPlayer.setAttribute("theme", effective);
+        if (nativeVideo) nativeVideo.style.colorScheme = effective;
+      };
+
+      window.matchMedia("(prefers-color-scheme: dark)").addEventListener("change", () => {
+        if (themeMode === "auto") applyTheme("auto");
+      });
+
+      themeToggle.addEventListener("click", () => {
+        themeMode = themeModes[(themeModes.indexOf(themeMode) + 1) % themeModes.length];
+        localStorage.setItem("theme-preference", themeMode);
+        applyTheme(themeMode);
+      });
+
+      applyTheme(themeMode);
     </script>
   </body>
 </html>
