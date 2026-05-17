@@ -59,6 +59,12 @@ export class MoviElement extends HTMLElement {
   private eventHandlers: Map<string, () => void> = new Map();
   private controlsContainer: HTMLElement | null = null;
   private unmuteOverlay: HTMLButtonElement | null = null;
+  // Sticky latch — once the user has heard audio (whether by clicking
+  // the pill, dragging the slider, or pressing M), suppress the pill
+  // for the rest of the element's life. Re-muting after that is an
+  // intentional choice; the pill is only meant to bridge the browser's
+  // autoplay-with-sound block, not pester on every manual mute.
+  private _userHasUnmuted: boolean = false;
   private brokenIndicator: HTMLElement | null = null;
   private emptyStateIndicator: HTMLElement | null = null;
   private controlsTimeout: number | null = null;
@@ -1048,6 +1054,7 @@ export class MoviElement extends HTMLElement {
     unmuteOverlay.appendChild(unmuteText);
     unmuteOverlay.addEventListener("click", (e) => {
       e.stopPropagation();
+      this._userHasUnmuted = true;
       this.muted = false;
       // Defensive — updateMuted() should hide it via updateUnmuteOverlay,
       // but if state is mid-flight this guarantees the click feels instant.
@@ -9515,26 +9522,30 @@ export class MoviElement extends HTMLElement {
            transform: none !important;
         }
         
-        /* Restore explicit transforms that are structural, not animated */
+        /* Restore explicit transforms that are structural, not animated.
+           Sized to a finger-friendly tap target on phones (was 68×68 +
+           32×32 svg, which read as undersized next to the bottom bar);
+           96×96 + 50×50 keeps parity with the desktop default. */
         .movi-center-play-pause {
            /* Center button needs transform for centering */
            transform: translate(-50%, -50%) scale(0.7) !important;
-           width: 68px !important;
-           height: 68px !important;
+           width: 96px !important;
+           height: 96px !important;
            border-width: 1.5px !important;
         }
         .movi-center-play-pause.movi-center-visible {
            transform: translate(-50%, -50%) scale(1) !important;
         }
         .movi-center-play-pause svg {
-           width: 32px !important;
-           height: 32px !important;
+           width: 50px !important;
+           height: 50px !important;
            color: var(--movi-controls-color) !important;
            fill: var(--movi-controls-color) !important;
            filter: drop-shadow(0 2px 4px rgba(0, 0, 0, 0.3)) !important;
         }
         .movi-center-icon-play {
-           margin-left: 5px !important;
+           margin-left: 0 !important;
+           transform: translateX(4px) scale(1.15) !important;
         }
         .movi-progress-handle {
             /* Handle needs transform for centering and positioning */
@@ -10021,15 +10032,19 @@ export class MoviElement extends HTMLElement {
         }
       }
 
-      /* Center play/pause button */
+      /* Center play/pause button — anchored 3% above the geometric
+         centre so the bottom controls bar (always present, visually
+         heavy) doesn't drag the perceived centre down. Subtle enough
+         that it still reads as "middle" on a pane with no chrome
+         visible. */
       .movi-center-play-pause {
         position: absolute;
-        top: 50%;
+        top: 44%;
         left: 50%;
         transform: translate(-50%, -50%) scale(0.8);
         z-index: 5;
-        width: 88px;
-        height: 88px;
+        width: 96px;
+        height: 96px;
         border-radius: 50%;
         background: color-mix(in srgb, var(--movi-primary) 25%, transparent);
         backdrop-filter: blur(12px);
@@ -10074,8 +10089,8 @@ export class MoviElement extends HTMLElement {
       }
 
       .movi-center-play-pause svg {
-        width: 48px;
-        height: 48px;
+        width: 52px;
+        height: 52px;
         color: var(--movi-controls-color);
         fill: var(--movi-controls-color);
         transition: all var(--movi-transition-fast);
@@ -10086,10 +10101,15 @@ export class MoviElement extends HTMLElement {
         filter: drop-shadow(0 0 8px color-mix(in srgb, var(--movi-primary) 60%, transparent));
       }
 
-      /* Play icon offset for optical centering */
+      /* Play icon — bumped up ~15% so the triangle isn't dwarfed by
+         the circle's blur halo (the pause SVG stays at the base size
+         since it's already visually heavier). The translate is a
+         small optical-centre nudge — 5px read as too far right in
+         practice, so 2px is enough to take the visual edge off the
+         left-leaning mass without making the tip look pushed. */
       .movi-center-icon-play {
-        margin-left: 6px;
         display: block;
+        transform: translateX(4px) scale(1.15);
       }
 
       .movi-center-play-pause:focus {
@@ -10098,18 +10118,11 @@ export class MoviElement extends HTMLElement {
         box-shadow: 0 0 0 3px color-mix(in srgb, var(--movi-primary) 30%, transparent), 0 8px 32px rgba(0, 0, 0, 0.4);
       }
       
-      /* Mobile center button sizing */
-      @container movi-host (max-width: 720px) {
-        .movi-center-play-pause {
-          width: 72px;
-          height: 72px;
-        }
-        
-        .movi-center-play-pause svg {
-          width: 36px;
-          height: 36px;
-        }
-      }
+      /* Mobile center button — previously shrank to 72px here, but the
+         <=720px responsive block further down enforces 96px with
+         !important, so this rule was dead. Removed to avoid drift; if
+         a smaller phone-sized variant is ever wanted, set it in that
+         block so it survives the !important cascade. */
 
       /* Subtitle overlay - HTML element for better performance */
       .movi-subtitle-overlay {
@@ -11072,15 +11085,18 @@ export class MoviElement extends HTMLElement {
           font-size: 10px !important;
         }
 
-        /* Center play button sized so it doesn't clip into controls bar
-           on narrow 16:9 players (~183px height). */
+        /* Center play button on narrow viewports — 72px keeps it a
+           comfortable tap target on phones (>44pt iOS HIG floor) while
+           leaving more black space around the circle than the 84px
+           sizing felt was eating on a 16:9 pane that fills a 430px
+           phone. SVG scales accordingly. */
         .movi-center-play-pause {
-          width: 52px !important;
-          height: 52px !important;
+          width: 72px !important;
+          height: 72px !important;
         }
         .movi-center-play-pause svg {
-          width: 26px !important;
-          height: 26px !important;
+          width: 38px !important;
+          height: 38px !important;
         }
 
         /* Tighter OSD on very narrow viewports — at 480px the 16px base
@@ -12002,7 +12018,8 @@ export class MoviElement extends HTMLElement {
     if (!overlay) return;
     const hasAudio = this.player ? this.player.hasAudibleSource() : true;
     const shouldShow =
-      this._controls && this._autoplay && this._muted && hasAudio;
+      this._controls && this._autoplay && this._muted && hasAudio &&
+      !this._userHasUnmuted;
     overlay.style.display = shouldShow ? "flex" : "none";
   }
 
@@ -14762,6 +14779,13 @@ export class MoviElement extends HTMLElement {
     if (value) {
       this.setAttribute("muted", "");
     } else {
+      // Reaching the setter (M-key, integrator JS, slider-driven unmute,
+      // pill click) is by definition a deliberate unmute — latch so the
+      // floating pill doesn't reappear if the user mutes again later.
+      // Init-time attribute parsing and SettingsStorage restore mutate
+      // `_muted` directly without going through this setter, so they
+      // can't accidentally trip the latch.
+      this._userHasUnmuted = true;
       this.removeAttribute("muted");
     }
     this.updateMuted();
@@ -14808,6 +14832,7 @@ export class MoviElement extends HTMLElement {
     // If user increases volume while muted, automatically unmute (like YouTube)
     if (this._muted && this._volume > 0) {
       this._muted = false;
+      this._userHasUnmuted = true;
       this.removeAttribute("muted");
       // Update player muted state immediately
       if (this.player) {
