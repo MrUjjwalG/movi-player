@@ -14910,7 +14910,8 @@ export class MoviElement extends HTMLElement {
     this.setAttribute("volume", this._volume.toString());
 
     // If user increases volume while muted, automatically unmute (like YouTube)
-    if (this._muted && this._volume > 0) {
+    const autoUnmuted = this._muted && this._volume > 0;
+    if (autoUnmuted) {
       this._muted = false;
       this._userHasUnmuted = true;
       this.removeAttribute("muted");
@@ -14921,7 +14922,16 @@ export class MoviElement extends HTMLElement {
     }
 
     this.updateVolume();
-    SettingsStorage.getInstance().save({ volume: this._volume });
+    // Persist `muted: false` here too whenever the slider triggered an
+    // auto-unmute — this path bypasses `set muted` (mutates `_muted`
+    // directly to keep things synchronous with the slider drag), so
+    // without this the persisted state lags behind: a session that
+    // ends unmuted-via-slider reloads as muted because OPFS still
+    // holds the last muted=true write from whenever the user first
+    // muted via M-key or the volume button.
+    SettingsStorage.getInstance().save(
+      autoUnmuted ? { volume: this._volume, muted: false } : { volume: this._volume },
+    );
     this.dispatchEvent(new CustomEvent("volumechange", { detail: { volume: this._volume, muted: this._muted } }));
   }
 
