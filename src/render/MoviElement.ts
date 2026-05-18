@@ -745,8 +745,8 @@ export class MoviElement extends HTMLElement {
     `;
     shadowRoot.appendChild(contextMenu);
 
-    // Move submenus out of the menu so they escape its backdrop-filter / overflow
-    // containing-block trap. They live as siblings of the menu in shadowRoot, and
+    // Move submenus out of the menu so they escape its overflow containing-block
+    // trap. They live as siblings of the menu in shadowRoot, and
     // setupSubmenuHover positions them in :host-relative absolute coordinates.
     const submenuNodes = contextMenu.querySelectorAll(
       ".movi-context-menu-submenu, .movi-context-menu-submenu-audio, .movi-context-menu-submenu-subtitle",
@@ -3595,7 +3595,7 @@ export class MoviElement extends HTMLElement {
 
     // Handle context menu item clicks. The same handler is attached to
     // submenus too because they live as siblings of contextMenu in shadowRoot
-    // (moved out so they escape the menu's backdrop-filter containing block).
+    // (moved out so they escape the menu's overflow containing block).
     const itemClickHandler = (e: Event) => {
       const target = e.target as HTMLElement;
       const item = target.closest(".movi-context-menu-item") as HTMLElement;
@@ -7140,8 +7140,6 @@ export class MoviElement extends HTMLElement {
       /* Light Theme Tooltip */
       :host([theme="light"]) .movi-seek-thumbnail {
         background-color: rgba(255, 255, 255, 0.65) !important;
-        backdrop-filter: blur(20px) !important;
-        -webkit-backdrop-filter: blur(20px) !important;
         color: #11142d !important;
         box-shadow: 0 8px 32px rgba(0, 0, 0, 0.12) !important;
         border: 1px solid rgba(255, 255, 255, 0.4) !important;
@@ -7415,8 +7413,6 @@ export class MoviElement extends HTMLElement {
         gap: 8px;
         padding: 8px 14px;
         background: rgba(0, 0, 0, 0.75);
-        backdrop-filter: blur(10px);
-        -webkit-backdrop-filter: blur(10px);
         color: #fff;
         font-size: 13px;
         font-weight: 600;
@@ -7484,8 +7480,6 @@ export class MoviElement extends HTMLElement {
         flex-direction: column;
         padding: 0 20px 10px;
         background: var(--movi-bar-bg);
-        backdrop-filter: blur(var(--movi-glass-blur));
-        -webkit-backdrop-filter: blur(var(--movi-glass-blur));
         color: var(--movi-controls-color);
         height: auto;
         min-height: var(--movi-controls-height);
@@ -7862,8 +7856,6 @@ export class MoviElement extends HTMLElement {
         bottom: calc(100% + 12px);
         right: 0;
         background: var(--movi-glass-bg);
-        backdrop-filter: blur(var(--movi-glass-blur));
-        -webkit-backdrop-filter: blur(var(--movi-glass-blur));
         border: 1px solid var(--movi-glass-border);
         border-radius: 14px;
         min-width: 260px;
@@ -8714,8 +8706,6 @@ export class MoviElement extends HTMLElement {
         bottom: calc(100% + 12px);
         right: 0;
         background: var(--movi-glass-bg);
-        backdrop-filter: blur(var(--movi-glass-blur));
-        -webkit-backdrop-filter: blur(var(--movi-glass-blur));
         border: 1px solid var(--movi-glass-border);
         border-radius: 12px;
         min-width: 140px;
@@ -8789,8 +8779,6 @@ export class MoviElement extends HTMLElement {
         left: 12px;
         z-index: 9;
         background: rgba(0, 0, 0, 0.82);
-        backdrop-filter: blur(12px);
-        -webkit-backdrop-filter: blur(12px);
         border: 1px solid rgba(255, 255, 255, 0.1);
         border-radius: 8px;
         padding: 0;
@@ -9005,8 +8993,6 @@ export class MoviElement extends HTMLElement {
         right: 12px;
         z-index: 11;
         background: rgba(0, 0, 0, 0.88);
-        backdrop-filter: blur(16px);
-        -webkit-backdrop-filter: blur(16px);
         border: 1px solid rgba(255, 255, 255, 0.1);
         border-radius: 10px;
         padding: 0;
@@ -9209,8 +9195,6 @@ export class MoviElement extends HTMLElement {
         transform: translate(-50%, -50%);
         z-index: 100;
         background: rgba(0, 0, 0, 0.92);
-        backdrop-filter: blur(20px);
-        -webkit-backdrop-filter: blur(20px);
         border: 1px solid rgba(255, 255, 255, 0.1);
         border-radius: 12px;
         padding: 0;
@@ -9298,8 +9282,6 @@ export class MoviElement extends HTMLElement {
         inset: 0;
         z-index: 200;
         background: rgba(0, 0, 0, 0.78);
-        backdrop-filter: blur(24px);
-        -webkit-backdrop-filter: blur(24px);
         display: flex;
         flex-direction: column;
         font-family: 'Inter', -apple-system, sans-serif;
@@ -9455,8 +9437,6 @@ export class MoviElement extends HTMLElement {
         right: 16px;
         z-index: 50;
         background: rgba(0, 0, 0, 0.9);
-        backdrop-filter: blur(16px);
-        -webkit-backdrop-filter: blur(16px);
         border: 1px solid rgba(255, 255, 255, 0.12);
         border-radius: 10px;
         padding: 14px 20px;
@@ -9982,8 +9962,6 @@ export class MoviElement extends HTMLElement {
 
         /* Remove backdrop filter which causes white flashes on some mobile GPUs */
         .movi-controls-bar {
-          backdrop-filter: none !important;
-          -webkit-backdrop-filter: none !important;
           background: rgba(10, 10, 18, 0.95) !important; /* Solid dark background fallback */
         }
 
@@ -10121,8 +10099,6 @@ export class MoviElement extends HTMLElement {
         height: 96px;
         border-radius: 50%;
         background: color-mix(in srgb, var(--movi-primary) 25%, transparent);
-        backdrop-filter: blur(12px);
-        -webkit-backdrop-filter: blur(12px);
         padding: 0;
         border: 2px solid color-mix(in srgb, var(--movi-primary) 40%, transparent);
         display: flex;
@@ -10312,8 +10288,6 @@ export class MoviElement extends HTMLElement {
       .movi-context-menu {
         position: absolute;
         background: rgba(15, 15, 22, 0.95);
-        backdrop-filter: blur(30px);
-        -webkit-backdrop-filter: blur(30px);
         border: 1px solid rgba(255, 255, 255, 0.12);
         border-radius: 16px;
         padding: 8px 4px; /* Consistent with submenus */
@@ -10354,8 +10328,6 @@ export class MoviElement extends HTMLElement {
         width: 100%;
         height: 100%;
         background: rgba(0, 0, 0, 0.4);
-        backdrop-filter: blur(4px);
-        -webkit-backdrop-filter: blur(4px);
         z-index: 19999;
         display: none;
       }
@@ -10470,8 +10442,6 @@ export class MoviElement extends HTMLElement {
       .movi-context-menu-submenu {
         position: absolute;
         background: rgba(15, 15, 22, 0.95);
-        backdrop-filter: blur(30px);
-        -webkit-backdrop-filter: blur(30px);
         border: 1px solid rgba(255, 255, 255, 0.12);
         border-radius: 16px;
         padding: 8px 4px;
@@ -10502,8 +10472,6 @@ export class MoviElement extends HTMLElement {
       .movi-context-menu-submenu-subtitle {
         position: absolute;
         background: rgba(15, 15, 22, 0.95);
-        backdrop-filter: blur(30px);
-        -webkit-backdrop-filter: blur(30px);
         border: 1px solid rgba(255, 255, 255, 0.12);
         border-radius: 16px;
         padding: 8px 4px;
@@ -10558,8 +10526,6 @@ export class MoviElement extends HTMLElement {
         transform: none; /* Reset transform */
         margin-bottom: 0;
         background: var(--movi-glass-bg);
-        backdrop-filter: blur(var(--movi-glass-blur));
-        -webkit-backdrop-filter: blur(var(--movi-glass-blur));
         border: 1px solid var(--movi-glass-border);
         border-radius: 12px;
         min-width: 200px;
@@ -10794,8 +10760,6 @@ export class MoviElement extends HTMLElement {
         left: 50%;
         transform: translateX(-50%) translateY(-20px);
         background: rgba(15, 15, 20, 0.85);
-        backdrop-filter: blur(20px);
-        -webkit-backdrop-filter: blur(20px);
         padding: 12px 24px;
         border-radius: 30px;
         display: none; /* Flex when visible */
@@ -10851,8 +10815,6 @@ export class MoviElement extends HTMLElement {
         font-family: 'Inter', sans-serif;
         text-align: center;
         padding: clamp(16px, 5%, 40px);
-        backdrop-filter: blur(20px) saturate(180%);
-        -webkit-backdrop-filter: blur(20px) saturate(180%);
         opacity: 0;
         animation: movi-fade-in 0.5s ease forwards;
       }
