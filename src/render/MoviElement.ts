@@ -1921,10 +1921,10 @@ export class MoviElement extends HTMLElement {
     });
 
     // Refresh disabled/visible state of speed options whenever the menu opens —
-    // 4K+ sources cap at 1.5x because hardware decoders genuinely can't
-    // sustain ≥120 effective fps decode (8K @ 2x produces decoder errors and
-    // stalls regardless of buffer tuning). getMaxAllowedRate() returns the
-    // active source's ceiling; defined as a method below.
+    // 8K+ sources cap at 1.5x because hardware decoders genuinely can't
+    // sustain ≥120 effective fps decode at 8K (decoder errors and stalls
+    // regardless of buffer tuning). 4K handles 2x fine on modern hw.
+    // getMaxAllowedRate() returns the active source's ceiling.
     const refreshSpeedMenu = () => {
       const maxRate = this.getMaxAllowedRate();
       shadowRoot.querySelectorAll(".movi-speed-item").forEach((item) => {
@@ -1934,7 +1934,7 @@ export class MoviElement extends HTMLElement {
         el.style.opacity = blocked ? "0.4" : "";
         el.style.pointerEvents = blocked ? "none" : "";
         el.title = blocked
-          ? "Not available for this source (4K+ tops out at 1.5x)"
+          ? "Not available for this source (8K+ tops out at 1.5x)"
           : "";
       });
     };
@@ -5251,15 +5251,16 @@ export class MoviElement extends HTMLElement {
   }
 
   /*
-   * Maximum playback rate the current source can sustain. Heavy sources
-   * (4K+) cap at 1.5x — hardware AV1/HEVC decoders can't sustain ≥120
-   * effective fps decode at 8K, so 2x produces decoder errors and stalls
-   * regardless of buffer / queue tuning. Lighter sources get the full 2x.
+   * Maximum playback rate the current source can sustain. 8K+ caps at 1.5x —
+   * hardware AV1/HEVC decoders genuinely top out below 120 effective fps
+   * decode at 8K, so 2x produces decoder errors and stalls regardless of
+   * buffer / queue tuning. 4K and lighter sources handle the full 2x on
+   * modern hardware.
    */
   private getMaxAllowedRate(): number {
     const track = (this.player as any)?.trackManager?.getActiveVideoTrack?.();
     const pixels = (track?.width ?? 0) * (track?.height ?? 0);
-    if (pixels >= 3840 * 2160) return 1.5;
+    if (pixels >= 7680 * 4320) return 1.5;
     return 2;
   }
 
@@ -14940,7 +14941,7 @@ export class MoviElement extends HTMLElement {
   }
 
   set playbackRate(value: number) {
-    // Clamp to the source's allowed ceiling — 4K+ sources can't sustain >1.5x
+    // Clamp to the source's allowed ceiling — 8K+ sources can't sustain >1.5x
     // decode in any browser today, so even programmatic callers are clamped
     // to prevent decoder errors / stalls. getMaxAllowedRate returns 2 when
     // no track is active yet, so attribute init / settings restore still work.
