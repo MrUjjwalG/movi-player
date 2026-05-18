@@ -297,28 +297,49 @@ export class CanvasRenderer {
         return;
       }
 
-      // Configure color space on the GL context (Chrome 104+, Safari 17+)
+      // Configure color space on the GL context (Chrome 104+, Safari 17+).
+      // For HDR PQ/HLG sources on Chromium, tag the canvas with
+      // rec2100-pq/hlg — Chrome's compositor then sends the buffer to the
+      // HDR display at full peak brightness. display-p3 alone is wide-gamut
+      // SDR (~100 nits) and tone-maps PQ highlights down, making HDR look
+      // dim. The HDR Canvas spec's RGBA16F float buffer (drawingBufferStorage)
+      // is NOT required for this — the colorspace tag is independent of the
+      // buffer's bit depth. 8-bit PQ has some quantization banding but
+      // unlocks the full HDR brightness range, which Ujjwal prefers.
       try {
-        // @ts-ignore
-        if (
-          detectedColorSpace !== "srgb" &&
-          this.gl.drawingBufferColorSpace !== undefined
-        ) {
-          // Verify if the browser actually supports the requested color space
-          // WebGL2 only supports 'srgb' and 'display-p3'
-          const supportedSpaces = ["srgb", "display-p3"];
-          const targetSpace = supportedSpaces.includes(detectedColorSpace)
-            ? detectedColorSpace
-            : "srgb";
+        const isChromium = !!(window as any).chrome;
+        const transferLc = (colorTransfer || "").toLowerCase();
+        const isHLGSource =
+          transferLc.includes("hlg") || transferLc.includes("arib-std-b67");
+        const isHDRPath =
+          this.isHDRSource && this.hdrEnabled && isChromium;
+        const hdrSpace = isHLGSource ? "rec2100-hlg" : "rec2100-pq";
 
-          // @ts-ignore
-          this.gl.drawingBufferColorSpace = targetSpace;
-          // @ts-ignore
-          this.gl.unpackColorSpace = targetSpace;
-          Logger.info(
-            TAG,
-            `WebGL drawing buffer color space set to: ${targetSpace} (requested: ${detectedColorSpace})`,
-          );
+        // @ts-ignore
+        if (this.gl.drawingBufferColorSpace !== undefined) {
+          let targetSpace: string;
+          if (isHDRPath) {
+            targetSpace = hdrSpace;
+          } else if (detectedColorSpace !== "srgb") {
+            // Wide-gamut SDR or HDR-disabled fallback
+            const supportedSpaces = ["srgb", "display-p3"];
+            targetSpace = supportedSpaces.includes(detectedColorSpace)
+              ? detectedColorSpace
+              : "srgb";
+          } else {
+            targetSpace = "srgb";
+          }
+
+          if (targetSpace !== "srgb") {
+            // @ts-ignore
+            this.gl.drawingBufferColorSpace = targetSpace;
+            // @ts-ignore
+            this.gl.unpackColorSpace = targetSpace;
+            Logger.info(
+              TAG,
+              `WebGL drawing buffer color space set to: ${targetSpace} (requested: ${detectedColorSpace}, HDR path: ${isHDRPath})`,
+            );
+          }
         }
       } catch (e) {
         Logger.warn(
@@ -529,17 +550,22 @@ export class CanvasRenderer {
       // Apply PQ EOTF to get linear light
       vec3 linear = PQtoLinear(color.rgb);
 
-      // Tone map to SDR range
-      // Adjusted to match Chrome native HDR appearance
-      // When HDR disabled: lower exposure (22.0) for better contrast
-      // When HDR enabled: higher exposure (35.0) to match native Chrome vibrance
-      float exposure = mix(22.0, 35.0, u_hdrEnabled);
+      // Tone map to SDR range.
+      // Reinhard's x/(1+x) curve gets steep fast — every extra unit of
+      // exposure pushes mid-tones harder toward white, which reads as
+      // crushed highlights + boosted contrast on most SDR displays.
+      // The HDR-on path used to push exposure to 35.0 to "match Chrome
+      // native HDR vibrance"; in practice that overshot native, with
+      // visible extra contrast vs the <video> tag on the compare page.
+      // 26.0 keeps the HDR path noticeably punchier than HDR-off (22.0)
+      // without crushing highlights past where Chrome's compositor
+      // lands.
+      float exposure = mix(22.0, 26.0, u_hdrEnabled);
       vec3 sdr = toneMapReinhard(linear, exposure);
 
-      // Saturation boost
-      // When HDR disabled: slight boost (1.1) for better colors
-      // When HDR enabled: strong boost (1.5) to match Chrome native HDR vibrancy
-      float saturation = mix(1.1, 1.5, u_hdrEnabled);
+      // Saturation boost. 1.5 read as oversaturated next to native;
+      // 1.25 keeps the wide-gamut feel without the cartoonish punch.
+      float saturation = mix(1.1, 1.25, u_hdrEnabled);
       sdr = adjustSaturation(sdr, saturation);
 
       // Apply gamma (2.2 for accurate color reproduction)
