@@ -295,6 +295,65 @@
         word-break: break-all;
       }
 
+      .sync-bar {
+        display: flex;
+        align-items: center;
+        gap: 1rem;
+        margin-bottom: 1.25rem;
+        flex-wrap: wrap;
+      }
+      .sync-btn {
+        display: inline-flex;
+        align-items: center;
+        gap: 0.55rem;
+        padding: 0.6rem 1.1rem;
+        border-radius: 10px;
+        font-weight: 600;
+        font-size: 0.9rem;
+        color: #fff;
+        background: linear-gradient(135deg, var(--primary-accent), #4a3bba);
+        border: 1px solid rgba(255, 255, 255, 0.08);
+        box-shadow: 0 6px 14px rgba(108, 93, 211, 0.28);
+        cursor: pointer;
+        transition: transform 0.15s ease, box-shadow 0.15s ease, opacity 0.15s ease;
+        font-family: inherit;
+      }
+      .sync-btn:hover { transform: translateY(-1px); box-shadow: 0 10px 20px rgba(108, 93, 211, 0.38); }
+      .sync-btn:active { transform: translateY(0); }
+      .sync-btn:disabled { opacity: 0.55; cursor: not-allowed; transform: none; box-shadow: none; }
+      .sync-btn svg { width: 16px; height: 16px; flex-shrink: 0; }
+      /* Brief "Synced ✓" pulse so the click registers visually even
+         when both players were already in step. */
+      .sync-btn.synced {
+        background: linear-gradient(135deg, var(--success), #34a35b);
+        box-shadow: 0 6px 14px rgba(74, 222, 128, 0.28);
+      }
+      /* When the toggle is engaged the button stays in the "synced"
+         palette and shows a tiny pulsing dot so the user can tell at
+         a glance that the native pane is mirroring MoviPlayer. */
+      .sync-btn.active {
+        background: linear-gradient(135deg, var(--success), #34a35b);
+        box-shadow: 0 6px 14px rgba(74, 222, 128, 0.28);
+      }
+      .sync-btn .sync-dot {
+        width: 8px;
+        height: 8px;
+        border-radius: 50%;
+        background: rgba(255, 255, 255, 0.85);
+        display: none;
+        animation: sync-pulse 1.4s ease-in-out infinite;
+      }
+      .sync-btn.active .sync-dot { display: inline-block; }
+      @keyframes sync-pulse {
+        0%, 100% { opacity: 0.5; transform: scale(0.85); }
+        50%      { opacity: 1;   transform: scale(1.15); }
+      }
+      .sync-hint {
+        font-size: 0.82rem;
+        color: var(--text-muted);
+        line-height: 1.4;
+      }
+
       .panes {
         display: grid;
         grid-template-columns: 1fr 1fr;
@@ -560,6 +619,19 @@
         <div class="picker-hint">MKV / HEVC / AV1 / HDR / multi-audio / subs — anything your &lt;video&gt; tag normally chokes on. The file never leaves your device. By default we load Sintel (Blender open movie, ~1.1 GB) so you have something to look at immediately.</div>
         <div class="picker-meta" id="picker-meta" hidden></div>
       </label>
+
+      <div class="sync-bar">
+        <button id="sync-btn" type="button" class="sync-btn" aria-pressed="false" aria-label="Toggle continuous sync between the native and MoviPlayer panes">
+          <span class="sync-dot" aria-hidden="true"></span>
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+            <polyline points="23 4 23 10 17 10"/>
+            <polyline points="1 20 1 14 7 14"/>
+            <path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"/>
+          </svg>
+          <span class="sync-label">Sync playback</span>
+        </button>
+        <span class="sync-hint">Mirrors MoviPlayer's play / pause / seek to the native &lt;video&gt; so both panes stay locked on the same frame. Click again to release.</span>
+      </div>
 
       <section class="panes" aria-label="Side-by-side players">
         <div class="pane" id="pane-native">
@@ -997,6 +1069,71 @@
         const file = e.dataTransfer?.files?.[0];
         if (file) loadFile(file);
       });
+
+      // Sync toggle — when active, mirrors MoviPlayer's play / pause /
+      // seek state onto the native <video> on a short polling tick so
+      // the panes stay locked on the same frame for visual comparison.
+      // MoviPlayer is the source of truth (the demo's point); changes
+      // the user makes on the native pane are NOT propagated back —
+      // bidirectional sync would need feedback-loop guards plus the
+      // movi side ignoring its own programmatic seeks, which adds
+      // complexity that isn't worth it for the "see what the bytes
+      // actually contain" framing here.
+      const syncBtn = $("sync-btn");
+      const syncLabel = syncBtn?.querySelector(".sync-label");
+      let syncTimerId = null;
+      let syncEnabled = false;
+      const SYNC_TICK_MS = 200;
+      // Re-seek native when it drifts past this much. Loose enough that
+      // we don't fight normal playback jitter, tight enough that a user
+      // visually notices the lock holding.
+      const SYNC_DRIFT_THRESHOLD = 0.35;
+
+      const tickSync = () => {
+        if (!syncEnabled) return;
+        const HAVE_METADATA = 1;
+        if (nativeVideo.error || nativeVideo.readyState < HAVE_METADATA) {
+          return; // Native rejected the file; nothing to mirror onto.
+        }
+        const moviPaused = moviPlayer.paused;
+        if (moviPaused && !nativeVideo.paused) {
+          nativeVideo.pause();
+        } else if (!moviPaused && nativeVideo.paused) {
+          nativeVideo.play().catch(() => {});
+        }
+        const t = Number(moviPlayer.currentTime);
+        if (
+          Number.isFinite(t) &&
+          t >= 0 &&
+          Math.abs(t - nativeVideo.currentTime) > SYNC_DRIFT_THRESHOLD
+        ) {
+          nativeVideo.currentTime = t;
+        }
+      };
+
+      const setSyncEnabled = (on) => {
+        syncEnabled = !!on;
+        if (syncBtn) {
+          syncBtn.classList.toggle("active", syncEnabled);
+          syncBtn.setAttribute("aria-pressed", syncEnabled ? "true" : "false");
+        }
+        if (syncLabel) {
+          syncLabel.textContent = syncEnabled ? "Sync ON" : "Sync playback";
+        }
+        if (syncEnabled) {
+          tickSync(); // Immediate alignment so the user sees the lock take effect.
+          if (syncTimerId === null) {
+            syncTimerId = window.setInterval(tickSync, SYNC_TICK_MS);
+          }
+        } else if (syncTimerId !== null) {
+          window.clearInterval(syncTimerId);
+          syncTimerId = null;
+        }
+      };
+
+      if (syncBtn) {
+        syncBtn.addEventListener("click", () => setSyncEnabled(!syncEnabled));
+      }
 
       // Toggle .scrolled on the navbar past the first ~12px — matches the
       // visual treatment on index.html (backdrop darkens slightly).
