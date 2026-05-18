@@ -294,6 +294,92 @@
         color: var(--text-secondary);
         word-break: break-all;
       }
+      .hdr-tip {
+        margin: 0 0 1rem;
+        padding: 0.7rem 0.9rem 0.7rem 1rem;
+        border: 1px solid color-mix(in srgb, var(--accent) 28%, transparent);
+        border-left: 3px solid var(--accent);
+        border-radius: 8px;
+        background: color-mix(in srgb, var(--accent) 7%, transparent);
+        font-size: 0.85rem;
+        color: var(--text-secondary);
+        display: flex;
+        align-items: center;
+        gap: 0.6rem 0.85rem;
+        line-height: 1.45;
+        animation: hdr-tip-in 240ms ease-out;
+      }
+      /* The `display: flex` rule above outranks the UA `[hidden] {
+         display: none }` rule (author CSS beats UA CSS at equal
+         specificity), so without this the `hidden` attribute does
+         nothing and the tip is always visible. */
+      .hdr-tip[hidden] {
+        display: none !important;
+      }
+      @keyframes hdr-tip-in {
+        from { opacity: 0; transform: translateY(-4px); }
+        to   { opacity: 1; transform: translateY(0); }
+      }
+      .hdr-tip-icon {
+        font-size: 1.05rem;
+        line-height: 1;
+        flex-shrink: 0;
+      }
+      .hdr-tip-text {
+        flex: 1;
+        min-width: 240px;
+      }
+      .hdr-tip strong {
+        color: var(--text-primary);
+        font-weight: 600;
+      }
+      .hdr-tip code {
+        font-family: var(--mono-family);
+        font-size: 0.78rem;
+        padding: 0.12rem 0.4rem;
+        border-radius: 4px;
+        background: color-mix(in srgb, var(--text-primary) 8%, transparent);
+        color: var(--text-primary);
+        word-break: break-all;
+      }
+      .hdr-tip button {
+        font: inherit;
+        font-size: 0.78rem;
+        padding: 0.3rem 0.7rem;
+        border-radius: 6px;
+        border: 1px solid color-mix(in srgb, var(--accent) 50%, transparent);
+        background: transparent;
+        color: var(--accent);
+        cursor: pointer;
+        flex-shrink: 0;
+        transition: background 120ms ease, color 120ms ease;
+      }
+      .hdr-tip button:hover {
+        background: color-mix(in srgb, var(--accent) 15%, transparent);
+      }
+      .hdr-tip button.copied {
+        color: var(--text-primary);
+        border-color: color-mix(in srgb, var(--text-primary) 30%, transparent);
+      }
+      .hdr-tip button#hdr-tip-dismiss {
+        padding: 0.15rem 0.5rem;
+        font-size: 1.1rem;
+        line-height: 1;
+        color: var(--text-muted);
+        border-color: transparent;
+      }
+      .hdr-tip button#hdr-tip-dismiss:hover {
+        background: color-mix(in srgb, var(--text-primary) 10%, transparent);
+        color: var(--text-primary);
+      }
+      @media (max-width: 600px) {
+        .hdr-tip {
+          flex-wrap: wrap;
+        }
+        .hdr-tip-text {
+          width: 100%;
+        }
+      }
 
       .sync-bar {
         display: flex;
@@ -633,6 +719,16 @@
         <span class="sync-hint">Mirrors MoviPlayer's play / pause / seek to the native &lt;video&gt; so both panes stay locked on the same frame. Click again to release.</span>
       </div>
 
+      <div class="hdr-tip" id="hdr-tip" hidden role="status" aria-live="polite">
+        <span class="hdr-tip-icon" aria-hidden="true">⚡</span>
+        <span class="hdr-tip-text">
+          <strong>HDR source detected.</strong>
+          Enable <code>chrome://flags/#enable-experimental-web-platform-features</code> and restart Chrome for full peak brightness. Right now it's rendering in wide-gamut SDR (~100 nits).
+        </span>
+        <button type="button" id="hdr-tip-copy">Copy flag URL</button>
+        <button type="button" id="hdr-tip-dismiss" aria-label="Dismiss">×</button>
+      </div>
+
       <section class="panes" aria-label="Side-by-side players">
         <div class="pane" id="pane-native">
           <div class="pane-header">
@@ -706,6 +802,122 @@
       const picker        = $("picker");
       const fileInput     = $("file-input");
       const pickerMeta    = $("picker-meta");
+      const hdrTip        = $("hdr-tip");
+      const hdrTipCopy    = $("hdr-tip-copy");
+      const hdrTipDismiss = $("hdr-tip-dismiss");
+
+      // Match MoviPlayer's own Chromium detection so we agree with it:
+      // see CanvasRenderer.ts and MoviElement.ts — both use the bare
+      // `!!window.chrome` test to gate the rec2100-pq HDR path. Anything
+      // fancier would risk showing the tip in a browser the player itself
+      // won't even attempt HDR rendering on.
+      const FLAG_URL = "chrome://flags/#enable-experimental-web-platform-features";
+      const TIP_DISMISS_KEY = "movi:hdr-tip-dismissed";
+      const isChromium = !!window.chrome;
+
+      // Once we know it's Chromium, probe whether the HDR canvas flag is
+      // already on — if it is, the user doesn't need the tip. This probe
+      // is only meaningful on Chromium (Safari/Firefox return undefined
+      // for drawingBufferColorSpace or silently ignore unknown values),
+      // so we gate it behind isChromium first.
+      function detectHdrFlagEnabled() {
+        if (!isChromium) return false;
+        try {
+          const c = document.createElement("canvas");
+          const gl = c.getContext("webgl2");
+          if (!gl || gl.drawingBufferColorSpace === undefined) return false;
+          gl.drawingBufferColorSpace = "rec2100-pq";
+          return gl.drawingBufferColorSpace === "rec2100-pq";
+        } catch {
+          return false;
+        }
+      }
+      function isTipDismissed() {
+        try { return localStorage.getItem(TIP_DISMISS_KEY) === "1"; } catch { return false; }
+      }
+      // Evaluate the gate on every source change rather than once at page
+      // load. The user can dismiss the tip, load a different file, or
+      // toggle the flag mid-session — each of those should be reflected
+      // without a full reload.
+      // Note: we intentionally don't gate on detectHdrFlagEnabled() any
+      // more. Flag-on users still benefit from a confirmation that HDR
+      // is fully active; flag-off users get the upgrade instruction. The
+      // tip text below adapts to which case applies.
+      function shouldShowHdrTip() {
+        return isChromium && !isTipDismissed();
+      }
+
+      const hdrTipText = hdrTip ? hdrTip.querySelector(".hdr-tip-text") : null;
+      function setHdrTipMessage(flagEnabled) {
+        if (!hdrTipText) return;
+        // Construct via DOM nodes (no innerHTML) to avoid any XSS risk
+        // even though the content is static.
+        hdrTipText.replaceChildren();
+        const strong = document.createElement("strong");
+        if (flagEnabled) {
+          strong.textContent = "HDR active.";
+          hdrTipText.append(
+            strong,
+            " Rendering with rec2100-pq — full peak brightness unlocked via the experimental web platform features flag.",
+          );
+        } else {
+          strong.textContent = "HDR source detected.";
+          const code = document.createElement("code");
+          code.textContent = "chrome://flags/#enable-experimental-web-platform-features";
+          hdrTipText.append(
+            strong,
+            " Enable ",
+            code,
+            " and restart Chrome for full peak brightness. Right now it's rendering in wide-gamut SDR (~100 nits).",
+          );
+        }
+      }
+
+      function showHdrTip() {
+        if (!hdrTip) return;
+        const flagEnabled = detectHdrFlagEnabled();
+        const allow = shouldShowHdrTip();
+        console.info("[hdr-tip] evaluate:", { isChromium, flagEnabled, dismissed: isTipDismissed(), allow });
+        if (!allow) return;
+        setHdrTipMessage(flagEnabled);
+        // Copy button only matters when the user still needs to act on
+        // the flag — hide it in the confirmation state.
+        if (hdrTipCopy) hdrTipCopy.style.display = flagEnabled ? "none" : "";
+        hdrTip.hidden = false;
+      }
+      function hideHdrTip(persist) {
+        if (!hdrTip) return;
+        hdrTip.hidden = true;
+        if (persist) {
+          try { localStorage.setItem(TIP_DISMISS_KEY, "1"); } catch {}
+        }
+      }
+
+      if (hdrTipCopy) {
+        hdrTipCopy.addEventListener("click", async (e) => {
+          e.preventDefault();
+          e.stopPropagation();
+          try {
+            await navigator.clipboard.writeText(FLAG_URL);
+            const original = hdrTipCopy.textContent;
+            hdrTipCopy.textContent = "Copied — paste in address bar";
+            hdrTipCopy.classList.add("copied");
+            setTimeout(() => {
+              hdrTipCopy.textContent = original;
+              hdrTipCopy.classList.remove("copied");
+            }, 2200);
+          } catch {
+            hdrTipCopy.textContent = "Copy failed";
+          }
+        });
+      }
+      if (hdrTipDismiss) {
+        hdrTipDismiss.addEventListener("click", (e) => {
+          e.preventDefault();
+          e.stopPropagation();
+          hideHdrTip(true);
+        });
+      }
       const nativeVideo   = $("native-video");
       const moviPlayer    = $("movi-player");
       const nativeFallback = $("native-fallback");
@@ -1021,6 +1233,15 @@
 
         const tracks     = (probe.info && probe.info.tracks) || [];
         const videoTrack = tracks.find((t) => t.type === "video");
+
+        // Surface the HDR-flag tip only when the element confirms the loaded
+        // source is HDR (BT.2020 primaries or PQ/HLG transfer). Same signal
+        // the player uses for its own HDR button visibility.
+        const playerSaysHdr = !!moviPlayer.isHDRContent;
+        console.info("[hdr-tip] playerSaysHdr:", playerSaysHdr);
+        if (playerSaysHdr) showHdrTip();
+        else hideHdrTip(false);
+
         const audioTotal = probe.audio.length;
         const subTotal   = probe.subs.length;
         const chapTotal  = probe.chapters.length;

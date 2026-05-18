@@ -15716,6 +15716,17 @@ export class MoviElement extends HTMLElement {
     SettingsStorage.getInstance().save({ hdr: this._hdr });
   }
 
+  /**
+   * Whether the currently loaded source is classified as HDR (BT.2020
+   * primaries or PQ/HLG transfer). Public mirror of the same check the
+   * element uses internally for HDR-button visibility — safe for host
+   * pages to read without reaching into private `.player` internals.
+   * Returns false before a source has loaded.
+   */
+  get isHDRContent(): boolean {
+    return !!this.player?.isHDRSupported?.();
+  }
+
   private updateHDRUI(): void {
     const hdrBtn = this.shadowRoot?.querySelector(".movi-hdr-btn");
     const hdrStatus = this.shadowRoot?.querySelector(".movi-hdr-status");
