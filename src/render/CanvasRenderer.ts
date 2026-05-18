@@ -331,14 +331,47 @@ export class CanvasRenderer {
           }
 
           if (targetSpace !== "srgb") {
-            // @ts-ignore
-            this.gl.drawingBufferColorSpace = targetSpace;
-            // @ts-ignore
-            this.gl.unpackColorSpace = targetSpace;
-            Logger.info(
-              TAG,
-              `WebGL drawing buffer color space set to: ${targetSpace} (requested: ${detectedColorSpace}, HDR path: ${isHDRPath})`,
-            );
+            // rec2100-pq/hlg is a Chromium extension behind
+            // chrome://flags#enable-experimental-web-platform-features
+            // (and Chrome version dependent). In practice Chromium does
+            // not silently ignore unsupported values — the setter throws.
+            // Try the HDR space first; on throw or readback mismatch,
+            // fall back to display-p3 (wide-gamut SDR) instead of leaving
+            // the canvas on srgb.
+            let applied: string | null = null;
+            try {
+              // @ts-ignore
+              this.gl.drawingBufferColorSpace = targetSpace;
+              // @ts-ignore
+              if (this.gl.drawingBufferColorSpace === targetSpace) {
+                applied = targetSpace;
+              }
+            } catch (_e) {
+              // setter threw — flag likely off, fall through to fallback
+            }
+
+            if (!applied && isHDRPath) {
+              Logger.warn(
+                TAG,
+                `Browser rejected ${targetSpace}. HDR canvas flag likely disabled — falling back to display-p3.`,
+              );
+              try {
+                // @ts-ignore
+                this.gl.drawingBufferColorSpace = "display-p3";
+                applied = "display-p3";
+              } catch (_e2) {
+                applied = null;
+              }
+            }
+
+            if (applied) {
+              // @ts-ignore
+              this.gl.unpackColorSpace = applied;
+              Logger.info(
+                TAG,
+                `WebGL drawing buffer color space set to: ${applied} (requested: ${detectedColorSpace}, HDR path: ${isHDRPath})`,
+              );
+            }
           }
         }
       } catch (e) {
@@ -695,15 +728,43 @@ export class CanvasRenderer {
           targetSpace = "srgb";
         }
 
-        // @ts-ignore
-        this.gl.drawingBufferColorSpace = targetSpace;
-        // @ts-ignore
-        this.gl.unpackColorSpace = targetSpace;
-        this.colorSpace = detectedColorSpace;
-        Logger.info(
-          TAG,
-          `Updated WebGL color space to ${targetSpace} (detected: ${detectedColorSpace}, HDR path: ${isHDRPath}) following HDR toggle`,
-        );
+        // Chromium throws (not silent-ignore) on unsupported rec2100-pq/hlg
+        // when the HDR canvas flag is off. Try first, fall back to display-p3.
+        let applied: string | null = null;
+        try {
+          // @ts-ignore
+          this.gl.drawingBufferColorSpace = targetSpace;
+          // @ts-ignore
+          if (this.gl.drawingBufferColorSpace === targetSpace) {
+            applied = targetSpace;
+          }
+        } catch (_e) {
+          // setter threw — flag likely off
+        }
+
+        if (!applied && isHDRPath) {
+          Logger.warn(
+            TAG,
+            `Browser rejected ${targetSpace} on toggle. HDR canvas flag likely disabled — falling back to display-p3.`,
+          );
+          try {
+            // @ts-ignore
+            this.gl.drawingBufferColorSpace = "display-p3";
+            applied = "display-p3";
+          } catch (_e2) {
+            applied = null;
+          }
+        }
+
+        if (applied) {
+          // @ts-ignore
+          this.gl.unpackColorSpace = applied;
+          this.colorSpace = applied === targetSpace ? detectedColorSpace : applied;
+          Logger.info(
+            TAG,
+            `Updated WebGL color space to ${applied} (detected: ${detectedColorSpace}, HDR path: ${isHDRPath}) following HDR toggle`,
+          );
+        }
       } catch (e) {
         Logger.warn(TAG, "Failed to update drawingBufferColorSpace on the fly");
       }
