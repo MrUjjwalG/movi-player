@@ -41,7 +41,9 @@ function createPlayButton(link) {
   link.appendChild(btn);
 }
 
-// Scan page for video links
+// Scan page for video links — only the cheap regex match here. _blank link
+// probing is hover-triggered (see the mouseover listener below) to avoid
+// firing HEAD requests for every target="_blank" on link-heavy pages.
 function scanPage() {
   const links = document.querySelectorAll("a[href]");
   links.forEach((link) => {
@@ -49,6 +51,81 @@ function scanPage() {
       createPlayButton(link);
     }
   });
+}
+
+// Hover-triggered probing for any link that doesn't match the extension
+// regex. Event delegation = no per-link listener overhead.
+document.addEventListener(
+  "mouseover",
+  (e) => {
+    if (!probeEnabled) return;
+    const link = e.target.closest?.("a[href]");
+    if (!link) return;
+    if (link.dataset.moviBtn) return;
+    if (isVideoUrl(link.href)) return; // would already be handled by scanPage
+    maybeProbeLink(link);
+  },
+  true
+);
+
+// URLs we've already asked the background to probe (or are queued). Stores the
+// final URL string regardless of outcome so we never re-probe the same target.
+const probedUrls = new Map(); // url -> "pending" | "video" | "not-video"
+const probeQueue = [];
+let activeProbes = 0;
+const MAX_CONCURRENT_PROBES = 4;
+
+// Gated by an opt-in setting. Default off — the feature requires the
+// `<all_urls>` host permission, which the user grants from the popup toggle.
+// Probing is hover-triggered, so nothing extra to do on enable/disable
+// beyond keeping this flag fresh.
+let probeEnabled = false;
+chrome.storage?.local.get("probeBlankLinks", (data) => {
+  probeEnabled = !!data?.probeBlankLinks;
+});
+chrome.storage?.onChanged.addListener((changes, area) => {
+  if (area !== "local" || !("probeBlankLinks" in changes)) return;
+  probeEnabled = !!changes.probeBlankLinks.newValue;
+});
+
+function maybeProbeLink(link) {
+  if (!probeEnabled) return;
+  const url = link.href;
+  if (!url || !/^https?:/i.test(url)) return;
+
+  const prior = probedUrls.get(url);
+  if (prior === "video") {
+    createPlayButton(link);
+    return;
+  }
+  if (prior) return; // pending or already determined not-video
+
+  probedUrls.set(url, "pending");
+  probeQueue.push(url);
+  drainProbeQueue();
+}
+
+function drainProbeQueue() {
+  while (activeProbes < MAX_CONCURRENT_PROBES && probeQueue.length) {
+    const url = probeQueue.shift();
+    activeProbes++;
+    chrome.runtime.sendMessage({ action: "probeVideo", url }, (resp) => {
+      activeProbes--;
+      // chrome.runtime.lastError fires when the service worker dropped the
+      // response (e.g. extension reloaded). Treat as a benign miss.
+      if (chrome.runtime.lastError) {
+        probedUrls.set(url, "not-video");
+      } else if (resp && resp.isVideo) {
+        probedUrls.set(url, "video");
+        // Tag every matching link currently in the DOM (a URL may appear in
+        // several <a> elements on link-heavy pages).
+        document.querySelectorAll(`a[target="_blank"][href="${CSS.escape(url)}"]`).forEach(createPlayButton);
+      } else {
+        probedUrls.set(url, "not-video");
+      }
+      drainProbeQueue();
+    });
+  }
 }
 
 // Detect Chrome's native direct-video viewer (file:// video, or http direct video URL).

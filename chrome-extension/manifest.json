@@ -8,7 +8,8 @@
     "48": "icons/icon48.png",
     "128": "icons/icon128.png"
   },
-  "permissions": ["contextMenus", "activeTab", "clipboardRead"],
+  "permissions": ["contextMenus", "activeTab", "clipboardRead", "storage"],
+  "optional_host_permissions": ["<all_urls>"],
   "cross_origin_embedder_policy": { "value": "require-corp" },
   "cross_origin_opener_policy": { "value": "same-origin" },
   "content_security_policy": {
