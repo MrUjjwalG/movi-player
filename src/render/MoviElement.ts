@@ -116,6 +116,14 @@ export class MoviElement extends HTMLElement {
   private _subtitleTracks: { src: string; lang: string; label: string; format?: string }[] = []; // External subtitles
   private _autoplay: boolean = false;
   private _pendingPlay: boolean = false;
+  // True while loading spinner + play() must wait for FileSource preload to
+  // complete (mobile only, height >= 2160). Released by the player's
+  // 'preloadcomplete' event, which always fires once preload settles.
+  private _preloadGateActive: boolean = false;
+  // True when the resume dialog was deferred because FileSource preload
+  // hadn't settled yet. Surfaced by the preloadcomplete handler. Independent
+  // of _preloadGateActive — applies to every FileSource, not just mobile 4K+.
+  private _resumeDialogPending: boolean = false;
   private _posterTime: string | null = null;
   private _generatedPosterUrl: string | null = null;
   // Bump on every src change / dispose so in-flight postertime generators
@@ -12395,21 +12403,38 @@ export class MoviElement extends HTMLElement {
       // Update loading indicator after load
       this.updateLoadingIndicator();
 
+      // Mobile 4K+ FileSource: hold the spinner and defer play() until the
+      // initial preload settles. Reads height from the active video track.
+      if (this.player) {
+        const activeVideoTrack = (this.player as any)?.trackManager?.getActiveVideoTrack?.();
+        const videoHeight = activeVideoTrack?.height ?? 0;
+        if (
+          MoviPlayer.isMobileDevice() &&
+          videoHeight >= 2160 &&
+          this.player.isFileSource() &&
+          !this.player.isFileSourcePreloadComplete()
+        ) {
+          this._preloadGateActive = true;
+          this.updateLoadingIndicator();
+        }
+      }
+
       // Auto-play if requested
       // Seek to initial position if set
       if (this._startAt > 0 && this.player) {
         await this.player.seek(this._startAt).catch((e: unknown) => {
           Logger.warn(TAG, "Failed to seek to start time", e);
         });
-      } else if (this._resume && this.player && this._contextLostTime === 0) {
-        // Show resume dialog if saved position exists.
-        // Skip during WebGL context-loss recovery — handleContextRestored will
-        // seek directly to _contextLostTime, so prompting "Resume from X?" is
-        // redundant noise (and would race the silent recovery seek).
-        const savedTime = this.getResumePosition();
-        if (savedTime > 2 && savedTime < this.duration - 5) {
-          this.showResumeDialog(savedTime);
-        }
+      } else if (
+        this.player &&
+        this.player.isFileSource() &&
+        !this.player.isFileSourcePreloadComplete()
+      ) {
+        // Any FileSource: defer the resume dialog until preload settles so
+        // the prompt doesn't compete with disk-I/O-heavy initial load.
+        this._resumeDialogPending = true;
+      } else {
+        this.maybeShowResumeDialog();
       }
 
       // Start saving position periodically if resume enabled
@@ -12668,6 +12693,31 @@ export class MoviElement extends HTMLElement {
       this.player?.off("loadEnd", loadEndHandler),
     );
 
+    // Release the mobile 4K+ preload gate when FileSource finishes its
+    // initial chunk preload. Always fires (success, error, or abort) so the
+    // gate can never get stuck. After release, flush any deferred play().
+    const preloadCompleteHandler = () => {
+      // Surface a deferred resume dialog first (every FileSource path), so
+      // the user sees the prompt before any auto-play kicks in.
+      if (this._resumeDialogPending) {
+        this._resumeDialogPending = false;
+        this.maybeShowResumeDialog();
+      }
+      if (!this._preloadGateActive) return;
+      this._preloadGateActive = false;
+      this.updateLoadingIndicator(this.player?.getState() || "idle");
+      if (this._pendingPlay && this.player && !this._isUnsupported) {
+        this._pendingPlay = false;
+        this.player.play().catch(() => {});
+      }
+      this.updateControlsState();
+      this.updatePlayPauseIcon();
+    };
+    this.player.on("preloadcomplete", preloadCompleteHandler);
+    this.eventHandlers.set("preloadcomplete", () =>
+      this.player?.off("preloadcomplete", preloadCompleteHandler),
+    );
+
     const timeUpdateHandler = (time: number) => {
       this.dispatchEvent(new CustomEvent("timeupdate", { detail: time }));
     };
@@ -12750,6 +12800,12 @@ export class MoviElement extends HTMLElement {
       this._pendingPlay = true;
       return;
     }
+    // Mobile 4K+ FileSource: defer until the preloadcomplete event fires,
+    // which flushes _pendingPlay through the same path.
+    if (this._preloadGateActive) {
+      this._pendingPlay = true;
+      return;
+    }
     if (this.player) {
       await this.player.play();
     }
@@ -12780,6 +12836,8 @@ export class MoviElement extends HTMLElement {
   dispose(): void {
     // Cancel any queued play intent
     this._pendingPlay = false;
+    this._preloadGateActive = false;
+    this._resumeDialogPending = false;
 
     // Tear down internal player
     if (this.player) {
@@ -13160,6 +13218,12 @@ export class MoviElement extends HTMLElement {
     } else if (currentState === "loading" && duration === 0) {
       // Show loading only during initial load when duration is not yet available
       // Once playing starts, don't show loading even if duration is still 0
+      shouldShow = true;
+    }
+
+    // Mobile 4K+ FileSource: hold the spinner regardless of player state
+    // until the preload gate releases.
+    if (this._preloadGateActive) {
       shouldShow = true;
     }
 
@@ -14473,6 +14537,19 @@ export class MoviElement extends HTMLElement {
         el.style.height = "90px";
       }
     });
+  }
+
+  /**
+   * Show resume dialog if a saved position exists and we're not mid-context-
+   * loss recovery. Centralized so the mobile 4K+ preload gate can hold it
+   * back and replay it after preload settles.
+   */
+  private maybeShowResumeDialog(): void {
+    if (!this._resume || !this.player || this._contextLostTime !== 0) return;
+    const savedTime = this.getResumePosition();
+    if (savedTime > 2 && savedTime < this.duration - 5) {
+      this.showResumeDialog(savedTime);
+    }
   }
 
   /**

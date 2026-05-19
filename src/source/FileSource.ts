@@ -39,6 +39,12 @@ export class FileSource implements SourceAdapter {
   private onRevokedCallback: ((info: { offset: number; length: number; reason: string }) => void) | null = null;
   private revokedFired: boolean = false;
 
+  // Fires once when the initial preload pass settles (success, error, or
+  // abort). Used by MoviPlayer to gate playback on mobile 4K+ where early
+  // disk I/O competes with the decode pipeline.
+  private preloadComplete: boolean = false;
+  private onPreloadCompleteCallback: (() => void) | null = null;
+
   constructor(file: File, cache: LRUCache | null = null) {
     this.file = file;
     this.size = file.size;
@@ -53,6 +59,25 @@ export class FileSource implements SourceAdapter {
    */
   setOnRevoked(cb: (info: { offset: number; length: number; reason: string }) => void): void {
     this.onRevokedCallback = cb;
+  }
+
+  /**
+   * Register a one-shot callback fired when the initial preload pass settles.
+   * If preload is already complete, fires synchronously.
+   */
+  setOnPreloadComplete(cb: () => void): void {
+    if (this.preloadComplete) {
+      cb();
+      return;
+    }
+    this.onPreloadCompleteCallback = cb;
+  }
+
+  /**
+   * True once the initial preload pass has settled (success, error, or abort).
+   */
+  isPreloadComplete(): boolean {
+    return this.preloadComplete;
   }
 
   /**
@@ -277,6 +302,12 @@ export class FileSource implements SourceAdapter {
     } finally {
       this.preloadPromise = null;
       this.preloadAbort = false;
+      if (!this.preloadComplete) {
+        this.preloadComplete = true;
+        const cb = this.onPreloadCompleteCallback;
+        this.onPreloadCompleteCallback = null;
+        if (cb) cb();
+      }
     }
   }
 

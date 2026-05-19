@@ -622,6 +622,9 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
         Logger.error(TAG, `File handle revoked: ${info.reason}`);
         this.emit("filerevoked", info);
       });
+      fs.setOnPreloadComplete(() => {
+        this.emit("preloadcomplete", undefined);
+      });
       return fs;
     }
 
@@ -3927,6 +3930,23 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
   isFileSource(): boolean {
     if (this.hlsWrapper) return false;
     return this.source instanceof FileSource;
+  }
+
+  /**
+   * True when the active source is not a FileSource (gate inactive), or when
+   * the FileSource's initial preload pass has settled.
+   */
+  isFileSourcePreloadComplete(): boolean {
+    if (!(this.source instanceof FileSource)) return true;
+    return this.source.isPreloadComplete();
+  }
+
+  /**
+   * Public accessor for the mobile-device flag (used by MoviElement to gate
+   * UI behavior on mobile-only paths).
+   */
+  static isMobileDevice(): boolean {
+    return MoviPlayer._isMobileDevice;
   }
 
   /**

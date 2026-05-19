@@ -256,4 +256,5 @@ export interface PlayerEventMap {
   seeked: number;
   bufferUpdate: { start: number; end: number }[];
   ended: void;
+  preloadcomplete: void;
 }
