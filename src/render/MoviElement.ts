@@ -7346,9 +7346,14 @@ export class MoviElement extends HTMLElement {
         transform: translateY(10px);
       }
       
-      /* Hide cursor on canvas when controls are hidden */
-      :host:has(.movi-controls-container.movi-controls-hidden) canvas,
-      :host:has(.movi-controls-container.movi-controls-hidden) video {
+      /* Hide cursor whenever controls are hidden. The overlay (z:1,
+         pointer-events:all) sits on top of canvas/video and was
+         showing the default cursor — covering canvas/video alone
+         wasn't enough. Wildcard inside the host catches the overlay,
+         controls-container, title bar, and any other layered child
+         without having to enumerate them. */
+      :host:has(.movi-controls-container.movi-controls-hidden),
+      :host:has(.movi-controls-container.movi-controls-hidden) * {
         cursor: none !important;
       }
 
