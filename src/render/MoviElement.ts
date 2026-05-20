@@ -119,6 +119,12 @@ export class MoviElement extends HTMLElement {
   private _audioTracks: { src: string; type?: string; lang: string; label: string }[] = []; // Multi-language audio
   private _subtitleTracks: { src: string; lang: string; label: string; format?: string }[] = []; // External subtitles
   private _autoplay: boolean = false;
+  // True from the moment an autoplay attempt is kicked off until playback
+  // actually reaches "playing" or the browser blocks it. While set, the
+  // center play overlay stays hidden — otherwise the big play icon flashes
+  // over the first frame during the brief pre-play startup window even
+  // though the player is about to start on its own.
+  private _autoplayStarting: boolean = false;
   private _pendingPlay: boolean = false;
   // True while loading spinner + play() must wait for FileSource preload to
   // complete (mobile only, height >= 2160). Released by the player's
@@ -6565,7 +6571,12 @@ export class MoviElement extends HTMLElement {
     const centerPlayPause = this.shadowRoot?.querySelector(
       ".movi-center-play-pause",
     ) as HTMLElement | null;
-    if (centerPlayPause && !this.isLoading && !this._isUnsupported) {
+    if (
+      centerPlayPause &&
+      !this.isLoading &&
+      !this._isUnsupported &&
+      !this._autoplayStarting
+    ) {
       const state = this.player?.getState();
       if (state !== "playing" && state !== "buffering") {
         centerPlayPause.classList.add("movi-center-visible");
@@ -12461,8 +12472,15 @@ export class MoviElement extends HTMLElement {
 
       // Auto-play if requested
       if (this._autoplay && this.player) {
+        // Suppress the center play overlay through the startup window so the
+        // big play icon doesn't flash before playback begins on its own.
+        this._autoplayStarting = true;
+        this.updatePlayPauseIcon();
         await this.player.play().catch(() => {
-          // Autoplay may fail due to browser policies
+          // Autoplay may fail due to browser policies — re-surface the
+          // overlay so the user has something to click.
+          this._autoplayStarting = false;
+          this.updatePlayPauseIcon();
         });
       } else {
         // Render first frame (poster) if not autoplaying and no custom start time.
@@ -12639,7 +12657,26 @@ export class MoviElement extends HTMLElement {
       this.updatePlayPauseIcon();
 
       if (state === "playing") {
+        // Autoplay reached playback — startup window is over. Capture it
+        // first so we can skip the click-confirmation UI below.
+        const wasAutoplayStart = this._autoplayStarting;
+        this._autoplayStarting = false;
         this.dispatchEvent(new Event("play"));
+        // Autoplay had no user gesture, so there's no click to confirm —
+        // hide the controls immediately rather than running the 200ms
+        // pause-confirmation flash below.
+        if (wasAutoplayStart) {
+          this.hideControls();
+          this.updatePlayPauseIcon();
+          if (this._ambientMode) this._ambientSampleInterval = 200;
+          if ("mediaSession" in navigator && this._title) {
+            navigator.mediaSession.metadata = new MediaMetadata({
+              title: this._title,
+            });
+          }
+          return;
+        }
+
         // Native-like: when playback starts, hide the controls unless the
         // user is actively interacting. Delayed ~200ms so the play→pause
         // icon swap above (updatePlayPauseIcon) has time to render and
@@ -13026,7 +13063,15 @@ export class MoviElement extends HTMLElement {
         const controlsHidden =
           !this._controls ||
           this.controlsContainer?.classList.contains("movi-controls-hidden");
-        if (isLoading || this._isUnsupported || controlsHidden) {
+        // Skip the brief pause-confirmation flash on an autoplay start —
+        // there was no user click to confirm, so the center button (and
+        // controls) should never surface in the first place.
+        if (
+          isLoading ||
+          this._isUnsupported ||
+          controlsHidden ||
+          this._autoplayStarting
+        ) {
           centerPlayPauseBtn.classList.remove("movi-center-visible");
         } else {
           centerPlayPauseBtn.classList.add("movi-center-visible");
@@ -13041,8 +13086,10 @@ export class MoviElement extends HTMLElement {
       contextMenuPauseIcon?.style.setProperty("display", "none");
       if (contextMenuLabel) contextMenuLabel.textContent = "Play";
 
-      // Show center play icon when paused/ready, but hide if loading or unsupported state is shown
-      if (isLoading || this._isUnsupported) {
+      // Show center play icon when paused/ready, but hide if loading or
+      // unsupported state is shown, or while an autoplay attempt is still
+      // starting up (the play icon would flash over the first frame).
+      if (isLoading || this._isUnsupported || this._autoplayStarting) {
         if (centerPlayPauseBtn) {
           centerPlayPauseBtn.classList.remove("movi-center-visible");
         }
