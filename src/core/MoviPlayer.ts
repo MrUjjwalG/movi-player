@@ -910,9 +910,10 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
       Logger.debug(TAG, "Replaying from beginning after ended state");
       this.requestWakeLock();
       try {
-        await this.seek(0);
+        await this.seek(0, { suppressSpinner: true });
         this.wasPlayingBeforeSeek = true;
       } catch (error) {
+        this.suppressSeekSpinner = false;
         Logger.warn(TAG, "Failed to seek to start on replay", error);
       }
       return;
@@ -942,10 +943,11 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
       // after the await) makes seek completion resume straight into playing.
       const uiTarget = this.getCurrentTime();
       try {
-        await this.seek(uiTarget);
+        await this.seek(uiTarget, { suppressSpinner: true });
         this.wasPlayingBeforeSeek = true;
         this._playStartTime = performance.now();
       } catch (error) {
+        this.suppressSeekSpinner = false;
         Logger.warn(TAG, "First-play seek failed", error);
       }
       return;
@@ -1158,6 +1160,9 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
     this.seekTargetTime = -1;
     this.waitingForVideoSync = false;
     this.seekingToKeyframe = false; // Also clear keyframe skip flag
+    // First-play/replay seek has produced its first frame — drop spinner
+    // suppression so any later genuine rebuffer shows the loading UI.
+    this.suppressSeekSpinner = false;
 
     // How far past the requested target did the first frame actually land?
     // Long-GOP .ts files can land seconds late; subtract that in
@@ -1989,10 +1994,22 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
   private seekSessionId = 0;
   private wasPlayingBeforeSeek = false;
 
-  async seek(seconds: number): Promise<void> {
+  // True while an internal seek with no real interruption is in flight: the
+  // initial poster seek(0), first play, and replay-from-ended. These route
+  // through the full seek pipeline (flush + demuxer.seek + keyframe wait) so
+  // the state machine briefly enters "seeking"/"buffering" even though, from
+  // the user's view, nothing is loading. The UI reads this to keep the loading
+  // spinner hidden during that window. Set via seek()'s suppressSpinner opt,
+  // cleared on seek completion (notifySeekCompletion).
+  suppressSeekSpinner = false;
+
+  async seek(seconds: number, opts?: { suppressSpinner?: boolean }): Promise<void> {
     if (this.hlsWrapper) {
       return this.hlsWrapper.seek(seconds);
     }
+    // A genuine user seek (no opt) clears any leftover suppression so its
+    // spinner shows; play()-initiated seeks pass suppressSpinner to hide it.
+    this.suppressSeekSpinner = opts?.suppressSpinner ?? false;
 
     const currentState = this.stateManager.getState();
     Logger.info(TAG, `seek(${seconds.toFixed(2)}): state=${currentState}, waitingForVideoSync=${this.waitingForVideoSync}, demuxInFlight=${this.demuxInFlight}, seekSessionId=${this.seekSessionId}`);

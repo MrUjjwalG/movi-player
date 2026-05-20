@@ -72,7 +72,6 @@ export class MoviElement extends HTMLElement {
   private isOverControls: boolean = false;
   private isSeeking: boolean = false;
   private pendingSeekTarget: number | null = null; // Coalesces rapid currentTime sets while a seek is in flight
-  private isPosterSeek: boolean = false; // True during initial seek(0) to render first frame
   private isDragging: boolean = false;
   private isTouchDragging: boolean = false;
 
@@ -10056,13 +10055,17 @@ export class MoviElement extends HTMLElement {
         }
       }
 
-      /* Loading indicator - positioned over video area */
+      /* Loading indicator — anchored to the same spot as the center
+         play/pause button (top 44%, 3% above geometric centre) so the spinner
+         and the play button occupy the exact same point. The box shrink-wraps
+         the loader; translate(-50%, -50%) centres it on that anchor. The inner
+         loader keeps its own rotate animation — separate element, no transform
+         conflict. */
       .movi-loading-indicator {
         position: absolute;
-        top: 0;
-        left: 0;
-        right: 0;
-        bottom: 0;
+        top: 44%;
+        left: 50%;
+        transform: translate(-50%, -50%);
         display: flex;
         align-items: center;
         justify-content: center;
@@ -12476,9 +12479,9 @@ export class MoviElement extends HTMLElement {
           !this._posterTime &&
           !this._poster
         ) {
-          this.isPosterSeek = true;
-          // isPosterSeek stays true until state leaves "seeking" (cleared in stateChangeHandler)
-          this.player.seek(0).catch(() => {});
+          // suppressSpinner keeps the loading UI hidden through this seek's
+          // "seeking" window; the player auto-clears it on seek completion.
+          this.player.seek(0, { suppressSpinner: true }).catch(() => {});
         }
       }
 
@@ -12617,10 +12620,6 @@ export class MoviElement extends HTMLElement {
     // Forward player events to element
     const stateChangeHandler = (state: PlayerState) => {
       Logger.info(TAG, `stateChange: ${state}`);
-      // Clear isPosterSeek when state leaves "seeking" (poster seek completed)
-      if (state !== "seeking" && this.isPosterSeek) {
-        this.isPosterSeek = false;
-      }
       // Hide poster on state change to playing
       if (state === "playing" && this.posterElement) {
         // Drop the frozen-frame snapshot overlay used during quality switch
@@ -12821,13 +12820,9 @@ export class MoviElement extends HTMLElement {
       return;
     }
     if (this.player) {
-      // Replay from ended: the player re-seeks to start, which passes through
-      // "seeking". Suppress the spinner for that transition (same as the
-      // initial poster seek) so replay starts as cleanly as first play. The
-      // flag auto-clears in stateChangeHandler once state leaves "seeking".
-      if (this.player.getState() === "ended") {
-        this.isPosterSeek = true;
-      }
+      // Replay-from-ended and first-play both re-seek through the seek
+      // pipeline; the player suppresses the spinner for those internal seeks
+      // itself (suppressSeekSpinner), so no element-side handling is needed.
       await this.player.play();
     }
   }
@@ -13232,9 +13227,15 @@ export class MoviElement extends HTMLElement {
     // Don't show loading during normal 'playing' state, even if duration is 0
     let shouldShow = false;
 
-    // Only show loading for interruption states
-    // Don't show spinner during poster seek (initial seek(0) to render first frame)
-    if ((currentState === "seeking" || currentState === "buffering") && !this.isPosterSeek) {
+    // Only show loading for interruption states.
+    // suppressSeekSpinner covers all internal seeks that briefly enter
+    // "seeking"/"buffering" without a real interruption — the initial poster
+    // seek(0), first play, and replay-from-ended. A spinner there is a false
+    // flash, since from the user's view nothing is loading.
+    if (
+      (currentState === "seeking" || currentState === "buffering") &&
+      !this.player?.suppressSeekSpinner
+    ) {
       shouldShow = true;
     } else if (currentState === "loading" && duration === 0) {
       // Show loading only during initial load when duration is not yet available
