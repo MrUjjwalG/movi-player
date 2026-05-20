@@ -12821,6 +12821,13 @@ export class MoviElement extends HTMLElement {
       return;
     }
     if (this.player) {
+      // Replay from ended: the player re-seeks to start, which passes through
+      // "seeking". Suppress the spinner for that transition (same as the
+      // initial poster seek) so replay starts as cleanly as first play. The
+      // flag auto-clears in stateChangeHandler once state leaves "seeking".
+      if (this.player.getState() === "ended") {
+        this.isPosterSeek = true;
+      }
       await this.player.play();
     }
   }

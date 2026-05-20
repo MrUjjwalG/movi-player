@@ -898,79 +898,24 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
 
     const wasEnded = currentState === "ended";
 
-    // If ended, seek to start (0) to replay from beginning
-    // This transitions from 'ended' -> 'seeking' -> 'ready' -> 'playing'
+    // Replay path: delegate to seek(0). The full seek pipeline runs flush +
+    // demuxer.seek + waitingForVideoSync + keyframe wait, and on first frame
+    // notifySeekCompletion syncs the clock to the actual first decodable PTS
+    // (matters for Open-GOP sources where the first ~2s have no usable IDR —
+    // without this the clock advances from startTime while video stays
+    // frozen, so EOF fires ~2s early and no buffering UI is shown). Setting
+    // wasPlayingBeforeSeek after the await flips the resume path so the
+    // seek completion transitions straight to "playing".
     if (wasEnded && this.demuxer) {
+      Logger.debug(TAG, "Replaying from beginning after ended state");
+      this.requestWakeLock();
       try {
-        Logger.debug(TAG, "Replaying from beginning after ended state");
-
-        // Transition to seeking state first (ended -> seeking is valid)
-        if (!this.stateManager.setState("seeking")) {
-          Logger.error(TAG, "Failed to transition from ended to seeking");
-          return;
-        }
-
-        // Flush decoders
-        await this.videoDecoder.flush();
-        await this.audioDecoder.flush();
-
-        // Clear video frame queue
-        if (this.videoRenderer) {
-          this.videoRenderer.clearQueue();
-        }
-
-        // Flush audio renderer
-        this.audioRenderer.reset();
-
-        // Seek demuxer to start (initial media startTime)
-        await this.demuxer.seek(this.startTime);
-        if (this.nativeAudioEl) this.nativeAudioEl.currentTime = this.startTime;
-        this.clock.seek(this.startTime);
-
-        // Reset EOF flag
-        this.eofReached = false;
-
-        // Mark that we need to skip to keyframe after seek
-        this.seekingToKeyframe = true;
-        this.seekingToKeyframeStartTime = performance.now();
-
-        // Transition to ready state after seek completes (seeking -> ready is valid)
-        if (!this.stateManager.setState("ready")) {
-          Logger.error(
-            TAG,
-            "Failed to transition from seeking to ready after replay seek",
-          );
-          this.clock.pause();
-          return;
-        }
-
-        // After successful replay seek, we're now in 'ready' state
-        // Continue with normal play flow below (will transition ready -> playing)
+        await this.seek(0);
+        this.wasPlayingBeforeSeek = true;
       } catch (error) {
-        Logger.warn(
-          TAG,
-          "Failed to seek to start on replay, continuing anyway",
-          error,
-        );
-        // Transition to ready even if seek fails, so we can still play
-        const currentState = this.stateManager.getState();
-        if (currentState === "seeking") {
-          if (!this.stateManager.setState("ready")) {
-            Logger.error(
-              TAG,
-              "Failed to transition from seeking to ready after failed replay seek",
-            );
-            this.clock.pause();
-            return;
-          }
-        } else if (currentState === "ended") {
-          // Still in ended state, can't proceed
-          Logger.error(TAG, "Still in ended state after replay seek failed");
-          this.clock.pause();
-          return;
-        }
-        // If we successfully transitioned to ready, continue with play flow
+        Logger.warn(TAG, "Failed to seek to start on replay", error);
       }
+      return;
     }
     // If resuming from paused state, seek to current time to ensure demuxer is at correct position
 
@@ -987,6 +932,25 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
     // seeked position), NOT the hardcoded startTime. Previously we always
     // seeked to startTime here, which silently discarded a pre-play scrub
     // and restarted from the beginning.
+    if (this._playStartTime === 0 && this.demuxer && !this.nativeAudioEl) {
+      // First play: delegate to seek() using the current UI time. With no
+      // pre-play scrub this is 0 (start); a pre-play scrub lands at the
+      // scrubbed position. The full seek pipeline runs waitingForVideoSync +
+      // keyframe wait and notifySeekCompletion syncs the clock to the actual
+      // first decodable PTS — same path as replay, so buffering UI, A/V sync
+      // and EOF timing all behave identically. wasPlayingBeforeSeek (set
+      // after the await) makes seek completion resume straight into playing.
+      const uiTarget = this.getCurrentTime();
+      try {
+        await this.seek(uiTarget);
+        this.wasPlayingBeforeSeek = true;
+        this._playStartTime = performance.now();
+      } catch (error) {
+        Logger.warn(TAG, "First-play seek failed", error);
+      }
+      return;
+    }
+
     if (this._playStartTime === 0 && this.demuxer) {
       const targetTime = this.clock.getTime();
 
@@ -2006,8 +1970,11 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
       this.animationFrameId = null;
     }
 
-    // Snap time to end
+    // Snap time to end. Drop the keyframe-jump offset so getCurrentTime()
+    // reports the true duration — otherwise open-GOP sources (where the
+    // first decodable IDR is ~2s in) report end ~2s short of duration.
     if (this.mediaInfo) {
+      this.seekKeyframeOffset = 0;
       this.clock.seek(this.mediaInfo.duration + this.startTime);
       this.emit("timeUpdate", this.mediaInfo.duration);
     }
