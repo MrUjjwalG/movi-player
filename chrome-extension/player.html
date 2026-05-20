@@ -136,6 +136,69 @@
       border-color: var(--accent);
     }
     .playlist-toolbar button svg { width: 13px; height: 13px; }
+    .playlist-toolbar button.playlist-icon-btn {
+      flex: 0 0 auto;
+      width: 34px;
+      padding: 7px 0;
+    }
+    .playlist-toolbar button.playlist-icon-btn svg { width: 15px; height: 15px; }
+    .playlist-toolbar button[aria-pressed="true"] {
+      background: var(--accent);
+      border-color: var(--accent);
+      color: #fff;
+    }
+    .playlist-toolbar button[aria-pressed="true"]:hover {
+      background: var(--accent);
+      color: #fff;
+    }
+    /* ─── Autoplay toggle switch (YouTube-style) ─── */
+    .playlist-toolbar button.autoplay-switch {
+      flex: 0 0 auto;
+      width: auto;
+      padding: 0 4px;
+      background: transparent;
+      border: none;
+    }
+    .playlist-toolbar button.autoplay-switch:hover {
+      background: transparent;
+      border: none;
+    }
+    .autoplay-switch-track {
+      position: relative;
+      display: block;
+      width: 40px;
+      height: 20px;
+      border-radius: 10px;
+      background: var(--border-subtle);
+      transition: background 0.18s ease;
+    }
+    .autoplay-switch[aria-checked="true"] .autoplay-switch-track {
+      background: var(--accent);
+    }
+    .autoplay-switch-knob {
+      position: absolute;
+      top: 2px;
+      left: 2px;
+      width: 16px;
+      height: 16px;
+      border-radius: 50%;
+      background: #fff;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      transition: transform 0.18s ease;
+    }
+    .autoplay-switch[aria-checked="true"] .autoplay-switch-knob {
+      transform: translateX(20px);
+    }
+    .autoplay-switch-knob svg {
+      width: 9px !important;
+      height: 9px !important;
+    }
+    .autoplay-switch-knob .icon-play { color: var(--accent); display: none; }
+    .autoplay-switch-knob .icon-pause { color: var(--text-muted); }
+    .autoplay-switch[aria-checked="true"] .icon-play { display: block; }
+    .autoplay-switch[aria-checked="true"] .icon-pause { display: none; }
 
     /* ─── Search ─── */
     .playlist-search {
@@ -647,7 +710,6 @@
       <movi-player
         id="player"
         controls
-        autoplay
         thumb
         fastseek
         showtitle
@@ -691,6 +753,25 @@
             <path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/>
           </svg>
           Add folder
+        </button>
+        <button id="nextBtn" class="playlist-icon-btn" title="Next" aria-label="Play next">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <polygon points="5 4 15 12 5 20 5 4" fill="currentColor" stroke="none"/><line x1="19" y1="5" x2="19" y2="19"/>
+          </svg>
+        </button>
+        <button id="shuffleBtn" class="playlist-icon-btn" title="Shuffle" aria-label="Shuffle" aria-pressed="false">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <polyline points="16 3 21 3 21 8"/><line x1="4" y1="20" x2="21" y2="3"/>
+            <polyline points="21 16 21 21 16 21"/><line x1="15" y1="15" x2="21" y2="21"/><line x1="4" y1="4" x2="9" y2="9"/>
+          </svg>
+        </button>
+        <button id="autoplayBtn" class="autoplay-switch" title="Autoplay next" aria-label="Autoplay next" role="switch" aria-checked="false">
+          <span class="autoplay-switch-track">
+            <span class="autoplay-switch-knob">
+              <svg class="icon-pause" viewBox="0 0 24 24" fill="currentColor"><rect x="6" y="5" width="4" height="14" rx="1"/><rect x="14" y="5" width="4" height="14" rx="1"/></svg>
+              <svg class="icon-play" viewBox="0 0 24 24" fill="currentColor"><polygon points="7 5 19 12 7 19 7 5"/></svg>
+            </span>
+          </span>
         </button>
       </div>
       <div class="playlist-search" id="playlistSearchWrap">

@@ -18,6 +18,9 @@ const playlistCloseBtn = document.getElementById("playlistClose");
 const playlistToggleBtn = document.getElementById("playlistToggle");
 const addFilesBtn = document.getElementById("addFilesBtn");
 const addFolderBtn = document.getElementById("addFolderBtn");
+const nextBtn = document.getElementById("nextBtn");
+const shuffleBtn = document.getElementById("shuffleBtn");
+const autoplayBtn = document.getElementById("autoplayBtn");
 const playlistSearchWrap = document.getElementById("playlistSearchWrap");
 const playlistSearch = document.getElementById("playlistSearch");
 const playlistSearchClear = document.getElementById("playlistSearchClear");
@@ -56,8 +59,9 @@ customElements.whenDefined("movi-player").then(() => {
         if (playlistItemEls[playlistIndex]) applyItemProgress(playlistItemEls[playlistIndex], f);
       }
     }
-    if (playlist.length && playlistIndex >= 0 && playlistIndex < playlist.length - 1) {
-      playPlaylistItem(playlistIndex + 1);
+    if (autoplayEnabled && playlist.length && playlistIndex >= 0) {
+      const next = getNextIndex();
+      if (next >= 0) playPlaylistItem(next);
     }
   });
   playerEl.addEventListener("timeupdate", () => {
@@ -255,6 +259,70 @@ let playlist = [];
 let playlistIndex = -1;
 let currentFile = null;
 const playlistItemEls = [];
+
+// Shuffle: when on, auto-advance follows a random permutation of indices
+// instead of sequential order. shuffleOrder holds the permutation; the
+// currently playing index's position in it determines what plays next.
+let shuffleEnabled = false;
+let shuffleOrder = [];
+
+function rebuildShuffleOrder() {
+  // Fisher–Yates over all indices, with the current item moved to the front
+  // so "next" starts from wherever we are rather than jumping immediately.
+  const order = playlist.map((_, i) => i);
+  for (let i = order.length - 1; i > 0; i--) {
+    const j = Math.floor(Math.random() * (i + 1));
+    [order[i], order[j]] = [order[j], order[i]];
+  }
+  if (playlistIndex >= 0) {
+    const at = order.indexOf(playlistIndex);
+    if (at > 0) [order[0], order[at]] = [order[at], order[0]];
+  }
+  shuffleOrder = order;
+}
+
+// Index that auto-advance (ended) should play after the current one, or -1
+// when the playlist/shuffle run is exhausted.
+function getNextIndex() {
+  if (shuffleEnabled) {
+    if (!shuffleOrder.length) return -1;
+    const pos = shuffleOrder.indexOf(playlistIndex);
+    const next = pos + 1;
+    return next < shuffleOrder.length ? shuffleOrder[next] : -1;
+  }
+  return playlistIndex < playlist.length - 1 ? playlistIndex + 1 : -1;
+}
+
+function setShuffle(on) {
+  shuffleEnabled = on;
+  shuffleBtn.setAttribute("aria-pressed", on ? "true" : "false");
+  if (on) rebuildShuffleOrder();
+  try { localStorage.setItem("movi-shuffle", on ? "1" : "0"); } catch {}
+}
+// Next: explicit user action — plays the next item (shuffle-aware) even when
+// the autoplay toggle is off.
+nextBtn.addEventListener("click", () => {
+  if (!playlist.length || playlistIndex < 0) return;
+  const next = getNextIndex();
+  if (next >= 0) playPlaylistItem(next, { forcePlay: true });
+});
+shuffleBtn.addEventListener("click", () => setShuffle(!shuffleEnabled));
+try { if (localStorage.getItem("movi-shuffle") === "1") setShuffle(true); } catch {}
+
+// Autoplay: when on, the next item plays automatically once the current one
+// ends. Defaults to on so existing auto-advance behaviour is preserved.
+let autoplayEnabled = true;
+function setAutoplay(on) {
+  autoplayEnabled = on;
+  autoplayBtn.setAttribute("aria-checked", on ? "true" : "false");
+  // Keep the element attribute in sync so its own autoplay path doesn't
+  // start playback when the toggle is off.
+  if (on) playerEl.setAttribute("autoplay", "");
+  else playerEl.removeAttribute("autoplay");
+  try { localStorage.setItem("movi-autoplay", on ? "1" : "0"); } catch {}
+}
+autoplayBtn.addEventListener("click", () => setAutoplay(!autoplayEnabled));
+try { setAutoplay(localStorage.getItem("movi-autoplay") !== "0"); } catch { setAutoplay(true); }
 const fileMeta = new Map();
 const metaQueue = [];
 let metaProcessing = false;
@@ -265,6 +333,9 @@ function loadFile(file) {
   document.title = file.name + " — Movi Player";
   if (playerEl.setFile) playerEl.setFile(file);
   else playerEl.src = file;
+  // Opening a single file always autoplays — the playlist toggle only governs
+  // playlist click + auto-advance, not a direct file open.
+  playerEl.play?.().catch(() => {});
 }
 
 function showPlaylist() {
@@ -413,6 +484,7 @@ function setPlaylist(files, { rootName } = {}) {
     playlistSearch.value = "";
     applySearchFilter();
   }
+  if (shuffleEnabled) rebuildShuffleOrder();
   playPlaylistItem(0);
 }
 
@@ -432,6 +504,7 @@ function appendToPlaylist(files) {
     showPlaylist();
   }
   renderPlaylist();
+  if (shuffleEnabled) rebuildShuffleOrder();
   if (wasEmpty) playPlaylistItem(0);
 }
 
@@ -480,7 +553,7 @@ function moveHighlight(delta) {
   setHighlightedIndex(visible[cursor]);
 }
 
-function playPlaylistItem(i) {
+function playPlaylistItem(i, { forcePlay = false } = {}) {
   if (i < 0 || i >= playlist.length) return;
   const file = playlist[i];
   if (!file) return;
@@ -494,7 +567,7 @@ function playPlaylistItem(i) {
   playerEl.setAttribute("postertime", "10%");
   if (playerEl.setFile) playerEl.setFile(file);
   else playerEl.src = file;
-  playerEl.play?.().catch(() => {});
+  if (autoplayEnabled || forcePlay) playerEl.play?.().catch(() => {});
   updateActiveItem(i);
 }
 

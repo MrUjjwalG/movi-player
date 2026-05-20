@@ -12920,6 +12920,14 @@ export class MoviElement extends HTMLElement {
       const dur = sr.querySelector(".movi-duration") as HTMLElement | null;
       if (cur) cur.textContent = "0:00";
       if (dur) dur.textContent = "0:00";
+      // Hide any resume dialog left over from the previous source — the next
+      // source re-shows it only if it has its own saved position, otherwise
+      // the stale "Resume from X?" prompt would linger.
+      const resumeDialog = sr.querySelector(".movi-resume-dialog") as HTMLElement | null;
+      if (resumeDialog) {
+        resumeDialog.style.display = "none";
+        resumeDialog.style.animation = "";
+      }
       if (!this._title) {
         const titleText = sr.querySelector(".movi-title-text") as HTMLElement | null;
         if (titleText) titleText.textContent = "";
