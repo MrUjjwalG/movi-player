@@ -2084,8 +2084,18 @@ export class CanvasRenderer {
       // grows/shrinks. Mixing the two would let sizeMult drift the cue's
       // anchor (PGS x is the LEFT edge, so scaling it up shoves the bitmap
       // right of its original centre); keep them separate.
+      //
+      // PGS bitmaps are authored larger than the corresponding text
+      // cue would render at the same player size (BluRay subs target
+      // a reading distance / TV viewing context, not the boxed-in
+      // browser player). 0.85 dials the rendered bitmap down to
+      // visually match the CSS-driven text-subtitle size so toggling
+      // between an SRT and a PGS track doesn't make the line jump in
+      // size. Only the *display* scale shrinks — positions stay on
+      // baseScale, so the cue still lands where the author put it.
+      const IMAGE_SUB_DISPLAY_SHRINK = 0.85;
       const baseScale = Math.min(scaleX, scaleY);
-      const uniformScale = baseScale * userSizeMult;
+      const uniformScale = baseScale * userSizeMult * IMAGE_SUB_DISPLAY_SHRINK;
 
       // Calculate scaled dimensions preserving aspect ratio
       const scaledWidth = cue.image.width * uniformScale;
