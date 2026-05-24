@@ -7088,8 +7088,15 @@ export class MoviElement extends HTMLElement {
         --movi-text-tertiary: rgba(255, 255, 255, 0.5);
         
         /* Dynamic Theme Backgrounds */
-        --movi-bar-bg: linear-gradient(to top, rgba(0, 0, 0, 0.92) 0%, rgba(0, 0, 0, 0.55) 100%);
-        --movi-overlay-bg: linear-gradient(to top, rgba(0, 0, 0, 0.4) 0%, transparent 30%);
+        /* Same three-stop fade-to-transparent gradient the light
+           theme uses now — feathered top edge reads like proper
+           chrome over the video instead of a hard band. */
+        --movi-bar-bg: linear-gradient(to top, rgba(0, 0, 0, 0.85) 0%, rgba(0, 0, 0, 0.35) 60%, transparent 100%);
+        /* Overlay's dark wash sits behind the controls bar gradient.
+           Fading out at 12% instead of 30% keeps the glow confined
+           to the chrome band — it used to bleed a third of the way
+           up the frame. */
+        --movi-overlay-bg: linear-gradient(to top, rgba(0, 0, 0, 0.35) 0%, transparent 12%);
         --movi-progress-bg: rgba(255, 255, 255, 0.15);
         
         /* Sizing */
@@ -7153,54 +7160,53 @@ export class MoviElement extends HTMLElement {
         --movi-btn-hover-bg: rgba(0, 0, 0, 0.05);
         --movi-progress-buffer-color: rgba(0, 0, 0, 0.15);
 
-        /* Light Theme Backgrounds. Solid-enough gradient (no blur)
-           so the controls bar reads as proper chrome over the video,
-           but the top edge still feathers to translucency so the
-           frame isn't cleanly bisected. */
-        --movi-bar-bg: linear-gradient(to top, rgba(255, 255, 255, 0.95) 0%, rgba(255, 255, 255, 0.65) 100%);
-        --movi-overlay-bg: linear-gradient(to top, rgba(255, 255, 255, 0.5) 0%, transparent 30%);
+        /* Light Theme Backgrounds. Bottom bar uses the same dark
+           gradient as the dark theme + as the title bar — the white
+           variant was reading as a washed-out slab on bright frames
+           and made dark icons fight the video underneath. Chrome
+           consistently dark across themes is what YouTube / Netflix
+           do; per-element colour overrides below force the icons
+           and text white inside the bar so the dark theme's icon
+           rules still apply over the dark gradient. */
+        --movi-bar-bg: linear-gradient(to top, rgba(0, 0, 0, 0.85) 0%, rgba(0, 0, 0, 0.35) 60%, transparent 100%);
+        /* Light theme overlay used to bleed bright white halfway up
+           the frame too; match the dark theme's tighter 12% fade. */
+        --movi-overlay-bg: linear-gradient(to top, rgba(0, 0, 0, 0.35) 0%, transparent 12%);
         --movi-progress-bg: rgba(0, 0, 0, 0.1);
       }
       
-      /* Explicitly force colors in Light Theme to override any defaults */
-      :host([theme="light"]) .movi-controls-bar,
-      :host([theme="light"]) .movi-btn,
-      :host([theme="light"]) .movi-time,
-      :host([theme="light"]) .movi-current-time,
-      :host([theme="light"]) .movi-duration,
+      /* Light Theme colour overrides for elements that sit on the
+         light surfaces — dropdown menu rows still need dark text
+         since they pop over the player on a light card. */
       :host([theme="light"]) .movi-speed-item,
       :host([theme="light"]) .movi-audio-track-item,
       :host([theme="light"]) .movi-subtitle-track-item,
       :host([theme="light"]) .movi-quality-item {
          color: #11142d !important;
       }
-      
-      :host([theme="light"]) .movi-time-separator {
-         color: rgba(0, 0, 0, 0.4) !important; 
-      }
-      
-      /* Light theme: keep both tracks transparent so the input's
-         gradient shows; the gradient itself swaps the unfilled
-         colour below for contrast against the lighter chrome. */
-      :host([theme="light"]) .movi-volume-slider {
-         background: linear-gradient(
-           to right,
-           var(--movi-primary) 0%,
-           var(--movi-primary) var(--movi-volume-pct, 100%),
-           rgba(0, 0, 0, 0.15) var(--movi-volume-pct, 100%),
-           rgba(0, 0, 0, 0.15) 100%
-         );
+
+      /* Inside the bottom controls bar we keep icons / text white
+         in both themes, because the bar surface is now a dark
+         gradient in both themes (see --movi-bar-bg above). Without
+         these overrides the light theme's dark icon colour would
+         disappear into the dark bar. */
+      :host([theme="light"]) .movi-controls-bar,
+      :host([theme="light"]) .movi-controls-bar .movi-btn,
+      :host([theme="light"]) .movi-controls-bar .movi-time,
+      :host([theme="light"]) .movi-controls-bar .movi-current-time,
+      :host([theme="light"]) .movi-controls-bar .movi-duration {
+         color: #FFFFFF !important;
       }
 
-      :host([theme="light"]) .movi-volume-slider::-webkit-slider-thumb {
-         background: #11142d;
-         box-shadow: 0 2px 6px rgba(0, 0, 0, 0.2);
+      :host([theme="light"]) .movi-controls-bar .movi-time-separator {
+         color: rgba(255, 255, 255, 0.5) !important;
       }
-
-      :host([theme="light"]) .movi-volume-slider::-moz-range-thumb {
-         background: #11142d;
-         box-shadow: 0 2px 6px rgba(0, 0, 0, 0.2);
-      }
+      
+      /* Light theme bar is dark now — drop the light-on-dark slider
+         overrides. The default white-on-dark slider (declared on
+         .movi-volume-slider further down) already reads correctly
+         against the dark gradient, so the previous "dark thumb on
+         light track" overrides would just disappear the thumb. */
 
       /* Light Theme Tooltip */
       :host([theme="light"]) .movi-seek-thumbnail {
@@ -7222,25 +7228,22 @@ export class MoviElement extends HTMLElement {
          background-color: #f0f0f0 !important;
       }
 
-      /* Light Theme OSD */
-      :host([theme="light"]) .movi-osd-container {
-        background: rgba(255, 255, 255, 0.85) !important;
-        border-color: rgba(0, 0, 0, 0.05) !important;
-        box-shadow: 0 8px 32px rgba(0, 0, 0, 0.12) !important;
-      }
-
-      :host([theme="light"]) .movi-osd-text {
-        color: #11142d !important;
-      }
+      /* OSD stays the dark capsule in light theme too — it's chrome
+         floating over the video, same logic as the bottom bar. The
+         old white pill blended into bright frames and hid behind
+         seek-OSD timing cues. */
 
       /* Light Theme Button Hover */
       :host([theme="light"]) .movi-btn:hover {
         background: var(--movi-btn-hover-bg) !important;
       }
 
-      /* Light Theme Controls Overlay */
+      /* Light theme controls overlay — use the dark wash that
+         matches the dark theme bar; the old white wash on light
+         theme made the bottom third of bright frames look hazy
+         instead of cleanly anchored to the chrome band. */
       :host([theme="light"]) .movi-controls-overlay {
-        background: linear-gradient(to top, rgba(255, 255, 255, 0.4) 0%, transparent 30%) !important;
+        background: linear-gradient(to top, rgba(0, 0, 0, 0.35) 0%, transparent 12%) !important;
       }
 
       /* Light Theme Title Bar — keep dark like dark theme for readability */
@@ -7248,17 +7251,21 @@ export class MoviElement extends HTMLElement {
         background: linear-gradient(to bottom, rgba(0, 0, 0, 0.7) 0%, transparent 100%) !important;
       }
 
-      /* Light Theme Progress Bar */
+      /* Light theme progress bar — bar surface is dark now, so the
+         track / buffer use the same white-on-dark values as the
+         dark theme defaults. Explicit !important needed to win over
+         the more-general dark-theme rules without re-tinting to
+         black-on-light. */
       :host([theme="light"]) .movi-progress-bar {
-        background: rgba(0, 0, 0, 0.15) !important;
+        background: rgba(255, 255, 255, 0.15) !important;
       }
 
       :host([theme="light"]) .movi-progress-bar:hover {
-        background: rgba(0, 0, 0, 0.2) !important;
+        background: rgba(255, 255, 255, 0.25) !important;
       }
 
       :host([theme="light"]) .movi-progress-buffer {
-        background: rgba(0, 0, 0, 0.1) !important;
+        background: rgba(255, 255, 255, 0.25) !important;
       }
 
       /* Light Theme Center Play Button */
@@ -7559,8 +7566,11 @@ export class MoviElement extends HTMLElement {
         box-shadow: inset 0 1px 0 0 rgba(255, 255, 255, 0.06);
       }
 
+      /* Light theme bar uses the same dark gradient — keep the
+         hairline accent so the separator between video and chrome
+         is just as visible. */
       :host([theme="light"]) .movi-controls-bar {
-        box-shadow: inset 0 1px 0 0 rgba(0, 0, 0, 0.06);
+        box-shadow: inset 0 1px 0 0 rgba(255, 255, 255, 0.06);
       }
 
       .movi-progress-container {
@@ -7612,8 +7622,11 @@ export class MoviElement extends HTMLElement {
         transform: scale(1.06);
       }
 
-      :host([theme="light"]) .movi-btn:hover {
-        background: rgba(0, 0, 0, 0.06);
+      /* Light theme bar is now dark too (see --movi-bar-bg), so the
+         hover tint should also be the light-on-dark variant — the
+         old dark-on-light tint disappeared into the new dark bar. */
+      :host([theme="light"]) .movi-controls-bar .movi-btn:hover {
+        background: rgba(255, 255, 255, 0.1);
       }
 
       .movi-btn:active {
@@ -10072,15 +10085,11 @@ export class MoviElement extends HTMLElement {
           animation: none !important;
         }
 
-        /* Remove backdrop filter which causes white flashes on some mobile GPUs */
-        .movi-controls-bar {
-          background: rgba(10, 10, 18, 0.95) !important; /* Solid dark background fallback */
-        }
-
-        /* Light theme mobile controls bar */
-        :host([theme="light"]) .movi-controls-bar {
-          background: rgba(255, 255, 255, 0.95) !important;
-        }
+        /* No mobile-specific bar background override — desktop's
+           three-stop fade-to-transparent gradient applies on touch
+           too. The old solid-colour fallback was for a backdrop-
+           filter-induced white flash on some mobile GPUs that's no
+           longer applicable since we don't use backdrop-filter. */
 
         /* Remove the slide-up/down effect */
         .movi-controls-container,
@@ -10898,50 +10907,72 @@ export class MoviElement extends HTMLElement {
         position: relative; 
       }
 
-      /* OSD Notification Styles */
+      /* OSD Notification — compact glass capsule. Sits in the upper-
+         centre of the player surface, dark translucent surface with
+         a hairline accent so it reads as chrome consistent with the
+         new bottom bar. Icon stays white; the primary tint only
+         shows through a subtle drop-shadow halo (so HDR-on/loop-on/
+         speed cues still feel "active" without screaming colour). */
       .movi-osd-container {
         position: absolute;
-        top: 40px;
+        top: 32px;
         left: 50%;
-        transform: translateX(-50%) translateY(-20px);
-        background: rgba(15, 15, 20, 0.85);
-        padding: 12px 24px;
-        border-radius: 30px;
+        transform: translateX(-50%) translateY(-12px) scale(0.96);
+        transform-origin: top center;
+        background: rgba(0, 0, 0, 0.55);
+        padding: 10px 20px;
+        border-radius: 999px;
         display: none; /* Flex when visible */
         align-items: center;
         justify-content: center;
-        gap: 12px;
+        gap: 10px;
         z-index: 1000;
         pointer-events: none;
         opacity: 0;
-        transition: opacity 0.3s ease, transform 0.3s ease;
-        border: 1px solid rgba(255, 255, 255, 0.1);
-        box-shadow: 0 4px 20px rgba(0, 0, 0, 0.4);
+        /* Spring entry; the exit is a quieter ease so dismissing a
+           cue doesn't pop. */
+        transition:
+          opacity 0.22s ease,
+          transform 0.32s cubic-bezier(0.34, 1.4, 0.5, 1);
+        border: 1px solid rgba(255, 255, 255, 0.08);
+        box-shadow:
+          0 12px 36px rgba(0, 0, 0, 0.45),
+          0 0 0 1px rgba(0, 0, 0, 0.2),
+          inset 0 1px 0 0 rgba(255, 255, 255, 0.06);
+        max-width: min(72%, 540px);
       }
-      
+
       .movi-osd-container.visible {
         opacity: 1;
-        transform: translateX(-50%) translateY(0);
+        transform: translateX(-50%) translateY(0) scale(1);
       }
-      
+
       .movi-osd-icon {
         display: flex;
         align-items: center;
         justify-content: center;
-        color: var(--movi-primary);
+        color: #FFFFFF;
+        /* Subtle primary halo around the icon — keeps the OSD
+           visually anchored to the brand without painting the bg. */
+        filter: drop-shadow(0 0 6px color-mix(in srgb, var(--movi-primary) 45%, transparent));
       }
-      
+
       .movi-osd-icon svg {
-        width: 24px;
-        height: 24px;
+        width: 22px;
+        height: 22px;
       }
-      
+
       .movi-osd-text {
-        font-size: 16px;
+        font-size: 14px;
         font-weight: 600;
-        color: white;
-        font-family: 'Inter', sans-serif;
-        letter-spacing: 0.02em;
+        color: #FFFFFF;
+        font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
+        letter-spacing: 0.01em;
+        line-height: 1.2;
+        font-variant-numeric: tabular-nums;
+        white-space: nowrap;
+        overflow: hidden;
+        text-overflow: ellipsis;
       }
       
       .movi-broken-indicator {
