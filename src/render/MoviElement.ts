@@ -2084,8 +2084,12 @@ export class MoviElement extends HTMLElement {
         (e as any).pointerType === "touch" ||
         (e as any).sourceCapabilities?.firesTouchEvents;
 
-      // Ignore if this was triggered by a touch gesture
-      if (isTouchClick && this.gesturePerformed) {
+      // Touch input is fully owned by handleTap (which runs from
+      // touchend in setupGestures) — that's where the native-style
+      // "tap toggles chrome, never play/pause" rule lives. Synthetic
+      // clicks fired off touchend would otherwise reach here and
+      // re-introduce the old play/pause toggle on every tap.
+      if (isTouchClick) {
         this.gesturePerformed = false; // Reset for next interaction
         e.preventDefault();
         e.stopPropagation();
@@ -2441,6 +2445,12 @@ export class MoviElement extends HTMLElement {
           return;
         }
 
+        // Native mobile behaviour: a tap on the video area only
+        // toggles the chrome on / off — play/pause stays a deliberate
+        // act through the centre play button or the bottom bar's
+        // play/pause icon. (Previously a visible-controls tap also
+        // ran play/pause, which surprised users coming from the
+        // system video player.)
         const controlsContainer = this.controlsContainer;
         const controlsHidden = controlsContainer?.classList.contains(
           "movi-controls-hidden",
@@ -2449,12 +2459,7 @@ export class MoviElement extends HTMLElement {
         if (controlsHidden) {
           this.showControls();
         } else {
-          const state = this.player?.getState();
-          if (state === "playing" || state === "buffering") {
-            this.pause();
-          } else {
-            this.play();
-          }
+          this.hideControls();
         }
         return;
       }
@@ -2499,8 +2504,10 @@ export class MoviElement extends HTMLElement {
         lastTap = now;
 
         tapTimer = window.setTimeout(() => {
-          // Single tap action (show controls or toggle play)
-          // Tap closes any open bottom-controls menu first.
+          // Single tap action: chrome show / hide only — see the
+          // doubleTap-disabled branch above for the rationale. The
+          // play/pause toggle moved off the player surface to keep
+          // tap behaviour consistent with native mobile players.
           if (this.isAnyMenuOpen()) {
             this.closeAllBottomMenus();
             lastTap = 0;
@@ -2515,12 +2522,7 @@ export class MoviElement extends HTMLElement {
           if (controlsHidden) {
             this.showControls();
           } else {
-            const state = this.player?.getState();
-            if (state === "playing" || state === "buffering") {
-              this.pause();
-            } else {
-              this.play();
-            }
+            this.hideControls();
           }
           lastTap = 0;
         }, 300);
@@ -7086,7 +7088,7 @@ export class MoviElement extends HTMLElement {
         --movi-text-tertiary: rgba(255, 255, 255, 0.5);
         
         /* Dynamic Theme Backgrounds */
-        --movi-bar-bg: linear-gradient(to top, rgba(0, 0, 0, 0.9) 0%, rgba(0, 0, 0, 0.4) 100%);
+        --movi-bar-bg: linear-gradient(to top, rgba(0, 0, 0, 0.92) 0%, rgba(0, 0, 0, 0.55) 100%);
         --movi-overlay-bg: linear-gradient(to top, rgba(0, 0, 0, 0.4) 0%, transparent 30%);
         --movi-progress-bg: rgba(255, 255, 255, 0.15);
         
@@ -7151,8 +7153,11 @@ export class MoviElement extends HTMLElement {
         --movi-btn-hover-bg: rgba(0, 0, 0, 0.05);
         --movi-progress-buffer-color: rgba(0, 0, 0, 0.15);
 
-        /* Light Theme Backgrounds */
-        --movi-bar-bg: linear-gradient(to top, rgba(255, 255, 255, 0.98) 0%, rgba(255, 255, 255, 0.8) 100%);
+        /* Light Theme Backgrounds. Solid-enough gradient (no blur)
+           so the controls bar reads as proper chrome over the video,
+           but the top edge still feathers to translucency so the
+           frame isn't cleanly bisected. */
+        --movi-bar-bg: linear-gradient(to top, rgba(255, 255, 255, 0.95) 0%, rgba(255, 255, 255, 0.65) 100%);
         --movi-overlay-bg: linear-gradient(to top, rgba(255, 255, 255, 0.5) 0%, transparent 30%);
         --movi-progress-bg: rgba(0, 0, 0, 0.1);
       }
@@ -7543,11 +7548,19 @@ export class MoviElement extends HTMLElement {
         z-index: 10 !important;
         display: flex;
         flex-direction: column;
-        padding: 0 20px 10px;
+        padding: 4px 20px 12px;
         background: var(--movi-bar-bg);
         color: var(--movi-controls-color);
         height: auto;
         min-height: var(--movi-controls-height);
+        /* Hairline top accent. Reads as a separator between video
+           and chrome the way YouTube's progress bar does, but with a
+           wider feel since our progress bar sits inside the bar. */
+        box-shadow: inset 0 1px 0 0 rgba(255, 255, 255, 0.06);
+      }
+
+      :host([theme="light"]) .movi-controls-bar {
+        box-shadow: inset 0 1px 0 0 rgba(0, 0, 0, 0.06);
       }
 
       .movi-progress-container {
@@ -7592,12 +7605,20 @@ export class MoviElement extends HTMLElement {
       }
 
       .movi-btn:hover {
-        background: color-mix(in srgb, var(--movi-primary) 0.15); /* Purplish hover */
-        transform: scale(1.1);
+        /* Sober hover: neutral tint over the bar instead of a colour
+           splash, plus a barely-there lift. The aggressive 1.1 scale
+           was reading as "jumpy" against the calm surface. */
+        background: rgba(255, 255, 255, 0.1);
+        transform: scale(1.06);
       }
-      
+
+      :host([theme="light"]) .movi-btn:hover {
+        background: rgba(0, 0, 0, 0.06);
+      }
+
       .movi-btn:active {
-        transform: scale(0.95);
+        transform: scale(0.94);
+        transition-duration: 0.08s;
       }
 
       .movi-btn:focus,
@@ -7627,7 +7648,10 @@ export class MoviElement extends HTMLElement {
       }
       
       .movi-btn:hover svg {
-        filter: drop-shadow(0 0 4px color-mix(in srgb, var(--movi-primary) 0.5));
+        /* Removed the purple glow drop-shadow on icons. Combined with
+           the new neutral hover backdrop it was overdoing the chrome
+           — the backdrop alone reads as "interactive" without making
+           the icon look like it's lighting up. */
       }
       
       .movi-icon-play {
@@ -7640,17 +7664,24 @@ export class MoviElement extends HTMLElement {
         font-weight: 500;
         font-variant-numeric: tabular-nums;
         white-space: nowrap;
-        letter-spacing: 0.02em;
+        letter-spacing: 0.01em;
+        /* Total duration sits secondary; the current-time override
+           below promotes the playhead to primary so the eye can find
+           it without scanning. */
         color: var(--movi-text-secondary);
+        display: inline-flex;
+        align-items: baseline;
+        gap: 4px;
       }
-      
+
       .movi-current-time {
         color: var(--movi-controls-color);
+        font-weight: 600;
       }
-      
+
       .movi-time-separator {
         color: var(--movi-text-tertiary);
-        margin: 0 2px;
+        font-weight: 400;
       }
 
       .movi-progress-container {
@@ -7665,7 +7696,7 @@ export class MoviElement extends HTMLElement {
         position: relative;
         width: 100%;
         height: var(--movi-progress-height);
-        min-height: 5px;
+        min-height: 4px;
         background: var(--movi-progress-bg);
         border-radius: 100px;
         cursor: pointer;
@@ -7673,13 +7704,16 @@ export class MoviElement extends HTMLElement {
         z-index: 11 !important;
         outline: none !important;
         border: none;
-        transition: height var(--movi-transition-fast), background var(--movi-transition-fast);
+        /* Slightly slower than --movi-transition-fast — the height
+           change is the user's *signal* that the bar is interactive,
+           so it should breathe rather than snap. */
+        transition: height 0.18s cubic-bezier(0.4, 0, 0.2, 1), background 0.18s ease;
         overflow: visible;
       }
-      
+
       .movi-progress-bar:hover {
         height: var(--movi-progress-height-hover);
-        background: rgba(255, 255, 255, 0.2);
+        background: rgba(255, 255, 255, 0.25);
       }
 
       .movi-progress-bar:focus,
@@ -13738,6 +13772,18 @@ export class MoviElement extends HTMLElement {
 
   private startAmbientColorSampling(): void {
     if (this._ambientRafId !== null) return;
+    // Bail when the player isn't built yet — connectedCallback runs
+    // updateAmbientMode() before initializePlayer() creates the
+    // player, and that pre-init call would otherwise set up an
+    // rAF loop that runs against a missing renderer (no mirror to
+    // enable, sampleCanvasColors returns early). Worse, the rAF
+    // handle would then block the *real* startAmbientColorSampling
+    // call later in initializePlayer — the `_ambientRafId !== null`
+    // guard above made the second call a no-op, so the renderer
+    // never had enableAmbientMirror() invoked on it. Net effect: a
+    // page that loads with `ambientmode` already on showed no
+    // ambient glow until the user toggled the feature off and on.
+    if (!this.player) return;
 
     // Reset adaptive interval — a previously-throttled session may have left
     // it ratcheted up to 2s, which would make ambient appear "frozen" until
