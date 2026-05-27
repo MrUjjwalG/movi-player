@@ -22,9 +22,20 @@ export class SoftwareAudioDecoder {
   private onError: ((error: Error) => void) | null = null;
   private isConfigured = false;
   private trackIndex = -1;
+  // Default: downmix to stereo. AudioDecoder flips this off via
+  // setDownmix(false) when the player has confirmed the output
+  // device supports the source's full channel count.
+  private _downmix = true;
 
   constructor(bindings: WasmBindings) {
     this.bindings = bindings;
+  }
+
+  setDownmix(downmix: boolean): void {
+    this._downmix = downmix;
+    if (this.isConfigured) {
+      this.bindings.enableAudioDownmix(downmix);
+    }
   }
 
   setOnData(callback: (frame: PCMFrame) => void): void {
@@ -48,8 +59,11 @@ export class SoftwareAudioDecoder {
       return false;
     }
 
-    // Enable stereo downmixing
-    this.bindings.enableAudioDownmix(true);
+    // Enable stereo downmixing by default — most users have stereo
+    // output and FFmpeg's downmix is higher quality than Web Audio's
+    // automatic one. setDownmix() below flips it off when the player
+    // detects the device can actually drive >2 discrete channels.
+    this.bindings.enableAudioDownmix(this._downmix);
 
     this.isConfigured = true;
     Logger.info(

@@ -114,7 +114,7 @@ else
         --enable-libdav1d \
         --enable-protocol=file \
         --enable-demuxer=mov,mp4,m4a,mj2,avi,flv,matroska,webm,asf,mpegts,mpegps,mpegvideo,flac,ogg,wav,srt,ass,ssa,webvtt,iamf,apv,h264,hevc,h261,h263,av1,vvc,aac,ac3,eac3,mp3,obu,ivf,mjpeg,dv \
-        --enable-decoder=h264,hevc,vp9,vp8,libdav1d,vvc,apv,mpeg1video,mpeg2video,mpeg4,h261,h263,h263p,mjpeg,dvvideo,theora,aac,aac_latm,mp3,mp2,mp1,opus,vorbis,flac,ac3,eac3,dca,pcm_s16le,pcm_s24le,pcm_s16be,pcm_f32le,pcm_mulaw,pcm_alaw,subrip,ass,ssa,mov_text,pgssub,dvbsub,dvdsub,webvtt,srt \
+        --enable-decoder=h264,hevc,vp9,vp8,libdav1d,vvc,apv,mpeg1video,mpeg2video,mpeg4,h261,h263,h263p,mjpeg,dvvideo,theora,aac,aac_latm,mp3,mp2,mp1,opus,vorbis,flac,ac3,eac3,dca,truehd,mlp,pcm_s16le,pcm_s24le,pcm_s16be,pcm_f32le,pcm_mulaw,pcm_alaw,subrip,ass,ssa,mov_text,pgssub,dvbsub,dvdsub,webvtt,srt \
         --enable-parser=h264,hevc,vp8,vp9,av1,vvc,apv,lcevc,mpeg4video,mpegvideo,h261,h263,mjpeg,aac,mp3,opus,vorbis,flac,hdmv_pgs_subtitle \
         --enable-bsf=aac_adtstoasc,h264_mp4toannexb,hevc_mp4toannexb,vvc_mp4toannexb,vvc_metadata,av1_metadata,av1_frame_merge,av1_frame_split,lcevc_metadata,pgs_frame_merge,iso_media_metadata_manipulator,extract_extradata,vp9_superframe \
         --extra-cflags="-Oz -flto -s USE_PTHREADS=0 -s USE_ZLIB=1 -D_FILE_OFFSET_BITS=64 -I${DAV1D_PREFIX}/include" \

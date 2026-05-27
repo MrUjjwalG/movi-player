@@ -130,6 +130,12 @@ export class MoviElement extends HTMLElement {
   // for) from the synthetic "paused" state the initial poster seek
   // lands in before the user has even pressed play.
   private _hasEverPlayed: boolean = false;
+  // Set briefly by the loop handler so the next end → play transition
+  // doesn't surface the centre pause-confirmation icon. Loop replay
+  // isn't a user click, so the "I clicked and now it's playing" flash
+  // would just look like a glitch at every loop boundary. Cleared
+  // once the player has settled into "playing" again.
+  private _loopRestartInFlight: boolean = false;
   private _pendingPlay: boolean = false;
   // True while loading spinner + play() must wait for FileSource preload to
   // complete (mobile only, height >= 2160). Released by the player's
@@ -12738,6 +12744,7 @@ export class MoviElement extends HTMLElement {
     // Handle loop
     if (this._loop) {
       const loopHandler = () => {
+        this._loopRestartInFlight = true;
         this.play();
       };
       this.player.on("ended", loopHandler);
@@ -12823,6 +12830,11 @@ export class MoviElement extends HTMLElement {
         const wasAutoplayStart = this._autoplayStarting;
         this._autoplayStarting = false;
         this._hasEverPlayed = true;
+        // Loop boundary fully settled (updatePlayPauseIcon above
+        // already ran with the flag set, so the pause-confirmation
+        // flash got suppressed). Clear here so a subsequent *user*
+        // click still flashes the icon as confirmation.
+        this._loopRestartInFlight = false;
         this.dispatchEvent(new Event("play"));
         // Autoplay had no user gesture, so there's no click to confirm —
         // hide the controls immediately rather than running the 200ms
@@ -12889,7 +12901,11 @@ export class MoviElement extends HTMLElement {
         if (this._resume) this.saveResumePosition();
       } else if (state === "ended") {
         this.dispatchEvent(new Event("ended"));
-        this.showControls();
+        // Only surface the chrome when the player is actually
+        // stopping. With `loop` on, the player immediately restarts
+        // playback, so popping the bar for the brief end→play
+        // transition was just a noisy flash on every loop boundary.
+        if (!this._loop) this.showControls();
         // Clear resume position when video ends (start fresh next time)
         if (this._resume) this.clearResumePosition();
       }
@@ -13231,14 +13247,17 @@ export class MoviElement extends HTMLElement {
         const controlsHidden =
           !this._controls ||
           this.controlsContainer?.classList.contains("movi-controls-hidden");
-        // Skip the brief pause-confirmation flash on an autoplay start —
-        // there was no user click to confirm, so the center button (and
-        // controls) should never surface in the first place.
+        // Skip the brief pause-confirmation flash on an autoplay start
+        // OR on a loop boundary — there was no user click to confirm
+        // in either case, so the centre button shouldn't flash. The
+        // loop flag is cleared by the stateChange handler once the
+        // player has settled back into "playing".
         if (
           isLoading ||
           this._isUnsupported ||
           controlsHidden ||
-          this._autoplayStarting
+          this._autoplayStarting ||
+          this._loopRestartInFlight
         ) {
           centerPlayPauseBtn.classList.remove("movi-center-visible");
         } else {
@@ -13257,7 +13276,17 @@ export class MoviElement extends HTMLElement {
       // Show center play icon when paused/ready, but hide if loading or
       // unsupported state is shown, or while an autoplay attempt is still
       // starting up (the play icon would flash over the first frame).
-      if (isLoading || this._isUnsupported || this._autoplayStarting) {
+      // Also hide during the brief end→play transition when loop is on
+      // — the player is about to restart, so popping the centre play
+      // icon there reads as a glitchy flash on every loop boundary.
+      const currentState = this.player?.getState();
+      const isLoopingEndedTransition = currentState === "ended" && this._loop;
+      if (
+        isLoading ||
+        this._isUnsupported ||
+        this._autoplayStarting ||
+        isLoopingEndedTransition
+      ) {
         if (centerPlayPauseBtn) {
           centerPlayPauseBtn.classList.remove("movi-center-visible");
         }

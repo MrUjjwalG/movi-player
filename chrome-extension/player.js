@@ -50,6 +50,15 @@ customElements.whenDefined("movi-player").then(() => {
     const t = playerEl.title;
     if (t) document.title = t + " — Movi Player";
   });
+  // Title typically isn't known at loadeddata — MoviElement auto-loads
+  // it from FFmpeg metadata / Content-Disposition / URL filename after
+  // duration becomes available, then fires `titlechange`. Mirror that
+  // into document.title so the browser tab updates whenever the clean
+  // title resolves (or when an integrator sets the attribute later).
+  playerEl.addEventListener("titlechange", (e) => {
+    const t = e?.detail?.title || playerEl.title;
+    if (t) document.title = t + " — Movi Player";
+  });
   playerEl.addEventListener("ended", () => {
     if (playlistIndex >= 0) {
       const f = playlist[playlistIndex];

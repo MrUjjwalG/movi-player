@@ -161,15 +161,18 @@ export class AudioRenderer {
       });
       this.gainNode = this.audioContext.createGain();
 
-      // Create compressor for stable audio (loudness normalization)
+      // Create compressor for stable audio (loudness normalization).
+      // Tuned as a peak-limiter, not a heavy compressor: a wide soft knee
+      // + low ratio (the WebAudio default-ish) flattens the whole signal
+      // and the average RMS rises — perceptually that makes loud passages
+      // feel *louder*, not stabler. Instead we let dialogue / mid-level
+      // content pass untouched and clamp only true peaks.
       this.compressorNode = this.audioContext.createDynamicsCompressor();
-      // YouTube-like stable volume settings:
-      // Compress loud parts (explosions, music) while keeping dialogue clear
-      this.compressorNode.threshold.value = -24;  // Start compressing above -24dB
-      this.compressorNode.knee.value = 30;         // Smooth transition into compression
-      this.compressorNode.ratio.value = 12;        // 12:1 compression ratio
-      this.compressorNode.attack.value = 0.003;    // Fast attack (3ms) to catch sudden loud sounds
-      this.compressorNode.release.value = 0.25;    // Smooth release (250ms)
+      this.compressorNode.threshold.value = -18;  // only peaks > -18dB engage
+      this.compressorNode.knee.value = 6;         // sharp transition, no mid-range squash
+      this.compressorNode.ratio.value = 20;       // near-limiter on peaks
+      this.compressorNode.attack.value = 0.001;   // 1ms — catch transients before they hit the ear
+      this.compressorNode.release.value = 0.15;   // 150ms — quick recovery, no pumping
 
       // Wire audio chain based on stable audio state
       if (this._stableAudio) {
@@ -215,6 +218,55 @@ export class AudioRenderer {
    */
   configure(sampleRate: number, channels: number): void {
     Logger.info(TAG, `Configured: ${sampleRate}Hz, ${channels}ch`);
+  }
+
+  /**
+   * Maximum number of output channels the user's audio device + browser
+   * combination supports. 2 (stereo) for typical laptop/phone setups,
+   * 6 for a 5.1 receiver, 8 for 7.1. Returns 2 when the AudioContext
+   * hasn't been created yet.
+   */
+  getMaxChannelCount(): number {
+    return this.audioContext?.destination.maxChannelCount ?? 2;
+  }
+
+  /**
+   * Ask the AudioContext destination to accept `n` discrete channels
+   * instead of Web Audio's default 2. `channelCountMode: "explicit"` +
+   * `channelInterpretation: "discrete"` together suppress the
+   * automatic speaker-layout downmix the API would otherwise apply,
+   * so a 7.1 AudioBuffer reaches the device with all 8 planes intact.
+   * Caller is responsible for ensuring the OS / hardware actually has
+   * that many output channels — read getMaxChannelCount() first and
+   * clamp accordingly.
+   */
+  setOutputChannelCount(n: number): void {
+    if (!this.audioContext) return;
+    const dest = this.audioContext.destination;
+    const clamped = Math.min(Math.max(1, Math.floor(n)), dest.maxChannelCount);
+    try {
+      dest.channelCount = clamped;
+      dest.channelCountMode = "explicit";
+      dest.channelInterpretation = "discrete";
+      // GainNode defaults to channelCountMode:"max", which already
+      // promotes its output to match the input — so multichannel
+      // audio flows through it untouched even with channelCount=2.
+      // Setting it here is a defensive no-op; documenting the
+      // intent for readers chasing the same channel question. The
+      // compressor (when stable audio is on) uses "clamped-max"
+      // which DOES respect channelCount, so we promote it
+      // explicitly — otherwise a 5.1 source would lose its
+      // surround when piped through stable-audio compression.
+      if (this.gainNode) {
+        this.gainNode.channelCount = clamped;
+      }
+      if (this.compressorNode) {
+        this.compressorNode.channelCount = clamped;
+      }
+      Logger.info(TAG, `Destination channelCount → ${clamped} (max ${dest.maxChannelCount})`);
+    } catch (e) {
+      Logger.warn(TAG, "Failed to set destination channelCount", e);
+    }
   }
 
   /**

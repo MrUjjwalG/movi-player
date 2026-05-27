@@ -416,6 +416,22 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
             TAG,
             `Audio decoder reconfigured for track ${track.id}: ${track.codec} ${track.sampleRate}Hz ${track.channels}ch`,
           );
+          // Re-evaluate the multichannel passthrough policy on every
+          // track change — switching from 7.1 TrueHD to stereo AAC
+          // (or vice versa) needs the destination channelCount and
+          // the WASM downmix flag to follow the new track. The
+          // AudioRenderer was already initialised before the first
+          // track configure landed, so reading max channels here is
+          // cheap and sync.
+          const sourceCh = track.channels ?? 2;
+          const maxCh = this.audioRenderer.getMaxChannelCount();
+          if (sourceCh > 2 && maxCh >= sourceCh) {
+            this.audioDecoder.setDownmix(false);
+            this.audioRenderer.setOutputChannelCount(sourceCh);
+          } else {
+            this.audioDecoder.setDownmix(true);
+            this.audioRenderer.setOutputChannelCount(2);
+          }
         } else {
           Logger.warn(
             TAG,
@@ -723,7 +739,31 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
         // Moves ~500ms creation cost from play() to load() for instant playback start.
         // init() no longer resumes — play() handles resume on user gesture.
         if (!this.disableAudio) {
-          this.audioRenderer.init().catch(() => {});
+          // Await so we can read destination.maxChannelCount synchronously
+          // before deciding the downmix policy. Init is cheap; the
+          // perf-sensitive bit (`resume`) is still gated on the user
+          // gesture in play().
+          await this.audioRenderer.init();
+          // Preserve native channel layout when the device can drive
+          // every plane (e.g. 7.1 over HDMI / DAC reporting
+          // maxChannelCount=8). Otherwise leave the WASM downmix on
+          // — FFmpeg's matrix is higher quality than Web Audio's
+          // automatic "speakers" interpretation fallback.
+          const sourceCh = audioTrack.channels ?? 2;
+          const maxCh = this.audioRenderer.getMaxChannelCount();
+          if (sourceCh > 2 && maxCh >= sourceCh) {
+            Logger.info(
+              TAG,
+              `Multichannel passthrough: source ${sourceCh}ch, destination supports ${maxCh}ch`,
+            );
+            this.audioDecoder.setDownmix(false);
+            this.audioRenderer.setOutputChannelCount(sourceCh);
+          } else if (sourceCh > 2) {
+            Logger.info(
+              TAG,
+              `Downmixing to stereo: source ${sourceCh}ch, destination caps at ${maxCh}ch`,
+            );
+          }
         }
       } else {
         Logger.warn(TAG, "Failed to configure audio decoder");
