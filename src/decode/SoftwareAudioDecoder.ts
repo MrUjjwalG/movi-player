@@ -27,6 +27,18 @@ export class SoftwareAudioDecoder {
   // device supports the source's full channel count.
   private _downmix = true;
 
+  // Some files trigger a sendPacket failure on every audio packet —
+  // typically a codec-mismatch (e.g. Atmos extensions inside EAC3) or a
+  // genuine ENOMEM that won't recover. Without a circuit-breaker we
+  // flood the console with hundreds of identical warnings per second
+  // and, worse, keep poking the FFmpeg allocator until its shared heap
+  // corrupts the demuxer. After this many consecutive failures we mute
+  // the decoder for the rest of the session; video continues, audio
+  // goes silent — a strictly better failure mode than a hard crash.
+  private consecutiveFailures = 0;
+  private isBroken = false;
+  private static readonly MAX_CONSECUTIVE_FAILURES = 50;
+
   constructor(bindings: WasmBindings) {
     this.bindings = bindings;
   }
@@ -78,7 +90,7 @@ export class SoftwareAudioDecoder {
   }
 
   reset(): void {
-    // No-op
+    this.consecutiveFailures = 0;
   }
 
   close(): void {
@@ -86,7 +98,7 @@ export class SoftwareAudioDecoder {
   }
 
   decode(data: Uint8Array, timestamp: number, keyframe: boolean): void {
-    if (!this.isConfigured) return;
+    if (!this.isConfigured || this.isBroken) return;
 
     const ret = this.bindings.sendPacket(
       this.trackIndex,
@@ -97,9 +109,24 @@ export class SoftwareAudioDecoder {
     );
 
     if (ret < 0) {
-      Logger.warn(TAG, `sendPacket failed: ${ret}`);
+      this.consecutiveFailures++;
+      if (this.consecutiveFailures === 1) {
+        Logger.warn(TAG, `sendPacket failed: ${ret}`);
+      }
+      if (
+        this.consecutiveFailures >=
+        SoftwareAudioDecoder.MAX_CONSECUTIVE_FAILURES
+      ) {
+        this.isBroken = true;
+        Logger.error(
+          TAG,
+          `Audio decoder disabled after ${this.consecutiveFailures} consecutive sendPacket failures (last: ${ret}). Playback continues without audio.`,
+        );
+      }
       return;
     }
+
+    this.consecutiveFailures = 0;
 
     // Receive loop
     while (true) {

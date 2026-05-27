@@ -2345,6 +2345,27 @@
         display: flex;
         justify-content: center;
       }
+      /* Audio-strip mode: when the inner <movi-player> picks up its
+         .movi-audio-strip class (no video, no embedded cover art), the
+         stage's 16:9 reservation becomes a tall black slab with a thin
+         strip on top. Collapse aspect-ratio, drop the black surface,
+         centre the strip vertically, and let pop-up menus escape the
+         overflow gate. Matches the chrome / VS Code extension layout. */
+      .player-stage:has(movi-player.movi-audio-strip) {
+        aspect-ratio: auto;
+        height: auto;
+        min-height: 0;
+        align-items: center;
+        background: transparent;
+        overflow: visible;
+        padding: 16px 0;
+      }
+      .player-stage:has(movi-player.movi-audio-strip) movi-player {
+        width: 100%;
+        max-width: 880px;
+        height: auto;
+        flex: 0 0 auto;
+      }
 
       movi-player {
         width: 100%;

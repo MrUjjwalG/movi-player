@@ -818,8 +818,14 @@ export class WasmBindings {
   ): number {
     if (!this.contextPtr) return -1;
 
-    // Alloc temp buffer for data
+    // Alloc temp buffer for data. _malloc returns 0 on OOM — without the
+    // guard, HEAPU8.set(data, 0) would silently write packet bytes over
+    // the start of the WASM heap (allocator state, stack, etc.) and the
+    // corruption surfaces hundreds of packets later as a demuxer
+    // "memory access out of bounds" in av_read_frame. Bail out as -6
+    // (ENOMEM) so the caller drops the packet instead of corrupting.
     const ptr = this.module._malloc(data.byteLength);
+    if (!ptr) return -6;
     this.module.HEAPU8.set(data, ptr);
 
     try {

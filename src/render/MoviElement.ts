@@ -13385,6 +13385,15 @@ export class MoviElement extends HTMLElement {
           title = "Network Error";
           message =
             "Failed to fetch video resource. Check your connection or try again.";
+        } else if (
+          /out of bounds memory access|memory access out of bounds|RuntimeError|Aborted\(\)/i.test(message)
+        ) {
+          // Emscripten WASM crash (FFmpeg ran out of memory or hit an
+          // OOB in a codec path). The "Try Software Decoding" button on
+          // the broken-source overlay drives the fallback for this.
+          title = "Playback Error";
+          message =
+            "The decoder ran out of memory while parsing this file. Try software decoding — it uses a different path that handles this case.";
         } else if (message.includes("decode")) {
           title = "Playback Error";
         }
@@ -13649,6 +13658,11 @@ export class MoviElement extends HTMLElement {
 
     const errorHandler = (error: unknown) => {
       this.dispatchEvent(new CustomEvent("error", { detail: error }));
+      // Always log the raw error before the message gets prettified for
+      // the overlay — without this, "State: ... -> error" appears in
+      // the log without any "what crashed" line and debugging requires
+      // the user to take a screenshot of the overlay.
+      Logger.error(TAG, "Player error event", error);
 
       let message = "An error occurred during playback.";
       let title = "Playback Error";
@@ -13681,6 +13695,18 @@ export class MoviElement extends HTMLElement {
         title = "Network Error";
       } else if (message.includes("does not support range requests")) {
         title = "Server Not Supported";
+      } else if (
+        // WebAssembly OOM / OOB from the FFmpeg WASM runtime — surfaces
+        // verbatim as "Out of bounds memory access (evaluating 'qe(...$e)')"
+        // (minified) or "memory access out of bounds". Replace the
+        // emscripten/JS-engine text with something useful and steer the
+        // user to the software-decode fallback that already handles the
+        // codec variants where the hardware path explodes.
+        /out of bounds memory access|memory access out of bounds|RuntimeError|Aborted\(\)/i.test(message)
+      ) {
+        title = "Playback Error";
+        message =
+          "The decoder ran out of memory while parsing this file. Try software decoding — it uses a different path that handles this case.";
       }
 
       this.handleUnsupportedVideo(title, message);

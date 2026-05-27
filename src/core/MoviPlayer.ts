@@ -344,10 +344,15 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
       };
     }
 
+    this.audioDecoder.setOnData((data) => {
+      // WebCodecs / hardware path: AudioData lands here.
+      this.audioRenderer.render(data);
+    });
+
     this.audioDecoder.setOnPCM((frame) => {
-      // Audio always uses the FFmpeg/WASM software path now (see
-      // MoviAudioDecoder.configure for the rationale). The renderer's
-      // PCM hook is the only feed.
+      // Software path (FFmpeg/WASM) emits planar Float32 PCM so we avoid
+      // the WebCodecs AudioData constructor — which Firefox on Android
+      // doesn't implement.
       this.audioRenderer.renderPCM(frame);
     });
 
@@ -391,7 +396,10 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
         }
       }
 
-      // Software path only — see MoviAudioDecoder.configure.
+      this.audioDecoder.setOnData((data) => {
+        this.audioRenderer.render(data);
+      });
+
       this.audioDecoder.setOnPCM((frame) => {
         this.audioRenderer.renderPCM(frame);
       });
@@ -619,14 +627,8 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
       this.emit("loadEnd", undefined);
 
       // Initialize preview pipeline in background (fire-and-forget)
-      // Only if enabled in config to save memory. Skip outright when
-      // there's no playable video stream — thumbnails would have nothing
-      // to scrub against, and the second WASM-context open() against an
-      // audio-only file errors with "Failed to open thumbnail media",
-      // which surfaces as a console error for an entirely cosmetic
-      // feature.
-      const hasPlayableVideo = !!this.trackManager.getActiveVideoTrack();
-      if (this.config.enablePreviews && hasPlayableVideo) {
+      // Only if enabled in config to save memory
+      if (this.config.enablePreviews) {
         // This makes the first preview faster since WASM is already loaded
         this.previewInitPromise = this.initPreviewPipeline().catch((e) => {
           Logger.warn(TAG, "Preview pipeline init failed (non-critical)", e);
@@ -1991,7 +1993,18 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
 
       // Check for fatal errors that indicate corrupted state
       const errorMessage = (e as any).message || "";
+      // WASM-level traps. Once av_read_frame or any other FFmpeg entry
+      // point dereferences past the heap, the entire WASM module is
+      // unrecoverable — every subsequent ccall hits the same OOB. Without
+      // this branch, processLoop classifies it as transient and retries
+      // every ~17ms, flooding the console and pinning the CPU until the
+      // user closes the tab.
+      const isWasmFatal =
+        /out of bounds memory access|memory access out of bounds|RuntimeError|Aborted\(\)/i.test(
+          errorMessage,
+        );
       const isCorruptError =
+        isWasmFatal ||
         errorMessage.includes("Invalid packet size") ||
         errorMessage.includes("Invalid typed array length") ||
         errorMessage.includes("State may be corrupted");

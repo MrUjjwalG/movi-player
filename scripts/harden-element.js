@@ -60,6 +60,14 @@ async function harden() {
     process.exit(1);
   }
 
+  // Diagnostic bypass — set MOVI_NO_HARDEN=1 to ship dist/element.js
+  // untouched. Used when investigating whether the post-build terser
+  // pass is what changes runtime behaviour vs the dev server.
+  if (process.env.MOVI_NO_HARDEN === "1") {
+    console.log("[harden-element] MOVI_NO_HARDEN=1 — skipping minify pass");
+    return;
+  }
+
   const src = readFileSync(target, "utf8");
   console.log(`[harden-element] Input: ${src.length.toLocaleString()} bytes`);
 

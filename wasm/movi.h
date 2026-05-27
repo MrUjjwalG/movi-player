@@ -48,14 +48,6 @@ typedef struct {
   char color_matrix[32];
   char pixel_format[32];
   char color_range[32];
-  // 1 when AV_DISPOSITION_ATTACHED_PIC is set on the stream (ID3v2 cover,
-  // FLAC PICTURE block, MP4 covr atom, Matroska attachment). These streams
-  // have a single cached pre-decoded packet (stream->attached_pic) instead
-  // of a regular packet stream and must be excluded from the active video
-  // track list — otherwise the demuxer tries to feed one frame into the
-  // video pipeline and the renderer stalls waiting for a never-arriving
-  // second frame.
-  int is_attached_pic;
 } StreamInfo;
 
 // Packet info struct

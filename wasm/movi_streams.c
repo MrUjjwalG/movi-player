@@ -124,38 +124,7 @@ int movi_get_stream_info(MoviContext *ctx, int stream_index, StreamInfo *info) {
       info->rotation = 0;
   }
 
-  // Surface the attached-pic disposition so the JS side can filter these
-  // pseudo-streams out of the video track list (audio-only files with
-  // embedded cover art expose them with codec_type=VIDEO).
-  info->is_attached_pic =
-      (stream->disposition & AV_DISPOSITION_ATTACHED_PIC) ? 1 : 0;
-
   return 0;
-}
-
-// Copy the cached attached_pic packet for a stream into the supplied buffer.
-// Returns the number of bytes written, 0 if the stream has no attached pic,
-// or -1 on validation errors. The data is whatever the demuxer stored in
-// stream->attached_pic — typically a complete PNG/JPEG file, ready to feed
-// directly to createImageBitmap on the JS side without going through a
-// video decoder.
-EMSCRIPTEN_KEEPALIVE
-int movi_get_attached_pic_data(MoviContext *ctx, int stream_index,
-                               uint8_t *buffer, int buffer_size) {
-  if (!ctx || !ctx->fmt_ctx || !buffer || stream_index < 0 ||
-      stream_index >= (int)ctx->fmt_ctx->nb_streams)
-    return -1;
-  AVStream *stream = ctx->fmt_ctx->streams[stream_index];
-  if (!(stream->disposition & AV_DISPOSITION_ATTACHED_PIC))
-    return 0;
-  const AVPacket *pic = &stream->attached_pic;
-  if (!pic->data || pic->size <= 0)
-    return 0;
-  int copy_size = pic->size;
-  if (copy_size > buffer_size)
-    return AVERROR(ENOBUFS);
-  memcpy(buffer, pic->data, copy_size);
-  return copy_size;
 }
 
 EMSCRIPTEN_KEEPALIVE
