@@ -12991,6 +12991,30 @@ export class MoviElement extends HTMLElement {
         message = error;
       }
 
+      // Prettify the raw HttpSource messages — surfaced verbatim they read
+      // like "HTTP 503" or "Stream failed after maximum retries" which means
+      // nothing to a user staring at a buffering UI that just gave up.
+      const httpMatch = message.match(/^HTTP (\d{3})/);
+      if (httpMatch) {
+        const code = httpMatch[1];
+        title = "Network Error";
+        if (code === "404") message = "Video not found (HTTP 404).";
+        else if (code === "403") message = "Access denied (HTTP 403). Check video permissions.";
+        else if (code === "401") message = "Authentication required (HTTP 401).";
+        else if (code.startsWith("5")) message = `Server error (HTTP ${code}). Try again later.`;
+        else message = `Network error (HTTP ${code}).`;
+      } else if (message.includes("Stream failed after")) {
+        title = "Network Error";
+        message = "Connection lost. The server stopped responding.";
+      } else if (
+        message.toLowerCase().includes("cors") ||
+        message.includes("Failed to fetch video resource")
+      ) {
+        title = "Network Error";
+      } else if (message.includes("does not support range requests")) {
+        title = "Server Not Supported";
+      }
+
       this.handleUnsupportedVideo(title, message);
     };
     this.player.on("error", errorHandler);

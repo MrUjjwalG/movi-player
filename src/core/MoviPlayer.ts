@@ -1984,20 +1984,45 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
 
       // Check for fatal errors that indicate corrupted state
       const errorMessage = (e as any).message || "";
-      const isFatalError =
+      const isCorruptError =
         errorMessage.includes("Invalid packet size") ||
         errorMessage.includes("Invalid typed array length") ||
         errorMessage.includes("State may be corrupted");
 
-      if (isFatalError) {
-        // Fatal error - pause playback and stop processing
-        Logger.error(TAG, "Fatal demux error detected, pausing playback");
+      // Source-level failures (HTTP 4xx/5xx, exhausted retries, CORS, etc.)
+      // surface through here as the demuxer reads its bytes from the source.
+      // Without classifying these as fatal, processLoop just keeps retrying
+      // the demux and the buffering spinner spins indefinitely with no
+      // user-visible reason. The actual messages come from HttpSource —
+      // see the strings it throws in startStream/buildHeaders.
+      const isSourceError =
+        /^HTTP \d{3}/.test(errorMessage) ||
+        errorMessage.includes("Access denied") ||
+        errorMessage.includes("Authentication required") ||
+        errorMessage.includes("Video not found") ||
+        errorMessage.includes("Failed to fetch video resource") ||
+        errorMessage.includes("Stream failed after") ||
+        errorMessage.includes("Server does not support range requests");
+
+      if (isCorruptError || isSourceError) {
+        Logger.error(
+          TAG,
+          isSourceError
+            ? `Fatal source error, pausing playback: ${errorMessage}`
+            : "Fatal demux error detected, pausing playback",
+        );
         this.pause();
-        this.emit("error", new Error("Playback error: corrupt data stream"));
+        this.stateManager.setState("error");
+        this.emit(
+          "error",
+          isSourceError
+            ? (e instanceof Error ? e : new Error(errorMessage))
+            : new Error("Playback error: corrupt data stream"),
+        );
         return; // Exit process loop
       }
 
-      // For non-fatal errors, continue (network glitches, etc.)
+      // For non-fatal errors, continue (transient network glitches, etc.)
     } finally {
       this.demuxInFlight = false;
     }
