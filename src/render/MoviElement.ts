@@ -3072,19 +3072,23 @@ export class MoviElement extends HTMLElement {
           // Z / X: Subtitle delay — shift subs earlier (Z) or later (X) by
           // 100ms per press. mpv convention: positive value = subs later.
           // File-source only — streamed sources don't expose the timing
-          // controls this nudge depends on.
+          // controls this nudge depends on. Also require an active subtitle
+          // track: nudging a delay value that applies to nothing on screen
+          // would just surface a misleading OSD readout.
           e.preventDefault();
-          if (this.player && this.player.isFileSource()) {
-            const step = 0.1;
-            const direction = e.key === "z" || e.key === "Z" ? -1 : 1;
-            // Round to 3 decimals to keep the displayed value stable across
-            // many presses despite floating-point accumulation.
-            const next = Math.round((this._subtitleDelay + direction * step) * 1000) / 1000;
-            this.subtitleDelay = next;
-            const formatted =
-              next === 0 ? "0s" : `${next > 0 ? "+" : ""}${next.toFixed(2)}s`;
-            this.showOSD(OSD.subOn, `Subtitle Delay: ${formatted}`);
-          }
+          if (!this.player || !this.player.isFileSource()) break;
+          const hasActiveMuxed = !!this.player.trackManager.getActiveSubtitleTrack();
+          const hasActiveExt = this.player.getSubtitleLangs().some((t) => t.active);
+          if (!hasActiveMuxed && !hasActiveExt) break;
+          const step = 0.1;
+          const direction = e.key === "z" || e.key === "Z" ? -1 : 1;
+          // Round to 3 decimals to keep the displayed value stable across
+          // many presses despite floating-point accumulation.
+          const next = Math.round((this._subtitleDelay + direction * step) * 1000) / 1000;
+          this.subtitleDelay = next;
+          const formatted =
+            next === 0 ? "0s" : `${next > 0 ? "+" : ""}${next.toFixed(2)}s`;
+          this.showOSD(OSD.subOn, `Subtitle Delay: ${formatted}`);
           break;
         }
         case "b":

@@ -1462,9 +1462,21 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
         // sustained ~500ms offset than to pause every second.
         const sinceLastResync = performance.now() - this._lastDesyncSeekTime;
         if (audioBehind > 0.5 && sinceLastResync > 5000) {
-          Logger.warn(TAG, `Audio desync detected: video=${videoTime.toFixed(2)}s, audio=${audioTime.toFixed(2)}s, behind=${(audioBehind * 1000).toFixed(0)}ms — resyncing`);
-          this._lastDesyncSeekTime = performance.now();
-          this.seek(this.getCurrentTime()).catch(() => {});
+          // Suppress the seek when the audio renderer already has samples
+          // scheduled past the presented video frame. The gap is just the
+          // buffer runway — audio playback will catch up on its own. Forcing
+          // a seek here would flush already-decoded audio and cause an
+          // audible trip. Most visible after foreground recovery: while
+          // backgrounded the audio worker keeps scheduling buffers (out to
+          // ~maxScheduledMediaTime), the demuxer-seek brings video forward
+          // to that same point, and the playback head is still chewing
+          // through the runway — looks like 1s of "desync" but isn't.
+          const audioBufferEnd = this.audioRenderer.getMaxScheduledMediaTime();
+          if (audioBufferEnd < videoTime - 0.1) {
+            Logger.warn(TAG, `Audio desync detected: video=${videoTime.toFixed(2)}s, audio=${audioTime.toFixed(2)}s, behind=${(audioBehind * 1000).toFixed(0)}ms — resyncing`);
+            this._lastDesyncSeekTime = performance.now();
+            this.seek(this.getCurrentTime()).catch(() => {});
+          }
         }
       }
     }
