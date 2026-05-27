@@ -29,16 +29,24 @@
       background: #000;
     }
     /* Audio-strip mode: drop the full-viewport black panel so the strip
-       doesn't sit at the top of an empty box. Player JS toggles this
-       class via the audiostripchange event from <movi-player>. Overflow
-       must be visible too — pop-up menus (speed, audio track, context
-       menu) anchor inside the player and extend below the 56px strip;
-       a clipped wrapper makes them look broken. */
+       doesn't sit at the top of an empty box. The shell becomes a flex
+       column-centered surface and the strip floats in the middle —
+       gives the extension a clean "native <audio> in a popup" feel
+       instead of a tall black slab with a thin bar on top. Overflow
+       must stay visible so pop-up menus (speed, audio track, context
+       menu) that anchor inside the player can spill out the 56px box. */
+    .player-shell.is-audio-strip {
+      align-items: center;
+      justify-content: center;
+      padding: 24px;
+      background: #0a0a0a;
+    }
     .player-main.is-audio-strip {
       height: auto;
       flex: 0 0 auto;
+      max-width: 880px;
+      width: 100%;
       background: transparent;
-      align-self: flex-start;
       overflow: visible;
     }
     movi-player { width: 100%; height: 100%; display: block; }

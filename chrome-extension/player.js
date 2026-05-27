@@ -59,14 +59,15 @@ customElements.whenDefined("movi-player").then(() => {
     const t = e?.detail?.title || playerEl.title;
     if (t) document.title = t + " — Movi Player";
   });
-  // Drop the player-main's full-height black box when the player is in
-  // audio-strip mode — otherwise the 56px control strip would sit at the
-  // top of an empty viewport-tall black panel for every audio file.
+  // Strip-mode layout: tag both the outer shell (centres the strip in
+  // the viewport, swaps the black panel for a neutral surface) and the
+  // inner .player-main (lets it shrink to the strip's natural width
+  // instead of stretching to fill). The classes are toggled together
+  // so we never have a half-applied state.
   playerEl.addEventListener("audiostripchange", (e) => {
-    document.querySelector(".player-main")?.classList.toggle(
-      "is-audio-strip",
-      !!e.detail?.strip,
-    );
+    const strip = !!e.detail?.strip;
+    document.querySelector(".player-shell")?.classList.toggle("is-audio-strip", strip);
+    document.querySelector(".player-main")?.classList.toggle("is-audio-strip", strip);
   });
   playerEl.addEventListener("ended", () => {
     if (playlistIndex >= 0) {
