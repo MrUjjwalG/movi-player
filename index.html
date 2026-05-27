@@ -250,6 +250,19 @@
         display: flex;
         justify-content: center;
       }
+      /* When the player tells us it's in audio-strip mode (no video, no
+         embedded artwork), drop the 16:9 aspect ratio so the wrapper
+         collapses to the strip's natural 56px height. Also lift the
+         overflow:hidden — pop-up menus (speed, audio track, context
+         menu) anchor inside the player's shadow root and extend BELOW
+         the 56px strip; with overflow:hidden the parent stage clips
+         them and they read as "broken / not opening". */
+      .player-stage.is-audio-strip {
+        aspect-ratio: auto;
+        height: auto;
+        background: transparent;
+        overflow: visible;
+      }
 
       movi-player {
         width: 100%;
@@ -489,7 +502,7 @@
               <line x1="12" y1="3" x2="12" y2="15"></line>
             </svg>
             Upload File
-            <input type="file" id="file-input" accept="video/*,.mkv,.ts" />
+            <input type="file" id="file-input" accept="video/*,audio/*,.mkv,.ts,.m2ts,.mts,.evo,.mka,.m4b,.opus,.oga,.dts,.ac3,.ec3,.eac3" />
           </label>
         </div>
       </section>
@@ -542,6 +555,15 @@
           statusDot.style.backgroundColor = "var(--text-secondary)";
         }
       };
+
+      // The player fires audiostripchange when it switches in/out of
+      // audio-strip mode (audio source with no embedded cover art). Drop
+      // the 16:9 wrapper so the player isn't sitting inside a giant black
+      // box for an audio file.
+      const playerStage = document.querySelector(".player-stage");
+      player?.addEventListener("audiostripchange", (e) => {
+        playerStage?.classList.toggle("is-audio-strip", !!e.detail?.strip);
+      });
 
       // Handle URL loading
       const loadUrl = () => {

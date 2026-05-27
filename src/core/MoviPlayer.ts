@@ -94,6 +94,11 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
   private prefetchedSubtitleStream: number | null = null;
   private prefetchInFlight: boolean = false;
 
+  // Embedded cover art (ID3v2 APIC, FLAC PICTURE, MP4 covr, MKV attachment).
+  // Extracted once at load time when the demuxer reports an attached_pic
+  // pseudo-stream; null for plain video files or audio without artwork.
+  private coverArt: ImageBitmap | null = null;
+
   // HLS Wrapper
   private hlsWrapper: HLSPlayerWrapper | null = null;
 
@@ -339,14 +344,10 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
       };
     }
 
-    this.audioDecoder.setOnData((data) => {
-      // Direct render (buffers in AudioContext)
-      this.audioRenderer.render(data);
-    });
-
     this.audioDecoder.setOnPCM((frame) => {
-      // Software-decoder path: avoids the WebCodecs AudioData constructor,
-      // which Firefox on Android does not implement.
+      // Audio always uses the FFmpeg/WASM software path now (see
+      // MoviAudioDecoder.configure for the rationale). The renderer's
+      // PCM hook is the only feed.
       this.audioRenderer.renderPCM(frame);
     });
 
@@ -390,13 +391,7 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
         }
       }
 
-      // Set up callbacks (match original setup)
-      this.audioDecoder.setOnData((data) => {
-        // Direct render (buffers in AudioContext)
-        // AudioRenderer handles muted state internally
-        this.audioRenderer.render(data);
-      });
-
+      // Software path only — see MoviAudioDecoder.configure.
       this.audioDecoder.setOnPCM((frame) => {
         this.audioRenderer.renderPCM(frame);
       });
@@ -597,6 +592,12 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
       // Set tracks
       this.trackManager.setTracks(this.mediaInfo.tracks);
 
+      // Extract embedded cover art (if any) once the track list is settled.
+      // Fire-and-forget: a missing/corrupt artwork stream shouldn't block
+      // playback. The eventual emit is what wakes the element-side painter,
+      // so callers don't need to await this.
+      void this.extractCoverArt();
+
       // Configure decoders for active tracks
       await this.configureDecoders();
 
@@ -618,8 +619,14 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
       this.emit("loadEnd", undefined);
 
       // Initialize preview pipeline in background (fire-and-forget)
-      // Only if enabled in config to save memory
-      if (this.config.enablePreviews) {
+      // Only if enabled in config to save memory. Skip outright when
+      // there's no playable video stream — thumbnails would have nothing
+      // to scrub against, and the second WASM-context open() against an
+      // audio-only file errors with "Failed to open thumbnail media",
+      // which surfaces as a console error for an entirely cosmetic
+      // feature.
+      const hasPlayableVideo = !!this.trackManager.getActiveVideoTrack();
+      if (this.config.enablePreviews && hasPlayableVideo) {
         // This makes the first preview faster since WASM is already loaded
         this.previewInitPromise = this.initPreviewPipeline().catch((e) => {
           Logger.warn(TAG, "Preview pipeline init failed (non-critical)", e);
@@ -2055,10 +2062,29 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
     // Snap time to end. Drop the keyframe-jump offset so getCurrentTime()
     // reports the true duration — otherwise open-GOP sources (where the
     // first decodable IDR is ~2s in) report end ~2s short of duration.
+    //
+    // Audio-only caveat: VBR MP3 / OGG / similar containers expose a
+    // bitrate-derived duration that's typically overestimated by a few
+    // seconds vs. the actual decoded sample count. Snapping to that
+    // inflated duration makes the time-display jump forward at EOF and
+    // makes the source look like it ended ~4s short of "done." For
+    // audio-only sources, prefer the real last-scheduled audio media
+    // time and update mediaInfo.duration so the seek bar matches.
     if (this.mediaInfo) {
       this.seekKeyframeOffset = 0;
-      this.clock.seek(this.mediaInfo.duration + this.startTime);
-      this.emit("timeUpdate", this.mediaInfo.duration);
+      const hasVideo = !!this.trackManager?.getActiveVideoTrack?.();
+      const audioEnd = this.audioRenderer.getMaxScheduledMediaTime?.() ?? 0;
+      const useAudioEnd = !hasVideo && audioEnd > 0;
+      const endTime = useAudioEnd ? audioEnd : this.mediaInfo.duration;
+      if (useAudioEnd && Math.abs(audioEnd - this.mediaInfo.duration) > 0.1) {
+        // Correct the cached duration so getDuration() and the timeline
+        // both show the real value instead of the metadata estimate.
+        this.mediaInfo.duration = audioEnd;
+        this.clock.setDuration(audioEnd + this.startTime);
+        this.emit("durationChange", audioEnd);
+      }
+      this.clock.seek(endTime + this.startTime);
+      this.emit("timeUpdate", endTime);
     }
 
     this.stateManager.setState("ended");
@@ -2304,6 +2330,10 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
     if (!this.config.enablePreviews) return null; // Previews disabled
     if (this.hlsWrapper) return null; // Previews not supported for HLS
     if (this.isPreviewGenerating) return null; // Busy
+    // Audio-only sources have no video track to thumbnail. Bail early
+    // so a hover on the seek bar doesn't trigger a "Thumbnail bindings
+    // or renderer not available" error every time.
+    if (!this.trackManager.getActiveVideoTrack()) return null;
     this.isPreviewGenerating = true;
 
     try {
@@ -4617,6 +4647,69 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
   }
 
   /**
+   * Embedded cover art for the loaded source, decoded into an ImageBitmap.
+   * Null when the source has no attached_pic stream (regular video files,
+   * audio files without artwork). Caller MUST NOT close() the bitmap — it
+   * is owned by the player and released on destroy() / next load.
+   */
+  getCoverArt(): ImageBitmap | null {
+    return this.coverArt;
+  }
+
+  /**
+   * Read the attached_pic data from the demuxer, decode it once into an
+   * ImageBitmap, and emit a "coverart" event. Best-effort: a malformed
+   * artwork stream just leaves coverArt null and logs a warning.
+   */
+  private async extractCoverArt(): Promise<void> {
+    const picTracks = this.trackManager.getAttachedPicTracks();
+    if (picTracks.length === 0) return;
+    const bindings = this.demuxer?.getBindings();
+    if (!bindings) return;
+
+    try {
+      const streamIndex = picTracks[0].id;
+      const data = bindings.getAttachedPicData(streamIndex);
+      if (!data || data.length === 0) return;
+
+      // Codec name from the stream is the most reliable MIME hint (png /
+      // mjpeg / etc.); fall back to image/* so createImageBitmap can sniff
+      // it itself when the codec name is unfamiliar.
+      const codec = (picTracks[0].codec || "").toLowerCase();
+      const mime =
+        codec === "png"
+          ? "image/png"
+          : codec === "mjpeg" || codec === "jpeg" || codec === "jpg"
+            ? "image/jpeg"
+            : codec === "webp"
+              ? "image/webp"
+              : "image/*";
+      // Pass the underlying ArrayBuffer (not the typed-array view) so the
+      // Blob constructor's TS overload accepts it under strict lib.dom —
+      // Uint8Array's buffer can be a SharedArrayBuffer in cross-origin
+      // isolated contexts, which the BlobPart type rejects. The buffer
+      // here is freshly allocated by getAttachedPicData so it's safe to
+      // hand off without a copy.
+      const blob = new Blob([data.buffer as ArrayBuffer], { type: mime });
+      const bitmap = await createImageBitmap(blob);
+
+      // Release the previous bitmap before stomping the reference — a stale
+      // load → load sequence (playlist next-track) would otherwise leak GPU
+      // memory until the next GC cycle.
+      this.coverArt?.close?.();
+      this.coverArt = bitmap;
+
+      this.emit("coverart", bitmap);
+      Logger.info(
+        TAG,
+        `Cover art extracted: ${bitmap.width}x${bitmap.height} (${codec || "image"})`,
+      );
+    } catch (err) {
+      Logger.warn(TAG, "Cover art extraction failed", err);
+    }
+  }
+
+  /**
    * Destroy player and release resources
    */
   destroy(): void {
@@ -4679,6 +4772,11 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
 
     // Clear track manager
     this.trackManager.clear();
+
+    // Release cover art bitmap. close() is a no-op on platforms that
+    // don't implement it (older Firefox); guard with optional call.
+    this.coverArt?.close?.();
+    this.coverArt = null;
 
     // Reset state
     this.stateManager.reset();

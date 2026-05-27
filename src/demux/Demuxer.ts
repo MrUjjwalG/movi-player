@@ -195,6 +195,7 @@ export class Demuxer {
           rotation: info.rotation,
           pixelFormat: info.pixelFormat,
           colorRange: info.colorRange,
+          isAttachedPic: info.isAttachedPic || undefined,
         } as VideoTrack;
 
         // Store extradata on track

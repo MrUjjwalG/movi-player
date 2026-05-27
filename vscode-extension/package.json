@@ -80,10 +80,61 @@
             "filenamePattern": "*.m2ts"
           },
           {
+            "filenamePattern": "*.mts"
+          },
+          {
+            "filenamePattern": "*.evo"
+          },
+          {
             "filenamePattern": "*.hevc"
           },
           {
             "filenamePattern": "*.265"
+          },
+          {
+            "filenamePattern": "*.mp3"
+          },
+          {
+            "filenamePattern": "*.m4a"
+          },
+          {
+            "filenamePattern": "*.m4b"
+          },
+          {
+            "filenamePattern": "*.aac"
+          },
+          {
+            "filenamePattern": "*.flac"
+          },
+          {
+            "filenamePattern": "*.wav"
+          },
+          {
+            "filenamePattern": "*.wave"
+          },
+          {
+            "filenamePattern": "*.ogg"
+          },
+          {
+            "filenamePattern": "*.oga"
+          },
+          {
+            "filenamePattern": "*.opus"
+          },
+          {
+            "filenamePattern": "*.ac3"
+          },
+          {
+            "filenamePattern": "*.ec3"
+          },
+          {
+            "filenamePattern": "*.eac3"
+          },
+          {
+            "filenamePattern": "*.mka"
+          },
+          {
+            "filenamePattern": "*.dts"
           }
         ],
         "priority": "default"
@@ -140,32 +191,32 @@
       "explorer/context": [
         {
           "command": "movi.openCurrentFile",
-          "when": "resourceExtname =~ /\\.(mp4|mkv|webm|mov|avi|flv|wmv|m4v|3gp|mpg|mpeg|m2ts|hevc|265)$/i",
+          "when": "resourceExtname =~ /\\.(mp4|mkv|webm|mov|avi|ts|flv|wmv|m4v|3gp|mpg|mpeg|m2ts|mts|evo|hevc|265|mp3|m4a|m4b|aac|flac|wav|wave|ogg|oga|opus|ac3|ec3|eac3|mka|dts)$/i",
           "group": "navigation@10"
         },
         {
           "command": "movi.openToSide",
-          "when": "resourceExtname =~ /\\.(mp4|mkv|webm|mov|avi|flv|wmv|m4v|3gp|mpg|mpeg|m2ts|hevc|265)$/i",
+          "when": "resourceExtname =~ /\\.(mp4|mkv|webm|mov|avi|ts|flv|wmv|m4v|3gp|mpg|mpeg|m2ts|mts|evo|hevc|265|mp3|m4a|m4b|aac|flac|wav|wave|ogg|oga|opus|ac3|ec3|eac3|mka|dts)$/i",
           "group": "navigation@11"
         },
         {
           "command": "movi.openInNewWindow",
-          "when": "resourceExtname =~ /\\.(mp4|mkv|webm|mov|avi|flv|wmv|m4v|3gp|mpg|mpeg|m2ts|hevc|265)$/i",
+          "when": "resourceExtname =~ /\\.(mp4|mkv|webm|mov|avi|ts|flv|wmv|m4v|3gp|mpg|mpeg|m2ts|mts|evo|hevc|265|mp3|m4a|m4b|aac|flac|wav|wave|ogg|oga|opus|ac3|ec3|eac3|mka|dts)$/i",
           "group": "navigation@12"
         }
       ],
       "editor/title/context": [
         {
           "command": "movi.openCurrentFile",
-          "when": "resourceExtname =~ /\\.(mp4|mkv|webm|mov|avi|flv|wmv|m4v|3gp|mpg|mpeg|m2ts|hevc|265)$/i"
+          "when": "resourceExtname =~ /\\.(mp4|mkv|webm|mov|avi|ts|flv|wmv|m4v|3gp|mpg|mpeg|m2ts|mts|evo|hevc|265|mp3|m4a|m4b|aac|flac|wav|wave|ogg|oga|opus|ac3|ec3|eac3|mka|dts)$/i"
         },
         {
           "command": "movi.openToSide",
-          "when": "resourceExtname =~ /\\.(mp4|mkv|webm|mov|avi|flv|wmv|m4v|3gp|mpg|mpeg|m2ts|hevc|265)$/i"
+          "when": "resourceExtname =~ /\\.(mp4|mkv|webm|mov|avi|ts|flv|wmv|m4v|3gp|mpg|mpeg|m2ts|mts|evo|hevc|265|mp3|m4a|m4b|aac|flac|wav|wave|ogg|oga|opus|ac3|ec3|eac3|mka|dts)$/i"
         },
         {
           "command": "movi.openInNewWindow",
-          "when": "resourceExtname =~ /\\.(mp4|mkv|webm|mov|avi|flv|wmv|m4v|3gp|mpg|mpeg|m2ts|hevc|265)$/i"
+          "when": "resourceExtname =~ /\\.(mp4|mkv|webm|mov|avi|ts|flv|wmv|m4v|3gp|mpg|mpeg|m2ts|mts|evo|hevc|265|mp3|m4a|m4b|aac|flac|wav|wave|ogg|oga|opus|ac3|ec3|eac3|mka|dts)$/i"
         }
       ]
     },

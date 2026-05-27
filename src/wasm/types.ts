@@ -57,6 +57,12 @@ export interface MoviWasmModule {
     buffer: number,
     bufferSize: number,
   ) => number;
+  _movi_get_attached_pic_data: (
+    ctx: number,
+    streamIndex: number,
+    buffer: number,
+    bufferSize: number,
+  ) => number;
   _movi_seek_to: (
     ctx: number,
     timestamp: number,
@@ -184,6 +190,13 @@ export interface StreamInfo {
   colorMatrix: string;
   pixelFormat: string;
   colorRange: string;
+  // True when AV_DISPOSITION_ATTACHED_PIC is set on the stream. Audio
+  // files with embedded cover art (ID3v2 APIC, FLAC PICTURE, MP4 covr,
+  // Matroska attachments) expose a video-codec stream that carries a
+  // single cached picture instead of a real packet stream. Consumers
+  // should skip these when picking the active video track and read the
+  // image via getAttachedPicData() instead.
+  isAttachedPic: boolean;
 }
 
 export interface PacketInfo {
@@ -196,7 +209,7 @@ export interface PacketInfo {
 }
 
 // StreamInfo struct layout (matches C struct)
-export const STREAM_INFO_SIZE = 336; // Adjusted for pixel format + range
+export const STREAM_INFO_SIZE = 340; // +4 for is_attached_pic (int)
 export const STREAM_INFO_OFFSETS = {
   index: 0,
   type: 4,
@@ -220,6 +233,7 @@ export const STREAM_INFO_OFFSETS = {
   colorMatrix: 240, // 32 bytes
   pixelFormat: 272, // 32 bytes
   colorRange: 304, // 32 bytes
+  isAttachedPic: 336, // 4 bytes (int)
 };
 
 // PacketInfo struct layout

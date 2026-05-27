@@ -28,6 +28,19 @@
       position: relative;
       background: #000;
     }
+    /* Audio-strip mode: drop the full-viewport black panel so the strip
+       doesn't sit at the top of an empty box. Player JS toggles this
+       class via the audiostripchange event from <movi-player>. Overflow
+       must be visible too — pop-up menus (speed, audio track, context
+       menu) anchor inside the player and extend below the 56px strip;
+       a clipped wrapper makes them look broken. */
+    .player-main.is-audio-strip {
+      height: auto;
+      flex: 0 0 auto;
+      background: transparent;
+      align-self: flex-start;
+      overflow: visible;
+    }
     movi-player { width: 100%; height: 100%; display: block; }
 
     /* ─── Playlist sidebar (matches main app) ─── */
@@ -827,7 +840,7 @@
             <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/>
           </svg>
           Choose Files
-          <input type="file" id="filePicker" accept="video/*,.mkv,.ts,.avi,.flv,.wmv,.mov" multiple style="display:none">
+          <input type="file" id="filePicker" accept="video/*,audio/*,.mkv,.ts,.m2ts,.mts,.evo,.avi,.flv,.wmv,.mov,.mka,.m4b,.opus,.oga,.dts,.ac3,.ec3,.eac3" multiple style="display:none">
         </label>
         <label class="browse-btn secondary">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">

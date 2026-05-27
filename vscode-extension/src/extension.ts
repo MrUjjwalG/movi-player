@@ -4,9 +4,17 @@ import * as fs from "fs";
 import { spawn, ChildProcess } from "child_process";
 import { MoviActionsProvider } from "./actionsView";
 
+// Extensions accepted by the openFile / openFileToSide / openFileInNewWindow
+// dialog filters. Audio formats live in the same player since the underlying
+// FFmpeg WASM build already decodes them — see docker/build-ffmpeg.sh for
+// the demuxer/decoder set.
 const VIDEO_EXTS = [
+  // Video
   "mp4", "mkv", "webm", "mov", "avi", "flv", "wmv",
-  "m4v", "3gp", "mpg", "mpeg", "m2ts", "hevc", "265",
+  "m4v", "3gp", "mpg", "mpeg", "m2ts", "mts", "evo", "hevc", "265",
+  // Audio
+  "mp3", "m4a", "m4b", "aac", "flac", "wav", "wave",
+  "ogg", "oga", "opus", "ac3", "ec3", "eac3", "mka", "dts",
 ];
 
 let commandPanel: vscode.WebviewPanel | undefined;
@@ -451,6 +459,7 @@ class MoviEditorProvider
 function guessMime(filePath: string): string {
   const ext = path.extname(filePath).toLowerCase();
   const map: Record<string, string> = {
+    // Video
     ".mp4": "video/mp4",
     ".m4v": "video/x-m4v",
     ".mkv": "video/x-matroska",
@@ -459,6 +468,8 @@ function guessMime(filePath: string): string {
     ".avi": "video/x-msvideo",
     ".ts": "video/mp2t",
     ".m2ts": "video/mp2t",
+    ".mts": "video/mp2t",
+    ".evo": "video/mpeg",
     ".mpg": "video/mpeg",
     ".mpeg": "video/mpeg",
     ".flv": "video/x-flv",
@@ -466,6 +477,22 @@ function guessMime(filePath: string): string {
     ".3gp": "video/3gpp",
     ".hevc": "video/hevc",
     ".265": "video/hevc",
+    // Audio
+    ".mp3": "audio/mpeg",
+    ".m4a": "audio/mp4",
+    ".m4b": "audio/mp4",
+    ".aac": "audio/aac",
+    ".flac": "audio/flac",
+    ".wav": "audio/wav",
+    ".wave": "audio/wav",
+    ".ogg": "audio/ogg",
+    ".oga": "audio/ogg",
+    ".opus": "audio/opus",
+    ".ac3": "audio/ac3",
+    ".ec3": "audio/eac3",
+    ".eac3": "audio/eac3",
+    ".mka": "audio/x-matroska",
+    ".dts": "audio/vnd.dts",
   };
   return map[ext] || "application/octet-stream";
 }

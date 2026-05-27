@@ -128,6 +128,8 @@ function parseStreamInfo(module: MoviWasmModule, ptr: number): StreamInfo {
     colorMatrix: readString(module, ptr + STREAM_INFO_OFFSETS.colorMatrix, 32),
     pixelFormat: readString(module, ptr + STREAM_INFO_OFFSETS.pixelFormat, 32),
     colorRange: readString(module, ptr + STREAM_INFO_OFFSETS.colorRange, 32),
+    isAttachedPic:
+      view.getInt32(STREAM_INFO_OFFSETS.isAttachedPic, true) !== 0,
   };
 }
 
@@ -550,6 +552,13 @@ export class WasmBindings {
     if (!this.contextPtr) return null;
 
     const infoPtr = this.module._malloc(STREAM_INFO_SIZE);
+    // Zero the buffer before the C side writes into it. The C struct
+    // grew (added is_attached_pic at offset 336); if the user is running
+    // against an unrebuilt WASM that still emits the old layout, the new
+    // trailing bytes would otherwise hold whatever leftover heap memory
+    // _malloc handed us — non-zero garbage parsed as a true flag would
+    // cause every real video track to be filtered out as cover art.
+    this.module.HEAPU8.fill(0, infoPtr, infoPtr + STREAM_INFO_SIZE);
     try {
       const ret = this.module._movi_get_stream_info(
         this.contextPtr,
@@ -592,6 +601,47 @@ export class WasmBindings {
     } finally {
       this.module._free(bufferPtr);
     }
+  }
+
+  /**
+   * Read the cached attached_pic data for a stream — typically a full
+   * PNG/JPEG file extracted from ID3v2 APIC, FLAC PICTURE, MP4 covr atom
+   * or Matroska attachment. Returns null when the stream has no attached
+   * picture (i.e. it's a real video stream, not embedded cover art).
+   *
+   * Size is read from StreamInfo.bitRate of the synthetic attached_pic
+   * stream — FFmpeg stores it via codecpar->bit_rate when populating the
+   * picture, but to keep the JS side oblivious of that detail we use a
+   * growing buffer: start at 1 MB (covers ~all real cover art), grow on
+   * ENOBUFS up to a sane cap.
+   */
+  getAttachedPicData(streamIndex: number): Uint8Array | null {
+    if (!this.contextPtr) return null;
+    const MAX_PIC_SIZE = 16 * 1024 * 1024; // 16 MB ceiling — generous.
+    let bufferSize = 1024 * 1024; // 1 MB initial.
+    while (bufferSize <= MAX_PIC_SIZE) {
+      const bufferPtr = this.module._malloc(bufferSize);
+      try {
+        const ret = this.module._movi_get_attached_pic_data(
+          this.contextPtr,
+          streamIndex,
+          bufferPtr,
+          bufferSize,
+        );
+        if (ret === 0) return null; // No attached_pic on this stream.
+        if (ret < 0) {
+          // ENOBUFS (-EAGAIN-ish): grow and retry.
+          bufferSize *= 2;
+          continue;
+        }
+        const result = new Uint8Array(ret);
+        result.set(this.module.HEAPU8.subarray(bufferPtr, bufferPtr + ret));
+        return result;
+      } finally {
+        this.module._free(bufferPtr);
+      }
+    }
+    return null;
   }
 
   /**
@@ -1441,6 +1491,9 @@ export class ThumbnailBindings {
     if (!this.contextPtr) return null;
 
     const infoPtr = this.module._malloc(STREAM_INFO_SIZE);
+    // Zero-init — see WasmBindings.getStreamInfo for the why (defends
+    // against unrebuilt WASM emitting a shorter struct than JS expects).
+    this.module.HEAPU8.fill(0, infoPtr, infoPtr + STREAM_INFO_SIZE);
     try {
       const ret = (this.module as any)._movi_thumbnail_get_stream_info(
         this.contextPtr,

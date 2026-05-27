@@ -42,6 +42,14 @@ export interface VideoTrack extends Track {
   rotation?: number;
   colorRange?: string;
   isHDR?: boolean;
+  /**
+   * True when this is an embedded cover-art pseudo-stream (ID3v2 APIC,
+   * FLAC PICTURE, MP4 covr, Matroska attachment). These look like single-
+   * frame PNG/JPEG video streams to the demuxer; consumers picking an
+   * active video track should skip them and read the picture via the
+   * player's cover-art accessor instead.
+   */
+  isAttachedPic?: boolean;
 }
 
 export interface AudioTrack extends Track {
@@ -268,4 +276,11 @@ export interface PlayerEventMap {
   bufferUpdate: { start: number; end: number }[];
   ended: void;
   preloadcomplete: void;
+  /**
+   * Embedded cover art extracted from the source (ID3v2 APIC, FLAC PICTURE,
+   * MP4 covr, Matroska attachment). Fires once after track enumeration when
+   * an attached_pic pseudo-stream is present. Recipients own the bitmap and
+   * should close() it on disposal.
+   */
+  coverart: ImageBitmap;
 }

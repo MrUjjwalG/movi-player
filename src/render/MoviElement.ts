@@ -68,6 +68,12 @@ export class MoviElement extends HTMLElement {
   private _userHasUnmuted: boolean = false;
   private brokenIndicator: HTMLElement | null = null;
   private emptyStateIndicator: HTMLElement | null = null;
+  // Cover-art canvas painted when the source has embedded album art and no
+  // playable video stream. Sits above the WebGL canvas; both children below
+  // resize with the host element via updateCoverArtOverlay().
+  private coverArtOverlay: HTMLDivElement | null = null;
+  private coverArtCanvas: HTMLCanvasElement | null = null;
+  private coverArtBitmap: ImageBitmap | null = null;
   private controlsTimeout: number | null = null;
   private isOverControls: boolean = false;
   private isSeeking: boolean = false;
@@ -417,6 +423,25 @@ export class MoviElement extends HTMLElement {
     // the canvas/video underneath where the player's handlers are attached.
     this.posterElement.style.pointerEvents = "none";
     shadowRoot.appendChild(this.posterElement);
+
+    // Cover-art overlay (only visible for audio-only sources with embedded
+    // artwork). Sits above the WebGL canvas but below subtitles + controls.
+    // A single canvas paints both the blurred backdrop and the centred art
+    // so we don't have to wire two DOM nodes through the resize path.
+    this.coverArtOverlay = document.createElement("div");
+    this.coverArtOverlay.className = "movi-cover-art-overlay";
+    this.coverArtOverlay.style.position = "absolute";
+    this.coverArtOverlay.style.inset = "0";
+    this.coverArtOverlay.style.display = "none";
+    this.coverArtOverlay.style.zIndex = "1";
+    this.coverArtOverlay.style.pointerEvents = "none";
+    this.coverArtOverlay.style.background = "#000";
+    this.coverArtCanvas = document.createElement("canvas");
+    this.coverArtCanvas.style.width = "100%";
+    this.coverArtCanvas.style.height = "100%";
+    this.coverArtCanvas.style.display = "block";
+    this.coverArtOverlay.appendChild(this.coverArtCanvas);
+    shadowRoot.appendChild(this.coverArtOverlay);
 
     // Create subtitle overlay element
     this.subtitleOverlay = document.createElement("div");
@@ -1195,27 +1220,27 @@ export class MoviElement extends HTMLElement {
       <div class="movi-shortcuts-body">
         <div class="movi-shortcuts-col">
           <div class="movi-shortcut-row"><kbd>Space</kbd><span>Play / Pause</span></div>
-          <div class="movi-shortcut-row"><kbd>F</kbd><span>Fullscreen</span></div>
-          <div class="movi-shortcut-row"><kbd>P</kbd><span>Picture-in-Picture</span></div>
+          <div class="movi-shortcut-row" data-video-only><kbd>F</kbd><span>Fullscreen</span></div>
+          <div class="movi-shortcut-row" data-video-only><kbd>P</kbd><span>Picture-in-Picture</span></div>
           <div class="movi-shortcut-row"><kbd>M</kbd><span>Mute / Unmute</span></div>
           <div class="movi-shortcut-row"><kbd>&uarr; / &darr;</kbd><span>Volume</span></div>
           <div class="movi-shortcut-row"><kbd>&larr; / &rarr;</kbd><span>Seek ±10s</span></div>
           <div class="movi-shortcut-row"><kbd>0</kbd><span>Seek to Start</span></div>
-          <div class="movi-shortcut-row"><kbd>Ctrl+&larr;/&rarr;</kbd><span>Frame Step</span></div>
+          <div class="movi-shortcut-row" data-video-only><kbd>Ctrl+&larr;/&rarr;</kbd><span>Frame Step</span></div>
           <div class="movi-shortcut-row"><kbd>+/-</kbd><span>Speed Up/Down</span></div>
-          <div class="movi-shortcut-row"><kbd>V</kbd><span>Cycle Subtitles</span></div>
-          <div class="movi-shortcut-row"><kbd>Z / X</kbd><span>Subtitle Delay</span></div>
+          <div class="movi-shortcut-row" data-video-only><kbd>V</kbd><span>Cycle Subtitles</span></div>
+          <div class="movi-shortcut-row" data-video-only><kbd>Z / X</kbd><span>Subtitle Delay</span></div>
           <div class="movi-shortcut-row"><kbd>B</kbd><span>Cycle Audio</span></div>
         </div>
         <div class="movi-shortcuts-col">
-          <div class="movi-shortcut-row"><kbd>A</kbd><span>Aspect Ratio</span></div>
-          <div class="movi-shortcut-row"><kbd>R</kbd><span>Rotate Video</span></div>
+          <div class="movi-shortcut-row" data-video-only><kbd>A</kbd><span>Aspect Ratio</span></div>
+          <div class="movi-shortcut-row" data-video-only><kbd>R</kbd><span>Rotate Video</span></div>
           <div class="movi-shortcut-row"><kbd>L</kbd><span>Loop</span></div>
           <div class="movi-shortcut-row"><kbd>U</kbd><span>Stable Volume</span></div>
-          <div class="movi-shortcut-row"><kbd>H</kbd><span>HDR Mode</span></div>
-          <div class="movi-shortcut-row"><kbd>S</kbd><span>Snapshot</span></div>
+          <div class="movi-shortcut-row" data-video-only><kbd>H</kbd><span>HDR Mode</span></div>
+          <div class="movi-shortcut-row" data-video-only><kbd>S</kbd><span>Snapshot</span></div>
           <div class="movi-shortcut-row"><kbd>I</kbd><span>Stats for Nerds</span></div>
-          <div class="movi-shortcut-row"><kbd>T</kbd><span>Timeline</span></div>
+          <div class="movi-shortcut-row" data-video-only><kbd>T</kbd><span>Timeline</span></div>
           <div class="movi-shortcut-row"><kbd>?</kbd><span>This Panel</span></div>
         </div>
       </div>
@@ -3328,11 +3353,25 @@ export class MoviElement extends HTMLElement {
         isInMenu: shadowTarget?.closest(".movi-context-menu"),
       });
 
-      if (
-        shadowTarget &&
-        (shadowTarget.closest(".movi-controls-container") ||
-          shadowTarget.closest(".movi-context-menu"))
-      ) {
+      // Suppress only when the click hits an interactive control or the
+      // menu itself. The original "any click inside controls-container
+      // is blocked" rule worked for video mode (the bar is a thin strip
+      // overlaying the video, so the dead-zone is small) — but in audio
+      // strip mode the controls-container IS the entire player surface,
+      // so blanket-blocking on it would mean right-click never works.
+      // Refined gate: allow context menu unless the click is on a real
+      // button, the progress bar, or the menu itself.
+      const inStripMode = this.classList.contains("movi-audio-strip");
+      const isOnInteractive =
+        !!shadowTarget?.closest(
+          ".movi-btn, .movi-progress-container, .movi-volume-slider, .movi-context-menu",
+        );
+      const blockMenu = inStripMode
+        ? isOnInteractive
+        : shadowTarget &&
+          (shadowTarget.closest(".movi-controls-container") ||
+            shadowTarget.closest(".movi-context-menu"));
+      if (blockMenu) {
         Logger.debug(
           TAG,
           "[ContextMenu] Clicked on controls or menu, not showing menu",
@@ -3378,6 +3417,38 @@ export class MoviElement extends HTMLElement {
           ".movi-context-menu-backdrop",
         ) as HTMLElement;
         if (backdrop) backdrop.style.display = "none";
+
+        // Audio-strip mode: the player is a 56px tall bar, so anchoring
+        // the menu inside its bounds gives a 36px usable region which is
+        // useless. Switch to position:fixed in viewport coordinates so
+        // the menu can spill into the empty page area below the strip.
+        const isStripMode = this.classList.contains("movi-audio-strip");
+        if (isStripMode) {
+          contextMenu.style.position = "fixed";
+          contextMenu.style.maxHeight = `${Math.max(180, window.innerHeight - 40)}px`;
+          contextMenu.style.display = "block";
+          contextMenu.style.visibility = "hidden";
+          const menuWidth = contextMenu.offsetWidth;
+          const menuHeight = contextMenu.offsetHeight;
+          contextMenu.style.visibility = "visible";
+          let fx = e.clientX;
+          let fy = e.clientY;
+          if (fx + menuWidth > window.innerWidth) fx = window.innerWidth - menuWidth - 10;
+          if (fx < 10) fx = 10;
+          if (fy + menuHeight > window.innerHeight) fy = window.innerHeight - menuHeight - 10;
+          if (fy < 10) fy = 10;
+          contextMenu.style.left = `${fx}px`;
+          contextMenu.style.top = `${fy}px`;
+          // skip the host-relative absolute-position path below
+          requestAnimationFrame(() => contextMenu.classList.add("visible"));
+          this._contextMenuVisible = true;
+          return;
+        }
+
+        // Reset any leftover fixed-position state from a previous strip-
+        // mode invocation (track switch from audio to video).
+        contextMenu.style.position = "";
+
         let x = e.clientX - rect.left;
         let y = e.clientY - rect.top;
 
@@ -6734,6 +6805,15 @@ export class MoviElement extends HTMLElement {
     if (open) {
       if (el.classList.contains("is-open")) return;
       el.style.display = ""; // revert to CSS default (flex/block)
+      // In audio-strip mode the player is a 56px tall bar. Pop-up menus
+      // normally rely on the bar's overflow:visible chain to extend
+      // beyond the host — but the bar lives inside the consumer's own
+      // layout (e.g. a .player-stage flex container), and ANY ancestor
+      // with overflow:hidden will clip the menu regardless of our own
+      // CSS. Sidestep the problem entirely by switching to position:
+      // fixed with the button's bounding rect — viewport coordinates
+      // can't be clipped by ancestor overflow.
+      this.applyStripFixedMenuPosition(el);
       void el.getBoundingClientRect(); // flush layout so transition starts
       el.classList.add("is-open");
       return;
@@ -6749,9 +6829,49 @@ export class MoviElement extends HTMLElement {
       // If the menu was reopened during the exit transition, leave it.
       if (el.classList.contains("is-open")) return;
       el.style.display = "none";
+      // Reset the strip-mode fixed positioning so a subsequent open in
+      // non-strip mode doesn't inherit stale inline coords.
+      el.style.position = "";
+      el.style.top = "";
+      el.style.left = "";
+      el.style.right = "";
+      el.style.bottom = "";
     };
     el.addEventListener("transitionend", finish, { once: true });
     setTimeout(finish, 240); // safety net if transitionend doesn't fire
+  }
+
+  /**
+   * Strip-mode menu positioning: place the menu just below the anchor
+   * button using viewport-relative position:fixed. The strip CSS drops
+   * the host's `contain: paint` + `container-type` so fixed coords are
+   * actually viewport-relative again (default behaviour) and paint
+   * extends outside the 56px strip box.
+   */
+  private applyStripFixedMenuPosition(menu: HTMLElement): void {
+    if (!this.classList.contains("movi-audio-strip")) return;
+    const anchor = menu.parentElement?.querySelector(
+      ".movi-btn",
+    ) as HTMLElement | null;
+    if (!anchor) return;
+    const btnRect = anchor.getBoundingClientRect();
+    // Measure intrinsic size by briefly placing the menu offscreen.
+    menu.style.position = "fixed";
+    menu.style.bottom = "auto";
+    menu.style.right = "auto";
+    menu.style.visibility = "hidden";
+    menu.style.left = "0";
+    menu.style.top = "0";
+    const menuW = menu.offsetWidth || 200;
+    // Right-align with the button; clamp into viewport on both edges.
+    let left = btnRect.right - menuW;
+    if (left < 8) left = 8;
+    if (left + menuW > window.innerWidth - 8) {
+      left = window.innerWidth - menuW - 8;
+    }
+    menu.style.left = `${left}px`;
+    menu.style.top = `${btnRect.bottom + 8}px`;
+    menu.style.visibility = "";
   }
 
   private isBottomMenuOpen(el: HTMLElement | null): boolean {
@@ -7003,7 +7123,12 @@ export class MoviElement extends HTMLElement {
         // hidden — without this update the centre button gets stuck on
         // its initial "pause" SVG. Loading indicator + title overlay
         // also stay live; they aren't part of the bar.
-        const controlsHidden = this.controlsContainer?.classList.contains(
+        // In strip mode, controls are permanently visible (the bar IS
+        // the player), so the auto-hide optimisation below would freeze
+        // the time / progress / volume icon updates against an empty
+        // class on the controls-container. Force the updates through.
+        const inStripMode = this.classList.contains("movi-audio-strip");
+        const controlsHidden = !inStripMode && this.controlsContainer?.classList.contains(
           "movi-controls-hidden",
         );
         this.updatePlayPauseIcon();
@@ -11397,6 +11522,438 @@ export class MoviElement extends HTMLElement {
             line-height: 1.25;
         }
       }
+
+      /* ========================================
+         AUDIO STRIP MODE
+         Activated when the source has audio but no playable video stream
+         (and no embedded cover art). Collapses the player to a thin
+         control strip — the layout the browser's native <audio controls>
+         exposes — so the host element doesn't sit as a black box.
+      ======================================== */
+      :host(.movi-audio-strip) canvas,
+      :host(.movi-audio-strip) video,
+      :host(.movi-audio-strip) .movi-poster-overlay,
+      :host(.movi-audio-strip) .movi-cover-art-overlay,
+      :host(.movi-audio-strip) .movi-subtitle-overlay,
+      :host(.movi-audio-strip) .movi-osd-container,
+      :host(.movi-audio-strip) .movi-loading-indicator,
+      :host(.movi-audio-strip) .movi-loader-container,
+      :host(.movi-audio-strip) .movi-center-play-pause,
+      :host(.movi-audio-strip) .movi-title-bar,
+      :host(.movi-audio-strip) .movi-unmute-overlay,
+      :host(.movi-audio-strip) .movi-broken-indicator,
+      :host(.movi-audio-strip) .movi-empty-state {
+        display: none !important;
+      }
+      /* !important here is unavoidable — the host's height is usually
+         driven by the consumer's <movi-player width="..." height="...">
+         attributes, which set inline styles with higher specificity than
+         a stylesheet rule. Strip mode needs to override that to collapse
+         the player to the control row's natural size. */
+      :host(.movi-audio-strip) {
+        min-height: 56px !important;
+        height: 56px !important;
+        max-height: 56px !important;
+        background: #0f0f0f;
+        border-radius: 6px;
+        /* "overflow: visible" is intentional — popups (speed menu,
+           audio-track menu, right-click context menu) anchor inside the
+           shadow root and open upward from the bar. With overflow:hidden
+           they'd be clipped to the 56px strip and look invisible. The
+           strip background itself is the host's solid colour, so visual
+           bleed past the rounded corners is limited to popups when open. */
+        overflow: visible !important;
+        position: relative;
+        /* The default host has "contain: layout style paint" and
+           "container-type: inline-size" for perf isolation — both clip
+           ANY descendant paint to the host's 56px box and re-anchor
+           position:fixed to the host. In strip mode we explicitly want
+           popups to escape the host visually (speed menu, audio-track
+           menu, context menu open below the bar). Drop the paint and
+           layout containment, but keep "style" (still safely scoped)
+           and skip container-type so fixed positioning reaches the
+           viewport again. */
+        contain: style !important;
+        container-type: normal !important;
+      }
+      :host(.movi-audio-strip[theme="light"]) {
+        background: #f5f5f5;
+        border: 1px solid rgba(0, 0, 0, 0.08);
+      }
+      /* Light-theme dark-icon overrides — the default video bar keeps
+         white icons on a dark gradient regardless of theme, because it
+         overlays a video. The strip has no video underneath, so on a
+         light page surface the white icons read as invisible. Flip them
+         (and the time text) back to the theme's dark text colour, and
+         darken the progress-bar groove so the purple fill registers. */
+      :host(.movi-audio-strip[theme="light"]) .movi-controls-bar,
+      :host(.movi-audio-strip[theme="light"]) .movi-controls-bar .movi-btn,
+      :host(.movi-audio-strip[theme="light"]) .movi-controls-bar .movi-time,
+      :host(.movi-audio-strip[theme="light"]) .movi-controls-bar .movi-current-time,
+      :host(.movi-audio-strip[theme="light"]) .movi-controls-bar .movi-duration {
+        color: #11142d !important;
+      }
+      :host(.movi-audio-strip[theme="light"]) .movi-controls-bar .movi-time-separator {
+        color: rgba(17, 20, 45, 0.5) !important;
+      }
+      :host(.movi-audio-strip[theme="light"]) .movi-progress-bar {
+        background: rgba(0, 0, 0, 0.12) !important;
+      }
+      :host(.movi-audio-strip[theme="light"]) .movi-progress-handle {
+        background: #11142d !important;
+      }
+      :host(.movi-audio-strip[theme="light"]) .movi-btn:hover {
+        background: rgba(0, 0, 0, 0.06) !important;
+      }
+      /* Volume slider thumb/track also need to flip in light strip. */
+      :host(.movi-audio-strip[theme="light"]) .movi-volume-slider::-webkit-slider-thumb {
+        background: #11142d !important;
+      }
+      :host(.movi-audio-strip[theme="light"]) .movi-volume-slider {
+        background: rgba(0, 0, 0, 0.18) !important;
+      }
+      /* The buffering shimmer was tuned for a dark bar — on a light
+         groove the white gradient with mix-blend:screen disappears.
+         Use a dark stripe and switch the blend mode so the animation
+         reads as movement against the lighter background. */
+      :host(.movi-audio-strip[theme="light"].is-buffering) .movi-progress-bar::after {
+        background: linear-gradient(
+          90deg,
+          rgba(0, 0, 0, 0) 0%,
+          rgba(17, 20, 45, 0.4) 50%,
+          rgba(0, 0, 0, 0) 100%
+        ) !important;
+        background-size: 40% 100% !important;
+        background-repeat: no-repeat !important;
+        mix-blend-mode: multiply !important;
+      }
+      /* Controls live in the host's natural flow instead of floating above
+         a video canvas — and stay visible regardless of hover state. */
+      :host(.movi-audio-strip) .movi-controls-overlay {
+        display: none !important;
+      }
+      /* Force the controls container visible in strip mode — its base rule
+         is display:none flipped to .movi-controls-visible on hover. In
+         strip mode there's no "hover to reveal" UX; the bar is the entire
+         player surface. */
+      :host(.movi-audio-strip) .movi-controls-container,
+      :host(.movi-audio-strip) .movi-controls-container.movi-controls-hidden {
+        display: flex !important;
+        position: absolute !important;
+        inset: 0 !important;
+        opacity: 1 !important;
+        pointer-events: auto !important;
+        transform: none !important;
+        background: transparent !important;
+        padding: 0 12px;
+        align-items: center;
+      }
+      /* Single-row layout: small play-pause / volume cluster on the left,
+         progress bar takes the remaining width, time on the right. The
+         vertical column the bar normally uses (progress on top, buttons
+         below) wastes the horizontal real estate the strip has plenty of. */
+      :host(.movi-audio-strip) .movi-controls-bar {
+        background: transparent !important;
+        padding: 0 !important;
+        width: 100%;
+        display: flex !important;
+        flex-direction: row !important;
+        align-items: center !important;
+        gap: 12px !important;
+        min-height: 0 !important;
+        box-shadow: none !important;
+      }
+      /* "display: contents" removes .movi-buttons-row from layout while
+         keeping its children — controls-left and controls-right become
+         direct flex items of .movi-controls-bar. Without this, the row's
+         baseline width:100% would push the progress bar to zero width.
+         The CSS "order" property then arranges the row as
+         [left] [progress fills] [right] like native audio. */
+      :host(.movi-audio-strip) .movi-buttons-row {
+        display: contents !important;
+      }
+      :host(.movi-audio-strip) .movi-controls-left {
+        order: 0 !important;
+        flex: 0 0 auto !important;
+      }
+      :host(.movi-audio-strip) .movi-progress-container {
+        order: 1 !important;
+        flex: 1 1 auto !important;
+        margin: 0 !important;
+        min-width: 0 !important;
+        width: auto !important;
+      }
+      :host(.movi-audio-strip) .movi-controls-right {
+        order: 2 !important;
+        flex: 0 0 auto !important;
+      }
+      /* Keep the right-side cluster visible but trim it to controls that
+         actually apply to audio playback. Subtitles, HDR, quality, PiP,
+         fullscreen, and rotation are video-only — hiding the buttons
+         instead of the whole container preserves audio-track switching
+         (multi-lang files), speed, and the stable-audio compressor. */
+      :host(.movi-audio-strip) .movi-controls-right {
+        display: flex !important;
+        align-items: center !important;
+        flex: 0 0 auto !important;
+        gap: 2px !important;
+      }
+      /* The desktop @media (hover) block initialises .movi-mobile-expandable
+         with width:0 + overflow:hidden, expecting a hover-to-reveal flow.
+         Strip mode has no hover affordance — the buttons live in the
+         visible bar permanently — so unwind those defaults completely.
+         Without overflow:visible here, downward-opening pop-ups (the new
+         strip-mode position) get clipped to the 56px row even with the
+         host's overflow:visible. */
+      :host(.movi-audio-strip) .movi-mobile-expandable {
+        display: flex !important;
+        align-items: center !important;
+        gap: 2px !important;
+        width: auto !important;
+        opacity: 1 !important;
+        overflow: visible !important;
+        pointer-events: auto !important;
+      }
+      /* The base CSS collapses .movi-speed-container, .movi-loop-btn,
+         (and the now-strip-hidden quality + aspect-ratio) to width:0
+         height:0 — they're meant to expand only when .movi-controls-right
+         picks up .expanded via the more-button. In strip mode the more-
+         button is hidden on desktop, so the buttons would be permanently
+         zero-sized despite the cluster being "open". Force-restore the
+         dimensions only for the audio-relevant ones (speed, loop) — the
+         video-only collapsed buttons stay hidden via their own display:
+         none strip rules. */
+      :host(.movi-audio-strip) .movi-speed-container,
+      :host(.movi-audio-strip) .movi-loop-btn {
+        width: auto !important;
+        height: auto !important;
+        margin: 0 !important;
+      }
+      /* Video-only buttons. The right cluster mixes container divs (for
+         buttons that have flyout menus) with bare <button>s — match both
+         patterns. */
+      :host(.movi-audio-strip) .movi-subtitle-track-container,
+      :host(.movi-audio-strip) .movi-quality-container,
+      :host(.movi-audio-strip) .movi-hdr-container,
+      :host(.movi-audio-strip) .movi-aspect-ratio-btn,
+      :host(.movi-audio-strip) .movi-pip-btn,
+      :host(.movi-audio-strip) .movi-snapshot-btn,
+      :host(.movi-audio-strip) .movi-rotate-btn,
+      :host(.movi-audio-strip) .movi-fullscreen-btn {
+        display: none !important;
+      }
+      /* Strip-mode keyboard-shortcuts panel: the base CSS centres it
+         inside the host via position:absolute + top:50%/left:50%, but
+         the host is only 56px tall in strip mode so the panel lands
+         half-off-screen above the bar. Switch to viewport-fixed
+         centring so the panel sits cleanly in the page area below the
+         strip. Also drop the video-only rows — fullscreen, PiP,
+         frame-step, subtitle keys, aspect, rotate, HDR, snapshot,
+         timeline don't apply to audio playback. */
+      :host(.movi-audio-strip) .movi-shortcuts-panel {
+        position: fixed !important;
+        top: 50% !important;
+        left: 50% !important;
+        transform: translate(-50%, -50%) !important;
+      }
+      :host(.movi-audio-strip) .movi-shortcut-row[data-video-only] {
+        display: none !important;
+      }
+      /* Same treatment for the Stats-for-Nerds panel — its default
+         "position: absolute; top: 12px; left: 12px" anchors it inside
+         the host, which is only 56px tall in strip mode so the panel
+         body extends well past the bar and reads as broken. Switch to
+         viewport-fixed in the top-left and trim min-width since there's
+         no video metadata column (codec/res/fps/bitrate are mostly N/A
+         for an audio file). */
+      :host(.movi-audio-strip) .movi-nerd-stats {
+        position: fixed !important;
+        /* top/left are intentionally non-!important — JS in toggleNerdStats
+           sets them as inline styles based on the strip's bounding rect,
+           so the panel anchors just below the bar instead of overlapping
+           its play/seek controls. */
+        right: auto !important;
+        bottom: auto !important;
+        max-height: calc(100vh - 32px) !important;
+        overflow-y: auto !important;
+      }
+
+      /* Mirror the same gate inside the right-click context menu —
+         aspect ratio / PiP / fullscreen / rotate / ambient / snapshot
+         / timeline make no sense for an audio-only source. Keep
+         play-pause, speed, loop, stable-audio, nerd-stats and
+         keyboard-shortcuts; everything else is video-frame work. */
+      :host(.movi-audio-strip) .movi-context-menu-item[data-action="fit"],
+      :host(.movi-audio-strip) .movi-context-menu-item[data-action="pip"],
+      :host(.movi-audio-strip) .movi-context-menu-item[data-action="fullscreen"],
+      :host(.movi-audio-strip) .movi-context-menu-item[data-action="rotate-video"],
+      :host(.movi-audio-strip) .movi-context-menu-item[data-action="ambient-toggle"],
+      :host(.movi-audio-strip) .movi-context-menu-item[data-action="snapshot"],
+      :host(.movi-audio-strip) .movi-context-menu-item[data-action="timeline"],
+      :host(.movi-audio-strip) .movi-context-menu-item[data-action="hdr-toggle"],
+      :host(.movi-audio-strip) .movi-context-menu-item[data-action="subtitle-track"] {
+        display: none !important;
+      }
+      /* The more-button reveals the mobile-expandable cluster. On a wide
+         viewport everything's visible already, so the button is noise —
+         hide. Below 600px the expandable collapses (rule further down)
+         and the more-btn becomes the only way in. */
+      :host(.movi-audio-strip) .movi-more-btn {
+        display: none !important;
+      }
+      /* The seek bar is the strip's most-used affordance — make sure it
+         renders at a usable height (the default ~4px hairline disappears
+         inside a 32px button row). */
+      :host(.movi-audio-strip) .movi-progress-bar {
+        height: 6px !important;
+        position: relative;
+      }
+      :host(.movi-audio-strip) .movi-progress-handle {
+        width: 14px !important;
+        height: 14px !important;
+      }
+      /* Strip-mode loading indicator. The centre spinner is hidden in
+         strip mode, so when the player is buffering / seeking / doing the
+         initial open, animate the progress bar instead. A moving stripe
+         layered above the progress fill reads as "working on it" without
+         disrupting the bar's normal time-line semantics. */
+      /* Popup positioning in strip mode is JS-driven (setBottomMenuOpen
+         switches the menu to position:fixed with viewport-relative top/
+         left computed from the anchor button's getBoundingClientRect).
+         An !important CSS top/bottom here would override those inline
+         values and pin the menu under the 56px host instead. Only the
+         transform-origin needs tweaking so the entrance scale still
+         feels like it grows from where the button visually sits. */
+      :host(.movi-audio-strip) .movi-audio-track-menu,
+      :host(.movi-audio-strip) .movi-subtitle-track-menu,
+      :host(.movi-audio-strip) .movi-quality-menu,
+      :host(.movi-audio-strip) .movi-speed-menu,
+      :host(.movi-audio-strip) .movi-stable-audio-menu {
+        transform-origin: top right !important;
+      }
+
+      /* The ::after gradient stripe rides on top of the progress fill,
+         buffer, and chapter markers — chapter-marker has z-index:3, so
+         bump this above it. Also brighter colour stops since the gentle
+         opacity on a thin bar against a dark background was almost
+         imperceptible. */
+      :host(.movi-audio-strip.is-buffering) .movi-progress-bar::after {
+        content: "";
+        position: absolute;
+        inset: 0;
+        border-radius: inherit;
+        background: linear-gradient(
+          90deg,
+          rgba(255, 255, 255, 0) 0%,
+          rgba(255, 255, 255, 0.55) 50%,
+          rgba(255, 255, 255, 0) 100%
+        );
+        background-size: 40% 100%;
+        background-repeat: no-repeat;
+        animation: movi-strip-buffer 1.05s linear infinite;
+        pointer-events: none;
+        z-index: 5;
+        mix-blend-mode: screen;
+      }
+      @keyframes movi-strip-buffer {
+        from { background-position: -40% 0; }
+        to   { background-position: 140% 0; }
+      }
+
+      /* ─── Strip mode: responsive breakpoints ─────────────────────
+         The strip has a fixed 56px host height regardless of width, so
+         we trim buttons (not bar height) when the viewport gets narrow.
+         Priority order, kept from widest to narrowest:
+           always  → play/pause, progress, time, mute
+           ≥ 480px → + seek±10s, volume slider
+           ≥ 600px → + audio-track, speed, stable-audio, loop (inline)
+           < 600px → those same buttons fold into the .movi-more-btn
+                     popover (tap "…" to expand) — same UX as native
+                     video mode on narrow viewports, no functionality
+                     dropped, just gated behind one tap.
+         Hidden buttons cascade so we don't have to repeat them at each
+         lower step. */
+      @media (max-width: 600px) {
+        /* Surface the more-button on narrow strip widths and collapse
+           the mobile-expandable cluster (audio-track / speed / stable
+           / loop) back to its default closed state, matching the
+           hover-to-expand UX video mode uses. */
+        :host(.movi-audio-strip) .movi-more-btn {
+          display: inline-flex !important;
+        }
+        :host(.movi-audio-strip) .movi-mobile-expandable {
+          width: 0 !important;
+          opacity: 0 !important;
+          overflow: hidden !important;
+          pointer-events: none !important;
+        }
+        :host(.movi-audio-strip) .movi-controls-right.expanded .movi-mobile-expandable {
+          width: auto !important;
+          opacity: 1 !important;
+          overflow: visible !important;
+          pointer-events: auto !important;
+        }
+      }
+      @media (max-width: 480px) {
+        :host(.movi-audio-strip) .movi-seek-backward,
+        :host(.movi-audio-strip) .movi-seek-forward,
+        :host(.movi-audio-strip) .movi-volume-slider-container {
+          display: none !important;
+        }
+        :host(.movi-audio-strip) .movi-controls-container {
+          padding: 0 8px !important;
+        }
+        :host(.movi-audio-strip) .movi-time {
+          font-size: 11px !important;
+        }
+        :host(.movi-audio-strip) .movi-btn {
+          padding: 4px !important;
+          height: 28px !important;
+          width: 28px !important;
+        }
+        :host(.movi-audio-strip) .movi-btn svg {
+          width: 16px !important;
+          height: 16px !important;
+        }
+        :host(.movi-audio-strip) .movi-controls-bar {
+          gap: 8px !important;
+        }
+      }
+      /* Sub-360 ultranarrow (older phones in portrait): drop everything
+         non-essential — even the time gets a compact mm:ss form via the
+         time-separator hide. The seek bar is what users actually use. */
+      @media (max-width: 360px) {
+        :host(.movi-audio-strip) .movi-volume-container,
+        :host(.movi-audio-strip) .movi-time-separator,
+        :host(.movi-audio-strip) .movi-duration {
+          display: none !important;
+        }
+      }
+      /* Trim the per-button paddings the default bar uses for hover
+         affordance — at 56px host height those add up to ~80px total. */
+      :host(.movi-audio-strip) .movi-controls-left {
+        display: flex !important;
+        align-items: center !important;
+        gap: 4px !important;
+      }
+      :host(.movi-audio-strip) .movi-btn {
+        padding: 6px !important;
+        height: 32px !important;
+        width: 32px !important;
+      }
+      :host(.movi-audio-strip) .movi-btn svg {
+        width: 18px !important;
+        height: 18px !important;
+      }
+      :host(.movi-audio-strip) .movi-time {
+        font-size: 12px !important;
+        white-space: nowrap;
+      }
+      /* The seek thumbnail tooltip is tied to a non-existent video frame
+         in strip mode — suppress so the hover preview doesn't pop up. */
+      :host(.movi-audio-strip) .movi-seek-thumbnail {
+        display: none !important;
+      }
     `;
     shadowRoot.appendChild(style);
   }
@@ -12234,7 +12791,113 @@ export class MoviElement extends HTMLElement {
         this.canvas.width = width;
         this.canvas.height = height;
       }
+      // Repaint the cover-art overlay against the new host size. No-op
+      // when the overlay is hidden (no bitmap / has video track) since
+      // it bails before any drawImage work.
+      this.updateCoverArtOverlay();
     }
+  }
+
+  /**
+   * Paint embedded cover art (audio-only sources). Shows when:
+   *   - the player has emitted a coverart bitmap, AND
+   *   - there is no active video track (a real video would mask this anyway,
+   *     but hiding upfront keeps unnecessary canvas work off the critical
+   *     path for plain video files that happen to ship a thumbnail track).
+   *
+   * Layout: blurred fill of the artwork stretched over the full surface,
+   * with the sharp artwork centred and sized to ~60% of the smaller host
+   * dimension. Matches the YouTube Music / Apple Music aesthetic.
+   */
+  private updateCoverArtOverlay(): void {
+    const overlay = this.coverArtOverlay;
+    const canvas = this.coverArtCanvas;
+    if (!overlay || !canvas) return;
+
+    const bitmap = this.coverArtBitmap;
+    const hasVideoTrack = !!this.player?.trackManager?.getActiveVideoTrack?.();
+    const hasAudio = !!this.player?.hasAudibleSource?.();
+
+    // Audio-strip mode: source has audio but neither a real video stream
+    // nor embedded artwork to paint. Collapse the player to a native-
+    // <audio>-style thin control strip (CSS handles the layout via the
+    // .movi-audio-strip host class).
+    const stripMode = !hasVideoTrack && !bitmap && hasAudio;
+    const wasStrip = this.classList.contains("movi-audio-strip");
+    this.classList.toggle("movi-audio-strip", stripMode);
+    if (stripMode !== wasStrip) {
+      // Tell the embedding page so it can collapse its own wrapper. The
+      // host shrinks to 56px via :host CSS, but a parent .player-stage
+      // with aspect-ratio: 16/9 (or any fixed height) would still reserve
+      // its old box and leave a black gap underneath. Consumers listen on
+      // this event and adjust their layout — see index.html.
+      this.dispatchEvent(
+        new CustomEvent("audiostripchange", {
+          detail: { strip: stripMode },
+          bubbles: true,
+          composed: true,
+        }),
+      );
+    }
+
+    if (!bitmap || hasVideoTrack) {
+      overlay.style.display = "none";
+      return;
+    }
+
+    const rect = this.getBoundingClientRect();
+    const cssW = Math.max(1, Math.floor(rect.width));
+    const cssH = Math.max(1, Math.floor(rect.height));
+    // Cap the backbuffer DPR — at 4K host sizes a 2x backbuffer + blur
+    // filter chews ~50ms per resize on integrated GPUs.
+    const dpr = Math.min(window.devicePixelRatio || 1, 2);
+    const pixelW = Math.floor(cssW * dpr);
+    const pixelH = Math.floor(cssH * dpr);
+    if (canvas.width !== pixelW) canvas.width = pixelW;
+    if (canvas.height !== pixelH) canvas.height = pixelH;
+
+    const ctx = canvas.getContext("2d");
+    if (!ctx) return;
+    ctx.save();
+    ctx.scale(dpr, dpr);
+
+    // Blurred backdrop. drawImage with ctx.filter is the only way to get
+    // a real Gaussian on a canvas. Cover the full area like background-
+    // size: cover.
+    const bitmapAR = bitmap.width / bitmap.height;
+    const hostAR = cssW / cssH;
+    let bgW: number, bgH: number, bgX: number, bgY: number;
+    if (bitmapAR > hostAR) {
+      bgH = cssH;
+      bgW = cssH * bitmapAR;
+      bgX = (cssW - bgW) / 2;
+      bgY = 0;
+    } else {
+      bgW = cssW;
+      bgH = cssW / bitmapAR;
+      bgX = 0;
+      bgY = (cssH - bgH) / 2;
+    }
+    ctx.filter = "blur(40px) brightness(0.5)";
+    ctx.drawImage(bitmap, bgX, bgY, bgW, bgH);
+    ctx.filter = "none";
+
+    // Centred sharp artwork — square, 60% of the smaller dimension. The
+    // bitmap itself is rarely a perfect square, so contain it inside the
+    // square frame (no crop) and let the blur backdrop fill the surround.
+    const frameSize = Math.min(cssW, cssH) * 0.6;
+    const artW = bitmapAR >= 1 ? frameSize : frameSize * bitmapAR;
+    const artH = bitmapAR >= 1 ? frameSize / bitmapAR : frameSize;
+    const artX = (cssW - artW) / 2;
+    const artY = (cssH - artH) / 2;
+    // Subtle shadow so the art doesn't bleed into its own blur.
+    ctx.shadowColor = "rgba(0,0,0,0.55)";
+    ctx.shadowBlur = 30;
+    ctx.shadowOffsetY = 6;
+    ctx.drawImage(bitmap, artX, artY, artW, artH);
+    ctx.restore();
+
+    overlay.style.display = "block";
   }
 
   private updateMuted() {
@@ -12931,6 +13594,11 @@ export class MoviElement extends HTMLElement {
       this.updateLoadingIndicator(this.player?.getState() || "idle");
       this.updateControlsState();
       this.updatePlayPauseIcon();
+      // Tracks are now finalised; pick the right visual mode (video
+      // surface / cover-art overlay / audio strip). Cover-art extraction
+      // is async, so the strip may flip OFF later when the coverart
+      // event lands — updateCoverArtOverlay handles both transitions.
+      this.updateCoverArtOverlay();
       this.dispatchEvent(new Event("loadeddata"));
     };
     this.player.on("loadEnd", loadEndHandler);
@@ -13021,6 +13689,18 @@ export class MoviElement extends HTMLElement {
     this.eventHandlers.set("error", () =>
       this.player?.off("error", errorHandler),
     );
+
+    const coverArtHandler = (bitmap: ImageBitmap) => {
+      // Don't close the previous bitmap here — MoviPlayer owns its instance
+      // and reuses one on subsequent loads. Our reference can be dropped
+      // safely; the player will close() when it stomps its own slot.
+      this.coverArtBitmap = bitmap;
+      this.updateCoverArtOverlay();
+    };
+    this.player.on("coverart", coverArtHandler);
+    this.eventHandlers.set("coverart", () =>
+      this.player?.off("coverart", coverArtHandler),
+    );
   }
 
   /**
@@ -13030,6 +13710,15 @@ export class MoviElement extends HTMLElement {
     // Reset auto-loaded title flag and duration tracker for new video
     this._titleAutoLoaded = false;
     this._lastDuration = 0;
+
+    // Drop any stale cover art from the previous source. The reference is
+    // owned by MoviPlayer; we just clear our own pointer and hide the
+    // overlay so the new load doesn't briefly show last track's art.
+    this.coverArtBitmap = null;
+    if (this.coverArtOverlay) this.coverArtOverlay.style.display = "none";
+    // Also drop the audio-strip layout — re-decided once the new source's
+    // tracks land via loadEnd → updateCoverArtOverlay.
+    this.classList.remove("movi-audio-strip");
 
     this.resetTimeline();
 
@@ -13558,6 +14247,11 @@ export class MoviElement extends HTMLElement {
       loadingIndicator.style.display = "none";
       // Center play button visibility will be managed by updatePlayPauseIcon
     }
+
+    // Strip mode has no spinner — the centre-screen loader is hidden via
+    // CSS. Surface the same buffering state by pulsing the progress bar
+    // (see :host(.movi-audio-strip.is-buffering) rules in the style block).
+    this.classList.toggle("is-buffering", shouldShow);
   }
 
   private formatTime(seconds: number): string {
@@ -14379,9 +15073,9 @@ export class MoviElement extends HTMLElement {
   private guessMediaType(url: string): string {
     const ext = url.split("?")[0].split(".").pop()?.toLowerCase();
     const map: Record<string, string> = {
+      // Video
       mp4: "video/mp4",
       webm: "video/webm",
-      ogg: "video/ogg",
       ogv: "video/ogg",
       m3u8: "application/x-mpegURL",
       mpd: "application/dash+xml",
@@ -14390,6 +15084,26 @@ export class MoviElement extends HTMLElement {
       mov: "video/quicktime",
       ts: "video/mp2t",
       m4v: "video/mp4",
+      // Audio — limited to what the shipped FFmpeg WASM build can decode
+      // (build-ffmpeg.sh demuxer/decoder list). .ogg is ambiguous between
+      // Vorbis audio and Theora video; we map it to audio/ogg because
+      // pure audio Ogg is the dominant case in 2026, and the demuxer will
+      // happily report a video track for the Theora variant either way.
+      mp3: "audio/mpeg",
+      m4a: "audio/mp4",
+      m4b: "audio/mp4",
+      aac: "audio/aac",
+      flac: "audio/flac",
+      wav: "audio/wav",
+      wave: "audio/wav",
+      ogg: "audio/ogg",
+      oga: "audio/ogg",
+      opus: "audio/opus",
+      ac3: "audio/ac3",
+      ec3: "audio/eac3",
+      eac3: "audio/eac3",
+      mka: "audio/x-matroska",
+      dts: "audio/vnd.dts",
     };
     return (ext && map[ext]) || "";
   }
@@ -14646,6 +15360,20 @@ export class MoviElement extends HTMLElement {
 
     if (this._nerdStatsVisible) {
       overlay.style.display = "flex";
+      // In strip mode the host is 56px tall — anchoring the panel to
+      // the host (top:16px from above) drops it on top of the strip's
+      // own controls. Compute a viewport position just below the
+      // strip's bottom-left so the panel doesn't overlap the bar.
+      // Non-strip mode keeps the CSS-driven absolute top-left of the
+      // video surface.
+      if (this.classList.contains("movi-audio-strip")) {
+        const hostRect = this.getBoundingClientRect();
+        overlay.style.top = `${hostRect.bottom + 8}px`;
+        overlay.style.left = `${hostRect.left}px`;
+      } else {
+        overlay.style.top = "";
+        overlay.style.left = "";
+      }
       this.networkSpeedHistory = [];
       this.updateNerdStats(shadowRoot);
       // Update every 500ms
@@ -14654,6 +15382,10 @@ export class MoviElement extends HTMLElement {
       }, 500);
     } else {
       overlay.style.display = "none";
+      // Clear strip-mode inline coords so a subsequent non-strip open
+      // doesn't inherit them.
+      overlay.style.top = "";
+      overlay.style.left = "";
       if (this.nerdStatsInterval) {
         clearInterval(this.nerdStatsInterval);
         this.nerdStatsInterval = null;

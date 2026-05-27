@@ -59,6 +59,15 @@ customElements.whenDefined("movi-player").then(() => {
     const t = e?.detail?.title || playerEl.title;
     if (t) document.title = t + " — Movi Player";
   });
+  // Drop the player-main's full-height black box when the player is in
+  // audio-strip mode — otherwise the 56px control strip would sit at the
+  // top of an empty viewport-tall black panel for every audio file.
+  playerEl.addEventListener("audiostripchange", (e) => {
+    document.querySelector(".player-main")?.classList.toggle(
+      "is-audio-strip",
+      !!e.detail?.strip,
+    );
+  });
   playerEl.addEventListener("ended", () => {
     if (playlistIndex >= 0) {
       const f = playlist[playlistIndex];
@@ -91,8 +100,15 @@ customElements.whenDefined("movi-player").then(() => {
 });
 
 // ─── Helpers ──────────────────────────────────────────────
-const VIDEO_EXT_RE = /\.(mp4|mkv|webm|mov|avi|ts|m3u8|flv|m4v|ogv|wmv|m2ts|mts|3gp|mpg|mpeg)$/i;
-const isVideoFile = (f) => (f.type && f.type.startsWith("video/")) || VIDEO_EXT_RE.test(f.name || "");
+// Video + audio extensions. The audio set is what's already decodable by the
+// shipped FFmpeg WASM build (see docker/build-ffmpeg.sh — aac/mp3/opus/vorbis/
+// flac/ac3/eac3/dca/truehd/mlp/pcm + ogg/flac/wav/mp3/aac/ac3/eac3/mov/m4a
+// demuxers). Adding more here without first enabling the corresponding decoder
+// in the build would just produce a "no audio track" error at open time.
+const MEDIA_EXT_RE = /\.(mp4|mkv|webm|mov|avi|ts|m3u8|flv|m4v|ogv|wmv|m2ts|mts|evo|3gp|mpg|mpeg|mp3|m4a|m4b|aac|flac|wav|wave|ogg|oga|opus|ac3|ec3|eac3|mka|dts)$/i;
+const isVideoFile = (f) =>
+  (f.type && (f.type.startsWith("video/") || f.type.startsWith("audio/"))) ||
+  MEDIA_EXT_RE.test(f.name || "");
 const naturalCompare = (a, b) => a.localeCompare(b, undefined, { numeric: true, sensitivity: "base" });
 
 // Sort playlist entries in tree DFS order with folders-first at every depth.

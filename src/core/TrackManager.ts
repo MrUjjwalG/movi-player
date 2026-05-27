@@ -51,10 +51,40 @@ export class TrackManager extends EventEmitter<TrackManagerEvents> {
   }
   
   /**
-   * Get video tracks
+   * Heuristic to identify cover-art video streams when the WASM-side
+   * disposition flag (isAttachedPic) hasn't been populated yet (e.g. an
+   * unrebuilt module). Real video streams have a positive frame rate;
+   * embedded artwork uses a still-image codec (mjpeg / png / jpeg) and
+   * reports frameRate 0 because there's exactly one cached picture.
+   * Pair with a codec check so we don't mis-flag low-fps real video.
+   */
+  private isLikelyCoverArt(t: VideoTrack): boolean {
+    if (t.isAttachedPic) return true;
+    const codec = (t.codec || "").toLowerCase();
+    const stillCodec = codec === "mjpeg" || codec === "png" || codec === "jpeg";
+    return stillCodec && (!t.frameRate || t.frameRate === 0);
+  }
+
+  /**
+   * Get video tracks. Excludes embedded cover-art streams (ID3v2 APIC,
+   * FLAC PICTURE, etc.) — those are exposed separately via
+   * getAttachedPicTracks() so the player doesn't try to feed a one-frame
+   * PNG into the video decoder and stall on a never-arriving second frame.
    */
   getVideoTracks(): VideoTrack[] {
-    return this.tracks.filter((t): t is VideoTrack => t.type === 'video');
+    return this.tracks.filter(
+      (t): t is VideoTrack => t.type === 'video' && !this.isLikelyCoverArt(t as VideoTrack),
+    );
+  }
+
+  /**
+   * Cover-art / attached-picture tracks (audio file embedded artwork).
+   * Empty for the usual video-with-audio case.
+   */
+  getAttachedPicTracks(): VideoTrack[] {
+    return this.tracks.filter(
+      (t): t is VideoTrack => t.type === 'video' && this.isLikelyCoverArt(t as VideoTrack),
+    );
   }
   
   /**
