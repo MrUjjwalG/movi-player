@@ -2868,6 +2868,24 @@ export class MoviElement extends HTMLElement {
         }
       }
 
+      // Video-only shortcuts are meaningless for an audio-only source and
+      // their on-screen controls are already hidden in audio mode (see the
+      // .movi-audio-mode context-menu gate above). Mirror that exact set
+      // here so the keys don't fire actions with no visible surface — e.g.
+      // T opening an empty timeline panel over the cover art / strip, which
+      // is the symptom that surfaced this gap.
+      if (this.classList.contains("movi-audio-mode")) {
+        // a:fit  p:pip  r:rotate  g:ambient  s:snapshot  t:timeline
+        // v:subtitle-track. f (fullscreen) and h (hdr) are intentionally
+        // omitted — they already self-guard: toggleFullscreen() is the
+        // single audio-mode chokepoint, and the h case no-ops because the
+        // hdr-toggle item is display:none for non-HDR (audio) content.
+        const VIDEO_ONLY_KEYS = "aprgstv";
+        if (e.key.length === 1 && VIDEO_ONLY_KEYS.includes(e.key.toLowerCase())) {
+          return;
+        }
+      }
+
       switch (e.key) {
         case " ":
         case "k":
