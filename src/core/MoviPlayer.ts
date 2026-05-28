@@ -82,23 +82,15 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
   private fileSize: number = -1; // Cached file size for buffer calculations
   private lastBufferedTime: number = 0;
 
-  // Above this source size we don't spin up the seek-bar thumbnail
-  // pipeline. Thumbnails open a SECOND, isolated WASM module + FFmpeg
-  // context against the same file. On large sources (1 GB+ MKV/MP4)
-  // the two heaps compete for the browser's per-tab memory budget;
-  // when the main demuxer then tries to grow memory for a cluster
-  // read, the grow fails, FFmpeg's matroska code dereferences the
-  // null allocation and the whole module traps with "memory access
-  // out of bounds" mid-playback (reproduced on Sintel 1080p, ~1.2 GB,
-  // and a 1 GB+ Dolby Vision MP4 — both crash in av_read_frame a
-  // couple seconds in, only in production where the minified bundle
-  // adds to the footprint). Thumbnails are cosmetic, so we trade them
-  // away for stable playback on big files.
-  private static readonly PREVIEW_MAX_FILE_SIZE = 600 * 1024 * 1024;
-
   private previewsAllowed(): boolean {
     if (!this.config.enablePreviews) return false;
-    if (this.fileSize > MoviPlayer.PREVIEW_MAX_FILE_SIZE) return false;
+    // NOTE: a file-size cap used to live here — the seek-bar thumbnail
+    // pipeline opens a SECOND isolated WASM module + FFmpeg context, and on
+    // large 1 GB+ sources the two heaps can exhaust the tab's memory budget,
+    // making a later memory.grow() fail and trapping FFmpeg with "memory
+    // access out of bounds" mid-playback. The cap was removed deliberately to
+    // allow previews on big files; if OOM crashes resurface on large 4K
+    // sources, reinstating a size gate here is the first thing to try.
     // No real video stream → nothing to scrub. Skipping here keeps
     // audio-only sources from opening a useless second WASM context
     // (the cover-art extractor already spins up its own short-lived one).
@@ -657,8 +649,7 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
       this.emit("loadEnd", undefined);
 
       // Initialize preview pipeline in background (fire-and-forget).
-      // Skipped for large sources — see previewsAllowed() for why a
-      // second WASM context is unsafe there.
+      // Skipped only for sources with no video track — see previewsAllowed().
       if (this.previewsAllowed()) {
         // This makes the first preview faster since WASM is already loaded
         this.previewInitPromise = this.initPreviewPipeline().catch((e) => {
@@ -666,11 +657,6 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
           // Clear promise on error so we can retry later if needed
           this.previewInitPromise = null;
         });
-      } else if (this.config.enablePreviews) {
-        Logger.info(
-          TAG,
-          `Seek-bar thumbnails disabled: source is ${(this.fileSize / (1024 * 1024)).toFixed(0)} MB (> ${MoviPlayer.PREVIEW_MAX_FILE_SIZE / (1024 * 1024)} MB cap) — avoiding a second WASM context.`,
-        );
       }
 
       Logger.info(
