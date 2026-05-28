@@ -1549,10 +1549,15 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
         // the furthest scheduled audio — not when the decoder empties — or the
         // last few seconds get clipped (audible on near-end seeks of audio-only
         // files). duration===0 keeps the unknown-length fallback.
+        // maxScheduled is already absolute media time (the scheduler stores
+        // raw packet timestamps), same basis as clock.getTime(). Don't add
+        // startTime again — on sources with a non-zero start (e.g. a .ts
+        // beginning at 4200s) the double-add pushes the threshold out of
+        // reach, audioPlayedOut never trips, and EOF never transitions to
+        // ended (timer freezes short of duration).
         const maxScheduled = this.audioRenderer.getMaxScheduledMediaTime();
         const audioPlayedOut =
-          maxScheduled > 0 &&
-          currentTime >= maxScheduled + this.startTime - 0.1;
+          maxScheduled > 0 && currentTime >= maxScheduled - 0.1;
         if ((decodersDone && videoDone && audioPlayedOut) || duration === 0) {
           this.handleEnded();
           return;
