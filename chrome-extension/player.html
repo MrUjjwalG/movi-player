@@ -564,19 +564,20 @@
     .playlist-toggle.visible { display: flex; }
     .playlist-toggle svg { width: 16px; height: 16px; }
 
-    /* ─── File overlay (initial) ─── */
+    /* ─── File overlay (initial / branded hero) ─── */
     .file-overlay {
       position: fixed;
       inset: 0;
       z-index: 9999;
-      background: #000;
+      background:
+        radial-gradient(ellipse 60% 50% at 50% 32%, rgba(139, 92, 246, 0.13), transparent 70%),
+        var(--bg);
       display: flex;
       flex-direction: column;
       align-items: center;
       justify-content: center;
-      gap: 16px;
-      font-family: -apple-system, sans-serif;
-      color: #fff;
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+      color: var(--text-primary);
     }
     .file-overlay.hidden { display: none; }
     .drop-zone {
@@ -584,28 +585,74 @@
       flex-direction: column;
       align-items: center;
       justify-content: center;
-      gap: 24px;
+      gap: 30px;
       width: 100%;
       height: 100%;
-      cursor: pointer;
-      transition: all 0.3s;
     }
-    .drop-zone.dragover .drop-visual svg {
-      color: var(--accent);
-      opacity: 1;
-      transform: translateY(-4px);
+    /* Drag-over → full-viewport accent ring + glow */
+    .drop-zone::before {
+      content: "";
+      position: fixed;
+      inset: 14px;
+      border: 2px dashed transparent;
+      border-radius: 26px;
+      pointer-events: none;
+      transition: border-color 0.25s, box-shadow 0.25s;
     }
-    .drop-visual { color: #555; transition: all 0.3s; }
-    .drop-visual svg { transition: all 0.3s; }
+    .drop-zone.dragover::before {
+      border-color: var(--accent);
+      box-shadow: inset 0 0 90px -24px rgba(139, 92, 246, 0.45);
+    }
+
+    .brand { display: flex; flex-direction: column; align-items: center; gap: 18px; }
+    .brand-logo {
+      width: 84px;
+      height: 84px;
+      position: relative;
+      transition: transform 0.3s;
+    }
+    .brand-logo img {
+      width: 84px;
+      height: 84px;
+      display: block;
+      border-radius: 50%;
+      box-shadow: 0 18px 54px -14px rgba(139, 92, 246, 0.65);
+    }
+    .brand-logo::after {
+      content: "";
+      position: absolute;
+      inset: -16px;
+      border-radius: 50%;
+      background: radial-gradient(circle, rgba(139, 92, 246, 0.32), transparent 70%);
+      opacity: 0.55;
+      z-index: -1;
+      transition: opacity 0.3s;
+    }
+    .drop-zone.dragover .brand-logo { transform: translateY(-6px) scale(1.05); }
+    .drop-zone.dragover .brand-logo::after { opacity: 1; }
+
     .drop-text { text-align: center; }
-    .drop-text h2 { font-size: 20px; font-weight: 600; color: #eee; margin-bottom: 6px; }
-    .drop-text p { font-size: 13px; color: #444; }
+    .drop-text h2,
+    .brand-name {
+      font-size: 30px;
+      font-weight: 800;
+      letter-spacing: -0.6px;
+      line-height: 1.1;
+      margin-bottom: 8px;
+      background: linear-gradient(92deg, #ffffff, #c4b5fd);
+      -webkit-background-clip: text;
+      background-clip: text;
+      color: transparent;
+    }
+    .drop-text p,
+    .brand-tagline { font-size: 13.5px; color: var(--text-muted); line-height: 1.5; }
+
     .drop-actions { display: flex; gap: 10px; flex-wrap: wrap; justify-content: center; align-items: center; }
     .browse-btn {
       background: var(--accent);
       color: #fff;
       border: none;
-      padding: 11px 26px;
+      padding: 12px 28px;
       border-radius: 12px;
       font-size: 13px;
       font-weight: 600;
@@ -618,21 +665,41 @@
     .browse-btn:hover {
       background: #7C3AED;
       transform: translateY(-2px);
-      box-shadow: 0 8px 24px rgba(139,92,246,0.3);
+      box-shadow: 0 8px 24px rgba(139,92,246,0.35);
     }
-    .browse-btn svg { width: 14px; height: 14px; }
+    .browse-btn svg { width: 15px; height: 15px; }
     .browse-btn.secondary {
-      background: transparent;
-      border: 1px solid #2a2a35;
-      color: #ccc;
+      background: rgba(255, 255, 255, 0.03);
+      border: 1px solid var(--border-subtle);
+      color: var(--text-secondary);
     }
     .browse-btn.secondary:hover {
       background: var(--bg-surface);
-      color: #fff;
+      color: var(--text-primary);
       border-color: var(--accent);
       box-shadow: none;
+      transform: translateY(-2px);
     }
-    .drop-formats { font-size: 11px; color: #333; letter-spacing: 0.5px; }
+    .drop-formats {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 18px;
+      justify-content: center;
+      margin-top: 2px;
+      font-size: 11px;
+      font-weight: 600;
+      letter-spacing: 0.3px;
+      color: var(--text-muted);
+    }
+    .drop-formats span { display: inline-flex; align-items: center; gap: 7px; }
+    .drop-formats span::before {
+      content: "";
+      width: 5px;
+      height: 5px;
+      border-radius: 50%;
+      background: var(--accent);
+      opacity: 0.7;
+    }
     .promo-links {
       position: absolute;
       bottom: 20px;
@@ -832,15 +899,14 @@
       </a>
     </div>
     <div class="drop-zone" id="dropZone">
-      <div class="drop-visual">
-        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" width="48" height="48">
-          <path d="M4 14.9A7 7 0 1 1 15.7 8h1.8a4.5 4.5 0 0 1 2.5 8.2" opacity="0.3"/>
-          <path d="M12 12v9"/><path d="m16 16-4-4-4 4"/>
-        </svg>
-      </div>
-      <div class="drop-text">
-        <h2>Drop videos here</h2>
-        <p>or pick from your device</p>
+      <div class="brand">
+        <div class="brand-logo">
+          <img src="icons/logo.svg" alt="Movi Player">
+        </div>
+        <div class="drop-text">
+          <h2 class="brand-name">Movi Player</h2>
+          <p class="brand-tagline">Play any video format — drop a file or pick from your device</p>
+        </div>
       </div>
       <div class="drop-actions">
         <label class="browse-btn">
@@ -859,7 +925,7 @@
         </label>
       </div>
       <div class="drop-formats">
-        MP4 &middot; MKV &middot; HEVC &middot; AV1 &middot; WebM &middot; HDR &middot; MOV &middot; TS
+        <span>100% Local</span><span>HDR &amp; 4K</span><span>HEVC · AV1</span><span>MKV · TS</span>
       </div>
     </div>
     <div class="cache-info" id="cacheInfo">
