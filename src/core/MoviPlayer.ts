@@ -1534,15 +1534,26 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
       const timeDone =
         currentTime >= duration + this.startTime - 0.5 || duration === 0;
 
-      const hasAudioTrack = !!this.trackManager?.getActiveAudioTrack();
+      const hasAudioTrack =
+        !!this.trackManager?.getActiveAudioTrack() && !this.disableAudio;
 
       if (hasAudioTrack) {
-        // With audio: queue-based end is reliable (audio provides steady signal)
         const videoDone =
           !this.videoRenderer || this.videoRenderer.getQueueSize() === 0;
         const decodersDone =
           this.videoDecoder.queueSize === 0 && this.audioDecoder.queueSize === 0;
-        if (timeDone || (decodersDone && videoDone)) {
+        // The audio renderer keeps playing buffers it already scheduled for
+        // seconds after the decoder queue drains. The clock is synced to that
+        // playout head, so it only reaches maxScheduledMediaTime once the final
+        // samples are actually heard. End when the playout head has caught up to
+        // the furthest scheduled audio — not when the decoder empties — or the
+        // last few seconds get clipped (audible on near-end seeks of audio-only
+        // files). duration===0 keeps the unknown-length fallback.
+        const maxScheduled = this.audioRenderer.getMaxScheduledMediaTime();
+        const audioPlayedOut =
+          maxScheduled > 0 &&
+          currentTime >= maxScheduled + this.startTime - 0.1;
+        if ((decodersDone && videoDone && audioPlayedOut) || duration === 0) {
           this.handleEnded();
           return;
         }

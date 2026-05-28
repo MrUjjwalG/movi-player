@@ -176,15 +176,18 @@ int movi_seek_to(MoviContext *ctx, double timestamp, int stream_index,
     ret = av_seek_frame(ctx->fmt_ctx, -1, seek_target, seek_flags);
   }
 
-  // After seek, flush again and reset position tracking
-  // This ensures FFmpeg's internal buffers are cleared and position is synced
-  // For large files, this prevents FFmpeg from reading sequentially from old
-  // position For Matroska/WebM, this helps with resync after seek
+  // After seek, clear stale EOF state.
+  //
+  // Do NOT avio_flush() here. On a *read* context, avio_flush() discards the
+  // AVIO buffer WITHOUT rewinding s->pos (see FFmpeg aviobuf.c: seekback is
+  // forced to 0 for read). After avformat_seek_file, the raw-audio demuxer has
+  // already read ahead to resync to the next sync frame; that data lives in the
+  // AVIO buffer waiting to be parsed into the first post-seek packets. Flushing
+  // it throws the read-ahead away, so the stream silently jumps forward by the
+  // buffered amount and hits EOF early — duration appears to shrink and seeks
+  // near the end of audio-only (eac3/ac3/mp3) files end prematurely. Indexed
+  // video seeks don't trip this because they don't do byte-estimate resync.
   if (ret >= 0) {
-    if (ctx->avio_ctx) {
-      avio_flush(ctx->avio_ctx);
-    }
-
     // CRITICAL: Clear AVIO eof_reached flag after successful seek.
     // Without this, a prior EOF (e.g. from poster-frame reads reaching end
     // of a short file) causes av_read_frame to immediately return EOF even
@@ -213,14 +216,15 @@ int movi_seek_to(MoviContext *ctx, double timestamp, int stream_index,
           avio_seek(ctx->fmt_ctx->pb, current_pos, SEEK_SET);
         }
       }
-    } else {
-      // For other formats, just sync position
-      // IMPORTANT: Use int64_t for position to handle files >= 2GB
-      if (ctx->fmt_ctx->pb) {
-        int64_t current_pos = avio_tell(ctx->fmt_ctx->pb);
-        ctx->position = current_pos;
-      }
     }
+    // For non-Matroska formats, do NOT overwrite ctx->position here.
+    // ctx->position is the source-side *physical* read cursor; FFmpeg already
+    // keeps it in sync via avio_seek_callback / avio_read_callback during the
+    // seek. avio_tell() returns the *logical consume* position, which trails
+    // the physical cursor by whatever the demuxer read ahead to resync to the
+    // next sync frame (raw eac3/ac3/mp3 etc.). Clobbering the cursor with that
+    // smaller value makes the source replay buffered bytes and hit EOF early
+    // by ~the read-ahead amount — duration appears to shrink near the end.
   }
 
   return ret;
