@@ -51,6 +51,16 @@ export class MoviVideoDecoder {
   private isAnnexBSource: boolean = false;
   private _loggedConversion: number = 0;
   private skippedWhileWaiting: number = 0;
+  // True between a flush (seek) and the next successfully-decoded frame. Some
+  // HW decoders reject the first keyframe after a flush for certain streams
+  // (observed: 10-bit BT.2020/PQ HDR HEVC). If the post-flush keyframe keeps
+  // getting rejected, we fall back to software quickly instead of stalling the
+  // whole seek waiting for the (impossible) HW recovery.
+  private justFlushed: boolean = false;
+  private postFlushKeyframeRejects: number = 0;
+  // After this many consecutive keyframe rejections immediately following a
+  // flush, give up on HW for this stream and switch to software decoding.
+  private static POST_FLUSH_REJECT_LIMIT = 2;
 
   constructor(forceSoftware: boolean = false) {
     this.forceSoftware = forceSoftware;
@@ -362,6 +372,8 @@ export class MoviVideoDecoder {
         this.openGopErrorCount = 0;
         this.errorCount = 0;
         this.isResurrecting = false; // Success!
+        this.justFlushed = false; // a frame decoded — HW is fine post-flush
+        this.postFlushKeyframeRejects = 0;
         if (this.onFrame) {
           this.onFrame(frame);
         } else {
@@ -481,6 +493,8 @@ export class MoviVideoDecoder {
         this.openGopErrorCount = 0;
         this.errorCount = 0;
         this.isResurrecting = false; // Success!
+        this.justFlushed = false; // a frame decoded — HW is fine post-flush
+        this.postFlushKeyframeRejects = 0;
         if (this.onFrame) {
           this.onFrame(frame);
         } else {
@@ -716,6 +730,29 @@ export class MoviVideoDecoder {
         TAG,
         `Decoding warning: Frame was marked as keyframe but decoder rejected it (Open GOP?). Timestamp: ${this.lastChunkInfo?.timestamp}. Count (OpenGOP): ${this.openGopErrorCount}`,
       );
+
+      // Post-flush keyframe rejection: some HW decoders refuse the first keyframe
+      // after a seek-flush for certain streams (10-bit BT.2020/PQ HDR HEVC has
+      // been observed to reject genuine, well-formed IDRs). HW reset+retry never
+      // recovers in that case, so the seek would stall until timeout. Detect it
+      // by counting rejections that happen before any frame decodes post-flush,
+      // and switch to the software decoder quickly. (Mid-stream Open-GOP on .ts
+      // files still uses the reset+retry path below — justFlushed is false there
+      // because frames have been decoding.)
+      if (this.justFlushed && !this.forceSoftware && !this.useSoftware) {
+        this.postFlushKeyframeRejects++;
+        if (
+          this.postFlushKeyframeRejects >=
+          MoviVideoDecoder.POST_FLUSH_REJECT_LIMIT
+        ) {
+          Logger.error(
+            TAG,
+            `Hardware rejected ${this.postFlushKeyframeRejects} keyframes after flush — falling back to software decoder for this stream.`,
+          );
+          this.initSoftwareDecoder();
+          return;
+        }
+      }
 
       // If we keep hitting these, hardware decoder is too strict. Fallback to software.
       if (this.openGopErrorCount > 15) {
@@ -974,6 +1011,8 @@ export class MoviVideoDecoder {
    */
   async flush(): Promise<void> {
     this.openGopErrorCount = 0;
+    this.justFlushed = true;
+    this.postFlushKeyframeRejects = 0;
     this.pendingChunks = []; // Clear pending inputs
     if (this.swDecoder) {
       return this.swDecoder.flush();
