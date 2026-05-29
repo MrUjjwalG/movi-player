@@ -6691,6 +6691,13 @@ export class MoviElement extends HTMLElement {
       this.style.cursor = "";
       if (this.canvas) this.canvas.style.cursor = "default";
       if (this.video) this.video.style.cursor = "default";
+
+      // Mirror hideControls — clear the inline cursor:none on the center
+      // button so its stylesheet cursor:pointer takes back over.
+      const centerBtn = this.shadowRoot?.querySelector(
+        ".movi-center-play-pause",
+      ) as HTMLElement | null;
+      if (centerBtn) centerBtn.style.cursor = "";
     }
 
     // Mirror the hide path — when controls come back, the center play
@@ -7057,6 +7064,16 @@ export class MoviElement extends HTMLElement {
       this.style.cursor = "none";
       if (this.canvas) this.canvas.style.cursor = "none";
       if (this.video) this.video.style.cursor = "none";
+
+      // The center play/pause button stays visible with pointer-events:auto
+      // while paused (the "click to resume" affordance). It has its own
+      // cursor:pointer, and because the pointer sits over it the host's
+      // cursor:none never wins — leaving a visible pointer over an
+      // otherwise hidden UI. Force it inline so the cursor hides there too.
+      const centerBtn = this.shadowRoot?.querySelector(
+        ".movi-center-play-pause",
+      ) as HTMLElement | null;
+      if (centerBtn) centerBtn.style.cursor = "none";
     }
 
     // The center play/pause button is a separate sibling, so the bar's
