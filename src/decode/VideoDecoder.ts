@@ -533,6 +533,16 @@ export class MoviVideoDecoder {
   /**
    * Decode an encoded video chunk
    */
+  // Non-keyframe packets at or below this byte size are treated as corrupt and
+  // dropped before reaching the decoder. Observed on some AV1 sources: 3-byte
+  // delta packets that throw EncodingError and close the HW decoder, forcing a
+  // recreate→skip-non-keyframes recovery (frozen/garbage video for a second+).
+  // A real AV1 inter frame carries an OBU header + frame header + tile data and
+  // is always larger; the only sub-handful-of-bytes payloads are malformed or
+  // show_existing_frame OBUs that the HW decoder mishandles here. Dropping one
+  // at most skips a single repeated frame — far cheaper than the crash+recover.
+  private static MIN_DELTA_PACKET_BYTES = 4;
+
   decode(
     data: Uint8Array,
     timestamp: number,
@@ -542,6 +552,16 @@ export class MoviVideoDecoder {
     this.lastChunkInfo = { timestamp, keyframe, size: data.byteLength };
 
     if (!this.isConfigured) return;
+
+    // Drop tiny corrupt non-keyframe packets before they crash the decoder.
+    // Keyframes are never dropped — losing one breaks the whole GOP.
+    if (!keyframe && data.byteLength < MoviVideoDecoder.MIN_DELTA_PACKET_BYTES) {
+      Logger.debug(
+        TAG,
+        `Dropping ${data.byteLength}-byte non-keyframe packet at ${timestamp.toFixed(3)}s (corrupt/too small)`,
+      );
+      return;
+    }
 
     if (this.useSoftware && this.swDecoder) {
       // RESURRECTION LOGIC: Periodically try to switch back to hardware only on a TRUE IDR keyframe
