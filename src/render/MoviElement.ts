@@ -15130,7 +15130,23 @@ export class MoviElement extends HTMLElement {
     } else if (typeof value === "string") {
       // For strings, use attribute
       if (value) {
+        // dispose() above already destroyed the player. Normally
+        // setAttribute fires attributeChangedCallback → load() →
+        // initializePlayer(), which recreates it. But the DOM only
+        // fires that callback when the attribute VALUE actually changes
+        // — re-assigning the SAME url is a no-op write, so the callback
+        // never runs and the player stays destroyed (blank player,
+        // "just destroyed" symptom). Detect that case and re-init
+        // directly, mirroring the File branch below.
+        const sameValue = this.getAttribute("src") === value;
         this.setAttribute("src", value);
+        if (sameValue) {
+          this._src = value;
+          this.updatePoster();
+          if (this.isConnected) {
+            this.load();
+          }
+        }
       } else {
         this.removeAttribute("src");
         this._src = null;
