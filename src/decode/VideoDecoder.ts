@@ -72,6 +72,10 @@ export class MoviVideoDecoder {
   }
 
   private setWaitingForKeyframe(waiting: boolean): void {
+    // Restart the tiny-packet drop window whenever we begin waiting for a
+    // keyframe — that marks a fresh (re)configure/flush, the only phase where
+    // the corrupt sub-4-byte packets appear.
+    if (waiting) this.chunksSinceKeyframeWait = 0;
     if (this.waitingForKeyframe === waiting) return;
     this.waitingForKeyframe = waiting;
     if (this.onKeyframeWaitChange) {
@@ -543,6 +547,16 @@ export class MoviVideoDecoder {
   // at most skips a single repeated frame — far cheaper than the crash+recover.
   private static MIN_DELTA_PACKET_BYTES = 4;
 
+  // The tiny-packet drop only matters in the startup window: the corrupt
+  // sub-4-byte delta packets that crash the HW decoder cluster right after a
+  // (re)configure/flush, at the head of the first GOP. In steady state the
+  // stream is past that point, so we stop screening — a stray tiny packet
+  // there is far more likely legitimate than corrupt, and screening every
+  // chunk forever risks dropping valid frames. Counts chunks fed since the
+  // last setWaitingForKeyframe(true); reset on every (re)configure/flush.
+  private static TINY_PACKET_DROP_WINDOW = 120;
+  private chunksSinceKeyframeWait = 0;
+
   decode(
     data: Uint8Array,
     timestamp: number,
@@ -553,12 +567,21 @@ export class MoviVideoDecoder {
 
     if (!this.isConfigured) return;
 
-    // Drop tiny corrupt non-keyframe packets before they crash the decoder.
+    this.chunksSinceKeyframeWait++;
+
+    // Drop tiny corrupt non-keyframe packets before they crash the decoder —
+    // but only within the startup window after a (re)configure/flush, where
+    // these malformed sub-4-byte packets actually cluster. Past that we leave
+    // the stream alone so a legitimate tiny packet in steady state isn't lost.
     // Keyframes are never dropped — losing one breaks the whole GOP.
-    if (!keyframe && data.byteLength < MoviVideoDecoder.MIN_DELTA_PACKET_BYTES) {
+    if (
+      !keyframe &&
+      data.byteLength < MoviVideoDecoder.MIN_DELTA_PACKET_BYTES &&
+      this.chunksSinceKeyframeWait <= MoviVideoDecoder.TINY_PACKET_DROP_WINDOW
+    ) {
       Logger.debug(
         TAG,
-        `Dropping ${data.byteLength}-byte non-keyframe packet at ${timestamp.toFixed(3)}s (corrupt/too small)`,
+        `Dropping ${data.byteLength}-byte non-keyframe packet at ${timestamp.toFixed(3)}s (corrupt/too small, startup window)`,
       );
       return;
     }
