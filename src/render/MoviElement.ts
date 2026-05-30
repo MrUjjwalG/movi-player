@@ -13443,7 +13443,10 @@ export class MoviElement extends HTMLElement {
         // the prompt doesn't compete with disk-I/O-heavy initial load.
         this._resumeDialogPending = true;
       } else {
-        this.maybeShowResumeDialog();
+        // Defer to the load finally-block: showing it here would surface the
+        // prompt while isLoading is still true and the controls are disabled,
+        // so the dialog appears before the chrome is interactive.
+        this._resumeDialogPending = true;
       }
 
       // Start saving position periodically if resume enabled
@@ -13560,6 +13563,10 @@ export class MoviElement extends HTMLElement {
       }
       this.updateControlsState();
       this.updatePlayPauseIcon();
+      // The resume dialog is held in _resumeDialogPending and surfaced on the
+      // first transition to "playing" (see stateChangeHandler), so the prompt
+      // only appears once playback has actually started and the bottom-bar
+      // play icon has flipped to pause — not over disabled/paused chrome.
     }
   }
 
@@ -13661,6 +13668,15 @@ export class MoviElement extends HTMLElement {
         // first so we can skip the click-confirmation UI below.
         const wasAutoplayStart = this._autoplayStarting;
         this._autoplayStarting = false;
+        // Surface the resume prompt the moment playback first starts — i.e.
+        // the first time the bottom-bar play icon flips to pause. Checked
+        // before _hasEverPlayed flips below so it only fires on the very
+        // first play. FileSource preload-gated paths still defer it via
+        // preloadCompleteHandler; the flag guards against a double-show.
+        if (this._resumeDialogPending && !this._hasEverPlayed) {
+          this._resumeDialogPending = false;
+          this.maybeShowResumeDialog();
+        }
         this._hasEverPlayed = true;
         // Loop boundary fully settled (updatePlayPauseIcon above
         // already ran with the flag set, so the pause-confirmation
@@ -13768,12 +13784,10 @@ export class MoviElement extends HTMLElement {
     // initial chunk preload. Always fires (success, error, or abort) so the
     // gate can never get stuck. After release, flush any deferred play().
     const preloadCompleteHandler = () => {
-      // Surface a deferred resume dialog first (every FileSource path), so
-      // the user sees the prompt before any auto-play kicks in.
-      if (this._resumeDialogPending) {
-        this._resumeDialogPending = false;
-        this.maybeShowResumeDialog();
-      }
+      // The deferred resume dialog is no longer surfaced here — it now waits
+      // for the first "playing" transition (see stateChangeHandler) so the
+      // prompt only appears once playback has actually started. The pending
+      // flag is left intact for that handler to consume.
       if (!this._preloadGateActive) return;
       this._preloadGateActive = false;
       this.updateLoadingIndicator(this.player?.getState() || "idle");
@@ -15402,10 +15416,11 @@ export class MoviElement extends HTMLElement {
       if (this._startAt > 0 && this.player) {
         await this.player.seek(this._startAt).catch(() => {});
       } else if (this._resume && this.player) {
-        const savedTime = this.getResumePosition();
-        if (savedTime > 2 && savedTime < this.duration - 5) {
-          this.showResumeDialog(savedTime);
-        }
+        // Defer to the first "playing" transition (see stateChangeHandler) so
+        // the prompt only appears once playback has actually started — i.e.
+        // when the bottom-bar play icon first flips to pause — not over the
+        // paused/loading chrome.
+        this._resumeDialogPending = true;
       }
 
       // Start resume saving if enabled
@@ -16948,7 +16963,15 @@ export class MoviElement extends HTMLElement {
             this._resumeCheckedWithTitle = true;
             const savedTime = this.getResumePosition();
             if (savedTime > 2 && savedTime < this.duration - 5) {
-              this.showResumeDialog(savedTime);
+              if (this._hasEverPlayed) {
+                // Playback already started before the title (and thus the
+                // resume key) resolved — surface the prompt immediately.
+                this.showResumeDialog(savedTime);
+              } else {
+                // Still pre-playback: hold it for the first "playing"
+                // transition so it lands with the play→pause icon flip.
+                this._resumeDialogPending = true;
+              }
             }
           }
         }
