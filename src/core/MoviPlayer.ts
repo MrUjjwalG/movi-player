@@ -3521,6 +3521,22 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
       this.rateChangeSeekTimer = null;
       if (!this.demuxer) return;
       if (this.stateManager.getState() !== "playing") return;
+      // Skip the corrective seek on 8K AV1: the seek flushes the HW decoder,
+      // and this profile's huge GOPs + show_existing_frame packets make the
+      // post-flush keyframe-wait feed an orphan delta frame → EncodingError →
+      // recreate→skip buffering freeze. The minor stretcher/clock drift the
+      // seek would correct is far cheaper to tolerate than that freeze. Other
+      // profiles still re-seek normally.
+      const vt = this.trackManager.getActiveVideoTrack();
+      const is8K = !!vt && (vt.width >= 7680 || vt.height >= 4320);
+      const isAv1 = !!vt && vt.codec === "av1";
+      if (is8K && isAv1) {
+        Logger.info(
+          TAG,
+          `Skipping rate-change corrective seek for 8K AV1 (${vt.width}x${vt.height}) — avoids decoder crash`,
+        );
+        return;
+      }
       const target = this.getCurrentTime();
       this.seek(target, { suppressSpinner: true }).catch((error) => {
         this.suppressSeekSpinner = false;
