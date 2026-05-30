@@ -5395,16 +5395,10 @@ export class MoviElement extends HTMLElement {
   }
 
   /*
-   * Maximum playback rate the current source can sustain. 8K+ caps at 1.5x —
-   * hardware AV1/HEVC decoders genuinely top out below 120 effective fps
-   * decode at 8K, so 2x produces decoder errors and stalls regardless of
-   * buffer / queue tuning. 4K and lighter sources handle the full 2x on
-   * modern hardware.
+   * Maximum playback rate the current source can sustain. All sources allow
+   * the full 2x — the previous 8K+ cap has been removed.
    */
   private getMaxAllowedRate(): number {
-    const track = (this.player as any)?.trackManager?.getActiveVideoTrack?.();
-    const pixels = (track?.width ?? 0) * (track?.height ?? 0);
-    if (pixels >= 7680 * 4320) return 1.5;
     return 2;
   }
 
