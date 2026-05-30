@@ -3305,6 +3305,29 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
   }
 
   /**
+   * Intended playback state, independent of transient interruptions.
+   *
+   * The raw state flips to "buffering"/"seeking" while the user is still
+   * mid-playback (network stall, internal seek), which would otherwise make
+   * the UI's play/pause icon flicker to "play" even though the user never
+   * paused. This returns true whenever playback is meant to be running —
+   * actually "playing", or interrupted by a buffer/seek that we entered
+   * from a playing state (tracked via wasPlayingBeforeRebuffer/Seek). Use
+   * this to drive the play/pause icon so it stays stable through stalls.
+   */
+  isPlaybackIntended(): boolean {
+    const state = this.getState();
+    if (state === "playing") return true;
+    if (
+      (state === "buffering" || state === "seeking") &&
+      (this.wasPlayingBeforeRebuffer || this.wasPlayingBeforeSeek)
+    ) {
+      return true;
+    }
+    return false;
+  }
+
+  /**
    * Get media info
    */
   /**

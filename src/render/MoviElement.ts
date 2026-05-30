@@ -1395,7 +1395,20 @@ export class MoviElement extends HTMLElement {
         if (state === "playing" || state === "buffering") {
           this.pause();
         } else {
-          // Play if in ready, paused, ended, or any other non-playing state
+          // Play if in ready, paused, ended, or any other non-playing state.
+          // Flip the centre icon to "pause" right away. The first play has to
+          // seek/buffer before the state actually reaches "playing", so keying
+          // the icon off the raw state left the play triangle showing for that
+          // whole startup window — the click felt unacknowledged. Optimistic
+          // swap here; updatePlayPauseIcon reconciles once playback settles.
+          const centerPlayIcon = centerPlayPauseBtn.querySelector(
+            ".movi-center-icon-play",
+          ) as HTMLElement | null;
+          const centerPauseIcon = centerPlayPauseBtn.querySelector(
+            ".movi-center-icon-pause",
+          ) as HTMLElement | null;
+          centerPlayIcon?.style.setProperty("display", "none");
+          centerPauseIcon?.style.setProperty("display", "block");
           this.play();
         }
       }
@@ -14138,6 +14151,14 @@ export class MoviElement extends HTMLElement {
     // Show play button if not playing (ready, paused, ended, idle states)
     // Show pause button only when playing
     const isPlaying = this.player?.getState() === "playing";
+    // Bottom-bar + context-menu play/pause icon should reflect the user's
+    // INTENDED state, not the raw one. A network stall / internal seek flips
+    // the raw state to buffering/seeking mid-playback, which would otherwise
+    // bounce the icon to "play" even though the user never paused. Intent
+    // stays true through those interruptions. (The centre icon keeps using
+    // the raw isPlaying above — that's the resume affordance, not a state
+    // indicator, and has its own flicker handling.)
+    const isPlayingIntended = this.player?.isPlaybackIntended() ?? isPlaying;
     const loadingIndicator = this.shadowRoot?.querySelector(
       ".movi-loading-indicator",
     ) as HTMLElement;
@@ -14171,15 +14192,31 @@ export class MoviElement extends HTMLElement {
       ".movi-center-icon-pause",
     ) as HTMLElement;
 
-    if (isPlaying) {
+    // Bottom-bar + context-menu icon: driven by intended state so a
+    // mid-playback buffer/seek stall doesn't bounce it to "play". Set once
+    // here, outside the centre-icon branch (which still keys off isPlaying).
+    if (isPlayingIntended) {
       playIcon?.style.setProperty("display", "none");
       pauseIcon?.style.setProperty("display", "block");
-
-      // Update context menu
       contextMenuPlayIcon?.style.setProperty("display", "none");
       contextMenuPauseIcon?.style.setProperty("display", "block");
       if (contextMenuLabel) contextMenuLabel.textContent = "Pause";
+    } else {
+      playIcon?.style.setProperty("display", "block");
+      pauseIcon?.style.setProperty("display", "none");
+      contextMenuPlayIcon?.style.setProperty("display", "block");
+      contextMenuPauseIcon?.style.setProperty("display", "none");
+      if (contextMenuLabel) contextMenuLabel.textContent = "Play";
+    }
 
+    if (isPlayingIntended) {
+      // Use intended state (not raw isPlaying) so the centre icon stays
+      // on "pause" through the play startup window — the first play has to
+      // seek/buffer before the state actually reaches "playing", and keying
+      // off raw isPlaying left it showing the play triangle (and the 250ms
+      // tick would revert the click handler's optimistic flip). With intent,
+      // it reconciles to pause and rides the same fade-out logic below.
+      //
       // While playing, the center button briefly surfaces as a pause
       // icon for visual confirmation of the user's click, then fades
       // out with the controls bar (the stateChange handler's 200ms
@@ -14213,14 +14250,7 @@ export class MoviElement extends HTMLElement {
         }
       }
     } else {
-      playIcon?.style.setProperty("display", "block");
-      pauseIcon?.style.setProperty("display", "none");
-
-      // Update context menu
-      contextMenuPlayIcon?.style.setProperty("display", "block");
-      contextMenuPauseIcon?.style.setProperty("display", "none");
-      if (contextMenuLabel) contextMenuLabel.textContent = "Play";
-
+      // Centre icon only — bottom-bar + context-menu icons already set above.
       // Show center play icon when paused/ready, but hide if loading or
       // unsupported state is shown, or while an autoplay attempt is still
       // starting up (the play icon would flash over the first frame).
