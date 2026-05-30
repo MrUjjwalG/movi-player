@@ -14262,32 +14262,19 @@ export class MoviElement extends HTMLElement {
           // the bar — that's about the click-confirmation flow, not
           // the resume affordance.
           if (this._controls) {
-            // Re-check on the next frame before committing the class. This
-            // method runs on the 250ms UI tick, so by the time the rAF
-            // fires the player may have flipped paused→buffering/seeking
-            // (background load on a huge file keeps re-entering buffering),
-            // or the spinner may have come up. Adding the class from a stale
-            // closure then races a sync remove on the following tick — that
-            // add/remove churn is the centre-icon flicker. Bail if the world
-            // moved on so the icon only appears when we're genuinely settled.
-            requestAnimationFrame(() => {
-              const st = this.player?.getState();
-              const spinnerUp =
-                (this.shadowRoot?.querySelector(
-                  ".movi-loading-indicator",
-                ) as HTMLElement | null)?.style.display === "flex";
-              if (
-                st === "playing" ||
-                st === "buffering" ||
-                st === "seeking" ||
-                spinnerUp ||
-                this._isUnsupported ||
-                this._autoplayStarting
-              ) {
-                return;
-              }
-              centerPlayPauseBtn.classList.add("movi-center-visible");
-            });
+            // Surface the icon synchronously. We only reach this branch when
+            // the spinner is already hidden (isLoading false above) and the
+            // player isn't playing/loading/unsupported — i.e. genuinely
+            // settled into paused/ready. Deferring to rAF here just delayed
+            // the icon by a frame-plus-tick, so the play icon lagged behind
+            // the spinner clearing instead of appearing right after it.
+            //
+            // The earlier flicker came from the opposite case — adding the
+            // class while a huge source kept dipping paused→buffering. That's
+            // now handled by NOT gating on isSuppressedSeek (so spinner-less
+            // buffering blips don't churn the icon) plus the isLoading guard,
+            // so a sync add no longer races a remove.
+            centerPlayPauseBtn.classList.add("movi-center-visible");
           } else {
             centerPlayPauseBtn.classList.remove("movi-center-visible");
           }
