@@ -720,6 +720,11 @@ function renderHtml(webview: vscode.Webview, webviewRoot: vscode.Uri): string {
 
   const config = vscode.workspace.getConfiguration("movi");
   const settings = {
+    autoplay: config.get<boolean>("autoplay", false),
+    muted: config.get<boolean>("muted", false),
+    loop: config.get<boolean>("loop", false),
+    objectFit: config.get<string>("objectFit", "contain"),
+    theme: config.get<string>("theme", "dark"),
     ambientMode: config.get<boolean>("ambientMode", true),
     resume: config.get<boolean>("resume", true),
   };
@@ -748,6 +753,15 @@ function renderHtml(webview: vscode.Webview, webviewRoot: vscode.Uri): string {
         "thumb",
         "fastseek",
         "showtitle",
+        settings.autoplay ? "autoplay" : "",
+        // Autoplay implies muted: browsers block autoplay-with-sound, so an
+        // autoplaying player always starts muted regardless of movi.muted.
+        // The element surfaces a "Tap to unmute" pill for the user. When
+        // autoplay is off, honour the movi.muted setting as-is.
+        settings.autoplay || settings.muted ? "muted" : "",
+        settings.loop ? "loop" : "",
+        `objectfit="${settings.objectFit}"`,
+        `theme="${settings.theme}"`,
         settings.ambientMode ? "ambientmode" : "",
         settings.resume ? "resume" : "",
       ]

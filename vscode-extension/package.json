@@ -223,6 +223,47 @@
     "configuration": {
       "title": "Movi Player",
       "properties": {
+        "movi.autoplay": {
+          "type": "boolean",
+          "default": false,
+          "description": "Start playback automatically when a video is opened"
+        },
+        "movi.muted": {
+          "type": "boolean",
+          "default": false,
+          "description": "Start playback muted"
+        },
+        "movi.loop": {
+          "type": "boolean",
+          "default": false,
+          "description": "Loop playback when the video reaches the end"
+        },
+        "movi.objectFit": {
+          "type": "string",
+          "enum": [
+            "contain",
+            "cover",
+            "fill",
+            "zoom"
+          ],
+          "default": "contain",
+          "enumDescriptions": [
+            "Fit the whole video inside the player (letterbox)",
+            "Fill the player, cropping the video edges",
+            "Stretch the video to fill the player",
+            "Zoom in on the video"
+          ],
+          "description": "How the video is scaled to fit the player area"
+        },
+        "movi.theme": {
+          "type": "string",
+          "enum": [
+            "dark",
+            "light"
+          ],
+          "default": "dark",
+          "description": "Player UI theme"
+        },
         "movi.ambientMode": {
           "type": "boolean",
           "default": true,

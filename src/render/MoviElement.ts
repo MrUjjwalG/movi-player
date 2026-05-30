@@ -135,6 +135,13 @@ export class MoviElement extends HTMLElement {
   // over the first frame during the brief pre-play startup window even
   // though the player is about to start on its own.
   private _autoplayStarting: boolean = false;
+  // True when autoplay-with-sound was blocked by the browser and we fell
+  // back to muted playback (YouTube/Twitter behaviour). Unlike the `muted`
+  // attribute, this is a runtime decision the user never asked for — so the
+  // "Tap to unmute" pill must surface even without a `controls` attribute,
+  // since the pill is the only path back to audio. Cleared the moment the
+  // user unmutes (set muted / volume slider both latch _userHasUnmuted).
+  private _autoMutedForAutoplay: boolean = false;
   // True once playback has actually reached "playing" at least once.
   // Distinguishes a real user pause (worth surfacing the controls bar
   // for) from the synthetic "paused" state the initial poster seek
@@ -12988,6 +12995,41 @@ export class MoviElement extends HTMLElement {
     overlay.style.display = "block";
   }
 
+  /**
+   * After an autoplay attempt, detect the browser blocking audio-with-sound
+   * (AudioContext stuck suspended) and fall back to muted playback so the
+   * video keeps rolling, then surface the "Tap to unmute" pill. No-op when
+   * the user already asked for muted, has deliberately unmuted this session,
+   * there's no audible source, or audio actually started. The AudioContext
+   * resume() kicked off inside play() is async, so we give it a couple of
+   * animation frames to settle before reading the state.
+   */
+  private maybeFallbackToMutedAutoplay(attempt: number = 0): void {
+    if (!this.player || this._muted || this._userHasUnmuted) return;
+    if (!this.player.hasAudibleSource()) return;
+
+    // Give the async resume() a moment; re-check across a few frames before
+    // concluding the context is genuinely blocked rather than mid-wakeup.
+    if (!this.player.isAudioBlockedSuspended()) {
+      if (attempt < 5) {
+        requestAnimationFrame(() => this.maybeFallbackToMutedAutoplay(attempt + 1));
+      }
+      return;
+    }
+
+    // Confirmed blocked — mute and show the pill. Video continues; once the
+    // user taps unmute (pill / volume / M-key), the gesture resumes the
+    // context and audio plays. Mutate _muted directly (not the setter) so we
+    // don't latch _userHasUnmuted — this mute is ours, not the user's.
+    Logger.info(
+      TAG,
+      "Autoplay-with-sound blocked — falling back to muted playback (tap to unmute)",
+    );
+    this._autoMutedForAutoplay = true;
+    this._muted = true;
+    this.updateMuted(); // pushes mute to player + surfaces the pill
+  }
+
   private updateMuted() {
     if (this.player) {
       // When muted, disable audio track processing (saves CPU)
@@ -13013,10 +13055,20 @@ export class MoviElement extends HTMLElement {
   private updateUnmuteOverlay() {
     const overlay = this.unmuteOverlay;
     if (!overlay) return;
+    // The user unmuting clears the runtime auto-mute fallback latch too —
+    // both the pill click and the setter set _userHasUnmuted, so this keeps
+    // _autoMutedForAutoplay from re-showing the pill on a later re-mute.
+    if (this._userHasUnmuted) this._autoMutedForAutoplay = false;
     const hasAudio = this.player ? this.player.hasAudibleSource() : true;
+    // Two cases surface the pill:
+    //  (a) integrator asked for `autoplay muted controls` — the classic
+    //      autoplay-muted setup, pill gated on controls being present.
+    //  (b) autoplay-with-sound was blocked and we muted as a fallback — the
+    //      user never asked to mute, so the pill is their only route back to
+    //      audio and must show even without a `controls` attribute.
     const shouldShow =
-      this._controls && this._autoplay && this._muted && hasAudio &&
-      !this._userHasUnmuted;
+      this._muted && hasAudio && !this._userHasUnmuted &&
+      ((this._controls && this._autoplay) || this._autoMutedForAutoplay);
     overlay.style.display = shouldShow ? "flex" : "none";
   }
 
@@ -13406,11 +13458,20 @@ export class MoviElement extends HTMLElement {
         this._autoplayStarting = true;
         this.updatePlayPauseIcon();
         await this.player.play().catch(() => {
-          // Autoplay may fail due to browser policies — re-surface the
-          // overlay so the user has something to click.
+          // Hard play() rejection (rare for canvas mode — video keeps going
+          // even when audio can't). Surface the overlay so there's something
+          // to click; the suspended-audio check below still runs.
           this._autoplayStarting = false;
           this.updatePlayPauseIcon();
         });
+        // Browser autoplay policy blocks audio-with-sound silently: play()
+        // resolves and video rolls, but the AudioContext stays suspended
+        // (resume() neither throws nor wakes it without a user gesture). So
+        // we can't detect this from the promise — poll the audio state right
+        // after play() and fall back to muted playback + a "Tap to unmute"
+        // pill (YouTube/Twitter behaviour) so the user has a one-tap path to
+        // audio instead of silently-broken sound.
+        this.maybeFallbackToMutedAutoplay();
       } else {
         // Render first frame (poster) if not autoplaying and no custom start time.
         // Mark as poster seek so the loading indicator stays hidden during this seek —
@@ -16168,6 +16229,14 @@ export class MoviElement extends HTMLElement {
   }
 
   set muted(value: boolean) {
+    // Set `_muted` directly up front rather than relying on the
+    // attributeChangedCallback to do it. The auto-mute autoplay fallback
+    // mutes by setting `_muted = true` WITHOUT adding the `muted` attribute
+    // (so it doesn't trip the user-intent latch). For that case the
+    // attribute is already absent, so removeAttribute() below fires no
+    // change callback — leaving `_muted` stuck true and the pill click a
+    // no-op. Setting it here makes the unmute path attribute-independent.
+    this._muted = value;
     if (value) {
       this.setAttribute("muted", "");
     } else {

@@ -4211,6 +4211,18 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
   }
 
   /**
+   * True when audio is blocked by the browser's autoplay policy — the
+   * AudioContext is stuck suspended despite an unmuted play() because no
+   * user gesture has unlocked it. play()'s promise resolves either way, so
+   * the element polls this after autoplay to decide whether to fall back to
+   * muted playback + a "Tap to unmute" pill.
+   */
+  isAudioBlockedSuspended(): boolean {
+    if (this.disableAudio || this.hlsWrapper) return false;
+    return this.audioRenderer.isBlockedSuspended();
+  }
+
+  /**
    * True when the active source is not a FileSource (gate inactive), or when
    * the FileSource's initial preload pass has settled.
    */

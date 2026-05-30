@@ -1079,6 +1079,24 @@ export class AudioRenderer {
   }
 
   /**
+   * True when an AudioContext exists but the browser is keeping it suspended
+   * despite us asking to play unmuted — i.e. autoplay-with-sound was blocked
+   * because no user gesture has unlocked audio yet. resume() resolves without
+   * throwing in this case (Chromium silently leaves the context suspended),
+   * so callers can't detect the block from play()'s promise; they poll this
+   * instead. Returns false when muted (we intentionally don't resume) or when
+   * the context is genuinely running.
+   */
+  isBlockedSuspended(): boolean {
+    return (
+      !!this.audioContext &&
+      this.audioContext.state === "suspended" &&
+      !this._muted &&
+      !this.intentionalSuspend
+    );
+  }
+
+  /**
    * Check if audio has healthy buffers (not in underrun state)
    * Used by video renderer to decide whether to sync to audio
    */
