@@ -352,7 +352,6 @@ int movi_read_frame(MoviContext *ctx, PacketInfo *info, uint8_t *buffer,
                            ctx->pkt->size);
   else
     info->is_idr = 0;
-  info->size = ctx->pkt->size;
   if (ctx->pkt->pts != AV_NOPTS_VALUE)
     info->timestamp = ctx->pkt->pts * av_q2d(stream->time_base);
   else if (ctx->pkt->dts != AV_NOPTS_VALUE)
@@ -372,12 +371,39 @@ int movi_read_frame(MoviContext *ctx, PacketInfo *info, uint8_t *buffer,
   else
     info->duration = 0.0;
 
-  int copy_size = ctx->pkt->size;
+  // AV1 Temporal Delimiter prepend: MP4/ISOBMFF stores one temporal unit per
+  // sample and strips the Temporal Delimiter OBU, but the WebCodecs low-overhead
+  // bitstream format (per the AV1 codec registration / ISOBMFF binding) expects
+  // each chunk to be a complete temporal unit. Prepend a TD OBU (0x12 0x00 =
+  // type TEMPORAL_DELIMITER, has_size=1, payload size 0) when the packet doesn't
+  // already start with one, so every chunk is a well-formed temporal unit.
+  // NOTE: this is for spec-compliant packaging; it does NOT cure the separate,
+  // non-deterministic HW-decoder crash on bare show_existing_frame OBUs (~3-byte
+  // re-display frames) — that originates inside Chrome's AV1 decoder and still
+  // recovers via decoder recreate. Harmless to keep: all frames decode with it.
+  int td_prepend = 0;
+  if (stream->codecpar->codec_id == AV_CODEC_ID_AV1 && ctx->pkt->size >= 1) {
+    int obu_type = (ctx->pkt->data[0] >> 3) & 0x0f;
+    if (obu_type != 2) // 2 = OBU_TEMPORAL_DELIMITER; only add if missing
+      td_prepend = 1;
+  }
+
+  int copy_size = ctx->pkt->size + (td_prepend ? 2 : 0);
   if (copy_size > buffer_size) {
     // Log error or return specific code to signal buffer too small
     return AVERROR(ENOBUFS);
   }
-  memcpy(buffer, ctx->pkt->data, copy_size);
+  if (td_prepend) {
+    buffer[0] = 0x12; // TD OBU header: obu_type=2, obu_has_size_field=1
+    buffer[1] = 0x00; // leb128 payload size = 0
+    memcpy(buffer + 2, ctx->pkt->data, ctx->pkt->size);
+  } else {
+    memcpy(buffer, ctx->pkt->data, ctx->pkt->size);
+  }
+  // info->size must reflect the actual emitted byte count (incl. any prepended
+  // TD), because JS slices the packet buffer by info->size — not by this
+  // return value.
+  info->size = copy_size;
   return copy_size;
 }
 
