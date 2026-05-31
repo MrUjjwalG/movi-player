@@ -1272,6 +1272,17 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
       Logger.warn(TAG, "notifySeekCompletion: early return (waitingForVideoSync=false)");
       return;
     }
+    // Bail if a newer seek has superseded the one that armed this completion.
+    // A stale frame/timeout from a coalesced rapid seek would otherwise run the
+    // resume/paused branch and consume wasPlayingBeforeSeek out from under the
+    // live seek — intermittently leaving rapid seeks stuck paused.
+    if (this.seekArmedSessionId !== this.seekSessionId) {
+      Logger.warn(
+        TAG,
+        `notifySeekCompletion: stale session ${this.seekArmedSessionId} != ${this.seekSessionId} — ignoring`,
+      );
+      return;
+    }
 
     // Forced completion (safety timeout) with no decoded video frame yet: the
     // seek didn't actually produce a picture — slow network/decode just hasn't
@@ -2326,6 +2337,10 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
    * Seek to timestamp
    */
   private seekSessionId = 0;
+  // The seek session whose completion is currently armed (waitingForVideoSync).
+  // notifySeekCompletion bails when this no longer matches seekSessionId, so a
+  // superseded seek's late frame/timeout can't stomp state or consume intent.
+  private seekArmedSessionId = 0;
   private wasPlayingBeforeSeek = false;
 
   // True while an internal seek with no real interruption is in flight: the
@@ -2337,13 +2352,26 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
   // cleared on seek completion (notifySeekCompletion).
   suppressSeekSpinner = false;
 
-  async seek(seconds: number, opts?: { suppressSpinner?: boolean }): Promise<void> {
+  async seek(
+    seconds: number,
+    opts?: { suppressSpinner?: boolean; preservePlaying?: boolean },
+  ): Promise<void> {
     if (this.hlsWrapper) {
       return this.hlsWrapper.seek(seconds);
     }
     // A genuine user seek (no opt) clears any leftover suppression so its
     // spinner shows; play()-initiated seeks pass suppressSpinner to hide it.
     this.suppressSeekSpinner = opts?.suppressSpinner ?? false;
+    // preservePlaying: a corrective seek (e.g. rate change) that must NOT flip
+    // the play/pause state. If we were playing — including mid-flight from a
+    // prior corrective seek (state "seeking"/"buffering") — keep the resume
+    // intent so completion lands back in "playing", never "paused".
+    if (opts?.preservePlaying) {
+      const s = this.stateManager.getState();
+      if (s !== "paused" && s !== "ended") {
+        this.wasPlayingBeforeSeek = true;
+      }
+    }
 
     const currentState = this.stateManager.getState();
     Logger.info(TAG, `seek(${seconds.toFixed(2)}): state=${currentState}, waitingForVideoSync=${this.waitingForVideoSync}, demuxInFlight=${this.demuxInFlight}, seekSessionId=${this.seekSessionId}`);
@@ -2459,6 +2487,12 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
       // Normalize target time against startTime offset
       this.seekTargetTime = seconds + this.startTime;
       this.waitingForVideoSync = true;
+      // Tag which seek session armed this completion. notifySeekCompletion
+      // bails if a newer seek has since superseded this one, so a stale (e.g.
+      // coalesced/rapid-seek) completion can't run the resume/paused branch and
+      // consume wasPlayingBeforeSeek out from under the live seek — which
+      // intermittently left rapid seeks stuck paused.
+      this.seekArmedSessionId = mySessionId;
       this.pendingAudioPackets = [];
       // Stashed prebuffer packets are pre-seek and now stale
       this.pendingPrebufferPackets = [];
@@ -3608,6 +3642,8 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
       this.hlsWrapper.setPlaybackRate(rate);
     }
 
+    const savedTime = this.getCurrentTime();
+
     this.clock.setPlaybackRate(rate);
 
     // Update audio renderer playback rate
@@ -3639,20 +3675,15 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
     // the AudioContext has — small with latencyHint="interactive" — and
     // the new rate is applied to subsequent stretcher output naturally.
 
-    // No corrective re-sync (neither a seek nor an audioRenderer.reset()).
-    // AudioRenderer.setPlaybackRate already re-anchors its audio→media clock
-    // continuously using the OLD rate up to `now`, so getAudioClock() stays
-    // smooth and the new rate applies only to time elapsed afterward.
-    //
-    // We previously tried reset() here to drop the short old-rate tail, but
-    // reset() clears firstBufferMediaTime/hasFirstBuffer — so the NEXT decoded
-    // chunk re-anchors the audio clock to the demuxer's read-ahead mediaTime
-    // (1–3s past the real play position). The audio clock then leapt forward
-    // and the video hard-snapped to it (drift > 0.4 in CanvasRenderer), which
-    // is exactly the "playback jumps 1–3s ahead on rate change" regression.
-    // The only artifact of doing nothing is the already-scheduled old-rate
-    // audio tail (≤ AudioContext output buffer, ~30–50ms with
-    // latencyHint="interactive") — imperceptible, and far better than a seek.
+    // Corrective seek to the saved position so the audio clock can't pivot to
+    // the demuxer read-ahead mediaTime (the "jumps ahead on rate change" bug).
+    // preservePlaying keeps the play/pause state across it; the seek-session
+    // guard keeps rapid rate changes from a superseded completion landing
+    // paused.
+    this.seek(savedTime, {
+      suppressSpinner: true,
+      preservePlaying: true,
+    }).catch(() => {});
   }
 
   /**
