@@ -3643,6 +3643,14 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
     }
 
     const savedTime = this.getCurrentTime();
+    // Only the corrective seek's purpose (undoing the audio read-ahead pivot)
+    // applies when playback is actually rolling. At load time the rate is
+    // restored from settings while the player sits in "ready"/"paused" — a
+    // corrective seek then would (via preservePlaying) latch a resume intent
+    // and auto-start playback. Gate it to active playback only.
+    const playingNow =
+      this.stateManager.getState() === "playing" ||
+      this.stateManager.getState() === "buffering";
 
     this.clock.setPlaybackRate(rate);
 
@@ -3679,11 +3687,13 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
     // the demuxer read-ahead mediaTime (the "jumps ahead on rate change" bug).
     // preservePlaying keeps the play/pause state across it; the seek-session
     // guard keeps rapid rate changes from a superseded completion landing
-    // paused.
-    this.seek(savedTime, {
-      suppressSpinner: true,
-      preservePlaying: true,
-    }).catch(() => {});
+    // paused. Only when actually playing — see playingNow above.
+    if (playingNow) {
+      this.seek(savedTime, {
+        suppressSpinner: true,
+        preservePlaying: true,
+      }).catch(() => {});
+    }
   }
 
   /**
