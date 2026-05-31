@@ -1531,7 +1531,16 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
     // Without this, clicking play on a poster triggers a false stall → buffering → loading spinner.
     const playGraceMs = 3000;
     const inPlayGrace = this._playStartTime > 0 && (performance.now() - this._playStartTime) < playGraceMs;
-    if (this.stateManager.getState() === "playing" && !this.eofReached && !this.waitingForVideoSync && !nearEnd && !this.isBackgrounded && !inPlayGrace) {
+    // Grace while the video decoder is recovering from a transient decode
+    // error (recreate + wait-for-keyframe). The video queue is legitimately
+    // empty for ~1 GOP there — counting it as a stall sends the player into a
+    // buffering→resume loop (seen on high-bitrate 1080p H.264 whose HW decoder
+    // throws an EncodingError on every IDR). The keyframe-wait handler already
+    // shows buffering during the actual recovery; this just stops the stall
+    // detector from piling on right after.
+    const decoderRecovering =
+      !!this.videoDecoder && this.videoDecoder.isRecentlyRecovering();
+    if (this.stateManager.getState() === "playing" && !this.eofReached && !this.waitingForVideoSync && !nearEnd && !this.isBackgrounded && !inPlayGrace && !decoderRecovering) {
       const videoEmpty = this.videoRenderer ? this.videoRenderer.getQueueSize() === 0 : false;
       const hasAudio = !!this.trackManager.getActiveAudioTrack() && !this.disableAudio;
       const audioLow = !hasAudio || this.audioRenderer.getBufferedDuration() < 0.05;

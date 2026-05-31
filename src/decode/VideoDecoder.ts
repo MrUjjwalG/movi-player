@@ -48,6 +48,7 @@ export class MoviVideoDecoder {
   private requiresSoftware: boolean = false; // True for 4:2:2/4:4:4 content that HW can't decode
   private targetFps: number = 0;
   private isRecovering: boolean = false;
+  private lastRecreateTime: number = 0; // perf.now() of last decoder recreate
   private isAnnexBSource: boolean = false;
   private _loggedConversion: number = 0;
   private skippedWhileWaiting: number = 0;
@@ -491,6 +492,7 @@ export class MoviVideoDecoder {
     if (this.useSoftware) return false;
     if (!this.lastConfig) return false;
 
+    this.lastRecreateTime = performance.now();
     Logger.warn(TAG, "Recreating decoder to recover from error");
 
     // Close existing
@@ -1361,6 +1363,19 @@ export class MoviVideoDecoder {
 
   get isWaitingForKeyframe(): boolean {
     return this.waitingForKeyframe;
+  }
+
+  // True while the decoder is recovering from a decode error (recreate +
+  // wait-for-keyframe), or within `graceMs` after the last recreate. During
+  // this window an empty video queue is EXPECTED — the GOP is being rebuilt —
+  // so the player should not treat it as a playback stall. Some HW decoders
+  // (observed: high-bitrate 1080p H.264) throw a transient EncodingError on
+  // each IDR; recreate recovers within ~1 GOP, but the brief empty queue would
+  // otherwise trip stall detection into a buffering loop.
+  isRecentlyRecovering(graceMs: number = 1200): boolean {
+    if (this.waitingForKeyframe) return true;
+    if (this.lastRecreateTime === 0) return false;
+    return performance.now() - this.lastRecreateTime < graceMs;
   }
 
   /**
