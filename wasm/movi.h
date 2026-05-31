@@ -58,6 +58,15 @@ typedef struct {
   double dts;
   double duration;
   int size;
+  // 1 only for a TRUE random-access keyframe the HW decoder will accept as a
+  // `key` chunk: IDR/BLA in HEVC, IDR in H.264, key+no-show-existing in AV1.
+  // 0 for CRA / open-GOP sync frames that AVPacket flags as a keyframe but
+  // whose leading (RASL) pictures reference the previous GOP — sending those
+  // as `key` makes WebCodecs reject them ("wasn't a key frame"). JS sends
+  // is_idr=0 keyframes as `delta` mid-stream so the HW decoder keeps running.
+  // Occupies the 4 bytes the compiler already pads after `size`, so
+  // sizeof(PacketInfo) stays 40 and existing JS offsets are unchanged.
+  int is_idr;
 } PacketInfo;
 
 // Prefetched subtitle cue (populated by movi_prefetch_subtitle_cues).

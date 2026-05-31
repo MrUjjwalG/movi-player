@@ -722,6 +722,13 @@ export class ThumbnailRenderer {
         let data = packetData;
         if (this.isAnnexBSource) {
           data = MoviVideoDecoder.annexBToLengthPrefixed(packetData);
+        } else {
+          // Length-prefixed (hvcC) HEVC: the thumbnail decoder flushes after
+          // every frame, so each keyframe is decoded in a post-flush state. As
+          // in the playback path, an Access Unit Delimiter NAL leading the
+          // keyframe makes the HW decoder reject it ("wasn't a key frame") on
+          // 10-bit DoVi/HDR HEVC. Strip the AUD so the keyframe is accepted.
+          data = MoviVideoDecoder.stripAudLengthPrefixed(data);
         }
 
         const chunk = new EncodedVideoChunk({

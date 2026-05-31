@@ -231,6 +231,104 @@ int movi_seek_to(MoviContext *ctx, double timestamp, int stream_index,
 }
 
 EMSCRIPTEN_KEEPALIVE
+// Classify a single VCL NAL type for HEVC. Returns 1 (true IDR/BLA), 0 (CRA or
+// other open-GOP key), or -1 (not a VCL/random-access NAL — keep scanning).
+static int hevc_nal_class(int nal_type) {
+  // 19=IDR_W_RADL, 20=IDR_N_LP, 16/17/18=BLA_* — all true random access.
+  if (nal_type == 19 || nal_type == 20 || nal_type == 16 || nal_type == 17 ||
+      nal_type == 18)
+    return 1;
+  if (nal_type == 21)
+    return 0; // CRA — open-GOP
+  // Other VCL slice types (0–9 trailing/leading, 21 handled) on a keyframe
+  // packet shouldn't occur as the FIRST slice, but if some non-RAP slice leads,
+  // treat the packet as non-IDR (safer: JS sends it as delta).
+  if (nal_type >= 0 && nal_type <= 31)
+    return 0;
+  return -1; // non-VCL (VPS/SPS/PPS/AUD/SEI/…) — keep scanning
+}
+
+// Classify whether a keyframe packet is a TRUE random-access point that a
+// hardware WebCodecs decoder will accept as a `key` chunk.
+//
+// FFmpeg flags both closed-GOP IDR and open-GOP CRA pictures as AV_PKT_FLAG_KEY,
+// but WebCodecs rejects a CRA sent as `key` ("wasn't a key frame") because its
+// leading RASL pictures reference the previous GOP. We tell them apart by
+// finding the first VCL slice NAL and reading its type:
+//   HEVC: nal_type = (byte0 >> 1) & 0x3F. 19/20 = IDR, 16-18 = BLA (true RAP).
+//         21 = CRA (open-GOP) — NOT a true key.
+//   H.264: nal_type = byte0 & 0x1F. 5 = IDR (true key).
+//
+// CRITICAL: a keyframe packet is NOT just one NAL. In MKV/MP4 it's typically
+// [AUD][VPS][SPS][PPS][SEI…][slice…]. Reading only the first NAL (an AUD/PS)
+// always misclassifies — we must walk every NAL and inspect the first VCL one.
+// Packets may be Annex B (00 00 01 start codes) or length-prefixed (4-byte
+// big-endian, hvcC/avcC). We detect which by probing for a leading start code.
+//
+// Returns 1 if the keyframe is a true IDR/BLA random-access point, 0 otherwise.
+static int movi_packet_is_idr(enum AVCodecID codec_id, const uint8_t *data,
+                              int size) {
+  if (!data || size < 5)
+    return 1; // too small to inspect — assume true key (safe default)
+
+  if (codec_id != AV_CODEC_ID_HEVC && codec_id != AV_CODEC_ID_H264)
+    return 1; // other codecs: honor container keyframe flag
+
+  // Detect format: Annex B if the packet starts with a 3- or 4-byte start code.
+  int is_annexb = (data[0] == 0 && data[1] == 0 &&
+                   (data[2] == 1 || (data[2] == 0 && data[3] == 1)));
+
+  int i = 0;
+  if (is_annexb) {
+    // Walk NAL units delimited by 00 00 01 / 00 00 00 01 start codes.
+    while (i + 3 < size) {
+      // Find next start code.
+      if (data[i] == 0 && data[i + 1] == 0 && data[i + 2] == 1) {
+        int nal_off = i + 3;
+        if (nal_off >= size)
+          break;
+        int hdr = data[nal_off];
+        int cls;
+        if (codec_id == AV_CODEC_ID_HEVC) {
+          cls = hevc_nal_class((hdr >> 1) & 0x3F);
+        } else {
+          int t = hdr & 0x1F;
+          cls = (t == 5) ? 1 : (t >= 1 && t <= 5) ? 0 : -1; // VCL types 1–5
+        }
+        if (cls >= 0)
+          return cls; // first VCL slice decides
+        i = nal_off + 1;
+      } else {
+        i++;
+      }
+    }
+  } else {
+    // Length-prefixed (4-byte big-endian length before each NAL).
+    while (i + 4 < size) {
+      uint32_t nal_len = ((uint32_t)data[i] << 24) | ((uint32_t)data[i + 1] << 16) |
+                         ((uint32_t)data[i + 2] << 8) | (uint32_t)data[i + 3];
+      int nal_off = i + 4;
+      if (nal_len == 0 || nal_off >= size)
+        break;
+      int hdr = data[nal_off];
+      int cls;
+      if (codec_id == AV_CODEC_ID_HEVC) {
+        cls = hevc_nal_class((hdr >> 1) & 0x3F);
+      } else {
+        int t = hdr & 0x1F;
+        cls = (t == 5) ? 1 : (t >= 1 && t <= 5) ? 0 : -1;
+      }
+      if (cls >= 0)
+        return cls;
+      i = nal_off + (int)nal_len; // advance past this NAL
+    }
+  }
+
+  // No VCL slice found (shouldn't happen on a keyframe) — assume true key so we
+  // never wedge waiting for an IDR that we failed to recognize.
+  return 1;
+}
+
 int movi_read_frame(MoviContext *ctx, PacketInfo *info, uint8_t *buffer,
                     int buffer_size) {
   if (!ctx || !ctx->fmt_ctx || !ctx->pkt || !info || !buffer)
@@ -245,6 +343,15 @@ int movi_read_frame(MoviContext *ctx, PacketInfo *info, uint8_t *buffer,
   AVStream *stream = ctx->fmt_ctx->streams[ctx->pkt->stream_index];
   info->stream_index = ctx->pkt->stream_index;
   info->keyframe = (ctx->pkt->flags & AV_PKT_FLAG_KEY) != 0;
+  // Distinguish true IDR/BLA random-access keyframes from open-GOP CRA frames
+  // so JS can send CRA as `delta` and keep the hardware decoder running. Only
+  // meaningful for keyframes; non-keyframes carry is_idr = 0.
+  if (info->keyframe)
+    info->is_idr =
+        movi_packet_is_idr(stream->codecpar->codec_id, ctx->pkt->data,
+                           ctx->pkt->size);
+  else
+    info->is_idr = 0;
   info->size = ctx->pkt->size;
   if (ctx->pkt->pts != AV_NOPTS_VALUE)
     info->timestamp = ctx->pkt->pts * av_q2d(stream->time_base);

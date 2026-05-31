@@ -473,6 +473,7 @@ export class Demuxer {
       dts: result.info.dts,
       duration: result.info.duration,
       data: result.data,
+      isIdr: result.info.isIdr,
     };
   }
 

@@ -161,6 +161,7 @@ function parsePacketInfo(module: MoviWasmModule, ptr: number): PacketInfo {
     dts: view.getFloat64(PACKET_INFO_OFFSETS.dts, true),
     duration: view.getFloat64(PACKET_INFO_OFFSETS.duration, true),
     size: view.getInt32(PACKET_INFO_OFFSETS.size, true),
+    isIdr: view.getInt32(PACKET_INFO_OFFSETS.isIdr, true) !== 0,
   };
 }
 

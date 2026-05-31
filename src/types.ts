@@ -210,6 +210,10 @@ export interface Packet {
   dts: number; // DTS
   duration: number;
   data: Uint8Array;
+  // True only for a real IDR/BLA random-access keyframe. False for open-GOP
+  // CRA sync frames (flagged keyframe but must be sent as delta mid-stream) and
+  // for non-keyframes. See VideoDecoder.decode.
+  isIdr: boolean;
 }
 
 // ============================================================================

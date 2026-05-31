@@ -206,6 +206,11 @@ export interface PacketInfo {
   dts: number;
   duration: number;
   size: number;
+  // True only for a real IDR/BLA random-access keyframe the HW decoder accepts
+  // as a `key` chunk. False for open-GOP CRA sync frames that are flagged as
+  // keyframes but must be sent as `delta` mid-stream (see VideoDecoder). Always
+  // false for non-keyframes.
+  isIdr: boolean;
 }
 
 // StreamInfo struct layout (matches C struct)
@@ -245,4 +250,5 @@ export const PACKET_INFO_OFFSETS = {
   dts: 16, // double
   duration: 24, // double
   size: 32,
+  isIdr: 36, // int — occupies the padding after `size`; struct stays 40 bytes
 };

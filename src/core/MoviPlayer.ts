@@ -2041,15 +2041,19 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
                   `Keyframe seek timeout after ${elapsed}ms, accepting any frame`,
                 );
                 this.seekingToKeyframe = false;
-              } else if (!packet.keyframe) {
-                // Skip this non-keyframe packet, continue to next
+              } else if (!packet.keyframe || !packet.isIdr) {
+                // Skip non-keyframes AND open-GOP CRA frames: after a flush the
+                // decoder has no references, so only a true IDR/BLA can restart
+                // a clean GOP. A CRA here would have its RASL leading pictures
+                // reference the (now-gone) previous GOP. Both IDR and CRA are
+                // frequent in these streams, so a real IDR arrives quickly.
                 continue;
               } else {
-                // Found keyframe, clear the flag and process packet
+                // Found a true IDR, clear the flag and process packet
                 this.seekingToKeyframe = false;
                 Logger.debug(
                   TAG,
-                  "Found keyframe after seek, resuming normal playback",
+                  "Found IDR keyframe after seek, resuming normal playback",
                 );
               }
             }
@@ -2063,6 +2067,7 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
                 packet.timestamp,
                 packet.keyframe,
                 packet.dts,
+                packet.isIdr,
               );
             }
           } else if (activeAudio && activeAudio.id === packet.streamIndex) {
