@@ -61,6 +61,13 @@ export class MoviVideoDecoder {
   // After this many consecutive keyframe rejections immediately following a
   // flush, give up on HW for this stream and switch to software decoding.
   private static POST_FLUSH_REJECT_LIMIT = 2;
+  // Mid-stream open-GOP (HEVC CRA frames the HW decoder keeps rejecting): no
+  // JS-only recovery keeps this on HW — every rejection drops the decoder into
+  // a configure-like state where only a true IDR is accepted, so the next
+  // CRA is rejected too. Switch to software after just a few rejections so the
+  // user sees ~1s of recovery instead of ~11s of per-GOP stutter. (The old
+  // limit was 15; lowered because the HW path never actually recovers here.)
+  private static MID_STREAM_OPENGOP_REJECT_LIMIT = 3;
 
   constructor(forceSoftware: boolean = false) {
     this.forceSoftware = forceSoftware;
@@ -817,11 +824,32 @@ export class MoviVideoDecoder {
         }
       }
 
+      // Mid-stream open-GOP on HEVC: the rejected "keyframe" is a CRA sync
+      // frame, not an IDR. Once the HW decoder rejects it, it drops into a
+      // configure/flush-like state where ONLY a true IDR is accepted — a
+      // re-fed delta fails with "key frame required after configure", and
+      // sending the next GOP's CRA as `key` just gets rejected again. So the
+      // reset→skip-RASL→recover loop repeats every GOP (~1s of video freeze
+      // each) and only escapes after 15 rounds (~11s of stutter) by switching
+      // to software anyway. There is no JS-only way to keep this stream on the
+      // HW decoder — the proper fix is C-side: surface is_idr so seeks land on
+      // a true IDR and mid-stream CRA is classified, not guessed. Until then,
+      // switch to software FAST (after a few rejections) so we trade ~11s of
+      // per-GOP stutter for ~1s. Software decodes this content at realtime.
+      const codecForFallback = this.lastConfig?.codec ?? "";
+      const isHevcMidStream =
+        (codecForFallback.startsWith("hvc1.") ||
+          codecForFallback.startsWith("hev1.")) &&
+        !this.justFlushed;
+      const openGopFallbackLimit = isHevcMidStream
+        ? MoviVideoDecoder.MID_STREAM_OPENGOP_REJECT_LIMIT
+        : 15;
+
       // If we keep hitting these, hardware decoder is too strict. Fallback to software.
-      if (this.openGopErrorCount > 15) {
+      if (this.openGopErrorCount > openGopFallbackLimit) {
         Logger.error(
           TAG,
-          "Persistent Open GOP errors detected. Switching to software decoder.",
+          `Persistent Open GOP errors detected (${this.openGopErrorCount} > ${openGopFallbackLimit}). Switching to software decoder.`,
         );
         this.initSoftwareDecoder();
         return;
