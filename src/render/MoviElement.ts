@@ -21,12 +21,7 @@ import type {
   PlayerState,
 } from "../types";
 import { Logger, LogLevel } from "../utils/Logger";
-import { ThumbnailBindings } from "../wasm/bindings";
-import { loadWasmModuleNew } from "../wasm/FFmpegLoader";
-import { FileSource } from "../source/FileSource";
-import { ThumbnailHttpSource } from "../source/ThumbnailHttpSource";
 import type { SourceAdapter } from "../source/SourceAdapter";
-import { Demuxer } from "../demux/Demuxer";
 
 import { SettingsStorage } from "../utils/SettingsStorage";
 
@@ -228,6 +223,11 @@ export class MoviElement extends HTMLElement {
   private _videoUrl: string = "";        // Video endpoint for encrypted playback
   private _videoId: string = "";         // Video ID for encrypted playback
   private _resumeSaveInterval: number | null = null; // Interval to save position
+  // True while the initial postertime poster seek is in flight (until the
+  // clock is reset back to 0). The poster seek lands in a "paused" state which
+  // would otherwise persist the poster timestamp (e.g. 2.8s) as the resume
+  // position — block resume saves during this window.
+  private _posterSeekActive: boolean = false;
   private _titleAutoLoaded: boolean = false; // Track if title was auto-loaded from metadata
   private _resumeCheckedWithTitle: boolean = false; // Track if resume was re-checked after title load
   private _stripTitleAttr: boolean = false; // Guard for suppressing native title tooltip
@@ -13547,35 +13547,40 @@ export class MoviElement extends HTMLElement {
         // pill (YouTube/Twitter behaviour) so the user has a one-tap path to
         // audio instead of silently-broken sound.
         this.maybeFallbackToMutedAutoplay();
-      } else {
-        // Render the first frame as a poster WITHOUT seeking the main decoder.
-        // Previously this did player.seek(0) on the main decoder, but on some
-        // streams (4K DoVi P8 .ts whose start GOP is open-GOP CRA) that
-        // post-configure→seek→flush left the decoder in a state that rejects
-        // the CRA as a `key` chunk and dropped playback to software. Generating
-        // the poster through the isolated thumbnail pipeline keeps the main
-        // decoder pristine until the first real play(). Skipped when a
-        // `postertime` or explicit poster URL is active (handled below / by the
-        // overlay).
-        if (
-          this._startAt === 0 &&
-          this.player &&
-          !this._posterTime &&
-          !this._poster
-        ) {
-          // 0 = start of content (same UI/0-based timebase the postertime path
-          // uses; the thumbnail pipeline maps it to the stream's start PTS).
-          this.generatePosterFromTime(0).catch(() => {});
+      } else if (this._startAt === 0 && this.player && !this._poster) {
+        // Render the poster frame on canvas via a seek on the main decoder
+        // (never the thumbnail pipeline). With a `postertime`, seek to that
+        // timestamp to paint the poster frame, then — once it lands — reset
+        // only the clock/playhead back to 0 (resetClockToStartForPoster keeps
+        // the poster frame on the canvas; it does NOT re-seek). With no
+        // postertime, just seek(0). An explicit poster URL (`_poster`) owns
+        // the overlay, so we skip the seek entirely.
+        const duration = this.player.getDuration() || 0;
+        const posterTime =
+          this._posterTime && this.parsePosterTime(this._posterTime, duration);
+        // suppressSpinner keeps the loading UI hidden through the seek's
+        // "seeking" window; the player auto-clears it on seek completion.
+        if (posterTime) {
+          // seek()'s promise resolves on demuxer.seek, BEFORE the frame is
+          // decoded/painted — resetting the clock there races the poster frame
+          // and loses it. Instead wait for the "seeked" event (fired from
+          // notifySeekCompletion once the frame has actually landed), THEN
+          // reset the clock to 0 with the poster frame already on the canvas.
+          // _posterSeekActive blocks resume-saves through this window so the
+          // poster timestamp isn't persisted as the resume position.
+          this._posterSeekActive = true;
+          this.player.once("seeked", () => {
+            this.player?.resetClockToStartForPoster();
+            this._posterSeekActive = false;
+          });
+          this.player
+            .seek(posterTime, { suppressSpinner: true })
+            .catch(() => {
+              this._posterSeekActive = false;
+            });
+        } else {
+          this.player.seek(0, { suppressSpinner: true }).catch(() => {});
         }
-      }
-
-      // If a postertime is set and no explicit poster URL, generate a
-      // high-quality frame at that timestamp via an isolated thumbnail
-      // pipeline. Fire-and-forget — main playback is unaffected.
-      if (this._posterTime && !this._poster) {
-        this.generatePosterFromTime().catch((err) => {
-          Logger.warn(TAG, "postertime poster generation failed", err);
-        });
       }
 
       // Start UI updates
@@ -14384,8 +14389,13 @@ export class MoviElement extends HTMLElement {
       ".movi-duration",
     ) as HTMLElement;
 
+    // During the postertime poster seek the clock transiently sits at the
+    // poster timestamp before being reset to 0 — show 0 so the time doesn't
+    // flicker to ~2s and back.
+    const ct = this._posterSeekActive ? 0 : this.currentTime;
+
     if (currentTimeEl) {
-      currentTimeEl.textContent = this.formatTime(this.currentTime);
+      currentTimeEl.textContent = this.formatTime(ct);
     }
     if (durationEl) {
       durationEl.textContent = this.formatTime(this.duration);
@@ -14463,7 +14473,10 @@ export class MoviElement extends HTMLElement {
     ) as HTMLElement;
 
     if (this.duration > 0) {
-      const percent = (this.currentTime / this.duration) * 100;
+      // Clamp to 0 during the postertime poster seek (clock transiently parked
+      // at the poster timestamp) so the filled bar/handle don't flick to ~2s.
+      const ct = this._posterSeekActive ? 0 : this.currentTime;
+      const percent = (ct / this.duration) * 100;
       if (progressFilled) {
         progressFilled.style.width = `${percent}%`;
       }
@@ -14478,7 +14491,12 @@ export class MoviElement extends HTMLElement {
       // notch. bufferEnd math is already correct (relative to real read
       // cursor), so drawing from 0 is purely a visual choice.
       if (this.player && progressBuffer) {
-        const bufferEnd = this.player.getBufferEndTime();
+        // During the postertime poster seek the buffered-end transiently sits
+        // at the poster timestamp (before the clock/buffer are reset to 0);
+        // show 0 so the buffer bar doesn't flash forward to ~2s.
+        const bufferEnd = this._posterSeekActive
+          ? 0
+          : this.player.getBufferEndTime();
         if (bufferEnd > 0) {
           const endPercent = Math.min(100, (bufferEnd / this.duration) * 100);
           progressBuffer.style.left = "0%";
@@ -16093,6 +16111,9 @@ export class MoviElement extends HTMLElement {
    * Save current position to localStorage
    */
   private saveResumePosition(): void {
+    // The postertime poster seek transiently parks currentTime at the poster
+    // timestamp before the clock is reset to 0; don't persist that.
+    if (this._posterSeekActive) return;
     const key = this.getResumeKey();
     if (!key || !this.player) return;
     const time = this.currentTime;
@@ -16770,172 +16791,6 @@ export class MoviElement extends HTMLElement {
     return Math.max(0, Math.min(duration, num));
   }
 
-  /**
-   * Generate a poster frame at `postertime` using an isolated thumbnail
-   * pipeline (WASM + ThumbnailBindings). Does not touch the main player's
-   * clock/decoder — purely side-channel frame extraction. Respects the
-   * video's rotation metadata so portrait videos display correctly.
-   */
-  // Generate the poster frame via the ISOLATED thumbnail pipeline (its own WASM
-  // + decoder), never the main playback decoder. Pass explicitTimeSec to render
-  // a default first-frame poster (e.g. 0) without a `postertime` attribute —
-  // this is how the initial poster is produced so the main HEVC decoder is left
-  // pristine until the first real play(): seeking the main decoder for the
-  // poster would put it in a post-flush state that rejects open-GOP CRA
-  // keyframes on some streams (4K DoVi P8 .ts) and drop playback to software.
-  private async generatePosterFromTime(explicitTimeSec?: number): Promise<void> {
-    // Skip when playback is already happening or about to start — the user
-    // would see the poster flash on top of live video otherwise.
-    const state = this.player?.getState();
-    if (this._pendingPlay || state === "playing" || state === "buffering") {
-      return;
-    }
-
-    // Revoke previous generated poster URL
-    if (this._generatedPosterUrl) {
-      URL.revokeObjectURL(this._generatedPosterUrl);
-      this._generatedPosterUrl = null;
-    }
-
-    // An explicit poster URL always wins; never overwrite it. A postertime is
-    // required only for the attribute-driven path — the default-first-frame
-    // path (explicitTimeSec given) doesn't need one.
-    if (this._poster || !this._src) return;
-    if (explicitTimeSec === undefined && !this._posterTime) return;
-
-    const duration = this.player?.getDuration() || 0;
-    const timeSec =
-      explicitTimeSec !== undefined
-        ? explicitTimeSec
-        : this.parsePosterTime(this._posterTime!, duration);
-    if (timeSec === null) return;
-
-    // Snapshot our generation id at entry; any later src change / dispose
-    // bumps it, which means this run is stale and must bail before it
-    // overwrites the new source's poster.
-    const genId = ++this._posterGenId;
-    const isStale = () => genId !== this._posterGenId;
-
-    // Only File and plain URL sources are supported here. Encrypted/DRM
-    // sources have their own protected pipelines — skip.
-    let dataSource: FileSource | ThumbnailHttpSource;
-    let size: number;
-    if (this._src instanceof File) {
-      dataSource = new FileSource(this._src);
-      size = this._src.size;
-    } else if (
-      typeof this._src === "string" &&
-      (this._src.startsWith("http") || this._src.startsWith("/"))
-    ) {
-      dataSource = new ThumbnailHttpSource(this._src);
-      size = await dataSource.getSize();
-    } else {
-      return;
-    }
-
-    // Pull rotation from a dedicated isolated-WASM Demuxer — ThumbnailBindings'
-    // StreamInfo.rotation is often 0 for display-matrix metadata.
-    let rotation = 0;
-    try {
-      const dm = new Demuxer(
-        this._src instanceof File
-          ? new FileSource(this._src)
-          : new ThumbnailHttpSource(this._src as string),
-        undefined,
-        true,
-      );
-      await dm.open();
-      rotation = dm.getVideoTracks()[0]?.rotation || 0;
-      try { dm.close(); } catch { /* noop */ }
-    } catch { /* fall back to 0 */ }
-
-    let wasm: any;
-    try {
-      wasm = await loadWasmModuleNew();
-    } catch (err) {
-      Logger.warn(TAG, "postertime: failed to load isolated WASM", err);
-      return;
-    }
-    if (isStale()) return;
-
-    const bindings = new ThumbnailBindings(wasm);
-    try {
-      // FileSource/ThumbnailHttpSource implement the DataSource shape at
-      // runtime; the SourceAdapter type difference is incidental.
-      bindings.setDataSource(dataSource as any);
-      await bindings.create(size);
-      if (isStale()) return;
-      if (!(await bindings.open())) return;
-      if (isStale()) return;
-
-      const info = bindings.getStreamInfo();
-      if (!info || !info.width || !info.height) return;
-
-      const sw = info.width;
-      const sh = info.height;
-      const rot = ((rotation || info.rotation || 0) % 360 + 360) % 360;
-      const isRotated = rot === 90 || rot === 270;
-
-      const pktSize = await bindings.readKeyframe(timeSec);
-      if (isStale() || !pktSize || pktSize <= 0) return;
-
-      const rgba = bindings.decodeCurrentPacket(sw, sh);
-      if (!rgba) return;
-
-      // Put raw frame on a source canvas. Copy into a fresh, plain-ArrayBuffer
-      // backed Uint8ClampedArray — WASM memory may be SharedArrayBuffer and
-      // ImageData requires a non-shared buffer.
-      const src = document.createElement("canvas");
-      src.width = sw;
-      src.height = sh;
-      const sctx = src.getContext("2d");
-      if (!sctx) return;
-      const clamped = new Uint8ClampedArray(sw * sh * 4);
-      clamped.set(rgba);
-      sctx.putImageData(new ImageData(clamped, sw, sh), 0, 0);
-
-      // Output canvas with rotation applied
-      const outW = isRotated ? sh : sw;
-      const outH = isRotated ? sw : sh;
-      const out = document.createElement("canvas");
-      out.width = outW;
-      out.height = outH;
-      const octx = out.getContext("2d");
-      if (!octx) return;
-      octx.save();
-      octx.translate(outW / 2, outH / 2);
-      if (rot) octx.rotate((rot * Math.PI) / 180);
-      octx.drawImage(src, -sw / 2, -sh / 2, sw, sh);
-      octx.restore();
-
-      const blob = await new Promise<Blob | null>((r) =>
-        out.toBlob(r, "image/jpeg", 0.92),
-      );
-      if (!blob) return;
-
-      // Final stale check + don't paint the poster if playback has started
-      // while we were decoding (avoids flashing the overlay on live video).
-      const finalState = this.player?.getState();
-      if (
-        isStale() ||
-        this._pendingPlay ||
-        finalState === "playing" ||
-        finalState === "buffering"
-      ) {
-        return;
-      }
-
-      this._generatedPosterUrl = URL.createObjectURL(blob);
-
-      // Show it via the existing poster overlay (explicit poster URL still
-      // wins — we gated on !this._poster above).
-      this.updatePoster();
-
-      try { bindings.clearBuffer?.(); } catch { /* noop */ }
-    } finally {
-      try { bindings.destroy(); } catch { /* noop */ }
-    }
-  }
 
   get doubletap(): boolean {
     return this._doubleTap;

@@ -3336,6 +3336,31 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
   }
 
   /**
+   * After a `postertime` seek has painted the poster frame on the canvas,
+   * reset only the CLOCK/playhead bookkeeping back to the start — WITHOUT
+   * flushing the decoder, re-seeking the demuxer, or clearing the renderer
+   * queue. That keeps the poster frame (from ~postertime) visible on the
+   * canvas while the seek bar/getCurrentTime() read 0, and lets the first
+   * play() start cleanly from the beginning (play()'s first-play branch
+   * re-seeks the demuxer to 0 itself). Pure time-math; touches no media state.
+   */
+  resetClockToStartForPoster(): void {
+    if (this.hlsWrapper) return; // HLS owns its own timeline
+    this.clock.seek(this.startTime); // paused → pausedTime = startTime
+    this.seekKeyframeOffset = 0; // so getCurrentTime() === 0
+    this.seekTargetTime = -1; // clear any lingering pre-target frame-drop filter
+    this.waitingForVideoSync = false; // no stale seek-completion armed
+    this._playStartTime = 0; // keep first-play branch eligible
+    this.pendingAudioPackets = []; // poster-era audio is stale; play() re-seeks
+    this.pendingPrebufferPackets = [];
+    // The poster seek advanced HttpSource's monotonic buffered-end to ~poster
+    // time; reset it (as a real seek does) so the buffer bar starts from 0
+    // instead of showing a false prebuffer at the poster timestamp.
+    this.lastBufferedTime = 0;
+    this.emit("timeUpdate", this.getCurrentTime()); // snap seek bar to 00:00
+  }
+
+  /**
    * Get duration
    */
   getDuration(): number {
