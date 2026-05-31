@@ -13548,23 +13548,24 @@ export class MoviElement extends HTMLElement {
         // audio instead of silently-broken sound.
         this.maybeFallbackToMutedAutoplay();
       } else {
-        // Render first frame (poster) if not autoplaying and no custom start time.
-        // Mark as poster seek so the loading indicator stays hidden during this seek —
-        // the user shouldn't see a spinner just to render the first frame.
-        //
-        // Skip this when a `postertime` is set OR an explicit poster URL is
-        // active — in those cases the poster overlay is the source of truth,
-        // and an initial seek(0) would briefly show the first frame on canvas
-        // before the real poster appears, which reads as a glitch.
+        // Render the first frame as a poster WITHOUT seeking the main decoder.
+        // Previously this did player.seek(0) on the main decoder, but on some
+        // streams (4K DoVi P8 .ts whose start GOP is open-GOP CRA) that
+        // post-configure→seek→flush left the decoder in a state that rejects
+        // the CRA as a `key` chunk and dropped playback to software. Generating
+        // the poster through the isolated thumbnail pipeline keeps the main
+        // decoder pristine until the first real play(). Skipped when a
+        // `postertime` or explicit poster URL is active (handled below / by the
+        // overlay).
         if (
           this._startAt === 0 &&
           this.player &&
           !this._posterTime &&
           !this._poster
         ) {
-          // suppressSpinner keeps the loading UI hidden through this seek's
-          // "seeking" window; the player auto-clears it on seek completion.
-          this.player.seek(0, { suppressSpinner: true }).catch(() => {});
+          // 0 = start of content (same UI/0-based timebase the postertime path
+          // uses; the thumbnail pipeline maps it to the stream's start PTS).
+          this.generatePosterFromTime(0).catch(() => {});
         }
       }
 
@@ -16775,7 +16776,14 @@ export class MoviElement extends HTMLElement {
    * clock/decoder — purely side-channel frame extraction. Respects the
    * video's rotation metadata so portrait videos display correctly.
    */
-  private async generatePosterFromTime(): Promise<void> {
+  // Generate the poster frame via the ISOLATED thumbnail pipeline (its own WASM
+  // + decoder), never the main playback decoder. Pass explicitTimeSec to render
+  // a default first-frame poster (e.g. 0) without a `postertime` attribute —
+  // this is how the initial poster is produced so the main HEVC decoder is left
+  // pristine until the first real play(): seeking the main decoder for the
+  // poster would put it in a post-flush state that rejects open-GOP CRA
+  // keyframes on some streams (4K DoVi P8 .ts) and drop playback to software.
+  private async generatePosterFromTime(explicitTimeSec?: number): Promise<void> {
     // Skip when playback is already happening or about to start — the user
     // would see the poster flash on top of live video otherwise.
     const state = this.player?.getState();
@@ -16789,10 +16797,17 @@ export class MoviElement extends HTMLElement {
       this._generatedPosterUrl = null;
     }
 
-    if (!this._posterTime || this._poster || !this._src) return;
+    // An explicit poster URL always wins; never overwrite it. A postertime is
+    // required only for the attribute-driven path — the default-first-frame
+    // path (explicitTimeSec given) doesn't need one.
+    if (this._poster || !this._src) return;
+    if (explicitTimeSec === undefined && !this._posterTime) return;
 
     const duration = this.player?.getDuration() || 0;
-    const timeSec = this.parsePosterTime(this._posterTime, duration);
+    const timeSec =
+      explicitTimeSec !== undefined
+        ? explicitTimeSec
+        : this.parsePosterTime(this._posterTime!, duration);
     if (timeSec === null) return;
 
     // Snapshot our generation id at entry; any later src change / dispose

@@ -69,6 +69,13 @@ export class MoviVideoDecoder {
   // user sees ~1s of recovery instead of ~11s of per-GOP stutter. (The old
   // limit was 15; lowered because the HW path never actually recovers here.)
   private static MID_STREAM_OPENGOP_REJECT_LIMIT = 3;
+  // When true, open-GOP keyframe rejections never fall back to software — the
+  // decoder keeps reset+retrying on hardware. With the poster generated off the
+  // main decoder (isolated thumbnail pipeline) and HEVC seeks recreating the
+  // decoder into a fresh state, the HW path recovers on its own, so the SW
+  // fallback (which dropped 4K/120fps HDR HEVC to throttled software) is no
+  // longer needed and hurt more than it helped.
+  private static DISABLE_OPENGOP_SW_FALLBACK = true;
 
   constructor(forceSoftware: boolean = false) {
     this.forceSoftware = forceSoftware;
@@ -886,6 +893,7 @@ export class MoviVideoDecoder {
       // random-access points (10-bit DoVi/HDR HEVC), so reset+retry is hopeless.
       const idrRejected = this.lastChunkInfo?.wasIdrWhileWaiting === true;
       if (
+        !MoviVideoDecoder.DISABLE_OPENGOP_SW_FALLBACK &&
         (this.justFlushed || idrRejected) &&
         isHevc &&
         !this.forceSoftware &&
@@ -927,7 +935,10 @@ export class MoviVideoDecoder {
         : 15;
 
       // If we keep hitting these, hardware decoder is too strict. Fallback to software.
-      if (this.openGopErrorCount > openGopFallbackLimit) {
+      if (
+        !MoviVideoDecoder.DISABLE_OPENGOP_SW_FALLBACK &&
+        this.openGopErrorCount > openGopFallbackLimit
+      ) {
         Logger.error(
           TAG,
           `Persistent Open GOP errors detected (${this.openGopErrorCount} > ${openGopFallbackLimit}). Switching to software decoder.`,
@@ -1198,6 +1209,23 @@ export class MoviVideoDecoder {
       return this.swDecoder.flush();
     }
     if (!this.decoder) return;
+
+    // Open-GOP HEVC restart: a decoder that has already decoded frames refuses
+    // an open-GOP CRA sent as `key` after a plain flush() ("Open GOP?"), yet a
+    // freshly configure()'d decoder accepts the very same CRA (the first CRA
+    // after a seek is accepted at startup but rejected on replay of the same
+    // position). For streams whose seek target may land on a CRA (no nearby
+    // IDR — e.g. 4K DoVi P8 .ts), recreate the decoder on flush instead of
+    // flush()ing it, so the post-seek decoder is in the same fresh state as
+    // startup. Recreate is ~tens of ms; only on seeks (flush), not per frame.
+    const codec = this.lastConfig?.codec ?? "";
+    const isHevc = codec.startsWith("hvc1.") || codec.startsWith("hev1.");
+    if (isHevc && !this.forceSoftware && !this.useSoftware) {
+      if (this.recreateDecoder()) {
+        return; // fresh decoder is configured and waiting for a keyframe
+      }
+      // recreate failed — fall through to a normal flush
+    }
 
     try {
       // Timeout flush — WebCodecs flush() can hang on slow devices
