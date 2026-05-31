@@ -689,18 +689,23 @@ export class MoviVideoDecoder {
       return;
     }
 
-    // If we're waiting for a keyframe after a seek/error, we need a TRUE
-    // random-access point (IDR/BLA) to resume — the decoder has no reference
-    // frames, so neither a non-keyframe nor an open-GOP CRA can start a clean
-    // GOP here. Skip both (a CRA sent as `delta` would fail with "key frame
-    // required after configure", a CRA sent as `key` gets rejected as open-GOP).
-    if (this.waitingForKeyframe && (!keyframe || isOpenGopKey)) {
+    // If we're waiting for a keyframe after a seek/error, skip non-keyframes —
+    // the decoder has no reference frames, so a delta can't restart a GOP.
+    // A keyframe (IDR or CRA) DOES restart it: a CRA is a clean random-access
+    // point, so on the first keyframe post-flush we resume on it even if it's a
+    // CRA. (Streams seeked into an all-CRA region — e.g. a DoVi P8 .ts whose
+    // only IDR is back at the file start — would otherwise never resume and
+    // stay black. The CRA's RASL leading pictures may not decode; that's
+    // handled by skipping until the next decodable frame.) The chunk-build
+    // path below sends a post-flush CRA as `key` (not delta) so the decoder
+    // treats it as the random-access restart it is.
+    if (this.waitingForKeyframe && !keyframe) {
       this.skippedWhileWaiting++;
       return;
     }
-    if (keyframe && !isOpenGopKey && this.waitingForKeyframe) {
+    if (keyframe && this.waitingForKeyframe) {
       if (this.skippedWhileWaiting > 0) {
-        Logger.debug(TAG, `Skipped ${this.skippedWhileWaiting} non-keyframes/CRA while waiting for IDR`);
+        Logger.debug(TAG, `Skipped ${this.skippedWhileWaiting} non-keyframes while waiting for keyframe`);
         this.skippedWhileWaiting = 0;
       }
     }
@@ -739,9 +744,11 @@ export class MoviVideoDecoder {
       }
     }
 
-    // Reached here only on a real frame to feed: a true IDR, an open-GOP CRA
-    // we're mid-stream on, or a delta. Clear the wait state on a true IDR.
-    if (keyframe && !isOpenGopKey) {
+    // Reached here only on a real frame to feed: an IDR, a CRA, or a delta.
+    // Clear the wait state on ANY keyframe — both IDR and CRA are random-access
+    // points the decoder can restart on (we now resume on a post-flush CRA when
+    // no IDR is available; see the keyframe-wait skip above).
+    if (keyframe) {
       this.setWaitingForKeyframe(false);
       // Cache converted keyframe for instant recovery after decoder recreation
     }

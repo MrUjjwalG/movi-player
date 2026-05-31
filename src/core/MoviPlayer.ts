@@ -150,6 +150,13 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
   private seekingToKeyframe: boolean = false;
   private seekingToKeyframeStartTime: number = 0;
   private static readonly KEYFRAME_SEEK_TIMEOUT = 5000; // 5 seconds timeout
+  // After a seek we prefer a true IDR to restart cleanly (avoids the open-GOP
+  // CRA-as-key HW rejection on mixed-keyframe HEVC). But some streams only have
+  // CRA keyframes for long stretches (e.g. seeking deep into a DoVi P8 .ts whose
+  // sole IDR is at the file start), so if no IDR shows up within this short
+  // window we fall back to resuming on a CRA rather than staying black.
+  private seekCraSeen: number = 0;
+  private static readonly SEEK_IDR_WAIT_MS = 400; // wait this long for an IDR before accepting a CRA
 
   // Set when an audio-starve video skip drops a non-keyframe, breaking AV1's
   // reference chain. While true the demux loop keeps dropping deltas until the
@@ -2075,26 +2082,34 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
               // Check timeout - if we've been waiting too long, give up and accept any frame
               const elapsed =
                 performance.now() - this.seekingToKeyframeStartTime;
+              // Prefer a true IDR to restart: on mixed-keyframe HEVC a CRA sent
+              // as `key` is rejected by the HW decoder (open-GOP) and forces a
+              // software fallback, while an IDR restarts cleanly. But accept a
+              // CRA if no IDR arrives quickly — some streams have only CRA
+              // keyframes for long stretches (seeking deep into a DoVi P8 .ts),
+              // where waiting for an IDR never resumes and the video stays black.
+              const idrWaitElapsed = elapsed > MoviPlayer.SEEK_IDR_WAIT_MS;
+              const acceptThisKeyframe =
+                packet.keyframe && (packet.isIdr || idrWaitElapsed);
               if (elapsed > MoviPlayer.KEYFRAME_SEEK_TIMEOUT) {
                 Logger.warn(
                   TAG,
                   `Keyframe seek timeout after ${elapsed}ms, accepting any frame`,
                 );
                 this.seekingToKeyframe = false;
-              } else if (!packet.keyframe || !packet.isIdr) {
-                // Skip non-keyframes AND open-GOP CRA frames: after a flush the
-                // decoder has no references, so only a true IDR/BLA can restart
-                // a clean GOP. A CRA here would have its RASL leading pictures
-                // reference the (now-gone) previous GOP. Both IDR and CRA are
-                // frequent in these streams, so a real IDR arrives quickly.
+              } else if (!acceptThisKeyframe) {
+                // Not yet: skip non-keyframes, and skip CRA keyframes while still
+                // within the short IDR-wait window (hoping a true IDR is near).
+                if (packet.keyframe) this.seekCraSeen++;
                 continue;
               } else {
-                // Found a true IDR, clear the flag and process packet
+                // Found a keyframe to restart on (IDR, or a CRA after the wait).
                 this.seekingToKeyframe = false;
                 Logger.debug(
                   TAG,
-                  "Found IDR keyframe after seek, resuming normal playback",
+                  `Found ${packet.isIdr ? "IDR" : "CRA"} keyframe after seek (craSkipped=${this.seekCraSeen}), resuming normal playback`,
                 );
+                this.seekCraSeen = 0;
               }
             }
 
@@ -2432,6 +2447,7 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
       // This prevents decoder errors from non-keyframe packets after seek
       this.seekingToKeyframe = true;
       this.seekingToKeyframeStartTime = performance.now();
+      this.seekCraSeen = 0;
       // A seek is a fresh keyframe-anchored start; any pending starve-induced
       // chain break is moot.
       this.videoChainBrokenUntilKeyframe = false;
@@ -4536,6 +4552,7 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
             this.seekTargetTime = Math.max(audioTime + this.startTime, audioBufferEnd);
             this.seekingToKeyframe = true;
             this.seekingToKeyframeStartTime = performance.now();
+            this.seekCraSeen = 0;
             this.videoChainBrokenUntilKeyframe = false;
 
             // Restart video pipeline
