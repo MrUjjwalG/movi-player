@@ -11,8 +11,13 @@ import { Logger } from "../utils/Logger";
 
 const TAG = "ThumbnailHttpSource";
 
-// Buffer 512KB at a time - enough for most keyframes
-const BUFFER_SIZE = 512 * 1024;
+// Buffer 2MB at a time. A single 4K HDR keyframe can run 1-2MB, and the
+// demuxer also issues several scattered index/keyframe reads around the
+// target before it hands us the packet. At 512KB each of those reads missed
+// the buffer and paid its own HTTP round-trip — a single far-position hover
+// fired ~8 sequential fetches (the ~4s vs <2s gap against a real seek).
+// 2MB lets one fetch cover the keyframe plus its neighbouring reads.
+const BUFFER_SIZE = 2 * 1024 * 1024;
 // Maximum fetch size to prevent excessive downloads (5MB cap)
 const MAX_FETCH_SIZE = 5 * 1024 * 1024;
 

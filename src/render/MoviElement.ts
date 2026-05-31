@@ -1494,9 +1494,15 @@ export class MoviElement extends HTMLElement {
       // Schedule this time
       previewLoopState.nextTime = time;
 
+      // Short debounce: hover previews far from the playhead need a fresh
+      // network fetch, so the debounce is pure added latency. 150ms made a
+      // far-position hover feel ~4s vs <2s for a real seek. The serialized
+      // single-flight queue (processPreviewQueue) already coalesces rapid
+      // moves — it drops to the latest pending time when a fetch finishes —
+      // so a tight debounce won't flood the network.
       previewDebounce = window.setTimeout(() => {
         processPreviewQueue();
-      }, 150);
+      }, 40);
     };
 
     // Helper to show/update thumbnail AND progress visuals during dragging/hovering
