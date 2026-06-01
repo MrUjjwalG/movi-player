@@ -125,7 +125,14 @@ async function buildEntry(entry, format) {
       rollupOptions: {
         external: [],
         // Order matters: rewrite console.* → __movilog FIRST, then terser.
-        plugins: [movilogRewritePlugin(), terser(terserConfig)],
+        // Terser disabled for the "no-harden" diagnostic build — toggle via
+        // env var MOVI_NO_HARDEN=1. Keeps the movilog rewrite (so consoles
+        // still pipe to the extension/output channel) but skips the
+        // dead-code / inline / mangle passes that we suspect change
+        // Asyncify timing in production.
+        plugins: process.env.MOVI_NO_HARDEN === "1"
+          ? [movilogRewritePlugin()]
+          : [movilogRewritePlugin(), terser(terserConfig)],
         output: {
           globals: {},
           assetFileNames: (assetInfo) => {

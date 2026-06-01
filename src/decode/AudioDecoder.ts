@@ -1,6 +1,6 @@
 import type { AudioTrack } from "../types";
 import { Logger } from "../utils/Logger";
-import { SoftwareAudioDecoder } from "./SoftwareAudioDecoder";
+import { SoftwareAudioDecoder, type PCMFrame } from "./SoftwareAudioDecoder";
 import { WasmBindings } from "../wasm/bindings";
 
 const TAG = "AudioDecoder";
@@ -12,6 +12,7 @@ export class MoviAudioDecoder {
   private useSoftware: boolean = false;
 
   private pendingData: AudioData[] = [];
+  private pendingPCM: PCMFrame[] = [];
   private pendingChunks: Array<{
     data: Uint8Array;
     timestamp: number;
@@ -19,13 +20,28 @@ export class MoviAudioDecoder {
   }> = [];
   private isConfigured: boolean = false;
   private onData: ((data: AudioData) => void) | null = null;
+  private onPCM: ((frame: PCMFrame) => void) | null = null;
   private onError: ((error: Error) => void) | null = null;
   private currentTrack: AudioTrack | null = null;
   private hasTriedSoftwareFallback: boolean = false; // Track if we've already tried software fallback
   private hasDescription: boolean = false; // Whether decoder was configured with description (AudioSpecificConfig)
+  // Stereo downmix policy for the software path (truehd, dca, ac3,
+  // eac3, …). Defaults to stereo so headphones / laptop speakers
+  // sound right; flipped off by setDownmix() when the player has
+  // confirmed the output destination supports the source's full
+  // channel count. WebCodecs path is unaffected — the browser
+  // delivers AudioData at the source channel count and the AudioRenderer
+  // either passes it through (if destination.channelCount matches)
+  // or lets Web Audio do its own downmix.
+  private _downmix = true;
 
   constructor() {
     Logger.debug(TAG, "Created");
+  }
+
+  setDownmix(downmix: boolean): void {
+    this._downmix = downmix;
+    if (this.swDecoder) this.swDecoder.setDownmix(downmix);
   }
 
   setBindings(bindings: WasmBindings) {
@@ -203,9 +219,13 @@ export class MoviAudioDecoder {
     }
 
     this.swDecoder = new SoftwareAudioDecoder(this.bindings);
-    this.swDecoder.setOnData((data) => {
-      if (this.onData) this.onData(data);
-      else this.pendingData.push(data);
+    // Carry forward the player-set downmix policy so a fresh swDecoder
+    // (e.g. an audio-track switch) doesn't snap back to stereo while
+    // the renderer is still wired for multi-channel output.
+    this.swDecoder.setDownmix(this._downmix);
+    this.swDecoder.setOnData((frame) => {
+      if (this.onPCM) this.onPCM(frame);
+      else this.pendingPCM.push(frame);
     });
     this.swDecoder.setOnError((e) => {
       Logger.error(TAG, "Software decoder error", e);
@@ -380,6 +400,18 @@ export class MoviAudioDecoder {
   }
 
   /**
+   * Set PCM frame output callback (used by the software decoder path).
+   */
+  setOnPCM(callback: (frame: PCMFrame) => void): void {
+    this.onPCM = callback;
+
+    while (this.pendingPCM.length > 0) {
+      const frame = this.pendingPCM.shift()!;
+      callback(frame);
+    }
+  }
+
+  /**
    * Set error callback
    */
   setOnError(callback: (error: Error) => void): void {
@@ -416,6 +448,7 @@ export class MoviAudioDecoder {
       data.close();
     }
     this.pendingData = [];
+    this.pendingPCM = [];
   }
 
   /**

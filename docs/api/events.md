@@ -41,6 +41,7 @@ All events from `PlayerEventMap`:
 | ---------------------- | ------------------------ | ------------------------------------------ |
 | `loadStart`            | `void`                   | Loading started                            |
 | `loadEnd`              | `void`                   | Loading completed                          |
+| `preloadComplete`      | `void`                   | Initial preload buffer filled              |
 | `stateChange`          | `PlayerState`            | State changed                              |
 | `timeUpdate`           | `number`                 | Current time updated                       |
 | `durationChange`       | `number`                 | Duration available/changed                 |
@@ -50,6 +51,7 @@ All events from `PlayerEventMap`:
 | `seeking`              | `number`                 | Seek started (target time)                 |
 | `seeked`               | `number`                 | Seek completed (actual time)               |
 | `bufferUpdate`         | `{ start, end }[]`       | Reserved — declared in `PlayerEventMap` but not emitted yet |
+| `coverArt`             | `ImageBitmap \| null`    | Embedded cover art extracted at load. Caller owns the bitmap and must call `close()`. |
 | `ended`                | `void`                   | Playback ended                             |
 | `error`                | `Error`                  | Error occurred                             |
 | `frame`                | `DecodedVideoFrame`      | Video frame decoded (advanced)             |
@@ -83,6 +85,34 @@ player.on("loadEnd", () => {
   // Safe to access tracks now
   renderQualityMenu();
   renderAudioMenu();
+});
+```
+
+### `preloadComplete`
+
+Fired when the initial preload buffer has enough data to begin playback without stalling. For local files this fires almost immediately; for HTTP sources it fires after the first prefetch window fills.
+
+```typescript
+player.on("preloadComplete", () => {
+  console.log("Buffer ready, safe to play");
+  playButton.disabled = false;
+});
+```
+
+### `coverArt`
+
+Fired when embedded cover art has been extracted from the media file (MP3 ID3v2 APIC, MP4 `covr`, FLAC PICTURE, MKV attachments). The payload is an `ImageBitmap` or `null` if no artwork was found. The caller owns the bitmap and **must call `close()`** on it when done.
+
+```typescript
+player.on("coverArt", (bitmap: ImageBitmap | null) => {
+  if (bitmap) {
+    artElement.width = bitmap.width;
+    artElement.height = bitmap.height;
+    artElement.getContext("2d")!.drawImage(bitmap, 0, 0);
+    bitmap.close();
+  } else {
+    artElement.src = "placeholder.png";
+  }
 });
 ```
 
@@ -489,6 +519,8 @@ The custom element re-exposes player activity as DOM events so you can wire `add
 | `pipchange`            | `{ pip: boolean }`                   | Picture-in-Picture window opened/closed            |
 | `qualitychange`        | `{ trackId: number }`                | Active video quality / track switched              |
 | `subtitledelaychange`  | `{ subtitleDelay: number }`          | Subtitle offset changed via property/attribute     |
+| `coverart`             | `ImageBitmap \| null`                | Embedded cover art extracted at load (close the bitmap when done) |
+| `preloadcomplete`      | —                                    | Initial preload buffer filled, ready to play       |
 | `filerevoked`          | `{ offset, length, reason }`         | Underlying `File` handle was revoked by the browser (mobile background / memory pressure). Prompt the user to re-pick. |
 
 ::: tip Casing note

@@ -308,66 +308,47 @@ void movi_thumbnail_read_keyframe(struct MoviThumbnailContext *ctx,
       return;
   }
 
-  // Increase search limit to ensure we find a keyframe
+  // AVSEEK_FLAG_BACKWARD lands us on the keyframe at-or-before target_ts, so
+  // the FIRST keyframe av_read_frame yields IS the closest one we want.
+  //
+  // The old loop kept scanning past it until current_pts > target_ts, hunting
+  // for a "closer" keyframe. On 4K HDR HEVC the GOP is long (5-10s between
+  // keyframes) and each frame is large, so that scan dragged the demuxer
+  // through a whole GOP of packets — several MB of sequential 512KB range
+  // fetches per hover (~5766MB→5770MB in the logs). That extra data is never
+  // even used: we only ever render the single keyframe packet. Forward
+  // keyframes are also strictly farther from target than the backward one,
+  // so the scan couldn't improve the result either. Take the first keyframe
+  // and stop — this is the bulk of the hover-vs-seek latency gap.
   int max_packets = 2000;
   int found_keyframe = 0;
-  int64_t best_keyframe_dist = LLONG_MAX;
 
   while (max_packets-- > 0) {
     int ret = av_read_frame(ctx->fmt_ctx, ctx->pkt);
 
     if (ret < 0) {
       av_log(NULL, AV_LOG_DEBUG, "[THUMB] EOF/error ret=%d, halting search\n", ret);
-      break; 
+      break;
     }
 
     if (ctx->pkt->stream_index == ctx->video_stream_index) {
       // Check for keyframe
       if ((ctx->pkt->flags & AV_PKT_FLAG_KEY) && ctx->pkt->size > 0) {
-        
+
         // Use PTS if available, otherwise DTS
         int64_t current_pts = (ctx->pkt->pts != AV_NOPTS_VALUE) ? ctx->pkt->pts : ctx->pkt->dts;
-        
-        if (current_pts != AV_NOPTS_VALUE) {
-            int64_t dist_current = llabs(current_pts - target_ts);
 
-            av_log(NULL, AV_LOG_DEBUG,
-                    "[THUMB] Keyframe at pts=%lld (target=%lld, dist=%lld)\n",
-                    (long long)current_pts, (long long)target_ts,
-                    (long long)dist_current);
+        av_log(NULL, AV_LOG_DEBUG,
+                "[THUMB] Keyframe at pts=%lld (target=%lld) — taking it\n",
+                (long long)current_pts, (long long)target_ts);
 
-            // Is this closer then previous best?
-            // Prioritize closer packets. 
-            // Also, if we haven't found any yet, take this one.
-            if (!found_keyframe || dist_current < best_keyframe_dist || 
-               (dist_current == best_keyframe_dist && current_pts < target_ts)) { // Prefer earlier if equal?
-               
-              best_keyframe_dist = dist_current;
-              found_keyframe = 1;
-              
-              // Save this packet as the best one so far
-              av_packet_unref(best_pkt);
-              av_packet_ref(best_pkt, ctx->pkt);
-              
-              av_log(NULL, AV_LOG_DEBUG, "[THUMB] New best candidate saved.\n");
-            }
-
-            // Stop if we passed the target significantly (e.g. > 1 sec)
-            // But if we haven't found *any* keyframe before target, we might need to keep going?
-            // Actually, if we passed target and we already have a keyframe, the one we have 
-            // (which is closer or previous) is likely the one we want.
-            // If we seek with BACKWARD flag, we expect to be before target.
-            // So finding one after target means we crossed it.
-            if (current_pts > target_ts) {
-               // Verify: Is the current one (after target) closer than the previous one (before target)?
-               // If so, we might keep current. If not, we keep previous.
-               // Since we already updated 'best_pkt' if 'current' was closer (dist < best),
-               // we can just stop now as going further forward won't help.
-               av_log(NULL, AV_LOG_DEBUG, "[THUMB] Passed target, stopping search.\n");
-               av_packet_unref(ctx->pkt); // Free the scan packet
-               break; 
-            }
-        }
+        // First keyframe after a BACKWARD seek is the closest-at-or-before
+        // target. Save it and stop scanning.
+        av_packet_unref(best_pkt);
+        av_packet_ref(best_pkt, ctx->pkt);
+        found_keyframe = 1;
+        av_packet_unref(ctx->pkt);
+        break;
       }
     }
 

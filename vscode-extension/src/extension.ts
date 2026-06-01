@@ -2,10 +2,19 @@ import * as vscode from "vscode";
 import * as path from "path";
 import * as fs from "fs";
 import { spawn, ChildProcess } from "child_process";
+import { MoviActionsProvider } from "./actionsView";
 
+// Extensions accepted by the openFile / openFileToSide / openFileInNewWindow
+// dialog filters. Audio formats live in the same player since the underlying
+// FFmpeg WASM build already decodes them — see docker/build-ffmpeg.sh for
+// the demuxer/decoder set.
 const VIDEO_EXTS = [
+  // Video
   "mp4", "mkv", "webm", "mov", "avi", "flv", "wmv",
-  "m4v", "3gp", "mpg", "mpeg", "m2ts", "hevc", "265",
+  "m4v", "3gp", "mpg", "mpeg", "m2ts", "mts", "evo", "hevc", "265",
+  // Audio
+  "mp3", "m4a", "m4b", "aac", "flac", "wav", "wave",
+  "ogg", "oga", "opus", "ac3", "ec3", "eac3", "mka", "dts",
 ];
 
 let commandPanel: vscode.WebviewPanel | undefined;
@@ -200,6 +209,11 @@ export function activate(context: vscode.ExtensionContext) {
       }
     ),
 
+    vscode.window.registerTreeDataProvider(
+      "moviPlayer.actions",
+      new MoviActionsProvider()
+    ),
+
     vscode.commands.registerCommand("movi.openPlayer", async () => {
       const picked = await vscode.window.showOpenDialog({
         canSelectMany: false,
@@ -212,6 +226,52 @@ export function activate(context: vscode.ExtensionContext) {
           picked[0],
           "movi.player"
         );
+      }
+    }),
+
+    vscode.commands.registerCommand("movi.openFileToSide", async () => {
+      const picked = await vscode.window.showOpenDialog({
+        canSelectMany: false,
+        filters: { Videos: VIDEO_EXTS },
+        openLabel: "Play to the Side",
+      });
+      if (picked && picked[0]) {
+        vscode.commands.executeCommand(
+          "vscode.openWith",
+          picked[0],
+          "movi.player",
+          vscode.ViewColumn.Beside
+        );
+      }
+    }),
+
+    vscode.commands.registerCommand("movi.openFileInNewWindow", async () => {
+      const picked = await vscode.window.showOpenDialog({
+        canSelectMany: false,
+        filters: { Videos: VIDEO_EXTS },
+        openLabel: "Play in New Window",
+      });
+      if (!picked || !picked[0]) return;
+      pendingAux = true;
+      try {
+        await vscode.commands.executeCommand(
+          "vscode.openWith",
+          picked[0],
+          "movi.player",
+          vscode.ViewColumn.Beside
+        );
+        await vscode.commands.executeCommand(
+          "workbench.action.moveEditorToNewWindow"
+        );
+        try {
+          await vscode.commands.executeCommand(
+            "workbench.action.enableCompactAuxiliaryWindow"
+          );
+        } catch {
+          // Older VS Code versions may not expose the compact-window command.
+        }
+      } finally {
+        pendingAux = false;
       }
     }),
 
@@ -289,7 +349,23 @@ export function activate(context: vscode.ExtensionContext) {
         prompt: "Enter video URL",
         placeHolder: "https://example.com/video.mp4",
       });
-      if (url) openCommandPanelWithUrl(context, url);
+      if (url) openCommandPanelWithUrl(context, url, "active");
+    }),
+
+    vscode.commands.registerCommand("movi.openUrlToSide", async () => {
+      const url = await vscode.window.showInputBox({
+        prompt: "Enter video URL — opens beside the active editor",
+        placeHolder: "https://example.com/video.mp4",
+      });
+      if (url) openCommandPanelWithUrl(context, url, "beside");
+    }),
+
+    vscode.commands.registerCommand("movi.openUrlInNewWindow", async () => {
+      const url = await vscode.window.showInputBox({
+        prompt: "Enter video URL — opens in a new VS Code window",
+        placeHolder: "https://example.com/video.mp4",
+      });
+      if (url) openCommandPanelWithUrl(context, url, "newWindow");
     })
   );
 }
@@ -383,6 +459,7 @@ class MoviEditorProvider
 function guessMime(filePath: string): string {
   const ext = path.extname(filePath).toLowerCase();
   const map: Record<string, string> = {
+    // Video
     ".mp4": "video/mp4",
     ".m4v": "video/x-m4v",
     ".mkv": "video/x-matroska",
@@ -391,6 +468,8 @@ function guessMime(filePath: string): string {
     ".avi": "video/x-msvideo",
     ".ts": "video/mp2t",
     ".m2ts": "video/mp2t",
+    ".mts": "video/mp2t",
+    ".evo": "video/mpeg",
     ".mpg": "video/mpeg",
     ".mpeg": "video/mpeg",
     ".flv": "video/x-flv",
@@ -398,6 +477,22 @@ function guessMime(filePath: string): string {
     ".3gp": "video/3gpp",
     ".hevc": "video/hevc",
     ".265": "video/hevc",
+    // Audio
+    ".mp3": "audio/mpeg",
+    ".m4a": "audio/mp4",
+    ".m4b": "audio/mp4",
+    ".aac": "audio/aac",
+    ".flac": "audio/flac",
+    ".wav": "audio/wav",
+    ".wave": "audio/wav",
+    ".ogg": "audio/ogg",
+    ".oga": "audio/ogg",
+    ".opus": "audio/opus",
+    ".ac3": "audio/ac3",
+    ".ec3": "audio/eac3",
+    ".eac3": "audio/eac3",
+    ".mka": "audio/x-matroska",
+    ".dts": "audio/vnd.dts",
   };
   return map[ext] || "application/octet-stream";
 }
@@ -417,24 +512,115 @@ async function readFileRange(
   });
 }
 
-function openCommandPanelWithUrl(
+// HTTP streaming proxy — extension host fetches the URL (no CORS in Node)
+// and pipes Range chunks to the webview via postMessage. Bypasses webview
+// CORS restrictions and avoids buffering the whole file into memory.
+async function probeHttpUrl(
+  url: string,
+  signal?: AbortSignal
+): Promise<{ size: number; mimeType: string; name: string; finalUrl: string }> {
+  // Range bytes=0-0 doubles as a Range-support probe AND gives us the total
+  // size from Content-Range — more reliable than HEAD (some CDNs reject it).
+  const res = await fetch(url, {
+    headers: { Range: "bytes=0-0" },
+    signal,
+    redirect: "follow",
+  });
+  if (!res.ok && res.status !== 206) {
+    try { res.body?.cancel(); } catch {}
+    throw new Error(`Server returned HTTP ${res.status}`);
+  }
+
+  let size = 0;
+  if (res.status === 206) {
+    const cr = res.headers.get("content-range") || "";
+    const match = cr.match(/\/(\d+)$/);
+    if (match) size = parseInt(match[1], 10);
+  } else {
+    const cl = res.headers.get("content-length");
+    if (cl) size = parseInt(cl, 10);
+  }
+
+  // Drain the 1-byte response body so the connection can be reused.
+  try { res.body?.cancel(); } catch {}
+
+  if (!size || !Number.isFinite(size)) {
+    throw new Error(
+      "Could not determine video size — server doesn't expose Content-Length / Content-Range."
+    );
+  }
+
+  const mimeType =
+    (res.headers.get("content-type") || "").split(";")[0].trim() ||
+    "video/mp4";
+  const finalUrl = res.url;
+
+  let name = "video";
+  try {
+    const u = new URL(finalUrl);
+    const last = u.pathname.split("/").pop() || "";
+    name = decodeURIComponent(last).replace(/\.[^.]+$/, "") || "video";
+  } catch {}
+
+  return { size, mimeType, name, finalUrl };
+}
+
+async function fetchHttpRange(
+  url: string,
+  start: number,
+  length: number,
+  signal?: AbortSignal
+): Promise<Uint8Array> {
+  const end = start + length - 1;
+  const res = await fetch(url, {
+    headers: { Range: `bytes=${start}-${end}` },
+    signal,
+    redirect: "follow",
+  });
+  if (!res.ok && res.status !== 206) {
+    try { res.body?.cancel(); } catch {}
+    throw new Error(`HTTP ${res.status}`);
+  }
+  const buf = await res.arrayBuffer();
+  return new Uint8Array(buf);
+}
+
+async function openCommandPanelWithUrl(
   context: vscode.ExtensionContext,
-  url: string
+  url: string,
+  target: "active" | "beside" | "newWindow" = "active"
 ) {
   const webviewRoot = vscode.Uri.joinPath(context.extensionUri, "webview");
   const folders = vscode.workspace.workspaceFolders ?? [];
 
-  if (commandPanel) {
-    commandPanel.title = "Movi Player";
-    commandPanel.reveal(vscode.ViewColumn.Active);
-    commandPanel.webview.postMessage({ type: "loadUrl", url });
+  // Probe URL on the extension host (no CORS) before opening the panel —
+  // gives us size + mime + post-redirect URL for the streaming pipeline.
+  let probed: Awaited<ReturnType<typeof probeHttpUrl>>;
+  try {
+    probed = await probeHttpUrl(url);
+  } catch (err: unknown) {
+    const message = err instanceof Error ? err.message : String(err);
+    vscode.window.showErrorMessage(`Movi: Failed to load URL — ${message}`);
     return;
   }
 
+  // Active reuses the singleton commandPanel slot (one URL at a time in
+  // the main column). Beside / newWindow always create fresh panels so
+  // multiple URLs can play side-by-side or across windows.
+  if (target === "active" && commandPanel) {
+    commandPanel.dispose();
+    commandPanel = undefined;
+  }
+
+  const column =
+    target === "active"
+      ? vscode.ViewColumn.Active
+      : vscode.ViewColumn.Beside;
+
   const panel = vscode.window.createWebviewPanel(
     "moviPlayer",
-    "Movi Player",
-    vscode.ViewColumn.Active,
+    probed.name + " — Movi Player",
+    column,
     {
       enableScripts: true,
       retainContextWhenHidden: true,
@@ -449,22 +635,76 @@ function openCommandPanelWithUrl(
     "icon128.png"
   );
 
-  const sub = panel.webview.onDidReceiveMessage((msg) => {
+  const abort = new AbortController();
+  const isAux = target === "newWindow";
+
+  const sub = panel.webview.onDidReceiveMessage(async (msg) => {
     if (msg?.type === "ready") {
-      panel.webview.postMessage({ type: "loadUrl", url });
+      // Aux windows can't host Zen Mode (settings-driven chrome hide
+      // targets the main window) — disable Movi fullscreen there.
+      if (isAux) panel.webview.postMessage({ type: "disableFullscreen" });
+      panel.webview.postMessage({
+        type: "loadStream",
+        name: probed.name,
+        size: probed.size,
+        mimeType: probed.mimeType,
+      });
+    } else if (msg?.type === "readChunk") {
+      const { id, start, length } = msg;
+      try {
+        const buffer = await fetchHttpRange(
+          probed.finalUrl,
+          start,
+          length,
+          abort.signal
+        );
+        panel.webview.postMessage({
+          type: "chunkData",
+          id,
+          buffer: buffer.buffer.slice(
+            buffer.byteOffset,
+            buffer.byteOffset + buffer.byteLength
+          ),
+        });
+      } catch (err: unknown) {
+        if (abort.signal.aborted) return;
+        const message = err instanceof Error ? err.message : String(err);
+        panel.webview.postMessage({ type: "chunkError", id, error: message });
+      }
     } else if (msg?.type === "fullscreen") {
-      vscode.commands.executeCommand("workbench.action.toggleZenMode");
+      if (isAux) return;
+      toggleMoviFullscreen();
     } else if (msg?.type === "log") {
       appendLog(msg);
     }
   });
 
   panel.onDidDispose(() => {
+    abort.abort();
     sub.dispose();
     if (commandPanel === panel) commandPanel = undefined;
   });
 
-  commandPanel = panel;
+  if (target === "active") commandPanel = panel;
+
+  if (target === "newWindow") {
+    try {
+      await vscode.commands.executeCommand(
+        "workbench.action.moveEditorToNewWindow"
+      );
+      try {
+        await vscode.commands.executeCommand(
+          "workbench.action.enableCompactAuxiliaryWindow"
+        );
+      } catch {
+        // Older VS Code versions may not expose the compact-window command.
+      }
+    } catch (err) {
+      // moveEditorToNewWindow can fail on very old VS Code; panel still
+      // opens beside, which is a reasonable fallback.
+      console.error("[Movi] moveEditorToNewWindow failed:", err);
+    }
+  }
 }
 
 function renderHtml(webview: vscode.Webview, webviewRoot: vscode.Uri): string {
@@ -480,6 +720,11 @@ function renderHtml(webview: vscode.Webview, webviewRoot: vscode.Uri): string {
 
   const config = vscode.workspace.getConfiguration("movi");
   const settings = {
+    autoplay: config.get<boolean>("autoplay", false),
+    muted: config.get<boolean>("muted", false),
+    loop: config.get<boolean>("loop", false),
+    objectFit: config.get<string>("objectFit", "contain"),
+    theme: config.get<string>("theme", "dark"),
     ambientMode: config.get<boolean>("ambientMode", true),
     resume: config.get<boolean>("resume", true),
   };
@@ -508,6 +753,15 @@ function renderHtml(webview: vscode.Webview, webviewRoot: vscode.Uri): string {
         "thumb",
         "fastseek",
         "showtitle",
+        settings.autoplay ? "autoplay" : "",
+        // Autoplay implies muted: browsers block autoplay-with-sound, so an
+        // autoplaying player always starts muted regardless of movi.muted.
+        // The element surfaces a "Tap to unmute" pill for the user. When
+        // autoplay is off, honour the movi.muted setting as-is.
+        settings.autoplay || settings.muted ? "muted" : "",
+        settings.loop ? "loop" : "",
+        `objectfit="${settings.objectFit}"`,
+        `theme="${settings.theme}"`,
         settings.ambientMode ? "ambientmode" : "",
         settings.resume ? "resume" : "",
       ]

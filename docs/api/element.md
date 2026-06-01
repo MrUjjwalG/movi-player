@@ -35,6 +35,10 @@ The `<movi-player>` custom HTML element provides a native `<video>`-like interfa
 - **Ambient Mode:** Extracts and displays average frame colors
 - **Track Selection:** Multi-audio/subtitle track selection UI
 - **Object Fit Modes:** contain/cover/fill/zoom with smooth transitions
+- **Audio-Only Mode:** Dedicated strip UI with embedded cover art for audio files (MP3, FLAC, AAC, Opus)
+- **Muted Autoplay Fallback:** Starts muted when autoplay is blocked, shows tap-to-unmute pill
+- **Pitch-Preserving Time-Stretch:** Signalsmith Stretch for clean non-1x playback
+- **Custom SourceAdapter:** Plug any byte protocol (WebSocket, WebRTC, IndexedDB) directly
 
 **Key File:** [src/render/MoviElement.ts](../src/render/MoviElement.ts)
 
@@ -42,10 +46,10 @@ The `<movi-player>` custom HTML element provides a native `<video>`-like interfa
 
 | Browser | Version | Notes                              |
 | ------- | ------- | ---------------------------------- |
-| Chrome  | 94+     | Full support (WebCodecs)           |
-| Edge    | 94+     | Full support                       |
-| Safari  | 16.4+   | Full support                       |
-| Firefox | ❌      | No WebCodecs yet (Q2 2026 planned) |
+| Chrome  | 110+    | Full support (WebCodecs)           |
+| Edge    | 110+    | Full support                       |
+| Safari  | 18+     | Full support                       |
+| Firefox | 130+    | WebCodecs Yes, HDR Limited         |
 
 ---
 
@@ -128,6 +132,48 @@ Specifies the video source URL or File object.
 - QuickTime (`.mov`)
 - MPEG-TS (`.ts`)
 - Any FFmpeg-supported format
+
+---
+
+#### `sourceAdapter` (property)
+
+JavaScript-only property — bypasses `src` entirely and feeds bytes through a custom [`SourceAdapter`](./sources.md#creating-custom-sources). Use this when your media doesn't live behind an HTTP URL or a local `File` (WebSocket, WebRTC data channel, IndexedDB, custom encryption, etc.) — you keep the full `<movi-player>` UI without re-implementing controls.
+
+```html
+<movi-player id="player" controls></movi-player>
+<script type="module">
+  import { MyWebSocketSource } from "./my-source.js";
+
+  const player = document.getElementById("player");
+  player.sourceAdapter = new MyWebSocketSource("wss://media.example.com", 12_345_678);
+</script>
+```
+
+**Mutual exclusion with `src`:**
+
+| You set        | Result                                       |
+| -------------- | -------------------------------------------- |
+| `src`          | Clears `sourceAdapter`, loads via URL/File   |
+| `sourceAdapter`| Clears `src` + `src` attribute, loads via adapter |
+| Both           | Last assignment wins                         |
+| `null`         | Clears that source; both null → empty state  |
+
+Setting either re-runs the full source-switch flow: disposes the old player, fires `loadstart`, and re-initializes. There's no separate attribute — pass adapter instances through JavaScript.
+
+```javascript
+// Swap protocols on a live element
+player.sourceAdapter = new MyWebRTCSource(channel);
+
+// Later, switch back to a plain URL
+player.src = "https://example.com/video.mp4"; // sourceAdapter auto-clears
+
+// Clear everything
+player.src = null;
+```
+
+::: tip Programmatic-only
+There's no `sourceadapter` HTML attribute — adapter instances aren't serializable. Always assign via JS (or the `setSourceAdapter()` convenience method, identical to the property setter).
+:::
 
 ---
 
@@ -1339,6 +1385,8 @@ The element re-exposes player activity as DOM events so you can wire `addEventLi
 | `pipchange`            | `{ pip: boolean }`                   | Picture-in-Picture window opened/closed            |
 | `qualitychange`        | `{ trackId: number }`                | Active video quality / track switched              |
 | `subtitledelaychange`  | `{ subtitleDelay: number }`          | Subtitle offset changed via property/attr          |
+| `coverart`             | `ImageBitmap \| null`                | Embedded cover art extracted at load (close the bitmap when done) |
+| `preloadcomplete`      | —                                    | Initial preload buffer filled, ready to play       |
 | `filerevoked`          | `{ offset, length, reason }`         | Underlying `File` handle was revoked by the browser (mobile background / memory pressure) |
 
 ::: tip Casing note
@@ -1920,15 +1968,13 @@ _Note: Shadow parts may not be fully exposed yet. Check component implementation
 
 ### Feature Support Matrix
 
-| Feature            | Chrome 94+ | Safari 16.4+ | Edge 94+ | Firefox |
-| ------------------ | ---------- | ------------ | -------- | ------- |
-| Basic Playback     | ✅         | ✅           | ✅       | ❌\*    |
-| Hardware Decode    | ✅         | ✅           | ✅       | ❌      |
-| HDR (Display-P3)   | ✅         | ✅           | ✅       | ❌      |
-| SharedArrayBuffer  | ✅         | ✅           | ✅       | ✅      |
-| Picture-in-Picture | ✅         | ✅           | ✅       | ✅      |
-
-\*Firefox: Awaiting WebCodecs implementation (expected Q2 2026)
+| Feature            | Chrome 110+ | Safari 18+ | Edge 110+ | Firefox 130+ |
+| ------------------ | ---------- | ---------- | --------- | ------------ |
+| Basic Playback     | ✅         | ✅         | ✅        | ✅           |
+| Hardware Decode    | ✅         | ✅         | ✅        | ✅           |
+| HDR (Display-P3)   | ✅         | ✅         | ✅        | Limited      |
+| SharedArrayBuffer  | ✅         | ✅         | ✅        | ✅           |
+| Picture-in-Picture | ✅         | ✅         | ✅        | ✅           |
 
 ---
 
@@ -2002,4 +2048,4 @@ observer.observe(player);
 
 ---
 
-**Last Updated:** February 5, 2026
+**Last Updated:** June 2, 2026

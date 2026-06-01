@@ -1,0 +1,1427 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Native &lt;video&gt; vs MoviPlayer — Side-by-side comparison</title>
+    <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
+
+    <meta name="description" content="Drop any MKV/HEVC/AV1 file. See exactly what your browser's native <video> tag silently ignores — multi-audio tracks, embedded subtitles, chapters — and what MoviPlayer surfaces." />
+    <meta name="robots" content="index, follow" />
+    <link rel="canonical" href="https://moviplayer.com/compare" />
+
+    <meta property="og:type" content="website" />
+    <meta property="og:url" content="https://moviplayer.com/compare" />
+    <meta property="og:title" content="Your browser only plays the surface of an MKV" />
+    <meta property="og:description" content="8 audio tracks, 12 subtitle languages, 7 chapters — all silently ignored by your browser. See for yourself." />
+    <meta property="og:image" content="https://moviplayer.com/og-image.png" />
+
+    <meta name="twitter:card" content="summary_large_image" />
+    <meta name="twitter:title" content="Your browser only plays the surface of an MKV" />
+    <meta name="twitter:description" content="Drop an MKV. See what the native <video> tag silently ignores." />
+
+    <meta name="theme-color" content="#0f0f12" />
+
+    <style>
+      :root {
+        --primary-accent: #6c5dd3;
+        --secondary-accent: #00d4ff;
+        --bg-base: #0f0f12;
+        --bg-panel: #16161b;
+        --bg-elevated: #1c1c22;
+        --text-primary: #ffffff;
+        --text-secondary: #a0a0b0;
+        --text-muted: #6a6a78;
+        --border: rgba(255, 255, 255, 0.08);
+        --navbar-bg: rgba(15, 15, 18, 0.6);
+        --navbar-bg-scrolled: rgba(15, 15, 18, 0.85);
+        --navbar-border: rgba(255, 255, 255, 0.06);
+        --navbar-border-scrolled: rgba(255, 255, 255, 0.1);
+        --surface-soft: rgba(255, 255, 255, 0.06);
+        --surface-soft-hover: rgba(255, 255, 255, 0.1);
+        --fallback-bg: rgba(0, 0, 0, 0.65);
+        --row-divider: rgba(255, 255, 255, 0.04);
+        --success: #4ade80;
+        --fail: #f87171;
+        --font-family: "Inter", system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+        --mono-family: "JetBrains Mono", "SF Mono", Menlo, Consolas, monospace;
+      }
+
+      /* Light theme — toggled by setting [data-theme="light"] on <html>.
+         Mirrors the same key used by app/index.html (localStorage
+         "theme-preference") so a user who flips the toggle on one page
+         finds the other page already matching when they navigate over. */
+      [data-theme="light"] {
+        --bg-base: #f5f5f5;
+        --bg-panel: #ffffff;
+        --bg-elevated: #ffffff;
+        --text-primary: #141414;
+        --text-secondary: #5a5a68;
+        --text-muted: #9e9e9e;
+        --border: rgba(0, 0, 0, 0.08);
+        --navbar-bg: rgba(255, 255, 255, 0.7);
+        --navbar-bg-scrolled: rgba(255, 255, 255, 0.92);
+        --navbar-border: rgba(0, 0, 0, 0.06);
+        --navbar-border-scrolled: rgba(0, 0, 0, 0.1);
+        --surface-soft: rgba(0, 0, 0, 0.04);
+        --surface-soft-hover: rgba(0, 0, 0, 0.08);
+        --fallback-bg: rgba(255, 255, 255, 0.85);
+        --row-divider: rgba(0, 0, 0, 0.06);
+      }
+      [data-theme="light"] body {
+        background-image:
+          radial-gradient(circle at 20% 10%, rgba(108, 93, 211, 0.08) 0%, transparent 35%),
+          radial-gradient(circle at 80% 90%, rgba(0, 212, 255, 0.05) 0%, transparent 35%);
+      }
+      [data-theme="light"] .brand-text {
+        /* Purple-to-cyan gradient — the brand colors, just at higher
+           saturation so they read on a light bg without falling back
+           to plain black. */
+        background: linear-gradient(135deg, #6c5dd3 0%, #00a8d8 100%);
+        background-clip: text;
+        -webkit-background-clip: text;
+        -webkit-text-fill-color: transparent;
+      }
+
+      * { margin: 0; padding: 0; box-sizing: border-box; }
+
+      html { scroll-behavior: smooth; }
+
+      body {
+        background: var(--bg-base);
+        background-image:
+          radial-gradient(circle at 20% 10%, rgba(108, 93, 211, 0.12) 0%, transparent 35%),
+          radial-gradient(circle at 80% 90%, rgba(0, 212, 255, 0.08) 0%, transparent 35%);
+        color: var(--text-primary);
+        font-family: var(--font-family);
+        min-height: 100vh;
+        line-height: 1.55;
+        /* Safety belt — nothing inside should be allowed to push the whole
+           document wider than the viewport (the summary table was doing
+           this on narrow screens, dragging the fixed navbar out of view
+           when the user scrolled horizontally). */
+        overflow-x: hidden;
+      }
+
+      /* Navbar — matches app/index.html so the brand identity is consistent
+         across the player and the compare page. Theme-toggle and dev-mode
+         chip from the main app are deliberately omitted (they require JS
+         hooks that don't apply here). */
+      .navbar {
+        position: fixed;
+        top: 0;
+        left: 0;
+        right: 0;
+        z-index: 100;
+        padding: 0 4%;
+        height: 64px;
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        background: var(--navbar-bg);
+        backdrop-filter: blur(20px) saturate(1.8);
+        -webkit-backdrop-filter: blur(20px) saturate(1.8);
+        border-bottom: 1px solid var(--navbar-border);
+        transition: background 0.3s ease, border-color 0.3s ease;
+      }
+      .navbar.scrolled {
+        background: var(--navbar-bg-scrolled);
+        border-bottom-color: var(--navbar-border-scrolled);
+      }
+      .nav-left {
+        display: flex;
+        align-items: center;
+        gap: 2rem;
+      }
+      .brand {
+        display: inline-flex;
+        align-items: center;
+        gap: 0.55rem;
+        text-decoration: none;
+        user-select: none;
+        transition: opacity 0.15s ease;
+      }
+      .brand:hover { opacity: 0.88; }
+      .brand-logo {
+        width: 28px;
+        height: 28px;
+        flex-shrink: 0;
+        filter: drop-shadow(0 2px 8px rgba(124, 108, 240, 0.35));
+      }
+      .brand-text {
+        font-size: 1.35rem;
+        font-weight: 800;
+        background: linear-gradient(135deg, #ffffff 0%, #c8c8e0 100%);
+        background-clip: text;
+        -webkit-background-clip: text;
+        -webkit-text-fill-color: transparent;
+        letter-spacing: -0.3px;
+        line-height: 1;
+      }
+      @media (max-width: 480px) {
+        .brand-text { font-size: 1.15rem; }
+        .brand-logo { width: 24px; height: 24px; }
+      }
+      .nav-links {
+        display: flex;
+        gap: 1.5rem;
+        list-style: none;
+      }
+      .nav-links a {
+        color: var(--text-secondary);
+        text-decoration: none;
+        font-size: 0.8125rem;
+        font-weight: 500;
+        letter-spacing: 0.2px;
+        transition: color 0.2s;
+      }
+      .nav-links a:hover,
+      .nav-links a.active { color: var(--text-primary); }
+      .nav-right {
+        display: flex;
+        align-items: center;
+        gap: 0.5rem;
+      }
+      .nav-icon-link {
+        color: var(--text-primary);
+        width: 36px;
+        height: 36px;
+        border-radius: 10px;
+        border: 1px solid transparent;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        text-decoration: none;
+        transition: background 0.2s, border-color 0.2s;
+      }
+      .nav-icon-link:hover {
+        background: var(--surface-soft);
+        border-color: var(--border);
+      }
+      .nav-icon-btn {
+        background: transparent;
+        border: 1px solid transparent;
+        color: var(--text-primary);
+        width: 36px;
+        height: 36px;
+        border-radius: 50%;
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        cursor: pointer;
+        padding: 0;
+        transition: background 0.2s, border-color 0.2s;
+      }
+      .nav-icon-btn:hover {
+        background: var(--surface-soft);
+        border-color: var(--border);
+      }
+      .nav-icon-btn svg { width: 18px; height: 18px; }
+
+      main {
+        max-width: 1400px;
+        margin: 0 auto;
+        padding: calc(64px + 3rem) 2rem 6rem; /* 64px = navbar height */
+      }
+
+      .hero {
+        text-align: center;
+        margin-bottom: 3rem;
+      }
+      .hero-eyebrow {
+        display: inline-block;
+        font-size: 0.78rem;
+        font-weight: 600;
+        letter-spacing: 0.08em;
+        text-transform: uppercase;
+        color: var(--primary-accent);
+        padding: 0.35rem 0.85rem;
+        border: 1px solid rgba(108, 93, 211, 0.3);
+        border-radius: 999px;
+        background: rgba(108, 93, 211, 0.08);
+        margin-bottom: 1.5rem;
+      }
+      .hero h1 {
+        font-size: clamp(1.8rem, 4vw, 2.8rem);
+        font-weight: 700;
+        letter-spacing: -0.02em;
+        line-height: 1.15;
+        margin-bottom: 1rem;
+      }
+      .hero h1 .accent {
+        background: linear-gradient(135deg, var(--primary-accent), var(--secondary-accent));
+        -webkit-background-clip: text;
+        background-clip: text;
+        -webkit-text-fill-color: transparent;
+      }
+      .hero p.sub {
+        color: var(--text-secondary);
+        font-size: 1.05rem;
+        max-width: 640px;
+        margin: 0 auto;
+      }
+
+      .picker-card {
+        background: var(--bg-panel);
+        border: 1px dashed var(--border);
+        border-radius: 16px;
+        padding: 2rem 1.5rem;
+        text-align: center;
+        margin-bottom: 2.5rem;
+        transition: border-color 0.2s, background 0.2s;
+        cursor: pointer;
+        display: block;
+      }
+      .picker-card:hover, .picker-card.drag-over {
+        border-color: var(--primary-accent);
+        background: rgba(108, 93, 211, 0.05);
+      }
+      .picker-card input[type=file] { display: none; }
+      .picker-label {
+        font-size: 1.05rem;
+        font-weight: 500;
+        color: var(--text-primary);
+      }
+      .picker-hint {
+        font-size: 0.88rem;
+        color: var(--text-muted);
+        margin-top: 0.4rem;
+      }
+      .picker-meta {
+        margin-top: 0.6rem;
+        font-family: var(--mono-family);
+        font-size: 0.82rem;
+        color: var(--text-secondary);
+        word-break: break-all;
+      }
+      .hdr-tip {
+        margin: 0 0 1rem;
+        padding: 0.7rem 0.9rem 0.7rem 1rem;
+        border: 1px solid color-mix(in srgb, var(--accent) 28%, transparent);
+        border-left: 3px solid var(--accent);
+        border-radius: 8px;
+        background: color-mix(in srgb, var(--accent) 7%, transparent);
+        font-size: 0.85rem;
+        color: var(--text-secondary);
+        display: flex;
+        align-items: center;
+        gap: 0.6rem 0.85rem;
+        line-height: 1.45;
+        animation: hdr-tip-in 240ms ease-out;
+      }
+      /* The `display: flex` rule above outranks the UA `[hidden] {
+         display: none }` rule (author CSS beats UA CSS at equal
+         specificity), so without this the `hidden` attribute does
+         nothing and the tip is always visible. */
+      .hdr-tip[hidden] {
+        display: none !important;
+      }
+      @keyframes hdr-tip-in {
+        from { opacity: 0; transform: translateY(-4px); }
+        to   { opacity: 1; transform: translateY(0); }
+      }
+      .hdr-tip-icon {
+        font-size: 1.05rem;
+        line-height: 1;
+        flex-shrink: 0;
+      }
+      .hdr-tip-text {
+        flex: 1;
+        min-width: 240px;
+      }
+      .hdr-tip strong {
+        color: var(--text-primary);
+        font-weight: 600;
+      }
+      .hdr-tip code {
+        font-family: var(--mono-family);
+        font-size: 0.78rem;
+        padding: 0.12rem 0.4rem;
+        border-radius: 4px;
+        background: color-mix(in srgb, var(--text-primary) 8%, transparent);
+        color: var(--text-primary);
+        word-break: break-all;
+      }
+      .hdr-tip button {
+        font: inherit;
+        font-size: 0.78rem;
+        padding: 0.3rem 0.7rem;
+        border-radius: 6px;
+        border: 1px solid color-mix(in srgb, var(--accent) 50%, transparent);
+        background: transparent;
+        color: var(--accent);
+        cursor: pointer;
+        flex-shrink: 0;
+        transition: background 120ms ease, color 120ms ease;
+      }
+      .hdr-tip button:hover {
+        background: color-mix(in srgb, var(--accent) 15%, transparent);
+      }
+      .hdr-tip button.copied {
+        color: var(--text-primary);
+        border-color: color-mix(in srgb, var(--text-primary) 30%, transparent);
+      }
+      .hdr-tip button#hdr-tip-dismiss {
+        padding: 0.15rem 0.5rem;
+        font-size: 1.1rem;
+        line-height: 1;
+        color: var(--text-muted);
+        border-color: transparent;
+      }
+      .hdr-tip button#hdr-tip-dismiss:hover {
+        background: color-mix(in srgb, var(--text-primary) 10%, transparent);
+        color: var(--text-primary);
+      }
+      @media (max-width: 600px) {
+        .hdr-tip {
+          flex-wrap: wrap;
+        }
+        .hdr-tip-text {
+          width: 100%;
+        }
+      }
+
+      .sync-bar {
+        display: flex;
+        align-items: center;
+        gap: 1rem;
+        margin-bottom: 1.25rem;
+        flex-wrap: wrap;
+      }
+      .sync-btn {
+        display: inline-flex;
+        align-items: center;
+        gap: 0.55rem;
+        padding: 0.6rem 1.1rem;
+        border-radius: 10px;
+        font-weight: 600;
+        font-size: 0.9rem;
+        color: #fff;
+        background: linear-gradient(135deg, var(--primary-accent), #4a3bba);
+        border: 1px solid rgba(255, 255, 255, 0.08);
+        box-shadow: 0 6px 14px rgba(108, 93, 211, 0.28);
+        cursor: pointer;
+        transition: transform 0.15s ease, box-shadow 0.15s ease, opacity 0.15s ease;
+        font-family: inherit;
+      }
+      .sync-btn:hover { transform: translateY(-1px); box-shadow: 0 10px 20px rgba(108, 93, 211, 0.38); }
+      .sync-btn:active { transform: translateY(0); }
+      .sync-btn:disabled { opacity: 0.55; cursor: not-allowed; transform: none; box-shadow: none; }
+      .sync-btn svg { width: 16px; height: 16px; flex-shrink: 0; }
+      /* Brief "Synced ✓" pulse so the click registers visually even
+         when both players were already in step. */
+      .sync-btn.synced {
+        background: linear-gradient(135deg, var(--success), #34a35b);
+        box-shadow: 0 6px 14px rgba(74, 222, 128, 0.28);
+      }
+      /* When the toggle is engaged the button stays in the "synced"
+         palette and shows a tiny pulsing dot so the user can tell at
+         a glance that the native pane is mirroring MoviPlayer. */
+      .sync-btn.active {
+        background: linear-gradient(135deg, var(--success), #34a35b);
+        box-shadow: 0 6px 14px rgba(74, 222, 128, 0.28);
+      }
+      .sync-btn .sync-dot {
+        width: 8px;
+        height: 8px;
+        border-radius: 50%;
+        background: rgba(255, 255, 255, 0.85);
+        display: none;
+        animation: sync-pulse 1.4s ease-in-out infinite;
+      }
+      .sync-btn.active .sync-dot { display: inline-block; }
+      @keyframes sync-pulse {
+        0%, 100% { opacity: 0.5; transform: scale(0.85); }
+        50%      { opacity: 1;   transform: scale(1.15); }
+      }
+      .sync-hint {
+        font-size: 0.82rem;
+        color: var(--text-muted);
+        line-height: 1.4;
+      }
+
+      .panes {
+        display: grid;
+        grid-template-columns: 1fr 1fr;
+        gap: 1.25rem;
+        margin-bottom: 2.5rem;
+      }
+      @media (max-width: 900px) {
+        .panes { grid-template-columns: 1fr; }
+      }
+
+      .pane {
+        background: var(--bg-panel);
+        border: 1px solid var(--border);
+        border-radius: 14px;
+        overflow: hidden;
+        display: flex;
+        flex-direction: column;
+      }
+      .pane-header {
+        padding: 0.9rem 1.1rem;
+        border-bottom: 1px solid var(--border);
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+      }
+      .pane-title {
+        font-weight: 600;
+        font-size: 0.95rem;
+      }
+      .pane-title .badge {
+        display: inline-block;
+        font-size: 0.7rem;
+        font-weight: 600;
+        padding: 0.15rem 0.5rem;
+        border-radius: 4px;
+        margin-left: 0.5rem;
+        vertical-align: middle;
+      }
+      .pane-title .badge.native { background: rgba(248, 113, 113, 0.12); color: var(--fail); }
+      .pane-title .badge.movi   { background: rgba(74, 222, 128, 0.12); color: var(--success); }
+      .pane-stage {
+        position: relative;
+        aspect-ratio: 16 / 9;
+        background: #000;
+      }
+      /* Pin the player's chrome to its dark colour palette regardless of
+         the page theme — same override app/index.html applies. The
+         player's built-in light theme makes the title text near-black,
+         which then vanishes against the title bar's dark gradient. */
+      .pane-stage movi-player {
+        --movi-controls-color: #ffffff;
+        --movi-controls-bg: rgba(0, 0, 0, 0.85);
+        --movi-slider-track: rgba(255, 255, 255, 0.15);
+      }
+      .pane-stage video,
+      .pane-stage movi-player {
+        position: absolute;
+        inset: 0;
+        width: 100%;
+        height: 100%;
+        display: block;
+      }
+      .pane-fallback {
+        position: absolute;
+        inset: 0;
+        flex-direction: column;
+        align-items: center;
+        justify-content: center;
+        padding: 1.5rem;
+        text-align: center;
+        color: var(--text-secondary);
+        font-size: 0.92rem;
+        background: var(--fallback-bg);
+      }
+      .pane-fallback:not([hidden]) { display: flex; }
+      .pane-fallback strong {
+        color: var(--text-primary);
+        font-size: 1rem;
+        margin-bottom: 0.5rem;
+        display: block;
+      }
+      .pane-fallback.error strong { color: var(--fail); }
+
+      .pane-tracks {
+        padding: 1rem 1.1rem;
+        font-size: 0.88rem;
+        color: var(--text-secondary);
+      }
+      .pane-tracks .track-row {
+        display: flex;
+        justify-content: space-between;
+        padding: 0.4rem 0;
+        border-bottom: 1px solid var(--row-divider);
+      }
+      .pane-tracks .track-row:last-child { border-bottom: none; }
+      .pane-tracks .track-label { color: var(--text-secondary); }
+      .pane-tracks .track-value {
+        font-family: var(--mono-family);
+        font-weight: 600;
+        color: var(--text-primary);
+      }
+      .pane-tracks .track-value.ok    { color: var(--success); }
+      .pane-tracks .track-value.miss  { color: var(--fail); }
+
+      .summary {
+        background: var(--bg-elevated);
+        border: 1px solid var(--border);
+        border-radius: 14px;
+        padding: 1.5rem;
+        margin-bottom: 2.5rem;
+        /* Contain table overflow within the card on narrow screens
+           instead of letting it widen the whole document. */
+        overflow-x: auto;
+        -webkit-overflow-scrolling: touch;
+      }
+      .summary h2 {
+        font-size: 1.05rem;
+        margin-bottom: 1rem;
+        font-weight: 600;
+      }
+      .summary table {
+        width: 100%;
+        border-collapse: collapse;
+        font-size: 0.92rem;
+      }
+      .summary th, .summary td {
+        text-align: left;
+        padding: 0.7rem 0.75rem;
+        border-bottom: 1px solid var(--row-divider);
+      }
+      .summary th {
+        font-weight: 600;
+        color: var(--text-secondary);
+        font-size: 0.82rem;
+        text-transform: uppercase;
+        letter-spacing: 0.04em;
+      }
+      .summary td.feature { color: var(--text-primary); font-weight: 500; }
+      .summary td.cell-native, .summary td.cell-movi {
+        font-family: var(--mono-family);
+        text-align: center;
+      }
+      .summary .yes { color: var(--success); }
+      .summary .no  { color: var(--fail); }
+
+      .footer-cta {
+        text-align: center;
+        padding: 2rem 1rem;
+      }
+      .footer-cta p {
+        color: var(--text-secondary);
+        margin-bottom: 1.25rem;
+      }
+      .btn {
+        display: inline-block;
+        padding: 0.85rem 1.5rem;
+        border-radius: 10px;
+        text-decoration: none;
+        font-weight: 600;
+        font-size: 0.95rem;
+        transition: transform 0.15s, box-shadow 0.15s;
+        margin: 0 0.3rem;
+      }
+      .btn-primary {
+        background: linear-gradient(135deg, var(--primary-accent), #4a3bba);
+        color: #fff;
+        box-shadow: 0 8px 16px rgba(108, 93, 211, 0.3);
+      }
+      .btn-primary:hover { transform: translateY(-1px); box-shadow: 0 12px 22px rgba(108, 93, 211, 0.42); }
+      .btn-secondary {
+        background: var(--surface-soft);
+        color: var(--text-primary);
+        border: 1px solid var(--border);
+      }
+      .btn-secondary:hover { background: var(--surface-soft-hover); }
+
+      code, kbd {
+        font-family: var(--mono-family);
+        font-size: 0.88em;
+        background: var(--surface-soft);
+        padding: 0.1em 0.4em;
+        border-radius: 4px;
+      }
+
+      .browser-note {
+        font-size: 0.82rem;
+        color: var(--text-muted);
+        text-align: center;
+        margin-top: 1rem;
+      }
+
+      /* Mobile tightening — at narrow widths the 2rem main padding plus
+         the 1.5rem summary padding stacked with a 4-column table was
+         overflowing the viewport. Trim everything and let the table
+         shrink with shorter cell padding / smaller type. */
+      @media (max-width: 760px) {
+        main { padding: calc(64px + 2rem) 1rem 4rem; }
+        .navbar { padding: 0 0.75rem; }
+        .nav-left { gap: 0.85rem; }
+        .nav-links { gap: 0.9rem; }
+        .nav-right { gap: 0.25rem; }
+        .nav-icon-link, .nav-icon-btn { width: 32px; height: 32px; }
+        .nav-icon-btn svg, .nav-icon-link svg { width: 16px; height: 16px; }
+        .picker-card { padding: 1.5rem 1rem; }
+        .summary { padding: 1rem; }
+        .summary h2 { font-size: 0.98rem; }
+        .summary table { font-size: 0.78rem; }
+        .summary th, .summary td { padding: 0.55rem 0.4rem; }
+        .summary th { font-size: 0.7rem; }
+        .footer-cta { padding: 1.5rem 0.5rem; }
+        .btn { padding: 0.7rem 1.1rem; font-size: 0.9rem; margin: 0.25rem 0.15rem; }
+      }
+      /* Below 560px the three nav links collide with the brand + icons.
+         Drop them first; brand + theme/chrome/github icons still fit. */
+      @media (max-width: 560px) {
+        .nav-links { display: none; }
+      }
+    </style>
+  </head>
+  <body>
+    <nav class="navbar" id="navbar">
+      <div class="nav-left">
+        <a href="/" class="brand" aria-label="MoviPlayer — home">
+          <svg class="brand-logo" viewBox="0 0 100 100" aria-hidden="true">
+            <defs>
+              <linearGradient id="brand-logo-grad" x1="0%" y1="0%" x2="100%" y2="100%">
+                <stop offset="0%" stop-color="#8a7cf2"/>
+                <stop offset="100%" stop-color="#6c5dd3"/>
+              </linearGradient>
+            </defs>
+            <circle cx="50" cy="50" r="46" fill="url(#brand-logo-grad)"/>
+            <polygon points="40,29 40,71 73,50" fill="#ffffff"/>
+          </svg>
+          <span class="brand-text">MoviPlayer</span>
+        </a>
+        <ul class="nav-links">
+          <li><a href="/">Player</a></li>
+          <li><a href="/compare" class="active">Compare</a></li>
+          <li><a href="https://mrujjwalg.github.io/movi-player/" target="_blank" rel="noopener">Docs</a></li>
+        </ul>
+      </div>
+      <div class="nav-right">
+        <button id="theme-toggle" class="nav-icon-btn" aria-label="Switch Theme" type="button"></button>
+        <a href="https://chromewebstore.google.com/detail/movi-player/ckleeigcopjnpehkjokijokjegknfgej" target="_blank" rel="noopener" class="nav-icon-link" aria-label="Chrome Extension" title="Get Chrome Extension">
+          <svg width="18" height="18" viewBox="0 0 512 512" fill="currentColor"><path d="M188.8,255.93A67.2,67.2,0,1,0,256,188.75,67.38,67.38,0,0,0,188.8,255.93Z"/><path d="M476.75,217.79s0,0,0,.05a206.63,206.63,0,0,0-7-28.84h-.11a202.16,202.16,0,0,1,7.07,29h0a203.5,203.5,0,0,0-7.07-29H314.24c19.05,17,31.36,40.17,31.36,67.05a86.55,86.55,0,0,1-12.31,44.73L231,478.45a2.44,2.44,0,0,1,0,.27V479h0v-.26A224,224,0,0,0,256,480c6.84,0,13.61-.39,20.3-1a222.91,222.91,0,0,0,29.78-4.74C405.68,451.52,480,362.4,480,255.94A225.25,225.25,0,0,0,476.75,217.79Z"/><path d="M256,345.5c-33.6,0-61.6-17.91-77.29-44.79L76,123.05l-.14-.24A224,224,0,0,0,207.4,474.55l0-.05,77.69-134.6A84.13,84.13,0,0,1,256,345.5Z"/><path d="M91.29,104.57l77.35,133.25A89.19,89.19,0,0,1,256,166H461.17a246.51,246.51,0,0,0-25.78-43.94l.12.08A245.26,245.26,0,0,1,461.17,166h.17a245.91,245.91,0,0,0-25.66-44,2.63,2.63,0,0,1-.35-.26A223.93,223.93,0,0,0,91.14,104.34l.14.24Z"/></svg>
+        </a>
+        <a href="https://github.com/mrujjwalg/movi-player" target="_blank" rel="noopener" class="nav-icon-link" aria-label="GitHub" title="View on GitHub">
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor"><path d="M12 0C5.37 0 0 5.37 0 12c0 5.31 3.435 9.795 8.205 11.385.6.105.825-.255.825-.57 0-.285-.015-1.23-.015-2.235-3.015.555-3.795-.735-4.035-1.41-.135-.345-.72-1.41-1.23-1.695-.42-.225-1.02-.78-.015-.795.945-.015 1.62.87 1.845 1.23 1.08 1.815 2.805 1.305 3.495.99.105-.78.42-1.305.765-1.605-2.67-.3-5.46-1.335-5.46-5.925 0-1.305.465-2.385 1.23-3.225-.12-.3-.54-1.53.12-3.18 0 0 1.005-.315 3.3 1.23.96-.27 1.98-.405 3-.405s2.04.135 3 .405c2.295-1.56 3.3-1.23 3.3-1.23.66 1.65.24 2.88.12 3.18.765.84 1.23 1.905 1.23 3.225 0 4.605-2.805 5.625-5.475 5.925.435.375.81 1.095.81 2.22 0 1.605-.015 2.895-.015 3.3 0 .315.225.69.825.57A12.02 12.02 0 0024 12c0-6.63-5.37-12-12-12z"/></svg>
+        </a>
+      </div>
+    </nav>
+
+    <main>
+      <section class="hero">
+        <span class="hero-eyebrow">Side-by-side comparison</span>
+        <h1>Your browser only plays the <span class="accent">surface</span> of an MKV.</h1>
+        <p class="sub">Drop an MKV with multiple audio tracks, embedded subtitles, or chapters. See exactly what the native <code>&lt;video&gt;</code> tag silently ignores — and what <code>&lt;movi-player&gt;</code> surfaces from the same bytes.</p>
+      </section>
+
+      <label class="picker-card" id="picker">
+        <input type="file" id="file-input" accept="video/*,.mkv,.ts,.mov,.m4v,.webm" />
+        <div class="picker-label">Drop your own video file or click to pick</div>
+        <div class="picker-hint">MKV / HEVC / AV1 / HDR / multi-audio / subs — anything your &lt;video&gt; tag normally chokes on. The file never leaves your device. By default we load Sintel (Blender open movie, ~1.1 GB) so you have something to look at immediately.</div>
+        <div class="picker-meta" id="picker-meta" hidden></div>
+      </label>
+
+      <div class="sync-bar">
+        <button id="sync-btn" type="button" class="sync-btn" aria-pressed="false" aria-label="Toggle continuous sync between the native and MoviPlayer panes">
+          <span class="sync-dot" aria-hidden="true"></span>
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+            <polyline points="23 4 23 10 17 10"/>
+            <polyline points="1 20 1 14 7 14"/>
+            <path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"/>
+          </svg>
+          <span class="sync-label">Sync playback</span>
+        </button>
+        <span class="sync-hint">Mirrors MoviPlayer's play / pause / seek to the native &lt;video&gt; so both panes stay locked on the same frame. Click again to release.</span>
+      </div>
+
+      <div class="hdr-tip" id="hdr-tip" hidden role="status" aria-live="polite">
+        <span class="hdr-tip-icon" aria-hidden="true">⚡</span>
+        <span class="hdr-tip-text">
+          <strong>HDR source detected.</strong>
+          Enable <code>chrome://flags/#enable-experimental-web-platform-features</code> and restart Chrome for full peak brightness. Right now it's rendering in wide-gamut SDR (~100 nits).
+        </span>
+        <button type="button" id="hdr-tip-copy">Copy flag URL</button>
+        <button type="button" id="hdr-tip-dismiss" aria-label="Dismiss">×</button>
+      </div>
+
+      <section class="panes" aria-label="Side-by-side players">
+        <div class="pane" id="pane-native">
+          <div class="pane-header">
+            <div class="pane-title">Native &lt;video&gt; <span class="badge native">Built into your browser</span></div>
+          </div>
+          <div class="pane-stage">
+            <video id="native-video" controls playsinline muted autoplay></video>
+            <div class="pane-fallback" id="native-fallback" hidden></div>
+          </div>
+          <div class="pane-tracks" id="native-tracks">
+            <div class="track-row"><span class="track-label">Container plays</span><span class="track-value" id="native-plays">—</span></div>
+            <div class="track-row"><span class="track-label">Video codec</span><span class="track-value" id="native-codec">—</span></div>
+            <div class="track-row"><span class="track-label">Audio codec</span><span class="track-value" id="native-acodec">—</span></div>
+            <div class="track-row"><span class="track-label">Audio tracks exposed</span><span class="track-value" id="native-audio">—</span></div>
+            <div class="track-row"><span class="track-label">Subtitle tracks exposed</span><span class="track-value" id="native-subs">—</span></div>
+            <div class="track-row"><span class="track-label">Chapters exposed</span><span class="track-value" id="native-chapters">—</span></div>
+          </div>
+        </div>
+
+        <div class="pane" id="pane-movi">
+          <div class="pane-header">
+            <div class="pane-title">&lt;movi-player&gt; <span class="badge movi">Same file, same browser</span></div>
+          </div>
+          <div class="pane-stage">
+            <movi-player id="movi-player" controls playsinline muted autoplay objectfit="contain" thumb fastseek showtitle stablevolume gesturefs></movi-player>
+            <div class="pane-fallback" id="movi-fallback" hidden></div>
+          </div>
+          <div class="pane-tracks" id="movi-tracks">
+            <div class="track-row"><span class="track-label">Container plays</span><span class="track-value" id="movi-plays">—</span></div>
+            <div class="track-row"><span class="track-label">Video codec</span><span class="track-value" id="movi-codec">—</span></div>
+            <div class="track-row"><span class="track-label">Audio codec</span><span class="track-value" id="movi-acodec">—</span></div>
+            <div class="track-row"><span class="track-label">Audio tracks exposed</span><span class="track-value" id="movi-audio">—</span></div>
+            <div class="track-row"><span class="track-label">Subtitle tracks exposed</span><span class="track-value" id="movi-subs">—</span></div>
+            <div class="track-row"><span class="track-label">Chapters exposed</span><span class="track-value" id="movi-chapters">—</span></div>
+          </div>
+        </div>
+      </section>
+
+      <section class="summary" id="summary" hidden>
+        <h2>What the file actually contains</h2>
+        <table>
+          <thead>
+            <tr>
+              <th>Feature</th>
+              <th style="text-align:center">In the file</th>
+              <th style="text-align:center">&lt;video&gt; gives you</th>
+              <th style="text-align:center">&lt;movi-player&gt; gives you</th>
+            </tr>
+          </thead>
+          <tbody id="summary-body"></tbody>
+        </table>
+        <p class="browser-note">Probed using MoviPlayer's WASM demuxer in the browser. The bytes never left your device.</p>
+      </section>
+
+      <section class="footer-cta">
+        <p>Want this in your own site? <code>npm install movi-player</code> and drop a <code>&lt;movi-player&gt;</code> tag.</p>
+        <a class="btn btn-primary" href="https://mrujjwalg.github.io/movi-player/" target="_blank" rel="noopener">Read the docs</a>
+        <a class="btn btn-secondary" href="https://github.com/mrujjwalg/movi-player" target="_blank" rel="noopener">View on GitHub</a>
+      </section>
+    </main>
+
+    <script type="module">
+      import "/dist/__BUILD_VERSION__/element.js";
+
+      const DEFAULT_SAMPLE = {
+        url: "/samples/sintel-2010-1080p.mkv",
+        label: "Sintel.2010.1080p.mkv (Blender open movie · CC-BY)",
+      };
+
+      const $ = (id) => document.getElementById(id);
+      const picker        = $("picker");
+      const fileInput     = $("file-input");
+      const pickerMeta    = $("picker-meta");
+      const hdrTip        = $("hdr-tip");
+      const hdrTipCopy    = $("hdr-tip-copy");
+      const hdrTipDismiss = $("hdr-tip-dismiss");
+
+      // Match MoviPlayer's own Chromium detection so we agree with it:
+      // see CanvasRenderer.ts and MoviElement.ts — both use the bare
+      // `!!window.chrome` test to gate the rec2100-pq HDR path. Anything
+      // fancier would risk showing the tip in a browser the player itself
+      // won't even attempt HDR rendering on.
+      const FLAG_URL = "chrome://flags/#enable-experimental-web-platform-features";
+      const TIP_DISMISS_KEY = "movi:hdr-tip-dismissed";
+      const isChromium = !!window.chrome;
+
+      // Once we know it's Chromium, probe whether the HDR canvas flag is
+      // already on — if it is, the user doesn't need the tip. This probe
+      // is only meaningful on Chromium (Safari/Firefox return undefined
+      // for drawingBufferColorSpace or silently ignore unknown values),
+      // so we gate it behind isChromium first.
+      function detectHdrFlagEnabled() {
+        if (!isChromium) return false;
+        try {
+          const c = document.createElement("canvas");
+          const gl = c.getContext("webgl2");
+          if (!gl || gl.drawingBufferColorSpace === undefined) return false;
+          gl.drawingBufferColorSpace = "rec2100-pq";
+          return gl.drawingBufferColorSpace === "rec2100-pq";
+        } catch {
+          return false;
+        }
+      }
+      function isTipDismissed() {
+        try { return localStorage.getItem(TIP_DISMISS_KEY) === "1"; } catch { return false; }
+      }
+      // Evaluate the gate on every source change rather than once at page
+      // load. The user can dismiss the tip, load a different file, or
+      // toggle the flag mid-session — each of those should be reflected
+      // without a full reload.
+      // Note: we intentionally don't gate on detectHdrFlagEnabled() any
+      // more. Flag-on users still benefit from a confirmation that HDR
+      // is fully active; flag-off users get the upgrade instruction. The
+      // tip text below adapts to which case applies.
+      function shouldShowHdrTip() {
+        return isChromium && !isTipDismissed();
+      }
+
+      const hdrTipText = hdrTip ? hdrTip.querySelector(".hdr-tip-text") : null;
+      function setHdrTipMessage(flagEnabled) {
+        if (!hdrTipText) return;
+        // Construct via DOM nodes (no innerHTML) to avoid any XSS risk
+        // even though the content is static.
+        hdrTipText.replaceChildren();
+        const strong = document.createElement("strong");
+        if (flagEnabled) {
+          strong.textContent = "HDR active.";
+          hdrTipText.append(
+            strong,
+            " Rendering with rec2100-pq — full peak brightness unlocked via the experimental web platform features flag.",
+          );
+        } else {
+          strong.textContent = "HDR source detected.";
+          const code = document.createElement("code");
+          code.textContent = "chrome://flags/#enable-experimental-web-platform-features";
+          hdrTipText.append(
+            strong,
+            " Enable ",
+            code,
+            " and restart Chrome for full peak brightness. Right now it's rendering in wide-gamut SDR (~100 nits).",
+          );
+        }
+      }
+
+      function showHdrTip() {
+        if (!hdrTip) return;
+        const flagEnabled = detectHdrFlagEnabled();
+        const allow = shouldShowHdrTip();
+        console.info("[hdr-tip] evaluate:", { isChromium, flagEnabled, dismissed: isTipDismissed(), allow });
+        if (!allow) return;
+        setHdrTipMessage(flagEnabled);
+        // Copy button only matters when the user still needs to act on
+        // the flag — hide it in the confirmation state.
+        if (hdrTipCopy) hdrTipCopy.style.display = flagEnabled ? "none" : "";
+        hdrTip.hidden = false;
+      }
+      function hideHdrTip(persist) {
+        if (!hdrTip) return;
+        hdrTip.hidden = true;
+        if (persist) {
+          try { localStorage.setItem(TIP_DISMISS_KEY, "1"); } catch {}
+        }
+      }
+
+      if (hdrTipCopy) {
+        hdrTipCopy.addEventListener("click", async (e) => {
+          e.preventDefault();
+          e.stopPropagation();
+          try {
+            await navigator.clipboard.writeText(FLAG_URL);
+            const original = hdrTipCopy.textContent;
+            hdrTipCopy.textContent = "Copied — paste in address bar";
+            hdrTipCopy.classList.add("copied");
+            setTimeout(() => {
+              hdrTipCopy.textContent = original;
+              hdrTipCopy.classList.remove("copied");
+            }, 2200);
+          } catch {
+            hdrTipCopy.textContent = "Copy failed";
+          }
+        });
+      }
+      if (hdrTipDismiss) {
+        hdrTipDismiss.addEventListener("click", (e) => {
+          e.preventDefault();
+          e.stopPropagation();
+          hideHdrTip(true);
+        });
+      }
+      const nativeVideo   = $("native-video");
+      const moviPlayer    = $("movi-player");
+      const nativeFallback = $("native-fallback");
+      const moviFallback   = $("movi-fallback");
+      const summary       = $("summary");
+      let summaryBody     = $("summary-body");
+
+      // Safe DOM element creation — never use innerHTML with values that
+      // came from a file (codec strings, language tags etc. could in
+      // principle smuggle markup from a hostile file).
+      function el(tag, attrs = {}, children = []) {
+        const node = document.createElement(tag);
+        for (const [k, v] of Object.entries(attrs)) {
+          if (k === "class") node.className = v;
+          else if (k === "style") node.setAttribute("style", v);
+          else node.setAttribute(k, v);
+        }
+        for (const c of children) {
+          if (c == null) continue;
+          node.appendChild(typeof c === "string" ? document.createTextNode(c) : c);
+        }
+        return node;
+      }
+
+      // Tiny helpers to set a value cell + its ok/miss color in one go.
+      function setVal(id, text, kind) {
+        const node = $(id);
+        if (!node) return;
+        node.textContent = text;
+        node.className = "track-value" + (kind ? " " + kind : "");
+      }
+
+      // Codecs that browsers' native <video> + WebCodecs cannot reliably
+      // decode — for these the native pane will be silent even if the
+      // container plays. movi-player falls back to its WASM software
+      // decoder (FFmpeg in WASM) and handles them all.
+      const NATIVE_RISKY_AUDIO = /^(dts|truehd|eac3|ac3|flac|alac|wma|amr|mp2|pcm)/i;
+
+      function setNativeCounts(stats, hadVideo) {
+        // stats: { codec, audioCodec, audio:{exposed,total},
+        //         subs:{exposed,total}, chapters:{exposed,total} }
+        if (!hadVideo) {
+          setVal("native-plays",    "rejected",      "miss");
+          setVal("native-codec",    stats.codec || "—");
+          setVal("native-acodec",   stats.audioCodec || "—");
+          setVal("native-audio",    "—");
+          setVal("native-subs",     "—");
+          setVal("native-chapters", "—");
+          return;
+        }
+        setVal("native-plays", "yes (default track)", "ok");
+        setVal("native-codec", stats.codec ? `${stats.codec} (decoded)` : "decoded", "ok");
+
+        if (stats.audioCodec) {
+          const risky = NATIVE_RISKY_AUDIO.test(stats.audioCodec);
+          setVal("native-acodec",
+            risky ? `${stats.audioCodec} (often silent in MKV)` : `${stats.audioCodec} (decoded)`,
+            risky ? "miss" : "ok");
+        } else {
+          setVal("native-acodec", "no audio");
+        }
+
+        const a = stats.audio, s = stats.subs, c = stats.chapters;
+        setVal("native-audio",    `${a.exposed} of ${a.total}`,
+          a.total > 0 ? (a.exposed >= a.total ? "ok" : "miss") : "");
+        setVal("native-subs",     `${s.exposed} of ${s.total}`,
+          s.total > 0 ? (s.exposed >= s.total ? "ok" : "miss") : "");
+        setVal("native-chapters", `${c.exposed} of ${c.total}`,
+          c.total > 0 ? (c.exposed >= c.total ? "ok" : "miss") : "");
+      }
+
+      function setMoviCounts(stats) {
+        setVal("movi-plays", "yes (full)", "ok");
+        setVal("movi-codec", stats.codec ? `${stats.codec} (decoded)` : "decoded", "ok");
+        setVal("movi-acodec",
+          stats.audioCodec ? `${stats.audioCodec} (decoded)` : "no audio",
+          stats.audioCodec ? "ok" : "");
+        setVal("movi-audio",    `${stats.audio.total} of ${stats.audio.total}`,    stats.audio.total > 0 ? "ok" : "");
+        setVal("movi-subs",     `${stats.subs.total} of ${stats.subs.total}`,     stats.subs.total > 0 ? "ok" : "");
+        setVal("movi-chapters", `${stats.chapters.total} of ${stats.chapters.total}`, stats.chapters.total > 0 ? "ok" : "");
+      }
+
+      function setFallback(node, isError, titleText, bodyText) {
+        node.hidden = false;
+        node.classList.toggle("error", !!isError);
+        node.replaceChildren(
+          el("strong", {}, [titleText]),
+          document.createTextNode(bodyText),
+        );
+      }
+
+      function renderSummary(info, chapters, nativeOk, nativeAudioExposed, nativeSubsExposed) {
+        const videoTrack = (info.tracks || []).find((t) => t.type === "video");
+        const audioTracks = (info.tracks || []).filter((t) => t.type === "audio");
+        const subTracks   = (info.tracks || []).filter((t) => t.type === "subtitle");
+
+        const codecDesc = videoTrack
+          ? [videoTrack.codec || "?", `${videoTrack.width || ""}×${videoTrack.height || ""}`.trim() === "×" ? "" : `${videoTrack.width}×${videoTrack.height}`]
+              .filter(Boolean).join(" ")
+          : "—";
+
+        const rows = [
+          {
+            label: "Container plays at all",
+            real: "—",
+            nativeOk,
+            moviOk: true,
+            nativeText: nativeOk ? "yes (default track only)" : "no — rejected",
+            moviText: "yes (full)",
+          },
+          {
+            label: "Video codec",
+            real: codecDesc,
+            nativeOk,
+            moviOk: true,
+            nativeText: nativeOk ? "decoded" : "—",
+            moviText: "decoded",
+          },
+          {
+            label: "Audio tracks",
+            real: String(audioTracks.length),
+            nativeOk: nativeAudioExposed === audioTracks.length,
+            moviOk: true,
+            nativeText: audioTracks.length === 0
+              ? "none in file"
+              : `${nativeAudioExposed} of ${audioTracks.length} exposed`,
+            moviText: `${audioTracks.length} of ${audioTracks.length} switchable`,
+          },
+          {
+            label: "Subtitle tracks (embedded)",
+            real: String(subTracks.length),
+            nativeOk: nativeSubsExposed === subTracks.length,
+            moviOk: true,
+            nativeText: subTracks.length === 0
+              ? "none in file"
+              : `${nativeSubsExposed} of ${subTracks.length} exposed`,
+            moviText: `${subTracks.length} of ${subTracks.length} rendered`,
+          },
+          {
+            label: "Chapters",
+            real: String(chapters.length),
+            nativeOk: chapters.length === 0,
+            moviOk: true,
+            nativeText: chapters.length === 0
+              ? "none in file"
+              : `0 of ${chapters.length} exposed`,
+            moviText: `${chapters.length} of ${chapters.length} on scrubber`,
+          },
+        ];
+
+        const newBody = document.createElement("tbody");
+        newBody.id = "summary-body";
+        for (const r of rows) {
+          newBody.appendChild(el("tr", {}, [
+            el("td", { class: "feature" }, [r.label]),
+            el("td", { class: "cell-native", style: "color: var(--text-secondary)" }, [r.real]),
+            el("td", { class: "cell-native" }, [
+              el("span", { class: r.nativeOk ? "yes" : "no" }, [r.nativeOk ? "✓ " : "✗ "]),
+              r.nativeText,
+            ]),
+            el("td", { class: "cell-movi" }, [
+              el("span", { class: r.moviOk ? "yes" : "no" }, [r.moviOk ? "✓ " : "✗ "]),
+              r.moviText,
+            ]),
+          ]));
+        }
+        summaryBody.replaceWith(newBody);
+        // refresh module-scoped reference for next render
+        summaryBody = newBody;
+        summary.hidden = false;
+      }
+
+      // Wait until the movi-player element has parsed the source and its
+      // track lists are populated. No separate Demuxer / HttpSource — the
+      // player has already done that work, asking it twice would re-download
+      // the file and run the WASM module a second time. We race trackschange
+      // against a hard timeout because some sources never emit it.
+      function waitForPlayerMetadata(timeoutMs = 15000) {
+        return new Promise((resolve) => {
+          let done = false;
+          const settle = (result) => {
+            if (done) return;
+            done = true;
+            moviPlayer.removeEventListener("trackschange", onTracks);
+            moviPlayer.removeEventListener("loadeddata", onLoaded);
+            moviPlayer.removeEventListener("error", onErr);
+            resolve(result);
+          };
+          const onTracks = () => settle({ ok: true });
+          const onLoaded = () => {
+            // loadeddata fires after tracks are known; pull immediately.
+            settle({ ok: true });
+          };
+          const onErr = (e) => settle({ ok: false, error: e?.detail || new Error("player error") });
+          moviPlayer.addEventListener("trackschange", onTracks);
+          moviPlayer.addEventListener("loadeddata", onLoaded);
+          moviPlayer.addEventListener("error", onErr);
+          setTimeout(() => settle({ ok: false, error: new Error(`metadata timeout after ${timeoutMs}ms`) }), timeoutMs);
+        });
+      }
+
+      function readMoviStats() {
+        const p = moviPlayer.player;
+        if (!p) return null;
+        const info  = typeof p.getMediaInfo === "function" ? p.getMediaInfo() : null;
+        const audio = typeof p.getAudioTracks === "function" ? p.getAudioTracks() : [];
+        const subs  = typeof p.getSubtitleTracks === "function" ? p.getSubtitleTracks() : [];
+        const chaps = typeof p.getChapters === "function" ? p.getChapters() : [];
+        return { info, audio, subs, chapters: chaps };
+      }
+
+      function nativeExposureCounts() {
+        const audioCount = nativeVideo.audioTracks ? nativeVideo.audioTracks.length : 1;
+        const textCount = nativeVideo.textTracks ? nativeVideo.textTracks.length : 0;
+        return { audioCount, textCount };
+      }
+
+      // Accepts either a File (from picker/drop) or a `{ url, label }`
+      // descriptor (default sample / future "try another file" buttons).
+      async function loadSource(src) {
+        const isFile = src instanceof File;
+        const isUrl  = !isFile && typeof src === "object" && typeof src.url === "string";
+        if (!isFile && !isUrl) return;
+
+        pickerMeta.hidden = false;
+        pickerMeta.textContent = isFile
+          ? `${src.name} · ${(src.size / (1024 * 1024)).toFixed(1)} MB · ${src.type || "unknown type"}`
+          : src.label;
+
+        const nativeSrc = isFile ? URL.createObjectURL(src) : src.url;
+        const moviSrc   = isFile ? src : src.url;
+
+        nativeFallback.hidden = true;
+        moviFallback.hidden = true;
+
+        nativeVideo.src = nativeSrc;
+        nativeVideo.load();
+        // Race loadedmetadata / error / timeout. We don't trust the default
+        // value of nativeOk — Safari rejects MKV silently (no error event,
+        // no loadedmetadata), so the timeout would resolve with the default
+        // unchanged. Decide nativeOk authoritatively AFTER the race using
+        // the real element state (videoWidth + .error) below.
+        const nativeLoadOnce = new Promise((res) => {
+          nativeVideo.addEventListener("loadedmetadata", () => res(), { once: true });
+          nativeVideo.addEventListener("error", () => res(), { once: true });
+          setTimeout(res, 5000);
+        });
+
+        moviPlayer.src = moviSrc;
+
+        // Use the player's own demux/track parsing instead of spinning up a
+        // second Demuxer. The player will fire trackschange / loadeddata
+        // once its source is open; we then pull tracks via its public API.
+        const moviResult = await waitForPlayerMetadata();
+        if (!moviResult.ok) {
+          setFallback(
+            moviFallback,
+            true,
+            "Couldn't load the sample",
+            isUrl
+              ? `Fetching ${src.url} failed (${moviResult.error?.message || moviResult.error}). On localhost the sample is only served when running through wrangler / deployed; via vite dev pick a file from disk instead.`
+              : `Player error: ${moviResult.error?.message || moviResult.error}`,
+          );
+        }
+        const probe = readMoviStats() || { info: { tracks: [] }, audio: [], subs: [], chapters: [] };
+
+        // Auto-pick an English subtitle so visitors see subs rendering
+        // immediately — the whole point of the demo. Tracks may arrive
+        // before the subtitle decoder is fully wired, so we re-read tracks
+        // and retry once after a short delay if the first selection didn't
+        // stick. Match leniently against language / lang / label / title /
+        // name fields — different containers tag them differently.
+        const isEnglish = (t) => {
+          const fields = [t.language, t.lang, t.label, t.title, t.name]
+            .filter(Boolean).map((s) => String(s).toLowerCase());
+          return fields.some((f) => /^(en|eng|english)\b/.test(f) || /english/.test(f));
+        };
+        const trySelectEnglishSub = async () => {
+          const subs = moviPlayer.player?.getSubtitleTracks?.() || [];
+          if (!subs.length) return false;
+          const eng = subs.find(isEnglish) || subs[0]; // fall back to the first
+          if (!eng || !moviPlayer.player?.selectSubtitleTrack) return false;
+          try {
+            await moviPlayer.player.selectSubtitleTrack(eng.id);
+            const active = moviPlayer.player.trackManager?.getActiveSubtitleTrack?.();
+            return active?.id === eng.id;
+          } catch {
+            return false;
+          }
+        };
+        if (!(await trySelectEnglishSub())) {
+          // One retry after the decoder/render pipeline has a chance to settle.
+          setTimeout(() => { trySelectEnglishSub(); }, 800);
+        }
+
+        await nativeLoadOnce;
+
+        // Authoritative detection: the element either has decoded video
+        // dimensions OR enough metadata to play (readyState >= HAVE_METADATA)
+        // AND no .error attached. Safari rejecting MKV → both checks fail.
+        const HAVE_METADATA = 1;
+        const nativeOk = !nativeVideo.error &&
+          (nativeVideo.videoWidth > 0 || nativeVideo.readyState >= HAVE_METADATA);
+
+        if (!nativeOk) {
+          setFallback(
+            nativeFallback,
+            true,
+            "Your browser refused this file",
+            "This format isn't supported by the native <video> tag in this browser.",
+          );
+        }
+
+        const tracks     = (probe.info && probe.info.tracks) || [];
+        const videoTrack = tracks.find((t) => t.type === "video");
+
+        // Surface the HDR-flag tip only when the element confirms the loaded
+        // source is HDR (BT.2020 primaries or PQ/HLG transfer). Same signal
+        // the player uses for its own HDR button visibility.
+        const playerSaysHdr = !!moviPlayer.isHDRContent;
+        console.info("[hdr-tip] playerSaysHdr:", playerSaysHdr);
+        if (playerSaysHdr) showHdrTip();
+        else hideHdrTip(false);
+
+        const audioTotal = probe.audio.length;
+        const subTotal   = probe.subs.length;
+        const chapTotal  = probe.chapters.length;
+
+        const codecDesc = videoTrack ? (videoTrack.codec || "?").toUpperCase() : null;
+        // Audio codec from the currently-active track, falling back to the
+        // first listed audio. Sintel-style files report e.g. "ac3", "opus".
+        const activeAudio = (typeof moviPlayer.player?.trackManager?.getActiveAudioTrack === "function"
+          ? moviPlayer.player.trackManager.getActiveAudioTrack()
+          : null) || probe.audio[0];
+        const audioCodec = activeAudio?.codec ? activeAudio.codec.toUpperCase() : null;
+
+        const nativeExposed = nativeExposureCounts();
+        const nativeAudioExposed = nativeOk
+          ? Math.min(nativeExposed.audioCount, audioTotal || nativeExposed.audioCount)
+          : 0;
+        const nativeSubsExposed = 0; // embedded subs never appear in textTracks
+
+        const stats = {
+          codec:    codecDesc,
+          audioCodec,
+          audio:    { exposed: nativeAudioExposed, total: audioTotal },
+          subs:     { exposed: nativeSubsExposed,  total: subTotal },
+          chapters: { exposed: 0,                  total: chapTotal },
+        };
+
+        setNativeCounts(stats, nativeOk);
+        setMoviCounts(stats);
+        renderSummary(probe.info, probe.chapters, nativeOk, nativeAudioExposed, nativeSubsExposed);
+      }
+
+      // Back-compat shim — old name used by picker/drop handlers below.
+      const loadFile = loadSource;
+
+      fileInput.addEventListener("change", (e) => {
+        const file = e.target.files?.[0];
+        if (file) loadFile(file);
+      });
+      ["dragenter", "dragover"].forEach((ev) =>
+        picker.addEventListener(ev, (e) => { e.preventDefault(); picker.classList.add("drag-over"); }),
+      );
+      ["dragleave", "drop"].forEach((ev) =>
+        picker.addEventListener(ev, (e) => { e.preventDefault(); picker.classList.remove("drag-over"); }),
+      );
+      picker.addEventListener("drop", (e) => {
+        const file = e.dataTransfer?.files?.[0];
+        if (file) loadFile(file);
+      });
+
+      // Sync toggle — when active, mirrors MoviPlayer's play / pause /
+      // seek state onto the native <video> on a short polling tick so
+      // the panes stay locked on the same frame for visual comparison.
+      // MoviPlayer is the source of truth (the demo's point); changes
+      // the user makes on the native pane are NOT propagated back —
+      // bidirectional sync would need feedback-loop guards plus the
+      // movi side ignoring its own programmatic seeks, which adds
+      // complexity that isn't worth it for the "see what the bytes
+      // actually contain" framing here.
+      const syncBtn = $("sync-btn");
+      const syncLabel = syncBtn?.querySelector(".sync-label");
+      let syncTimerId = null;
+      let syncEnabled = false;
+      const SYNC_TICK_MS = 200;
+      // Re-seek native when it drifts past this much. Loose enough that
+      // we don't fight normal playback jitter, tight enough that a user
+      // visually notices the lock holding.
+      const SYNC_DRIFT_THRESHOLD = 0.35;
+
+      const tickSync = () => {
+        if (!syncEnabled) return;
+        const HAVE_METADATA = 1;
+        if (nativeVideo.error || nativeVideo.readyState < HAVE_METADATA) {
+          return; // Native rejected the file; nothing to mirror onto.
+        }
+        const moviPaused = moviPlayer.paused;
+        if (moviPaused && !nativeVideo.paused) {
+          nativeVideo.pause();
+        } else if (!moviPaused && nativeVideo.paused) {
+          nativeVideo.play().catch(() => {});
+        }
+        const t = Number(moviPlayer.currentTime);
+        if (
+          Number.isFinite(t) &&
+          t >= 0 &&
+          Math.abs(t - nativeVideo.currentTime) > SYNC_DRIFT_THRESHOLD
+        ) {
+          nativeVideo.currentTime = t;
+        }
+      };
+
+      const setSyncEnabled = (on) => {
+        syncEnabled = !!on;
+        if (syncBtn) {
+          syncBtn.classList.toggle("active", syncEnabled);
+          syncBtn.setAttribute("aria-pressed", syncEnabled ? "true" : "false");
+        }
+        if (syncLabel) {
+          syncLabel.textContent = syncEnabled ? "Sync ON" : "Sync playback";
+        }
+        if (syncEnabled) {
+          tickSync(); // Immediate alignment so the user sees the lock take effect.
+          if (syncTimerId === null) {
+            syncTimerId = window.setInterval(tickSync, SYNC_TICK_MS);
+          }
+        } else if (syncTimerId !== null) {
+          window.clearInterval(syncTimerId);
+          syncTimerId = null;
+        }
+      };
+
+      if (syncBtn) {
+        syncBtn.addEventListener("click", () => setSyncEnabled(!syncEnabled));
+      }
+
+      // Toggle .scrolled on the navbar past the first ~12px — matches the
+      // visual treatment on index.html (backdrop darkens slightly).
+      const navbarEl = document.getElementById("navbar");
+      const onScroll = () => {
+        navbarEl.classList.toggle("scrolled", window.scrollY > 12);
+      };
+      window.addEventListener("scroll", onScroll, { passive: true });
+      onScroll();
+
+      // Auto-load the default sample on first visit. Streams via HTTP Range,
+      // so first frame appears in a couple of seconds even though the file
+      // itself is ~1.1 GB. User can override anytime with the picker / drop.
+      loadSource(DEFAULT_SAMPLE);
+
+      // --- Theme Logic --- mirrors app/index.html (same localStorage key,
+      // same auto/light/dark cycle) so the choice carries between pages.
+      const themeToggle = document.getElementById("theme-toggle");
+      // SVG markup is parsed via DOMParser instead of assigning to
+      // innerHTML so we don't trip the project's no-innerHTML security
+      // hook. The strings are static literals, but the rule is
+      // mechanical and easier to comply with than to argue with.
+      const svgNs = "http://www.w3.org/2000/svg";
+      const parseSvg = (markup) => {
+        const doc = new DOMParser().parseFromString(
+          `<svg xmlns="${svgNs}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">${markup}</svg>`,
+          "image/svg+xml",
+        );
+        return document.importNode(doc.documentElement, true);
+      };
+      const themeIcons = {
+        auto: () => parseSvg('<rect x="2" y="3" width="20" height="14" rx="2" ry="2"/><line x1="8" y1="21" x2="16" y2="21"/><line x1="12" y1="17" x2="12" y2="21"/>'),
+        light: () => parseSvg('<circle cx="12" cy="12" r="5"/><line x1="12" y1="1" x2="12" y2="3"/><line x1="12" y1="21" x2="12" y2="23"/><line x1="4.22" y1="4.22" x2="5.64" y2="5.64"/><line x1="18.36" y1="18.36" x2="19.78" y2="19.78"/><line x1="1" y1="12" x2="3" y2="12"/><line x1="21" y1="12" x2="23" y2="12"/><line x1="4.22" y1="19.78" x2="5.64" y2="18.36"/><line x1="18.36" y1="5.64" x2="19.78" y2="4.22"/>'),
+        dark: () => parseSvg('<path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"/>'),
+      };
+      const themeModes = ["auto", "light", "dark"];
+      let themeMode = localStorage.getItem("theme-preference") || "auto";
+
+      const applyTheme = (mode) => {
+        const effective = mode === "auto"
+          ? (window.matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light")
+          : mode;
+        if (effective === "light") {
+          document.documentElement.setAttribute("data-theme", "light");
+        } else {
+          document.documentElement.removeAttribute("data-theme");
+        }
+        themeToggle.replaceChildren(themeIcons[mode]());
+        themeToggle.setAttribute("title", `Theme: ${mode[0].toUpperCase() + mode.slice(1)}`);
+        // Push the resolved theme to both players so their internal
+        // [theme="..."] selectors flip in sync with the page chrome.
+        if (moviPlayer) moviPlayer.setAttribute("theme", effective);
+        if (nativeVideo) nativeVideo.style.colorScheme = effective;
+      };
+
+      window.matchMedia("(prefers-color-scheme: dark)").addEventListener("change", () => {
+        if (themeMode === "auto") applyTheme("auto");
+      });
+
+      themeToggle.addEventListener("click", () => {
+        themeMode = themeModes[(themeModes.indexOf(themeMode) + 1) % themeModes.length];
+        localStorage.setItem("theme-preference", themeMode);
+        applyTheme(themeMode);
+      });
+
+      applyTheme(themeMode);
+    </script>
+  </body>
+</html>
+

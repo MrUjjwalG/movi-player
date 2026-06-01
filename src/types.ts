@@ -42,6 +42,14 @@ export interface VideoTrack extends Track {
   rotation?: number;
   colorRange?: string;
   isHDR?: boolean;
+  /**
+   * True when this is an embedded cover-art pseudo-stream (ID3v2 APIC,
+   * FLAC PICTURE, MP4 covr, Matroska attachment). These look like single-
+   * frame PNG/JPEG video streams to the demuxer; consumers picking an
+   * active video track should skip them and read the picture via the
+   * player's cover-art accessor instead.
+   */
+  isAttachedPic?: boolean;
 }
 
 export interface AudioTrack extends Track {
@@ -114,7 +122,18 @@ export type RendererType = "canvas";
 export type DecoderType = "auto" | "software";
 
 export interface PlayerConfig {
-  source: SourceConfig;
+  /**
+   * Standard source descriptor (url / file / encrypted). Optional when a
+   * pre-built `sourceAdapter` is supplied instead.
+   */
+  source?: SourceConfig;
+  /**
+   * Pre-built SourceAdapter — overrides `source` when present.
+   * Use this to feed media from a custom protocol (WebSocket, WebRTC data
+   * channel, IndexedDB, encrypted blob, etc.) without writing a SourceConfig
+   * branch. The adapter's `getSize()` and `read()` are called directly.
+   */
+  sourceAdapter?: import("./source/SourceAdapter").SourceAdapter;
   /** Separate audio source — single or multi-language */
   audioSource?: SourceConfig;
   /** Multiple audio tracks with language metadata */
@@ -170,6 +189,7 @@ export interface VideoDecoderConfig {
     matrix?: VideoMatrixCoefficients | null;
     fullRange?: boolean | null;
   };
+  hardwareAcceleration?: "no-preference" | "prefer-hardware" | "prefer-software";
 }
 
 export interface AudioDecoderConfig {
@@ -190,6 +210,14 @@ export interface Packet {
   dts: number; // DTS
   duration: number;
   data: Uint8Array;
+  // True only for a real IDR/BLA random-access keyframe. False for open-GOP
+  // CRA sync frames (flagged keyframe but must be sent as delta mid-stream) and
+  // for non-keyframes. See VideoDecoder.decode.
+  isIdr: boolean;
+  // True for an HEVC RASL leading picture (NAL 8/9) that trails a CRA/BLA. After
+  // a random-access resume these reference an absent (pre-RAP) GOP and must be
+  // skipped — Safari's decoder hard-errors on them. See VideoDecoder.decode.
+  isRasl: boolean;
 }
 
 // ============================================================================
@@ -255,4 +283,13 @@ export interface PlayerEventMap {
   seeked: number;
   bufferUpdate: { start: number; end: number }[];
   ended: void;
+  preloadcomplete: void;
+  /**
+   * Embedded cover art extracted from the source (ID3v2 APIC, FLAC PICTURE,
+   * MP4 covr, Matroska attachment). Fires once after track enumeration when
+   * an attached_pic pseudo-stream is present. Recipients own the bitmap and
+   * should close() it on disposal. Fires with `null` when an art track was
+   * present but extraction failed, so listeners waiting on it can stop.
+   */
+  coverart: ImageBitmap | null;
 }

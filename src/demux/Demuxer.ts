@@ -17,6 +17,7 @@ import type {
 } from "../types";
 import {
   WasmBindings,
+  ThumbnailBindings,
   loadWasmModule,
   loadWasmModuleNew,
   type MoviWasmModule,
@@ -195,6 +196,7 @@ export class Demuxer {
           rotation: info.rotation,
           pixelFormat: info.pixelFormat,
           colorRange: info.colorRange,
+          isAttachedPic: info.isAttachedPic || undefined,
         } as VideoTrack;
 
         // Store extradata on track
@@ -471,6 +473,8 @@ export class Demuxer {
       dts: result.info.dts,
       duration: result.info.duration,
       data: result.data,
+      isIdr: result.info.isIdr,
+      isRasl: result.info.isRasl,
     };
   }
 
@@ -494,6 +498,50 @@ export class Demuxer {
     this.tracks = [];
 
     Logger.info(TAG, "Demuxer closed");
+  }
+
+  /**
+   * Extract embedded cover art (attached_pic) as the raw encoded image
+   * bytes (jpeg / png), or null if the source has none.
+   *
+   * Runs in a short-lived, isolated WASM context — NOT the live playback
+   * demuxer — so reading the artwork packet never moves the main read
+   * position and can't disturb playback or seeking. The cover art is the
+   * single keyframe of the still-image "video" stream, so readKeyframe(0)
+   * returns its packet directly; no decode pass and no extra C exports
+   * are needed (a dedicated movi_get_attached_pic_data export would shift
+   * the WASM layout and trip a latent FFmpeg audio overflow — see project
+   * memory "Album Art Crashes WASM"). Caller owns MIME-typing and decode
+   * into an ImageBitmap. Best-effort: any failure resolves to null.
+   */
+  static async extractAttachedPicture(
+    source: SourceAdapter,
+    fileSize: number,
+    wasmBinary?: Uint8Array,
+  ): Promise<Uint8Array | null> {
+    if (fileSize <= 0) return null;
+    let bindings: ThumbnailBindings | null = null;
+    try {
+      const module = await loadWasmModuleNew({ wasmBinary });
+      bindings = new ThumbnailBindings(module);
+      bindings.setDataSource({
+        read: async (offset: number, size: number): Promise<Uint8Array> =>
+          new Uint8Array(await source.read(offset, size)),
+        getSize: async (): Promise<number> => fileSize,
+      });
+      if (!(await bindings.create(fileSize))) return null;
+      if (!(await bindings.open())) return null;
+      const size = await bindings.readKeyframe(0);
+      if (size <= 0) return null;
+      return bindings.getPacketDataCopy(size);
+    } catch (e) {
+      Logger.warn(TAG, "Attached-picture extraction failed", e);
+      return null;
+    } finally {
+      // Tear the isolated context down immediately — one frame is all we
+      // need; keeping a second WASM heap alive for a static image is waste.
+      bindings?.destroy();
+    }
   }
 
   getBindings(): WasmBindings | null {

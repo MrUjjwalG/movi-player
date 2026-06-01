@@ -4,18 +4,53 @@ import { Logger } from "../utils/Logger";
 
 const TAG = "SoftwareAudioDecoder";
 
+/**
+ * Browser-agnostic PCM frame. Avoids the WebCodecs AudioData constructor,
+ * which Firefox on Android does not implement.
+ */
+export interface PCMFrame {
+  planes: Float32Array[];
+  numberOfFrames: number;
+  numberOfChannels: number;
+  sampleRate: number;
+  timestamp: number; // micro-seconds, matches AudioData semantics
+}
+
 export class SoftwareAudioDecoder {
   private bindings: WasmBindings;
-  private onData: ((data: AudioData) => void) | null = null;
+  private onData: ((frame: PCMFrame) => void) | null = null;
   private onError: ((error: Error) => void) | null = null;
   private isConfigured = false;
   private trackIndex = -1;
+  // Default: downmix to stereo. AudioDecoder flips this off via
+  // setDownmix(false) when the player has confirmed the output
+  // device supports the source's full channel count.
+  private _downmix = true;
+
+  // Some files trigger a sendPacket failure on every audio packet —
+  // typically a codec-mismatch (e.g. Atmos extensions inside EAC3) or a
+  // genuine ENOMEM that won't recover. Without a circuit-breaker we
+  // flood the console with hundreds of identical warnings per second
+  // and, worse, keep poking the FFmpeg allocator until its shared heap
+  // corrupts the demuxer. After this many consecutive failures we mute
+  // the decoder for the rest of the session; video continues, audio
+  // goes silent — a strictly better failure mode than a hard crash.
+  private consecutiveFailures = 0;
+  private isBroken = false;
+  private static readonly MAX_CONSECUTIVE_FAILURES = 50;
 
   constructor(bindings: WasmBindings) {
     this.bindings = bindings;
   }
 
-  setOnData(callback: (data: AudioData) => void): void {
+  setDownmix(downmix: boolean): void {
+    this._downmix = downmix;
+    if (this.isConfigured) {
+      this.bindings.enableAudioDownmix(downmix);
+    }
+  }
+
+  setOnData(callback: (frame: PCMFrame) => void): void {
     this.onData = callback;
   }
 
@@ -36,8 +71,11 @@ export class SoftwareAudioDecoder {
       return false;
     }
 
-    // Enable stereo downmixing
-    this.bindings.enableAudioDownmix(true);
+    // Enable stereo downmixing by default — most users have stereo
+    // output and FFmpeg's downmix is higher quality than Web Audio's
+    // automatic one. setDownmix() below flips it off when the player
+    // detects the device can actually drive >2 discrete channels.
+    this.bindings.enableAudioDownmix(this._downmix);
 
     this.isConfigured = true;
     Logger.info(
@@ -52,7 +90,7 @@ export class SoftwareAudioDecoder {
   }
 
   reset(): void {
-    // No-op
+    this.consecutiveFailures = 0;
   }
 
   close(): void {
@@ -60,7 +98,7 @@ export class SoftwareAudioDecoder {
   }
 
   decode(data: Uint8Array, timestamp: number, keyframe: boolean): void {
-    if (!this.isConfigured) return;
+    if (!this.isConfigured || this.isBroken) return;
 
     const ret = this.bindings.sendPacket(
       this.trackIndex,
@@ -71,9 +109,24 @@ export class SoftwareAudioDecoder {
     );
 
     if (ret < 0) {
-      Logger.warn(TAG, `sendPacket failed: ${ret}`);
+      this.consecutiveFailures++;
+      if (this.consecutiveFailures === 1) {
+        Logger.warn(TAG, `sendPacket failed: ${ret}`);
+      }
+      if (
+        this.consecutiveFailures >=
+        SoftwareAudioDecoder.MAX_CONSECUTIVE_FAILURES
+      ) {
+        this.isBroken = true;
+        Logger.error(
+          TAG,
+          `Audio decoder disabled after ${this.consecutiveFailures} consecutive sendPacket failures (last: ${ret}). Playback continues without audio.`,
+        );
+      }
       return;
     }
+
+    this.consecutiveFailures = 0;
 
     // Receive loop
     while (true) {
@@ -91,45 +144,36 @@ export class SoftwareAudioDecoder {
     const numberOfChannels = this.bindings.getFrameChannels();
     const sampleRate = this.bindings.getFrameSampleRate();
 
-    // FFmpeg usually outputs planar float (AV_SAMPLE_FMT_FLTP = 8) for most decoders
-    // We need to check the format and convert if necessary, but WebCodecs AudioData
-    // supports f32-planar which is what FLTP is.
-
+    // FFmpeg outputs planar float (AV_SAMPLE_FMT_FLTP) for most decoders.
+    // We copy each plane out of the WASM heap into its own Float32Array so the
+    // heap can be reused for the next frame.
     try {
-      // AV_SAMPLE_FMT_FLTP (Planar Float)
-      // Each plane is Float32Array
-      const planeSize = numberOfFrames * 4; // 4 bytes per float
-      const totalSize = planeSize * numberOfChannels;
-      const buffer = new Uint8Array(totalSize);
-
+      const heap = (this.bindings as any).module.HEAPU8 as Uint8Array;
+      const planes: Float32Array[] = new Array(numberOfChannels);
       for (let i = 0; i < numberOfChannels; i++) {
         const ptr = this.bindings.getFrameDataPointer(i);
-        const heap = (this.bindings as any).module.HEAPU8 as Uint8Array;
-        const planeData = heap.subarray(ptr, ptr + planeSize);
-        buffer.set(planeData, i * planeSize);
+        const view = new Float32Array(heap.buffer, ptr, numberOfFrames);
+        planes[i] = new Float32Array(view); // copy out of heap
       }
 
-      const audioData = new AudioData({
-        format: "f32-planar",
-        sampleRate: sampleRate,
-        numberOfFrames: numberOfFrames,
-        numberOfChannels: numberOfChannels,
+      const frame: PCMFrame = {
+        planes,
+        numberOfFrames,
+        numberOfChannels,
+        sampleRate,
         timestamp: timestamp * 1_000_000, // micro-seconds
-        data: buffer,
-      });
+      };
 
       if (Math.random() < 0.01) {
-        // Log occasionally to avoid spam
         Logger.debug(
           TAG,
           `Audio data: ${numberOfChannels}ch, ${numberOfFrames} frames`,
         );
       }
 
-      this.onData(audioData);
-      // ownership passed to callback
+      this.onData(frame);
     } catch (e) {
-      Logger.error(TAG, "AudioData creation failed", e);
+      Logger.error(TAG, "PCM frame extraction failed", e);
       if (this.onError) this.onError(e as Error);
     }
   }

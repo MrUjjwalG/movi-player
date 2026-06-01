@@ -28,6 +28,12 @@ export class MoviVideoDecoder {
   private onFrame: ((frame: VideoFrame) => void) | null = null;
   private onError: ((error: Error) => void) | null = null;
   private waitingForKeyframe: boolean = false;
+  // Optional listener: notified whenever the decoder enters or exits its
+  // "skip non-keyframes" recovery window. MoviPlayer uses this to flip into
+  // buffering state during playback so audio + clock pause instead of running
+  // through the silent video gap (an Open-GOP IDR rejection on .ts files can
+  // produce 2+ seconds of "audio plays, video frozen" if we don't).
+  public onKeyframeWaitChange: ((waiting: boolean) => void) | null = null;
   private errorCount: number = 0;
   private static MAX_ERRORS = 5; // Max consecutive errors before giving up
   private lastConfig: VideoDecoderConfig | null = null;
@@ -42,9 +48,43 @@ export class MoviVideoDecoder {
   private requiresSoftware: boolean = false; // True for 4:2:2/4:4:4 content that HW can't decode
   private targetFps: number = 0;
   private isRecovering: boolean = false;
+  private lastRecreateTime: number = 0; // perf.now() of last decoder recreate
   private isAnnexBSource: boolean = false;
   private _loggedConversion: number = 0;
   private skippedWhileWaiting: number = 0;
+  // True between a flush (seek) and the next successfully-decoded frame. Some
+  // HW decoders reject the first keyframe after a flush for certain streams
+  // (observed: 10-bit BT.2020/PQ HDR HEVC). If the post-flush keyframe keeps
+  // getting rejected, we fall back to software quickly instead of stalling the
+  // whole seek waiting for the (impossible) HW recovery.
+  private justFlushed: boolean = false;
+  // Latched when we resume (post-flush) on an IRAP keyframe: the RASL leading
+  // pictures that may trail a CRA/BLA random-access point reference the absent
+  // pre-RAP GOP, so they must be dropped (NoRaslOutputFlag=1). Chrome discards
+  // them internally; Safari/VideoToolbox throws a hard EncodingError. We latch
+  // on ANY post-flush keyframe and let the per-packet isRasl flag do the actual
+  // dropping — after an IDR (no RASL) the latch is a harmless no-op that the
+  // first trailing picture clears. Only mid-stream RAPs reached during
+  // continuous playback (references present, not post-flush) keep their RASL.
+  private skipRaslAfterResume: boolean = false;
+  private postFlushKeyframeRejects: number = 0;
+  // After this many consecutive keyframe rejections immediately following a
+  // flush, give up on HW for this stream and switch to software decoding.
+  private static POST_FLUSH_REJECT_LIMIT = 2;
+  // Mid-stream open-GOP (HEVC CRA frames the HW decoder keeps rejecting): no
+  // JS-only recovery keeps this on HW — every rejection drops the decoder into
+  // a configure-like state where only a true IDR is accepted, so the next
+  // CRA is rejected too. Switch to software after just a few rejections so the
+  // user sees ~1s of recovery instead of ~11s of per-GOP stutter. (The old
+  // limit was 15; lowered because the HW path never actually recovers here.)
+  private static MID_STREAM_OPENGOP_REJECT_LIMIT = 3;
+  // When true, open-GOP keyframe rejections never fall back to software — the
+  // decoder keeps reset+retrying on hardware. With the poster generated off the
+  // main decoder (isolated thumbnail pipeline) and HEVC seeks recreating the
+  // decoder into a fresh state, the HW path recovers on its own, so the SW
+  // fallback (which dropped 4K/120fps HDR HEVC to throttled software) is no
+  // longer needed and hurt more than it helped.
+  private static DISABLE_OPENGOP_SW_FALLBACK = true;
 
   constructor(forceSoftware: boolean = false) {
     this.forceSoftware = forceSoftware;
@@ -53,6 +93,22 @@ export class MoviVideoDecoder {
 
   setBindings(bindings: WasmBindings) {
     this.bindings = bindings;
+  }
+
+  private setWaitingForKeyframe(waiting: boolean): void {
+    // Restart the tiny-packet drop window whenever we begin waiting for a
+    // keyframe — that marks a fresh (re)configure/flush, the only phase where
+    // the corrupt sub-4-byte packets appear.
+    if (waiting) this.chunksSinceKeyframeWait = 0;
+    if (this.waitingForKeyframe === waiting) return;
+    this.waitingForKeyframe = waiting;
+    if (this.onKeyframeWaitChange) {
+      try {
+        this.onKeyframeWaitChange(waiting);
+      } catch {
+        // listener errors must not break the decoder pipeline
+      }
+    }
   }
 
   /**
@@ -122,6 +178,7 @@ export class MoviVideoDecoder {
       codec: codecString,
       codedWidth: track.width,
       codedHeight: track.height,
+      hardwareAcceleration: "prefer-hardware",
     };
 
     // Add color space if available
@@ -177,6 +234,22 @@ export class MoviVideoDecoder {
         // If it throws (e.g. TypeError for invalid enum), treat as not supported
         // and let the color stripping logic below retry
         support = { supported: false, config: config };
+      }
+
+      // If the hardware-preferred config wasn't supported, retry without the
+      // preference — some browsers report unsupported when hw decode is
+      // unavailable instead of silently falling back to software.
+      if (!support.supported && config.hardwareAcceleration === "prefer-hardware") {
+        const configNoHw = { ...config };
+        delete configNoHw.hardwareAcceleration;
+        const supportNoHw = await VideoDecoder.isConfigSupported(configNoHw).catch(
+          () => ({ supported: false, config: configNoHw }) as VideoDecoderSupport,
+        );
+        if (supportNoHw.supported) {
+          Logger.info(TAG, `Hardware decode unavailable for ${config.codec}; using no-preference.`);
+          delete config.hardwareAcceleration;
+          support = supportNoHw;
+        }
       }
 
       // If failed and we have color space info, try removing it as it might be causing validation issues
@@ -327,6 +400,8 @@ export class MoviVideoDecoder {
         this.openGopErrorCount = 0;
         this.errorCount = 0;
         this.isResurrecting = false; // Success!
+        this.justFlushed = false; // a frame decoded — HW is fine post-flush
+        this.postFlushKeyframeRejects = 0;
         if (this.onFrame) {
           this.onFrame(frame);
         } else {
@@ -347,7 +422,7 @@ export class MoviVideoDecoder {
       this.isConfigured = true;
       Logger.info(
         TAG,
-        `Configured: ${codecString} ${track.width}x${track.height}`,
+        `Configured: ${codecString} ${track.width}x${track.height} hwAccel=${config.hardwareAcceleration ?? "no-preference"}`,
       );
       return true;
     } catch (error) {
@@ -405,7 +480,7 @@ export class MoviVideoDecoder {
     }
     if (success) {
       this.isConfigured = true;
-      this.waitingForKeyframe = true; // Wait for keyframe on new decoder
+      this.setWaitingForKeyframe(true); // Wait for keyframe on new decoder
 
       // Process pending chunks
       if (this.pendingChunks.length > 0) {
@@ -433,6 +508,7 @@ export class MoviVideoDecoder {
     if (this.useSoftware) return false;
     if (!this.lastConfig) return false;
 
+    this.lastRecreateTime = performance.now();
     Logger.warn(TAG, "Recreating decoder to recover from error");
 
     // Close existing
@@ -446,6 +522,8 @@ export class MoviVideoDecoder {
         this.openGopErrorCount = 0;
         this.errorCount = 0;
         this.isResurrecting = false; // Success!
+        this.justFlushed = false; // a frame decoded — HW is fine post-flush
+        this.postFlushKeyframeRejects = 0;
         if (this.onFrame) {
           this.onFrame(frame);
         } else {
@@ -467,7 +545,7 @@ export class MoviVideoDecoder {
       // Wait for next keyframe to resync — don't re-feed cached keyframe
       // as subsequent non-keyframes may fail on certain content (DoVi P8 etc.)
       // causing a recreate→re-feed→fail loop that triggers software fallback.
-      this.waitingForKeyframe = true;
+      this.setWaitingForKeyframe(true);
       return true;
     } catch (error) {
       Logger.error(TAG, "Failed to recreate decoder", error);
@@ -479,20 +557,97 @@ export class MoviVideoDecoder {
     timestamp: number;
     keyframe: boolean;
     size: number;
+    // True if the last submitted chunk was a true IDR/BLA sent as `key` while
+    // the decoder was waiting for a clean GOP start (post-flush/post-error). If
+    // THAT gets rejected, the HW decoder is refusing a genuine random-access
+    // point — characteristic of 10-bit DoVi/HDR HEVC — and no amount of
+    // reset+retry recovers it, so we must fall back to software fast.
+    wasIdrWhileWaiting: boolean;
   } | null = null;
 
   /**
    * Decode an encoded video chunk
    */
+  // Non-keyframe packets at or below this byte size are treated as corrupt and
+  // dropped before reaching the decoder. Observed on some AV1 sources: 3-byte
+  // delta packets that throw EncodingError and close the HW decoder, forcing a
+  // recreate→skip-non-keyframes recovery (frozen/garbage video for a second+).
+  // A real AV1 inter frame carries an OBU header + frame header + tile data and
+  // is always larger; the only sub-handful-of-bytes payloads are malformed or
+  // show_existing_frame OBUs that the HW decoder mishandles here. Dropping one
+  // at most skips a single repeated frame — far cheaper than the crash+recover.
+  private static MIN_DELTA_PACKET_BYTES = 4;
+
+  // The tiny-packet drop only matters in the startup window: the corrupt
+  // sub-4-byte delta packets that crash the HW decoder cluster right after a
+  // (re)configure/flush, at the head of the first GOP. In steady state the
+  // stream is past that point, so we stop screening — a stray tiny packet
+  // there is far more likely legitimate than corrupt, and screening every
+  // chunk forever risks dropping valid frames. Counts chunks fed since the
+  // last setWaitingForKeyframe(true); reset on every (re)configure/flush.
+  private static TINY_PACKET_DROP_WINDOW = 120;
+  private chunksSinceKeyframeWait = 0;
+
+  // Current playback rate, mirrored from the player. At 1x the HW decoder
+  // handles AV1 show_existing_frame (sub-4-byte) packets fine, so we must NOT
+  // drop them there — dropping breaks the reference chain and a later keyframe
+  // ends up rejected (EncodingError → buffering freeze). Only at non-1x, where
+  // feeding these packets itself crashes the decoder, do we screen them out.
+  private playbackRate = 1;
+
+  setPlaybackRate(rate: number): void {
+    this.playbackRate = rate;
+  }
+
   decode(
     data: Uint8Array,
     timestamp: number,
     keyframe: boolean,
     dts?: number,
+    // True IDR/BLA random-access keyframe (HW accepts as `key`). When a packet
+    // is flagged keyframe but isIdr is false it's an open-GOP CRA — sent as
+    // `delta` mid-stream so the HW decoder keeps running. Defaults to true so
+    // callers that don't pass it (and non-keyframes) behave as before.
+    isIdr: boolean = true,
+    // True for an HEVC RASL leading picture (NAL 8/9). Dropped after a
+    // random-access resume (see skipRaslAfterResume). Defaults to false.
+    isRasl: boolean = false,
   ): void {
-    this.lastChunkInfo = { timestamp, keyframe, size: data.byteLength };
+    // A keyframe is only a real random-access point if the demuxer classified
+    // it as IDR/BLA. Open-GOP CRA frames arrive flagged keyframe but isIdr
+    // false — track that so the chunk-build path can down-grade them to delta.
+    const isOpenGopKey = keyframe && !isIdr;
+    this.lastChunkInfo = {
+      timestamp,
+      keyframe,
+      size: data.byteLength,
+      // A true IDR fed as `key` while still waiting for a clean GOP start. If
+      // the decoder rejects this, it's refusing a genuine random-access point.
+      wasIdrWhileWaiting: keyframe && !isOpenGopKey && this.waitingForKeyframe,
+    };
 
     if (!this.isConfigured) return;
+
+    this.chunksSinceKeyframeWait++;
+
+    // Drop tiny corrupt non-keyframe packets before they crash the decoder —
+    // but ONLY at non-1x rates and within the startup window after a
+    // (re)configure/flush. At 1x these sub-4-byte show_existing_frame packets
+    // decode fine; dropping them there breaks the reference chain and trips a
+    // later keyframe reject. Keyframes are never dropped — losing one breaks
+    // the whole GOP.
+    if (
+      this.playbackRate !== 1 &&
+      !keyframe &&
+      data.byteLength < MoviVideoDecoder.MIN_DELTA_PACKET_BYTES &&
+      this.chunksSinceKeyframeWait <= MoviVideoDecoder.TINY_PACKET_DROP_WINDOW
+    ) {
+      Logger.debug(
+        TAG,
+        `Dropping ${data.byteLength}-byte non-keyframe packet at ${timestamp.toFixed(3)}s (corrupt/too small, startup window at ${this.playbackRate}x)`,
+      );
+      return;
+    }
 
     if (this.useSoftware && this.swDecoder) {
       // RESURRECTION LOGIC: Periodically try to switch back to hardware only on a TRUE IDR keyframe
@@ -532,7 +687,7 @@ export class MoviVideoDecoder {
           return;
         }
         if (keyframe) {
-          this.waitingForKeyframe = false;
+          this.setWaitingForKeyframe(false);
         }
 
         this.swDecoder.decode(data, timestamp, dts ?? timestamp, keyframe);
@@ -553,23 +708,63 @@ export class MoviVideoDecoder {
       return;
     }
 
-    // If we're waiting for keyframe after an error, skip non-keyframes
-    // but still count toward error count to maintain backpressure
+    // If we're waiting for a keyframe after a seek/error, skip non-keyframes —
+    // the decoder has no reference frames, so a delta can't restart a GOP.
+    // A keyframe (IDR or CRA) DOES restart it: a CRA is a clean random-access
+    // point, so on the first keyframe post-flush we resume on it even if it's a
+    // CRA. (Streams seeked into an all-CRA region — e.g. a DoVi P8 .ts whose
+    // only IDR is back at the file start — would otherwise never resume and
+    // stay black. The CRA's RASL leading pictures may not decode; that's
+    // handled by skipping until the next decodable frame.) The chunk-build
+    // path below sends a post-flush CRA as `key` (not delta) so the decoder
+    // treats it as the random-access restart it is.
     if (this.waitingForKeyframe && !keyframe) {
       this.skippedWhileWaiting++;
       return;
     }
     if (keyframe && this.waitingForKeyframe) {
       if (this.skippedWhileWaiting > 0) {
-        Logger.debug(TAG, `Skipped ${this.skippedWhileWaiting} non-keyframes while waiting`);
+        Logger.debug(TAG, `Skipped ${this.skippedWhileWaiting} non-keyframes while waiting for keyframe`);
         this.skippedWhileWaiting = 0;
       }
+    }
+
+    // Drop orphaned RASL leading pictures after a random-access resume. A
+    // CRA/BLA used as a seek target has NoRaslOutputFlag=1: its trailing RASL
+    // pictures reference the flushed pre-RAP GOP and are non-decodable. Chrome
+    // discards them internally; Safari/VideoToolbox throws a hard EncodingError
+    // that wedges the seek (recreate → wait-for-IDR → seek timeout → stuck). The
+    // RASL also have PTS < the RAP, so the seek-target frame filter would drop
+    // their output anyway — skipping here is free and correct on every browser.
+    if (this.skipRaslAfterResume && !keyframe) {
+      if (isRasl) {
+        return; // orphaned leading picture — discard
+      }
+      // First non-leading picture (trailing/RADL): references are valid from
+      // the RAP onward, so stop skipping and resume normal decode.
+      this.skipRaslAfterResume = false;
     }
 
     // Pass packet data as-is — Chrome's WebCodecs handles both Annex B and
     // length-prefixed formats natively. Converting Annex B → length-prefixed
     // was causing decode errors on DoVi P8 non-keyframes.
-    const chunkData = data;
+    let chunkData = data;
+
+    // Post-flush IDR rejection workaround: the FIRST true keyframe after a
+    // flush (still waitingForKeyframe) on a length-prefixed HEVC stream gets
+    // rejected by the HW decoder ("wasn't a key frame") when it leads with an
+    // Access Unit Delimiter NAL — observed on 10-bit DoVi/HDR HEVC, where the
+    // very same packet decodes fine at startup but is refused right after a
+    // seek-flush. Stripping the AUD makes the decoder accept the IDR and keeps
+    // the stream on hardware instead of falling back to software. Only the
+    // first post-flush keyframe is touched; mid-stream packets pass through
+    // untouched (no per-frame cost, no reference-chain risk).
+    if (keyframe && !isOpenGopKey && this.waitingForKeyframe) {
+      const stripped = MoviVideoDecoder.stripAudLengthPrefixed(data);
+      if (stripped !== data) {
+        chunkData = stripped;
+      }
+    }
 
     // Diagnostic for Annex B conversion — log first keyframe + first non-keyframe
     if (this.isAnnexBSource && (this._loggedConversion < 2)) {
@@ -584,9 +779,19 @@ export class MoviVideoDecoder {
       }
     }
 
-    // Got a keyframe, reset recovery state
+    // Reached here only on a real frame to feed: an IDR, a CRA, or a delta.
+    // Clear the wait state on ANY keyframe — both IDR and CRA are random-access
+    // points the decoder can restart on (we now resume on a post-flush CRA when
+    // no IDR is available; see the keyframe-wait skip above).
     if (keyframe) {
-      this.waitingForKeyframe = false;
+      // Post-flush resume on an IRAP: arm RASL-dropping for any leading
+      // pictures that trail this CRA/BLA (their pre-RAP refs were flushed, so
+      // they're orphaned). A mid-stream RAP reached during continuous playback
+      // (not waiting) keeps its RASL — references are present. Latch on ANY
+      // post-flush keyframe; after a true IDR (no RASL) it's a harmless no-op
+      // the first trailing picture clears.
+      this.skipRaslAfterResume = this.waitingForKeyframe;
+      this.setWaitingForKeyframe(false);
       // Cache converted keyframe for instant recovery after decoder recreation
     }
 
@@ -595,8 +800,25 @@ export class MoviVideoDecoder {
       return; // Give up after too many errors
     }
 
+    // Open-GOP CRA mid-stream: the decoder still holds the previous GOP's
+    // reference frames, so feed the CRA (and its RASL leading pictures that
+    // follow) as `delta`. Sending it as `key` would make WebCodecs reject it
+    // ("wasn't a key frame"). We only get here for a CRA when NOT waiting for a
+    // keyframe (line above skips CRA while waiting) — i.e. references are
+    // present — so delta is valid. The extra !justFlushed guard is belt-and-
+    // suspenders: a CRA fed as delta right after a flush (before any frame has
+    // decoded) fails with "key frame required after configure", so if we somehow
+    // reach here still flushed, send it as `key` (it'll be rejected as open-GOP
+    // and trigger the proper wait-for-IDR path rather than corrupting decode).
+    const craAsDelta = isOpenGopKey && !this.justFlushed;
+    const chunkType: EncodedVideoChunkType = craAsDelta
+      ? "delta"
+      : keyframe
+      ? "key"
+      : "delta";
+
     const chunk = new EncodedVideoChunk({
-      type: keyframe ? "key" : "delta",
+      type: chunkType,
       timestamp: timestamp * 1_000_000, // Convert to microseconds
       data: chunkData,
     });
@@ -682,11 +904,79 @@ export class MoviVideoDecoder {
         `Decoding warning: Frame was marked as keyframe but decoder rejected it (Open GOP?). Timestamp: ${this.lastChunkInfo?.timestamp}. Count (OpenGOP): ${this.openGopErrorCount}`,
       );
 
+      // Post-flush keyframe rejection: some HW decoders refuse the first keyframe
+      // after a seek-flush for certain streams (10-bit BT.2020/PQ HDR HEVC has
+      // been observed to reject genuine, well-formed IDRs). HW reset+retry never
+      // recovers in that case, so the seek would stall until timeout. Detect it
+      // by counting rejections that happen before any frame decodes post-flush,
+      // and switch to the software decoder quickly. (Mid-stream Open-GOP on .ts
+      // files still uses the reset+retry path below — justFlushed is false there
+      // because frames have been decoding.)
+      //
+      // Restrict to HEVC: this was only ever observed on HDR HEVC. H.264/AVC
+      // genuine Open-GOP keyframes get rejected on some seeks too, but the
+      // reset+retry path recovers fine — dropping them to the software decoder
+      // just throttles 1080p below realtime and triggers a desync/stall loop.
+      const codec = this.lastConfig?.codec ?? "";
+      const isHevc = codec.startsWith("hvc1.") || codec.startsWith("hev1.");
+      // Treat as a post-flush rejection if EITHER we're still in the flush
+      // window (justFlushed) OR the rejected frame was a genuine IDR we fed
+      // while waiting for a clean GOP start. The latter matters because a 3s
+      // seek-timeout + forced completion can decode a stray frame and clear
+      // justFlushed before the IDR rejections cluster — yet a rejected true IDR
+      // is the definitive sign the HW decoder won't take this stream's
+      // random-access points (10-bit DoVi/HDR HEVC), so reset+retry is hopeless.
+      const idrRejected = this.lastChunkInfo?.wasIdrWhileWaiting === true;
+      if (
+        !MoviVideoDecoder.DISABLE_OPENGOP_SW_FALLBACK &&
+        (this.justFlushed || idrRejected) &&
+        isHevc &&
+        !this.forceSoftware &&
+        !this.useSoftware
+      ) {
+        this.postFlushKeyframeRejects++;
+        if (
+          this.postFlushKeyframeRejects >=
+          MoviVideoDecoder.POST_FLUSH_REJECT_LIMIT
+        ) {
+          Logger.error(
+            TAG,
+            `Hardware rejected ${this.postFlushKeyframeRejects} ${idrRejected ? "genuine IDR" : "post-flush"} keyframes — falling back to software decoder for this stream.`,
+          );
+          this.initSoftwareDecoder();
+          return;
+        }
+      }
+
+      // Mid-stream open-GOP on HEVC: the rejected "keyframe" is a CRA sync
+      // frame, not an IDR. Once the HW decoder rejects it, it drops into a
+      // configure/flush-like state where ONLY a true IDR is accepted — a
+      // re-fed delta fails with "key frame required after configure", and
+      // sending the next GOP's CRA as `key` just gets rejected again. So the
+      // reset→skip-RASL→recover loop repeats every GOP (~1s of video freeze
+      // each) and only escapes after 15 rounds (~11s of stutter) by switching
+      // to software anyway. There is no JS-only way to keep this stream on the
+      // HW decoder — the proper fix is C-side: surface is_idr so seeks land on
+      // a true IDR and mid-stream CRA is classified, not guessed. Until then,
+      // switch to software FAST (after a few rejections) so we trade ~11s of
+      // per-GOP stutter for ~1s. Software decodes this content at realtime.
+      const codecForFallback = this.lastConfig?.codec ?? "";
+      const isHevcMidStream =
+        (codecForFallback.startsWith("hvc1.") ||
+          codecForFallback.startsWith("hev1.")) &&
+        !this.justFlushed;
+      const openGopFallbackLimit = isHevcMidStream
+        ? MoviVideoDecoder.MID_STREAM_OPENGOP_REJECT_LIMIT
+        : 15;
+
       // If we keep hitting these, hardware decoder is too strict. Fallback to software.
-      if (this.openGopErrorCount > 15) {
+      if (
+        !MoviVideoDecoder.DISABLE_OPENGOP_SW_FALLBACK &&
+        this.openGopErrorCount > openGopFallbackLimit
+      ) {
         Logger.error(
           TAG,
-          "Persistent Open GOP errors detected. Switching to software decoder.",
+          `Persistent Open GOP errors detected (${this.openGopErrorCount} > ${openGopFallbackLimit}). Switching to software decoder.`,
         );
         this.initSoftwareDecoder();
         return;
@@ -698,7 +988,7 @@ export class MoviVideoDecoder {
         try {
           this.decoder.reset();
           this.decoder.configure(this.lastConfig!);
-          this.waitingForKeyframe = true;
+          this.setWaitingForKeyframe(true);
           return;
         } catch (e) {
           Logger.warn(
@@ -750,7 +1040,7 @@ export class MoviVideoDecoder {
         try {
           if (this.decoder && this.decoder.state !== "closed") {
             this.decoder.configure(this.lastConfig);
-            this.waitingForKeyframe = true;
+            this.setWaitingForKeyframe(true);
             this.errorCount = 0; // Reset error count as we are trying a new config/hack
             return;
           } else {
@@ -778,7 +1068,7 @@ export class MoviVideoDecoder {
         this.decoder.reset();
         this.decoder.configure(this.lastConfig!);
 
-        this.waitingForKeyframe = true;
+        this.setWaitingForKeyframe(true);
         return;
       } catch (e) {
         Logger.warn(TAG, "Fast reset failed, trying full recreation");
@@ -939,11 +1229,41 @@ export class MoviVideoDecoder {
    */
   async flush(): Promise<void> {
     this.openGopErrorCount = 0;
+    this.justFlushed = true;
+    this.postFlushKeyframeRejects = 0;
+    // Re-derived on the next keyframe (post-flush resume re-latches it); clear
+    // here so a half-finished RASL skip from the prior position can't leak.
+    this.skipRaslAfterResume = false;
     this.pendingChunks = []; // Clear pending inputs
+    // After a flush the decoder has NO reference frames, so it must restart on
+    // a true IDR/BLA. Force the keyframe-wait so open-GOP CRA frames (and
+    // non-keyframes) that arrive before the first real IDR are skipped instead
+    // of fed as `delta` — a CRA-as-delta here fails with "key frame required
+    // after configure" and corrupts the next true IDR's decode too. This is the
+    // authoritative "references missing" signal; the decode() path keys its
+    // CRA→delta downgrade off NOT being in this state.
+    this.setWaitingForKeyframe(true);
     if (this.swDecoder) {
       return this.swDecoder.flush();
     }
     if (!this.decoder) return;
+
+    // Open-GOP HEVC restart: a decoder that has already decoded frames refuses
+    // an open-GOP CRA sent as `key` after a plain flush() ("Open GOP?"), yet a
+    // freshly configure()'d decoder accepts the very same CRA (the first CRA
+    // after a seek is accepted at startup but rejected on replay of the same
+    // position). For streams whose seek target may land on a CRA (no nearby
+    // IDR — e.g. 4K DoVi P8 .ts), recreate the decoder on flush instead of
+    // flush()ing it, so the post-seek decoder is in the same fresh state as
+    // startup. Recreate is ~tens of ms; only on seeks (flush), not per frame.
+    const codec = this.lastConfig?.codec ?? "";
+    const isHevc = codec.startsWith("hvc1.") || codec.startsWith("hev1.");
+    if (isHevc && !this.forceSoftware && !this.useSoftware) {
+      if (this.recreateDecoder()) {
+        return; // fresh decoder is configured and waiting for a keyframe
+      }
+      // recreate failed — fall through to a normal flush
+    }
 
     try {
       // Timeout flush — WebCodecs flush() can hang on slow devices
@@ -1116,6 +1436,19 @@ export class MoviVideoDecoder {
 
   get isWaitingForKeyframe(): boolean {
     return this.waitingForKeyframe;
+  }
+
+  // True while the decoder is recovering from a decode error (recreate +
+  // wait-for-keyframe), or within `graceMs` after the last recreate. During
+  // this window an empty video queue is EXPECTED — the GOP is being rebuilt —
+  // so the player should not treat it as a playback stall. Some HW decoders
+  // (observed: high-bitrate 1080p H.264) throw a transient EncodingError on
+  // each IDR; recreate recovers within ~1 GOP, but the brief empty queue would
+  // otherwise trip stall detection into a buffering loop.
+  isRecentlyRecovering(graceMs: number = 1200): boolean {
+    if (this.waitingForKeyframe) return true;
+    if (this.lastRecreateTime === 0) return false;
+    return performance.now() - this.lastRecreateTime < graceMs;
   }
 
   /**
@@ -1416,5 +1749,57 @@ export class MoviVideoDecoder {
     }
 
     return output;
+  }
+
+  // Strip Access Unit Delimiter (HEVC NAL type 35) NALs from a length-prefixed
+  // (hvcC, 4-byte big-endian length) packet. Some hardware WebCodecs decoders
+  // reject the FIRST keyframe after a flush when it leads with an AUD —
+  // observed on 10-bit DoVi/HDR HEVC where the same packet decodes fine at
+  // startup but is refused ("wasn't a key frame") right after a seek-flush.
+  // Returns the packet unchanged if no AUD is present or the data isn't
+  // recognizably length-prefixed.
+  static stripAudLengthPrefixed(data: Uint8Array): Uint8Array {
+    if (data.length < 5) return data;
+    // Bail if it looks like Annex B (start code) — this only handles hvcC.
+    if (
+      data[0] === 0 &&
+      data[1] === 0 &&
+      (data[2] === 1 || (data[2] === 0 && data[3] === 1))
+    ) {
+      return data;
+    }
+    const view = new DataView(data.buffer, data.byteOffset, data.byteLength);
+    const kept: Array<{ off: number; len: number }> = [];
+    let i = 0;
+    let removed = 0;
+    while (i + 4 <= data.length) {
+      const len = view.getUint32(i);
+      const nalOff = i + 4;
+      if (len <= 0 || nalOff + len > data.length) {
+        // Malformed length — don't risk corrupting the packet, return as-is.
+        return data;
+      }
+      const nalType = (data[nalOff] >> 1) & 0x3f;
+      if (nalType === 35) {
+        removed++;
+      } else {
+        kept.push({ off: nalOff, len });
+      }
+      i = nalOff + len;
+    }
+    if (removed === 0 || kept.length === 0) return data;
+
+    let total = 0;
+    for (const k of kept) total += 4 + k.len;
+    const out = new Uint8Array(total);
+    const outView = new DataView(out.buffer);
+    let pos = 0;
+    for (const k of kept) {
+      outView.setUint32(pos, k.len);
+      pos += 4;
+      out.set(data.subarray(k.off, k.off + k.len), pos);
+      pos += k.len;
+    }
+    return out;
   }
 }

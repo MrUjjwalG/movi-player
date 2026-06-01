@@ -86,9 +86,12 @@ export class PlaybackController {
         this.audioRenderer.configure(audioTrack.sampleRate, audioTrack.channels);
         await this.audioRenderer.init();
         
-        // Set up data callback
-        this.audioDecoder.setOnData((data) => {
-          this.audioRenderer.render(data);
+        // Audio is decoded via the FFmpeg/WASM software path only —
+        // see MoviAudioDecoder.configure for why the WebCodecs hardware
+        // path is gone. PCM frames come out of the software decoder
+        // and feed the AudioRenderer's renderPCM hook directly.
+        this.audioDecoder.setOnPCM((frame) => {
+          this.audioRenderer.renderPCM(frame);
         });
         
         Logger.info(TAG, `Audio decoder initialized: ${audioTrack.codec}`);

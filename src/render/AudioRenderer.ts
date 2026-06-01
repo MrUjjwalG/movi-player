@@ -4,7 +4,12 @@
  */
 
 import { Logger } from "../utils/Logger";
-import { SoundTouch } from "../utils/soundtouch";
+import {
+  createSignalsmithStretcher,
+  loadSignalsmith,
+  type SignalsmithStretcher,
+} from "../utils/signalsmith";
+import type { PCMFrame } from "../decode/SoftwareAudioDecoder";
 
 const TAG = "AudioRenderer";
 
@@ -33,9 +38,14 @@ export class AudioRenderer {
   // Playback rate change rebuffering flag
   private isRebufferingForRateChange: boolean = false;
 
-  // Pitch preservation
+  // Pitch preservation via Signalsmith Stretch (MIT), compiled into the same
+  // movi WASM module as FFmpeg/dav1d. Loads asynchronously on first need;
+  // until then we fall back to scaling source.playbackRate (which shifts
+  // pitch but keeps audio playing).
   private preservePitch: boolean = true;
-  private soundTouch: SoundTouch | null = null;
+  private signalsmith: SignalsmithStretcher | null = null;
+  private signalsmithLoading: boolean = false;
+  private signalsmithSampleRate: number = 0;
 
   // Stable audio: master toggle (off by default, opt-in via element attribute)
   private _stableAudio: boolean = false;
@@ -140,19 +150,29 @@ export class AudioRenderer {
   async init(): Promise<boolean> {
     try {
       this.audioContext = new AudioContext({
-        latencyHint: "playback",
+        // "interactive" gives Chromium's audio thread a shorter read-ahead
+        // (~30–50ms vs ~150ms with "playback"). Without this, Chromium starves
+        // when setPlaybackRate stops active sources and resets scheduledTime
+        // to `now` — Safari/Firefox tolerate it because their read-ahead is
+        // already short. Trade-off is a smaller output buffer cushion against
+        // main-thread spikes; the audio decoder + Stable Audio gap-fill
+        // already handle that case.
+        latencyHint: "interactive",
       });
       this.gainNode = this.audioContext.createGain();
 
-      // Create compressor for stable audio (loudness normalization)
+      // Create compressor for stable audio (loudness normalization).
+      // Tuned as a peak-limiter, not a heavy compressor: a wide soft knee
+      // + low ratio (the WebAudio default-ish) flattens the whole signal
+      // and the average RMS rises — perceptually that makes loud passages
+      // feel *louder*, not stabler. Instead we let dialogue / mid-level
+      // content pass untouched and clamp only true peaks.
       this.compressorNode = this.audioContext.createDynamicsCompressor();
-      // YouTube-like stable volume settings:
-      // Compress loud parts (explosions, music) while keeping dialogue clear
-      this.compressorNode.threshold.value = -24;  // Start compressing above -24dB
-      this.compressorNode.knee.value = 30;         // Smooth transition into compression
-      this.compressorNode.ratio.value = 12;        // 12:1 compression ratio
-      this.compressorNode.attack.value = 0.003;    // Fast attack (3ms) to catch sudden loud sounds
-      this.compressorNode.release.value = 0.25;    // Smooth release (250ms)
+      this.compressorNode.threshold.value = -18;  // only peaks > -18dB engage
+      this.compressorNode.knee.value = 6;         // sharp transition, no mid-range squash
+      this.compressorNode.ratio.value = 20;       // near-limiter on peaks
+      this.compressorNode.attack.value = 0.001;   // 1ms — catch transients before they hit the ear
+      this.compressorNode.release.value = 0.15;   // 150ms — quick recovery, no pumping
 
       // Wire audio chain based on stable audio state
       if (this._stableAudio) {
@@ -165,7 +185,7 @@ export class AudioRenderer {
       }
 
       // Apply muted state if set before initialization
-      this.gainNode.gain.value = this._muted ? 0 : this.volume;
+      this.gainNode.gain.value = this._muted ? 0 : this.perceptualGain(this.volume);
 
       // Don't resume here — play() handles resume when user clicks play.
       // Pre-init creates AudioContext during load for fast startup;
@@ -180,6 +200,12 @@ export class AudioRenderer {
         TAG,
         `Initialized: sampleRate=${this.audioContext.sampleRate}, muted=${this._muted}, state=${this.audioContext.state}`,
       );
+
+      // Warm the Signalsmith WASM module so the first rate change isn't
+      // gated on a fetch. The stretcher instance is constructed lazily on
+      // the first audio chunk so we use the decoded sample rate (not
+      // AudioContext's, which often differs for Opus).
+      loadSignalsmith();
       return true;
     } catch (error) {
       Logger.error(TAG, "Failed to initialize", error);
@@ -192,6 +218,55 @@ export class AudioRenderer {
    */
   configure(sampleRate: number, channels: number): void {
     Logger.info(TAG, `Configured: ${sampleRate}Hz, ${channels}ch`);
+  }
+
+  /**
+   * Maximum number of output channels the user's audio device + browser
+   * combination supports. 2 (stereo) for typical laptop/phone setups,
+   * 6 for a 5.1 receiver, 8 for 7.1. Returns 2 when the AudioContext
+   * hasn't been created yet.
+   */
+  getMaxChannelCount(): number {
+    return this.audioContext?.destination.maxChannelCount ?? 2;
+  }
+
+  /**
+   * Ask the AudioContext destination to accept `n` discrete channels
+   * instead of Web Audio's default 2. `channelCountMode: "explicit"` +
+   * `channelInterpretation: "discrete"` together suppress the
+   * automatic speaker-layout downmix the API would otherwise apply,
+   * so a 7.1 AudioBuffer reaches the device with all 8 planes intact.
+   * Caller is responsible for ensuring the OS / hardware actually has
+   * that many output channels — read getMaxChannelCount() first and
+   * clamp accordingly.
+   */
+  setOutputChannelCount(n: number): void {
+    if (!this.audioContext) return;
+    const dest = this.audioContext.destination;
+    const clamped = Math.min(Math.max(1, Math.floor(n)), dest.maxChannelCount);
+    try {
+      dest.channelCount = clamped;
+      dest.channelCountMode = "explicit";
+      dest.channelInterpretation = "discrete";
+      // GainNode defaults to channelCountMode:"max", which already
+      // promotes its output to match the input — so multichannel
+      // audio flows through it untouched even with channelCount=2.
+      // Setting it here is a defensive no-op; documenting the
+      // intent for readers chasing the same channel question. The
+      // compressor (when stable audio is on) uses "clamped-max"
+      // which DOES respect channelCount, so we promote it
+      // explicitly — otherwise a 5.1 source would lose its
+      // surround when piped through stable-audio compression.
+      if (this.gainNode) {
+        this.gainNode.channelCount = clamped;
+      }
+      if (this.compressorNode) {
+        this.compressorNode.channelCount = clamped;
+      }
+      Logger.info(TAG, `Destination channelCount → ${clamped} (max ${dest.maxChannelCount})`);
+    } catch (e) {
+      Logger.warn(TAG, "Failed to set destination channelCount", e);
+    }
   }
 
   /**
@@ -215,6 +290,73 @@ export class AudioRenderer {
       return;
     }
 
+    try {
+      const numberOfFrames = audioData.numberOfFrames;
+      const numberOfChannels = audioData.numberOfChannels;
+      const sampleRate = audioData.sampleRate;
+      const audioTime = audioData.timestamp / 1_000_000; // Convert to seconds
+
+      const audioBuffer = this.audioContext.createBuffer(
+        numberOfChannels,
+        numberOfFrames,
+        sampleRate,
+      );
+
+      for (let channel = 0; channel < numberOfChannels; channel++) {
+        const channelData = new Float32Array(numberOfFrames);
+        audioData.copyTo(channelData, {
+          planeIndex: channel,
+          format: "f32-planar",
+        });
+        audioBuffer.copyToChannel(channelData, channel);
+      }
+
+      this.scheduleAudioBuffer(audioBuffer, audioTime);
+    } catch (error) {
+      Logger.error(TAG, "Render error", error);
+    } finally {
+      audioData.close();
+    }
+  }
+
+  /**
+   * Render a raw PCM frame (browser-agnostic path used by the software
+   * decoder). Avoids constructing a WebCodecs AudioData, which Firefox on
+   * Android does not implement.
+   */
+  renderPCM(frame: PCMFrame): void {
+    if (!this.audioContext || !this.gainNode) return;
+    if (!this.isPlaying) return;
+    if (this._muted && this.audioContext.state === "suspended") return;
+
+    try {
+      const audioTime = frame.timestamp / 1_000_000;
+      const audioBuffer = this.audioContext.createBuffer(
+        frame.numberOfChannels,
+        frame.numberOfFrames,
+        frame.sampleRate,
+      );
+
+      for (let channel = 0; channel < frame.numberOfChannels; channel++) {
+        audioBuffer.copyToChannel(
+          frame.planes[channel] as Float32Array<ArrayBuffer>,
+          channel,
+        );
+      }
+
+      this.scheduleAudioBuffer(audioBuffer, audioTime);
+    } catch (error) {
+      Logger.error(TAG, "RenderPCM error", error);
+    }
+  }
+
+  /**
+   * Schedule a populated AudioBuffer through the stretcher + A/V sync
+   * pipeline. Shared by render() and renderPCM().
+   */
+  private scheduleAudioBuffer(audioBuffer: AudioBuffer, audioTime: number): void {
+    if (!this.audioContext || !this.gainNode) return;
+
     // Track when we receive decoded audio
     this.lastDecodeTime = performance.now();
 
@@ -225,166 +367,134 @@ export class AudioRenderer {
       Logger.debug(TAG, "Recovered from audio starvation");
     }
 
-    // We do NOT drop frames here anymore to prevent A/V sync issues.
-    // Instead, MoviPlayer checks getBufferedDuration() to apply backpressure.
+    const numberOfChannels = audioBuffer.numberOfChannels;
+    const sampleRate = audioBuffer.sampleRate;
 
-    try {
-      const numberOfFrames = audioData.numberOfFrames;
-      const numberOfChannels = audioData.numberOfChannels;
-      const sampleRate = audioData.sampleRate;
-      const audioTime = audioData.timestamp / 1_000_000; // Convert to seconds
+    // Clear rebuffering flag as soon as audio data arrives (decoder is producing).
+    // Don't wait for successful scheduling — the stretcher may swallow a few
+    // buffers while warming up, but the flag should clear immediately.
+    if (this.isRebufferingForRateChange) {
+      this.isRebufferingForRateChange = false;
+      Logger.debug(TAG, "Rebuffering complete after playback rate change");
+    }
 
-      // Create audio buffer
-      const audioBuffer = this.audioContext.createBuffer(
-        numberOfChannels,
-        numberOfFrames,
-        sampleRate,
-      );
-
-      // Copy data to buffer
-      for (let channel = 0; channel < numberOfChannels; channel++) {
-        const channelData = new Float32Array(numberOfFrames);
-        audioData.copyTo(channelData, {
-          planeIndex: channel,
-          format: "f32-planar",
-        });
-        audioBuffer.copyToChannel(channelData, channel);
+    // Apply pitch preservation via Signalsmith if enabled and playback rate
+    // is not 1.0. If the stretcher isn't ready yet (WASM still loading) we
+    // schedule expected-duration silence instead of falling back to scaling
+    // source.playbackRate — that fallback shifts pitch (chipmunk audio) for
+    // the ~1s of startup before the WASM stretcher kicks in. A brief silent
+    // gap at the start is preferable to an audible pitch-shifted blip.
+    let processedBuffer = audioBuffer;
+    let usedStretcher = false;
+    if (this.preservePitch && Math.abs(this._playbackRate - 1.0) > 0.01) {
+      const stOutput = this.processStretch(audioBuffer, this._playbackRate);
+      if (stOutput && stOutput.length > 1) {
+        processedBuffer = stOutput;
+        usedStretcher = true;
+      } else {
+        // Stretcher ready-but-warming OR not loaded yet — schedule
+        // expected-duration silence so timing stays correct. Brief gap,
+        // no pitch shift (no chipmunk).
+        const expectedDuration = audioBuffer.duration / this._playbackRate;
+        const silenceFrames = Math.max(1, Math.ceil(expectedDuration * sampleRate));
+        processedBuffer = this.audioContext.createBuffer(numberOfChannels, silenceFrames, sampleRate);
+        usedStretcher = true;
       }
+    }
 
-      // Clear rebuffering flag as soon as audio data arrives (decoder is producing).
-      // Don't wait for successful scheduling — SoundTouch may skip a few buffers
-      // while accumulating internally, but the flag should clear immediately.
-      if (this.isRebufferingForRateChange) {
-        this.isRebufferingForRateChange = false;
-        Logger.debug(TAG, "Rebuffering complete after playback rate change");
-      }
+    const source = this.audioContext.createBufferSource();
+    source.buffer = processedBuffer;
+    source.connect(this.gainNode);
+    source.playbackRate.value = usedStretcher ? 1.0 : this._playbackRate;
 
-      // Apply pitch preservation if enabled and playback rate is not 1.0
-      let processedBuffer = audioBuffer;
-      let usedSoundTouch = false;
-      if (this.preservePitch && Math.abs(this._playbackRate - 1.0) > 0.01) {
-        const stOutput = this.processSoundTouch(audioBuffer, this._playbackRate);
-        if (stOutput && stOutput.length > 1) {
-          processedBuffer = stOutput;
-          usedSoundTouch = true;
-        } else {
-          // SoundTouch is accumulating internally — schedule silence of the expected
-          // duration to keep timing correct. No pitch change, just a brief gap.
-          const expectedDuration = audioBuffer.duration / this._playbackRate;
-          const silenceFrames = Math.max(1, Math.ceil(expectedDuration * sampleRate));
-          processedBuffer = this.audioContext.createBuffer(numberOfChannels, silenceFrames, sampleRate);
-          usedSoundTouch = true; // treat as SoundTouch path for scheduling
-        }
-      }
+    const now = this.audioContext.currentTime;
+    const minTime = now + 0.005; // Small buffer to prevent glitches
 
-      // Create buffer source
-      const source = this.audioContext.createBufferSource();
-      source.buffer = processedBuffer;
-      source.connect(this.gainNode);
-      source.playbackRate.value = usedSoundTouch ? 1.0 : this._playbackRate;
-
-      // Schedule playback sequentially
-      const now = this.audioContext.currentTime;
-      const minTime = now + 0.005; // Small buffer to prevent glitches
-
-      // Detect buffer underrun
-      if (this.scheduledTime < now) {
-        // Stable audio: fill the gap with a short silence buffer to prevent pops
-        if (this._stableAudio && this.hasFirstBuffer && this.audioContext) {
-          const gapDuration = now - this.scheduledTime;
-          if (gapDuration > 0.005 && gapDuration < 1.0) {
-            try {
-              const silenceFrames = Math.ceil(gapDuration * sampleRate);
-              const silenceBuffer = this.audioContext.createBuffer(
-                numberOfChannels, silenceFrames, sampleRate
-              );
-              const silenceSource = this.audioContext.createBufferSource();
-              silenceSource.buffer = silenceBuffer;
-              silenceSource.connect(this.gainNode);
-              silenceSource.start(this.scheduledTime);
-              silenceSource.onended = () => {
-                try { silenceSource.disconnect(); } catch { /* ignore */ }
-              };
-              Logger.debug(TAG, `Gap filled: ${(gapDuration * 1000).toFixed(1)}ms silence`);
-            } catch {
-              // Ignore gap fill errors
-            }
+    // Detect buffer underrun
+    if (this.scheduledTime < now) {
+      // Stable audio: fill the gap with a short silence buffer to prevent pops
+      if (this._stableAudio && this.hasFirstBuffer && this.audioContext) {
+        const gapDuration = now - this.scheduledTime;
+        if (gapDuration > 0.005 && gapDuration < 1.0) {
+          try {
+            const silenceFrames = Math.ceil(gapDuration * sampleRate);
+            const silenceBuffer = this.audioContext.createBuffer(
+              numberOfChannels, silenceFrames, sampleRate
+            );
+            const silenceSource = this.audioContext.createBufferSource();
+            silenceSource.buffer = silenceBuffer;
+            silenceSource.connect(this.gainNode);
+            silenceSource.start(this.scheduledTime);
+            silenceSource.onended = () => {
+              try { silenceSource.disconnect(); } catch { /* ignore */ }
+            };
+            Logger.debug(TAG, `Gap filled: ${(gapDuration * 1000).toFixed(1)}ms silence`);
+          } catch {
+            // Ignore gap fill errors
           }
         }
-
-        this.scheduledTime = minTime;
-
-        if (this.hasFirstBuffer) {
-          // Pivot global clock if we underrun (resync)
-          this.firstBufferScheduledAt = minTime;
-          this.firstBufferMediaTime = audioTime;
-        }
       }
 
-      // Calculate expected playback time based on timestamp
-      let targetScheduleTime = this.scheduledTime;
+      this.scheduledTime = minTime;
 
       if (this.hasFirstBuffer) {
-        const expectedTime =
-          this.firstBufferScheduledAt +
-          (audioTime - this.firstBufferMediaTime) / this._playbackRate;
-
-        const drift = expectedTime - this.scheduledTime;
-        // Tighter drift tolerance (20ms) for better sync
-        if (Math.abs(drift) > 0.02) {
-          targetScheduleTime = expectedTime;
-        }
-      }
-
-      const when = Math.max(targetScheduleTime, minTime);
-      source.start(when);
-
-      // Track first buffer for audio clock
-      if (!this.hasFirstBuffer) {
-        this.firstBufferScheduledAt = when;
+        // Pivot global clock if we underrun (resync)
+        this.firstBufferScheduledAt = minTime;
         this.firstBufferMediaTime = audioTime;
-        this.hasFirstBuffer = true;
-        Logger.debug(
-          TAG,
-          `First buffer scheduled at ${when.toFixed(3)}s, mediaTime=${audioTime.toFixed(3)}s`,
-        );
       }
-
-      this.activeSources.push(source);
-      // When SoundTouch produced output, use its actual duration.
-      // When falling back to hardware rate, use original duration / rate.
-      this.scheduledTime = when + (usedSoundTouch
-        ? processedBuffer.duration
-        : audioBuffer.duration / this._playbackRate);
-      this.currentMediaTime = audioTime;
-      this.scheduledCount++;
-
-      // Track the maximum media time we've scheduled
-      // audioBuffer.duration is already in media seconds, no need to multiply by playbackRate
-      const endMediaTime = audioTime + audioBuffer.duration;
-      if (endMediaTime > this.maxScheduledMediaTime) {
-        this.maxScheduledMediaTime = endMediaTime;
-      }
-
-      // Cleanup when finished
-      source.onended = () => {
-        const idx = this.activeSources.indexOf(source);
-        if (idx !== -1) {
-          this.activeSources.splice(idx, 1);
-        }
-        try {
-          source.disconnect();
-        } catch {
-          // Ignore
-        }
-      };
-
-      // Close the AudioData
-      audioData.close();
-    } catch (error) {
-      Logger.error(TAG, "Render error", error);
-      audioData.close();
     }
+
+    // Calculate expected playback time based on timestamp
+    let targetScheduleTime = this.scheduledTime;
+
+    if (this.hasFirstBuffer) {
+      const expectedTime =
+        this.firstBufferScheduledAt +
+        (audioTime - this.firstBufferMediaTime) / this._playbackRate;
+
+      const drift = expectedTime - this.scheduledTime;
+      // Tighter drift tolerance (20ms) for better sync
+      if (Math.abs(drift) > 0.02) {
+        targetScheduleTime = expectedTime;
+      }
+    }
+
+    const when = Math.max(targetScheduleTime, minTime);
+    source.start(when);
+
+    if (!this.hasFirstBuffer) {
+      this.firstBufferScheduledAt = when;
+      this.firstBufferMediaTime = audioTime;
+      this.hasFirstBuffer = true;
+      Logger.debug(
+        TAG,
+        `First buffer scheduled at ${when.toFixed(3)}s, mediaTime=${audioTime.toFixed(3)}s`,
+      );
+    }
+
+    this.activeSources.push(source);
+    this.scheduledTime = when + (usedStretcher
+      ? processedBuffer.duration
+      : audioBuffer.duration / this._playbackRate);
+    this.currentMediaTime = audioTime;
+    this.scheduledCount++;
+
+    const endMediaTime = audioTime + audioBuffer.duration;
+    if (endMediaTime > this.maxScheduledMediaTime) {
+      this.maxScheduledMediaTime = endMediaTime;
+    }
+
+    source.onended = () => {
+      const idx = this.activeSources.indexOf(source);
+      if (idx !== -1) {
+        this.activeSources.splice(idx, 1);
+      }
+      try {
+        source.disconnect();
+      } catch {
+        // Ignore
+      }
+    };
   }
 
   /**
@@ -431,15 +541,53 @@ export class AudioRenderer {
    * Start playback
    */
   async play(): Promise<void> {
+    // Flip isPlaying up front, BEFORE any await. The resume branch in the
+    // player's notifySeekCompletion calls play() fire-and-forget and then
+    // immediately decodes the first post-seek audio packets. If we only set
+    // isPlaying after awaiting audioContext.resume() (which on replay can take
+    // tens of ms while the context wakes from suspended), every frame decoded
+    // during that window — the 0s frame and the next ~1s of audio — hits
+    // render()'s `!isPlaying` guard and gets dropped. The first surviving
+    // frame is then ~1s in, so replay starts playing ahead of 0. Setting the
+    // flag synchronously here lets those early frames schedule; they sit in
+    // the AudioContext queue and play once it resumes.
+    this.isPlaying = true;
+    this.intentionalSuspend = false;
+
     // Don't initialize AudioContext during muted autoplay (browser policy)
     // It will be initialized when user unmutes (user gesture)
     if (!this.audioContext && !this._muted) {
       await this.init();
     }
 
-    // Only resume if not muted (to avoid autoplay policy errors)
-    // When muted, AudioContext stays suspended until user unmutes
-    if (this.audioContext?.state === "suspended" && !this._muted) {
+    // Eager stretcher warmup when starting playback already at a non-1x rate
+    // (saved preference, or rate set while paused). Kicks WASM construction
+    // off now so it's ready before the first decoded chunk needs stretching,
+    // avoiding the opening silence gap the chunk-time lazy init would leave.
+    if (
+      this.preservePitch &&
+      this.audioContext &&
+      !this.signalsmith &&
+      Math.abs(this._playbackRate - 1.0) > 0.01
+    ) {
+      this.maybeInitSignalsmith(this.audioContext.sampleRate);
+    }
+
+    // Resume the AudioContext when either (a) we're not muted so audio
+    // can actually play, OR (b) we suspended it ourselves via pause()
+    // and need to wake it back up. The original `!_muted` gate was a
+    // browser-autoplay-policy safety net for the very first play before
+    // any user gesture had unlocked audio — but a resume-after-pause
+    // has already crossed that gate (pause() only suspends a running
+    // context, which only reached running via a prior gesture). Without
+    // the second branch, a muted pause→play leaves the context stuck
+    // suspended, audio time stops advancing, and the canvas renderer's
+    // audio-synced presentation loop wedges on its last frame even
+    // though the Clock keeps ticking via fallback time.
+    if (
+      this.audioContext?.state === "suspended" &&
+      (!this._muted || this.intentionalSuspend)
+    ) {
       try {
         await this.audioContext.resume();
       } catch (err) {
@@ -462,8 +610,8 @@ export class AudioRenderer {
     // Reset last decode time to prevent false unhealthy buffer detection after long pause
     this.lastDecodeTime = performance.now();
 
-    this.isPlaying = true;
-    this.intentionalSuspend = false;
+    // isPlaying / intentionalSuspend already set synchronously at the top of
+    // play() so no decoded frames are dropped during the async resume window.
 
     // NOTE: We do NOT reset scheduledTime or sync anchors here.
     // If we are resuming from pause (suspend), the buffer is preserved
@@ -477,77 +625,92 @@ export class AudioRenderer {
   }
 
   /**
-   * Initialize or update SoundTouch instance
+   * Kick off Signalsmith stretcher construction. Single-flight; idempotent.
+   * The movi WASM module is shared with FFmpeg, so this is fast once the
+   * player has loaded — just an instance allocation.
    */
-  private initSoundTouch(): void {
-    if (!this.soundTouch) {
-      this.soundTouch = new SoundTouch();
-    }
-    this.soundTouch.tempo = this._playbackRate;
-    this.soundTouch.pitch = 1.0;
+  private maybeInitSignalsmith(sampleRate: number): void {
+    if (this.signalsmith || this.signalsmithLoading) return;
+    this.signalsmithLoading = true;
+    this.signalsmithSampleRate = sampleRate;
+    createSignalsmithStretcher(sampleRate, 2)
+      .then((s) => {
+        this.signalsmithLoading = false;
+        if (!s) return;
+        s.tempo = this._playbackRate;
+        s.pitch = 1.0;
+        this.signalsmith = s;
+        Logger.info(TAG, `Signalsmith ready @ ${sampleRate}Hz`);
+      })
+      .catch((err) => {
+        this.signalsmithLoading = false;
+        Logger.warn(TAG, "Signalsmith init failed", err);
+      });
   }
 
   /**
-   * Process audio buffer through SoundTouch for pitch-preserving playback rate changes
+   * Pitch-preserving time stretch through Signalsmith. Returns the stretched
+   * AudioBuffer, or null if the stretcher isn't ready yet (caller falls back
+   * to source.playbackRate scaling, which shifts pitch but keeps audio playing).
    */
-  private processSoundTouch(
+  private processStretch(
     inputBuffer: AudioBuffer,
-    playbackRate: number
-  ): AudioBuffer {
-    if (!this.audioContext) return inputBuffer;
-
-    // Initialize or update SoundTouch
-    this.initSoundTouch();
+    playbackRate: number,
+  ): AudioBuffer | null {
+    if (!this.audioContext) return null;
 
     const numChannels = inputBuffer.numberOfChannels;
     const sampleRate = inputBuffer.sampleRate;
     const inputFrames = inputBuffer.length;
 
-    // Convert planar to interleaved stereo
+    // Drop + rebuild the stretcher if the decoded sample rate changed —
+    // Signalsmith is fixed-rate per instance.
+    if (this.signalsmith && this.signalsmithSampleRate !== sampleRate) {
+      this.signalsmith.destroy();
+      this.signalsmith = null;
+    }
+    this.maybeInitSignalsmith(sampleRate);
+
+    if (!this.signalsmith) return null; // still loading — caller falls back
+
+    const stretcher = this.signalsmith;
+    stretcher.tempo = this._playbackRate;
+    stretcher.pitch = 1.0;
+
+    // Convert planar AudioBuffer → interleaved stereo for the WASM API.
     const interleavedInput = new Float32Array(inputFrames * 2);
     const leftChannel = inputBuffer.getChannelData(0);
     const rightChannel = numChannels > 1 ? inputBuffer.getChannelData(1) : leftChannel;
-
     for (let i = 0; i < inputFrames; i++) {
       interleavedInput[i * 2] = leftChannel[i];
       interleavedInput[i * 2 + 1] = rightChannel[i];
     }
 
-    // Feed samples to SoundTouch
-    this.soundTouch!.inputBuffer.putSamples(interleavedInput, 0, inputFrames);
-    this.soundTouch!.process();
+    stretcher.inputBuffer.putSamples(interleavedInput, 0, inputFrames);
+    stretcher.process();
 
-    // Calculate expected output frames
     const expectedFrames = Math.ceil(inputFrames / playbackRate);
-    const availableFrames = this.soundTouch!.outputBuffer.frameCount;
+    const availableFrames = stretcher.outputBuffer.frameCount;
     const framesToExtract = Math.min(expectedFrames, availableFrames);
 
     if (framesToExtract === 0) {
-      // SoundTouch is still accumulating internally — signal caller to skip scheduling.
-      // Input is buffered inside SoundTouch and will be emitted on subsequent calls.
-      return null as unknown as AudioBuffer;
+      // Stretcher is still warming up — caller should skip scheduling.
+      return null;
     }
 
-    // Extract processed samples
     const interleavedOutput = new Float32Array(framesToExtract * 2);
-    this.soundTouch!.outputBuffer.receiveSamples(interleavedOutput, framesToExtract);
+    stretcher.outputBuffer.receiveSamples(interleavedOutput, framesToExtract);
 
-    // Create output buffer
     const outputBuffer = this.audioContext.createBuffer(
       numChannels,
       framesToExtract,
-      sampleRate
+      sampleRate,
     );
-
-    // De-interleave and copy to output buffer
     const outputLeft = outputBuffer.getChannelData(0);
     const outputRight = numChannels > 1 ? outputBuffer.getChannelData(1) : null;
-
     for (let i = 0; i < framesToExtract; i++) {
       outputLeft[i] = interleavedOutput[i * 2];
-      if (outputRight) {
-        outputRight[i] = interleavedOutput[i * 2 + 1];
-      }
+      if (outputRight) outputRight[i] = interleavedOutput[i * 2 + 1];
     }
 
     return outputBuffer;
@@ -635,10 +798,11 @@ export class AudioRenderer {
   setVolume(volume: number): void {
     this.volume = Math.max(0, Math.min(1, volume));
     if (this.gainNode && !this._muted) {
+      const g = this.perceptualGain(this.volume);
       if (this._stableAudio) {
-        this.rampGain(this.volume);
+        this.rampGain(g);
       } else {
-        this.gainNode.gain.value = this.volume;
+        this.gainNode.gain.value = g;
       }
     }
     Logger.debug(TAG, `Volume: ${this.volume} (muted: ${this._muted})`);
@@ -660,12 +824,43 @@ export class AudioRenderer {
 
     const oldRate = this._playbackRate;
 
-    // Clear SoundTouch state when rate changes
-    if (this.soundTouch && this.preservePitch) {
-      this.soundTouch.clear();
+    // Clear stretcher state when rate changes.
+    if (this.preservePitch && this.signalsmith) {
+      this.signalsmith.tempo = newRate;
+      this.signalsmith.clear();
+    } else if (
+      this.preservePitch &&
+      Math.abs(newRate - 1.0) > 0.01 &&
+      this.audioContext
+    ) {
+      // Eager warmup: kick off WASM stretcher construction the moment a
+      // non-1x rate is chosen, BEFORE the first audio chunk arrives. Without
+      // this the stretcher only starts loading inside processStretch() on the
+      // first chunk, leaving the opening ~1s with no stretcher — which falls
+      // through to the silence path (no chipmunk, but a brief audio gap).
+      // Warming it ahead of the chunks closes that gap in the common case.
+      // sampleRate matches the AudioContext; processStretch rebuilds the
+      // instance if a decoded chunk ever arrives at a different rate.
+      this.maybeInitSignalsmith(this.audioContext.sampleRate);
     }
 
-    // Pivot the clock before changing rate
+    // Re-anchor the audio→media clock at the CURRENT play position, then drop
+    // the stale old-rate audio that's still scheduled ahead of `now` so the
+    // rate change is heard immediately instead of after a multi-second tail.
+    //
+    // The scheduled read-ahead (each chunk queued at `scheduledTime`, which
+    // runs up to ~maxAudioBuffered seconds past `now`) is all old-rate audio.
+    // If we leave it playing (the old "do nothing" path) the audible rate
+    // change lags video by that whole span. So we stop the active sources and
+    // pull scheduledTime back to `now` — the next decoded chunk then plays at
+    // `now` at the new rate.
+    //
+    // Crucially we do NOT clear firstBufferMediaTime / hasFirstBuffer the way
+    // reset() does. Keeping the anchor (mapped through the OLD rate up to now)
+    // means the next chunk schedules via expectedTime against the current
+    // playhead — so the audio clock does NOT leap to the demuxer's read-ahead
+    // mediaTime, and the video does not hard-snap forward. That leap was the
+    // "jumps 1–3s ahead on rate change" regression.
     if (
       this.audioContext &&
       this.audioContext.state === "running" &&
@@ -675,51 +870,55 @@ export class AudioRenderer {
       const currentMediaTime =
         this.firstBufferMediaTime +
         (now - this.firstBufferScheduledAt) * oldRate;
-
-      const bufferAhead = this.scheduledTime - now;
-      if (bufferAhead > 0) {
-        this.scheduledTime = now + bufferAhead * (oldRate / newRate);
-      } else {
-        this.scheduledTime = now + 0.01;
-      }
-
       this.firstBufferScheduledAt = now;
       this.firstBufferMediaTime = currentMediaTime;
+
+      // Stop the stale old-rate sources scheduled ahead of now. Fade the gain
+      // briefly first (stable audio) to avoid a click at the cut.
+      if (this._stableAudio && this.gainNode && this.activeSources.length > 0) {
+        try {
+          this.gainNode.gain.cancelScheduledValues(now);
+          this.gainNode.gain.setValueAtTime(this.gainNode.gain.value, now);
+          this.gainNode.gain.linearRampToValueAtTime(
+            0,
+            now + AudioRenderer.FADE_OUT_TIME,
+          );
+        } catch {
+          /* ignore ramp errors */
+        }
+      }
+      for (const source of this.activeSources) {
+        try {
+          source.stop();
+          source.disconnect();
+        } catch {
+          /* ignore */
+        }
+      }
+      this.activeSources = [];
+      // Next chunk schedules from now (its expectedTime, via the preserved
+      // anchor, lands just after now — the small forward gap is the buffered
+      // span we just discarded, not a clock leap). Stretcher ring already
+      // cleared above.
+      this.scheduledTime = now;
+
+      // Restore gain after the fade-out for the new-rate sources.
+      if (this._stableAudio && this.gainNode) {
+        try {
+          const restoreTime = now + AudioRenderer.FADE_OUT_TIME + 0.005;
+          this.gainNode.gain.linearRampToValueAtTime(
+            this._muted ? 0 : this.perceptualGain(this.volume),
+            restoreTime,
+          );
+        } catch {
+          this.gainNode.gain.value = this._muted
+            ? 0
+            : this.perceptualGain(this.volume);
+        }
+      }
     }
 
     this._playbackRate = newRate;
-
-    // Stop all currently playing sources to force immediate re-buffering with new rate
-    // This causes a brief gap (~50-100ms) but ensures correct playback rate immediately
-    if (this.audioContext) {
-      const now = this.audioContext.currentTime;
-
-      // No rebuffering flag — brief audio gap (~50-100ms) is acceptable.
-      // Setting the flag causes loading state that gets stuck when SoundTouch
-      // delays output (especially on Safari). Clock drift correction handles sync.
-
-      // Stop all active sources
-      if (this.activeSources.length > 0) {
-        for (const source of this.activeSources) {
-          try {
-            source.stop(now);
-            source.disconnect();
-          } catch {
-            // Source may already be stopped
-          }
-        }
-
-        // Clear active sources array
-        this.activeSources = [];
-
-        // Reset scheduled time to force immediate re-buffering
-        this.scheduledTime = now;
-      } else if (this.isPlaying) {
-        // No active sources but playing (e.g., underrun or just started)
-        // Still need to reset scheduled time to ensure new audio uses new rate immediately
-        this.scheduledTime = now;
-      }
-    }
   }
 
   /**
@@ -779,10 +978,11 @@ export class AudioRenderer {
     }
 
     if (this.gainNode) {
+      const g = this.perceptualGain(this.volume);
       if (this._stableAudio) {
-        this.rampGain(this.volume);
+        this.rampGain(g);
       } else {
-        this.gainNode.gain.value = this.volume;
+        this.gainNode.gain.value = g;
       }
     }
 
@@ -839,22 +1039,20 @@ export class AudioRenderer {
     this.isStarved = false;
     this.starvationStartTime = 0;
 
-    // Clear SoundTouch state
-    if (this.soundTouch) {
-      this.soundTouch.clear();
-    }
+    // Clear stretcher state
+    if (this.signalsmith) this.signalsmith.clear();
 
     // Restore gain after fade-out (for next playback)
     if (this._stableAudio && this.gainNode && this.audioContext) {
       try {
         const restoreTime = this.audioContext.currentTime + AudioRenderer.FADE_OUT_TIME + 0.005;
         this.gainNode.gain.linearRampToValueAtTime(
-          this._muted ? 0 : this.volume,
+          this._muted ? 0 : this.perceptualGain(this.volume),
           restoreTime
         );
       } catch {
         // Fallback: set directly
-        this.gainNode.gain.value = this._muted ? 0 : this.volume;
+        this.gainNode.gain.value = this._muted ? 0 : this.perceptualGain(this.volume);
       }
     }
   }
@@ -929,6 +1127,24 @@ export class AudioRenderer {
       return computedTime;
     }
     return -1;
+  }
+
+  /**
+   * True when an AudioContext exists but the browser is keeping it suspended
+   * despite us asking to play unmuted — i.e. autoplay-with-sound was blocked
+   * because no user gesture has unlocked audio yet. resume() resolves without
+   * throwing in this case (Chromium silently leaves the context suspended),
+   * so callers can't detect the block from play()'s promise; they poll this
+   * instead. Returns false when muted (we intentionally don't resume) or when
+   * the context is genuinely running.
+   */
+  isBlockedSuspended(): boolean {
+    return (
+      !!this.audioContext &&
+      this.audioContext.state === "suspended" &&
+      !this._muted &&
+      !this.intentionalSuspend
+    );
   }
 
   /**
@@ -1034,6 +1250,23 @@ export class AudioRenderer {
   /**
    * Smoothly ramp gain to target value to prevent clicks/pops
    */
+  /**
+   * Convert a linear slider value (0-1) to a perceptual gain value.
+   *
+   * Human loudness perception is logarithmic, so a linear gain feels like
+   * "almost everything happens in the first 10%" and the top 90% feels flat.
+   * We map the slider through an exponential (dB-based) curve so that equal
+   * slider movement produces a roughly equal perceived loudness change across
+   * the whole range. 0 -> silence, 1 -> unity gain.
+   */
+  private perceptualGain(v: number): number {
+    if (v <= 0) return 0;
+    if (v >= 1) return 1;
+    // ~60 dB usable range: gain = (e^(k*v) - 1) / (e^k - 1), k tuned for feel.
+    const k = 6.908; // ln(1000) -> ~60 dB dynamic range
+    return (Math.exp(k * v) - 1) / (Math.exp(k) - 1);
+  }
+
   private rampGain(targetValue: number): void {
     if (!this.gainNode || !this.audioContext) {
       return;
@@ -1175,7 +1408,10 @@ export class AudioRenderer {
 
     this.gainNode = null;
     this.compressorNode = null;
-    this.soundTouch = null;
+    if (this.signalsmith) {
+      this.signalsmith.destroy();
+      this.signalsmith = null;
+    }
     this.recoveryAttempts = 0;
     Logger.debug(TAG, "Destroyed");
   }

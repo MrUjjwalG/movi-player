@@ -10,6 +10,7 @@ docs/.vitepress/dist/
 .wrangler/
 .dev.vars
 .dev.vars.*
+.playwright-mcp/
 
 chrome-extension/screenshots/
 test-media/

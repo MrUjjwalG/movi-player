@@ -44,6 +44,22 @@ import { ThumbnailRenderer } from "../utils/ThumbnailRenderer";
 const TAG = "MoviPlayer";
 
 export class MoviPlayer extends EventEmitter<PlayerEventMap> {
+  // One-shot UA classification: mobile devices get the same conservative
+  // decode/render budgets as 4K+ desktop, since mobile GPUs and Chrome's
+  // AV1 hardware whitelist make the heavy path unaffordable at any res.
+  // Memoized at class level so we don't re-parse navigator.userAgent in
+  // every demux loop tick.
+  private static readonly _isMobileDevice: boolean = (() => {
+    if (typeof navigator === "undefined") return false;
+    const uaData = (navigator as any)?.userAgentData;
+    if (uaData?.mobile === true) return true;
+    const ua = navigator.userAgent || "";
+    if (/Android|iPhone|iPod|Mobile|Opera Mini|IEMobile|BlackBerry/i.test(ua)) return true;
+    // iPadOS 13+ reports as Mac — disambiguate via touch points
+    if (/Macintosh/.test(ua) && (navigator.maxTouchPoints ?? 0) > 1) return true;
+    return false;
+  })();
+
   private config: PlayerConfig;
   private source: SourceAdapter | null = null;
   private cache: LRUCache;
@@ -66,6 +82,22 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
   private fileSize: number = -1; // Cached file size for buffer calculations
   private lastBufferedTime: number = 0;
 
+  private previewsAllowed(): boolean {
+    if (!this.config.enablePreviews) return false;
+    // NOTE: a file-size cap used to live here — the seek-bar thumbnail
+    // pipeline opens a SECOND isolated WASM module + FFmpeg context, and on
+    // large 1 GB+ sources the two heaps can exhaust the tab's memory budget,
+    // making a later memory.grow() fail and trapping FFmpeg with "memory
+    // access out of bounds" mid-playback. The cap was removed deliberately to
+    // allow previews on big files; if OOM crashes resurface on large 4K
+    // sources, reinstating a size gate here is the first thing to try.
+    // No real video stream → nothing to scrub. Skipping here keeps
+    // audio-only sources from opening a useless second WASM context
+    // (the cover-art extractor already spins up its own short-lived one).
+    if (this.trackManager.getVideoTracks().length === 0) return false;
+    return true;
+  }
+
   // Decoders and Renderers
   private videoDecoder: MoviVideoDecoder;
   private audioDecoder: MoviAudioDecoder;
@@ -77,6 +109,11 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
   // the user nudges the delay value while the same track is active.
   private prefetchedSubtitleStream: number | null = null;
   private prefetchInFlight: boolean = false;
+
+  // Embedded cover art (ID3v2 APIC, FLAC PICTURE, MP4 covr, MKV attachment).
+  // Extracted once at load time when the demuxer reports an attached_pic
+  // pseudo-stream; null for plain video files or audio without artwork.
+  private coverArt: ImageBitmap | null = null;
 
   // HLS Wrapper
   private hlsWrapper: HLSPlayerWrapper | null = null;
@@ -113,6 +150,20 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
   private seekingToKeyframe: boolean = false;
   private seekingToKeyframeStartTime: number = 0;
   private static readonly KEYFRAME_SEEK_TIMEOUT = 5000; // 5 seconds timeout
+  // After a seek we prefer a true IDR to restart cleanly (avoids the open-GOP
+  // CRA-as-key HW rejection on mixed-keyframe HEVC). But some streams only have
+  // CRA keyframes for long stretches (e.g. seeking deep into a DoVi P8 .ts whose
+  // sole IDR is at the file start), so if no IDR shows up within this short
+  // window we fall back to resuming on a CRA rather than staying black.
+  private seekCraSeen: number = 0;
+  private static readonly SEEK_IDR_WAIT_MS = 400; // wait this long for an IDR before accepting a CRA
+
+  // Set when an audio-starve video skip drops a non-keyframe, breaking AV1's
+  // reference chain. While true the demux loop keeps dropping deltas until the
+  // next keyframe (even after the starve clears) so no orphaned delta ever
+  // reaches the decoder — that orphan is what throws EncodingError. Cleared on
+  // the next keyframe, which rebuilds the chain. See the demux loop.
+  private videoChainBrokenUntilKeyframe: boolean = false;
 
   // Prebuffer targets — accumulate this much before reporting "ready" so
   // play() doesn't immediately stall on short videos where the demux burst
@@ -146,6 +197,13 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
   private justSeeked: boolean = false;
   private seekTime: number = 0;
   private startTime: number = 0; // Media start time (PTS offset)
+  // Per-seek "keyframe jump" offset. FFmpeg lands on the nearest keyframe
+  // at-or-after the seek target, which on long-GOP containers (.ts mainly)
+  // can be seconds beyond what the user asked for. Reporting the raw time
+  // then makes the timeline jump from 0:00 → 0:02 right after a seek to 0.
+  // Track the gap and subtract it from getCurrentTime() so the UI stays
+  // pinned to what the user requested. Reset on every new seek.
+  private seekKeyframeOffset: number = 0;
   private static readonly POST_SEEK_THROTTLE_MS = 1000; // Throttle aggressive buffering for 1000ms after seek to stabilize playback
 
   // Pause-time buffering: continue demuxing while paused so seek within buffered
@@ -284,11 +342,39 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
         this.emit("error", error);
         // Note: Decoder now has built-in recovery, only pauses after MAX_ERRORS
       });
+
+      // When the decoder enters its "skip non-keyframes until next IDR" recovery
+      // during normal playback (decode-error recreate, e.g. high-bitrate 1080p
+      // H.264 whose HW decoder throws an EncodingError on an IDR), we deliberately
+      // do NOT flip into buffering. Per request: the clock and audio keep running
+      // and the video simply holds its last frame until the next keyframe lands
+      // (~1 GOP), then A/V sync catches the video up with a jump. The stall
+      // detector is already suppressed across this window via
+      // videoDecoder.isRecentlyRecovering(), so the empty video queue here is not
+      // mistaken for a stall. Seeks are handled by the seek pipeline (suppressed
+      // here via the state/sync guard).
+      this.videoDecoder.onKeyframeWaitChange = (waiting) => {
+        const state = this.stateManager.getState();
+        if (state === "seeking" || this.waitingForVideoSync) return;
+        if (waiting && state === "playing") {
+          Logger.debug(
+            TAG,
+            "Decoder waiting for keyframe mid-playback — staying in playing (audio/clock continue, video holds until next keyframe)",
+          );
+        }
+      };
     }
 
     this.audioDecoder.setOnData((data) => {
-      // Direct render (buffers in AudioContext)
+      // WebCodecs / hardware path: AudioData lands here.
       this.audioRenderer.render(data);
+    });
+
+    this.audioDecoder.setOnPCM((frame) => {
+      // Software path (FFmpeg/WASM) emits planar Float32 PCM so we avoid
+      // the WebCodecs AudioData constructor — which Firefox on Android
+      // doesn't implement.
+      this.audioRenderer.renderPCM(frame);
     });
 
     this.audioDecoder.setOnError((error) => {
@@ -331,11 +417,12 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
         }
       }
 
-      // Set up callbacks (match original setup)
       this.audioDecoder.setOnData((data) => {
-        // Direct render (buffers in AudioContext)
-        // AudioRenderer handles muted state internally
         this.audioRenderer.render(data);
+      });
+
+      this.audioDecoder.setOnPCM((frame) => {
+        this.audioRenderer.renderPCM(frame);
       });
 
       this.audioDecoder.setOnError((error) => {
@@ -353,6 +440,22 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
             TAG,
             `Audio decoder reconfigured for track ${track.id}: ${track.codec} ${track.sampleRate}Hz ${track.channels}ch`,
           );
+          // Re-evaluate the multichannel passthrough policy on every
+          // track change — switching from 7.1 TrueHD to stereo AAC
+          // (or vice versa) needs the destination channelCount and
+          // the WASM downmix flag to follow the new track. The
+          // AudioRenderer was already initialised before the first
+          // track configure landed, so reading max channels here is
+          // cheap and sync.
+          const sourceCh = track.channels ?? 2;
+          const maxCh = this.audioRenderer.getMaxChannelCount();
+          if (sourceCh > 2 && maxCh >= sourceCh) {
+            this.audioDecoder.setDownmix(false);
+            this.audioRenderer.setOutputChannelCount(sourceCh);
+          } else {
+            this.audioDecoder.setDownmix(true);
+            this.audioRenderer.setOutputChannelCount(2);
+          }
         } else {
           Logger.warn(
             TAG,
@@ -397,12 +500,21 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
     this.emit("loadStart", undefined);
     this.lastBufferedTime = 0;
 
+    // Drop the previous source's cover art so a soft-reload on the same
+    // instance (no destroy) doesn't keep showing stale artwork when the
+    // new source has none.
+    this.coverArt?.close?.();
+    this.coverArt = null;
+
     // Clean up any existing preview pipeline
     this.destroyPreviewPipeline();
 
-    // Check for HLS
+    // Check for HLS — only when caller used SourceConfig. A custom
+    // SourceAdapter bypasses URL/HLS detection entirely.
     const src = this.config.source;
     if (
+      !this.config.sourceAdapter &&
+      src &&
       src.type === "url" &&
       src.url &&
       (src.url.includes(".m3u8") || src.url.toLowerCase().endsWith("m3u8"))
@@ -458,8 +570,16 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
     }
 
     try {
-      // Create source
-      this.source = await this.createSource(this.config.source);
+      // Create source — honor a pre-built adapter if the caller supplied
+      // one (custom protocol, encrypted blob, IndexedDB-backed source, etc.)
+      // so the demuxer can read through it without going through SourceConfig.
+      if (this.config.sourceAdapter) {
+        this.source = this.config.sourceAdapter;
+      } else if (this.config.source) {
+        this.source = await this.createSource(this.config.source);
+      } else {
+        throw new Error("Either config.source or config.sourceAdapter is required");
+      }
 
       // Create demuxer (getSize will be called lazily in bindings.open())
       this.demuxer = new Demuxer(this.source, this.config.wasmBinary);
@@ -507,12 +627,19 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
       // Set tracks
       this.trackManager.setTracks(this.mediaInfo.tracks);
 
+      // Extract embedded cover art (if any) once the track list is settled.
+      // Fire-and-forget: a missing/corrupt artwork stream shouldn't block
+      // playback. The eventual emit is what wakes the element-side painter,
+      // so callers don't need to await this.
+      void this.extractCoverArt();
+
       // Configure decoders for active tracks
       await this.configureDecoders();
 
       // Set duration on clock for clamping (prevents timer exceeding duration)
       // Clock operates in media time (PTS), so it runs from startTime to startTime + duration
       this.startTime = this.mediaInfo.startTime || 0;
+      this.seekKeyframeOffset = 0;
       this.clock.setDuration(this.mediaInfo.duration + this.startTime);
       this.clock.seek(this.startTime);
 
@@ -526,9 +653,9 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
       this.stateManager.setState("ready");
       this.emit("loadEnd", undefined);
 
-      // Initialize preview pipeline in background (fire-and-forget)
-      // Only if enabled in config to save memory
-      if (this.config.enablePreviews) {
+      // Initialize preview pipeline in background (fire-and-forget).
+      // Skipped only for sources with no video track — see previewsAllowed().
+      if (this.previewsAllowed()) {
         // This makes the first preview faster since WASM is already loaded
         this.previewInitPromise = this.initPreviewPipeline().catch((e) => {
           Logger.warn(TAG, "Preview pipeline init failed (non-critical)", e);
@@ -557,6 +684,9 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
       fs.setOnRevoked((info) => {
         Logger.error(TAG, `File handle revoked: ${info.reason}`);
         this.emit("filerevoked", info);
+      });
+      fs.setOnPreloadComplete(() => {
+        this.emit("preloadcomplete", undefined);
       });
       return fs;
     }
@@ -645,7 +775,31 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
         // Moves ~500ms creation cost from play() to load() for instant playback start.
         // init() no longer resumes — play() handles resume on user gesture.
         if (!this.disableAudio) {
-          this.audioRenderer.init().catch(() => {});
+          // Await so we can read destination.maxChannelCount synchronously
+          // before deciding the downmix policy. Init is cheap; the
+          // perf-sensitive bit (`resume`) is still gated on the user
+          // gesture in play().
+          await this.audioRenderer.init();
+          // Preserve native channel layout when the device can drive
+          // every plane (e.g. 7.1 over HDMI / DAC reporting
+          // maxChannelCount=8). Otherwise leave the WASM downmix on
+          // — FFmpeg's matrix is higher quality than Web Audio's
+          // automatic "speakers" interpretation fallback.
+          const sourceCh = audioTrack.channels ?? 2;
+          const maxCh = this.audioRenderer.getMaxChannelCount();
+          if (sourceCh > 2 && maxCh >= sourceCh) {
+            Logger.info(
+              TAG,
+              `Multichannel passthrough: source ${sourceCh}ch, destination supports ${maxCh}ch`,
+            );
+            this.audioDecoder.setDownmix(false);
+            this.audioRenderer.setOutputChannelCount(sourceCh);
+          } else if (sourceCh > 2) {
+            Logger.info(
+              TAG,
+              `Downmixing to stereo: source ${sourceCh}ch, destination caps at ${maxCh}ch`,
+            );
+          }
         }
       } else {
         Logger.warn(TAG, "Failed to configure audio decoder");
@@ -820,79 +974,33 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
 
     const wasEnded = currentState === "ended";
 
-    // If ended, seek to start (0) to replay from beginning
-    // This transitions from 'ended' -> 'seeking' -> 'ready' -> 'playing'
+    // Replay path: delegate to seek(0). The full seek pipeline runs flush +
+    // demuxer.seek + waitingForVideoSync + keyframe wait, and on first frame
+    // notifySeekCompletion syncs the clock to the actual first decodable PTS
+    // (matters for Open-GOP sources where the first ~2s have no usable IDR —
+    // without this the clock advances from startTime while video stays
+    // frozen, so EOF fires ~2s early and no buffering UI is shown). Setting
+    // wasPlayingBeforeSeek after the await flips the resume path so the
+    // seek completion transitions straight to "playing".
     if (wasEnded && this.demuxer) {
+      Logger.debug(TAG, "Replaying from beginning after ended state");
+      this.requestWakeLock();
+      // Set the resume intent BEFORE awaiting seek(0). Replay data is always
+      // already buffered, so notifySeekCompletion can fire synchronously
+      // inside the await — if wasPlayingBeforeSeek is still false at that
+      // point, seek completion takes the "paused" branch and replay stalls at
+      // the first frame instead of resuming. seek() itself derives
+      // wasPlayingBeforeSeek from the entry state ("ended" → false), which is
+      // why we must force it true here up front rather than after the await.
+      this.wasPlayingBeforeSeek = true;
       try {
-        Logger.debug(TAG, "Replaying from beginning after ended state");
-
-        // Transition to seeking state first (ended -> seeking is valid)
-        if (!this.stateManager.setState("seeking")) {
-          Logger.error(TAG, "Failed to transition from ended to seeking");
-          return;
-        }
-
-        // Flush decoders
-        await this.videoDecoder.flush();
-        await this.audioDecoder.flush();
-
-        // Clear video frame queue
-        if (this.videoRenderer) {
-          this.videoRenderer.clearQueue();
-        }
-
-        // Flush audio renderer
-        this.audioRenderer.reset();
-
-        // Seek demuxer to start (initial media startTime)
-        await this.demuxer.seek(this.startTime);
-        if (this.nativeAudioEl) this.nativeAudioEl.currentTime = this.startTime;
-        this.clock.seek(this.startTime);
-
-        // Reset EOF flag
-        this.eofReached = false;
-
-        // Mark that we need to skip to keyframe after seek
-        this.seekingToKeyframe = true;
-        this.seekingToKeyframeStartTime = performance.now();
-
-        // Transition to ready state after seek completes (seeking -> ready is valid)
-        if (!this.stateManager.setState("ready")) {
-          Logger.error(
-            TAG,
-            "Failed to transition from seeking to ready after replay seek",
-          );
-          this.clock.pause();
-          return;
-        }
-
-        // After successful replay seek, we're now in 'ready' state
-        // Continue with normal play flow below (will transition ready -> playing)
+        await this.seek(0, { suppressSpinner: true });
       } catch (error) {
-        Logger.warn(
-          TAG,
-          "Failed to seek to start on replay, continuing anyway",
-          error,
-        );
-        // Transition to ready even if seek fails, so we can still play
-        const currentState = this.stateManager.getState();
-        if (currentState === "seeking") {
-          if (!this.stateManager.setState("ready")) {
-            Logger.error(
-              TAG,
-              "Failed to transition from seeking to ready after failed replay seek",
-            );
-            this.clock.pause();
-            return;
-          }
-        } else if (currentState === "ended") {
-          // Still in ended state, can't proceed
-          Logger.error(TAG, "Still in ended state after replay seek failed");
-          this.clock.pause();
-          return;
-        }
-        // If we successfully transitioned to ready, continue with play flow
+        this.suppressSeekSpinner = false;
+        this.wasPlayingBeforeSeek = false;
+        Logger.warn(TAG, "Failed to seek to start on replay", error);
       }
+      return;
     }
     // If resuming from paused state, seek to current time to ensure demuxer is at correct position
 
@@ -909,6 +1017,43 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
     // seeked position), NOT the hardcoded startTime. Previously we always
     // seeked to startTime here, which silently discarded a pre-play scrub
     // and restarted from the beginning.
+    // Guard: only treat this as the first play when the clock is still parked
+    // at the start. _playStartTime is the primary signal, but if anything ever
+    // leaves it at 0 mid-session, this stops the first-play seek(0) from
+    // dragging an in-progress video (clock well past startTime) back to zero.
+    const atStart =
+      this.clock.getTime() <= this.startTime + 1;
+    if (
+      this._playStartTime === 0 &&
+      atStart &&
+      this.demuxer &&
+      !this.nativeAudioEl
+    ) {
+      // First play: always seek to 0. The poster seek's processLoop reads the
+      // demuxer ~1s ahead while decoding the first video frame, so the cursor
+      // is out of sync with the start. Re-seeking to 0 realigns it so playback
+      // begins cleanly from the beginning. The full seek pipeline runs
+      // waitingForVideoSync + keyframe wait and notifySeekCompletion syncs the
+      // clock to the actual first decodable PTS — same path as replay, so
+      // buffering UI, A/V sync and EOF timing all behave identically.
+      // Set wasPlayingBeforeSeek BEFORE the await: seek() enters from the
+      // "paused" state and would otherwise derive it as false, so a fast
+      // (already-buffered) completion firing inside the await would take the
+      // paused branch and stall instead of starting playback. seek()'s
+      // re-derivation now skips when this is already true.
+      const uiTarget = 0;
+      this.wasPlayingBeforeSeek = true;
+      try {
+        await this.seek(uiTarget, { suppressSpinner: true });
+        this._playStartTime = performance.now();
+      } catch (error) {
+        this.suppressSeekSpinner = false;
+        this.wasPlayingBeforeSeek = false;
+        Logger.warn(TAG, "First-play seek failed", error);
+      }
+      return;
+    }
+
     if (this._playStartTime === 0 && this.demuxer) {
       const targetTime = this.clock.getTime();
 
@@ -951,6 +1096,7 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
       // decoder, making first frame jump ahead instead of starting at targetTime).
       this.pendingPrebufferPackets = [];
       this.eofReached = false;
+      this.eofSince = 0;
     } else {
       // Resume from pause — just resume AudioContext
       if (!this.disableAudio) {
@@ -1100,22 +1246,61 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
   private demuxInFlightStartTime: number = 0;
   private static readonly DEMUX_TIMEOUT = 35000; // 35 seconds timeout (slightly more than HTTP timeout of 30s)
   private eofReached = false;
+  // Wall-clock time (performance.now) when eofReached first flipped true.
+  // Used as a watchdog: if the normal drained-and-played-out conditions
+  // never all line up (e.g. a marginal float mismatch between the audio
+  // playout head and the last video frame), force the ended transition
+  // rather than freezing one frame short of the end forever.
+  private eofSince = 0;
 
   /**
    * Internal handler for seek completion when first target frame is found.
    * Clears the seek flag, synchronizes clock, and transitions to final state.
    */
-  private notifySeekCompletion(time: number): void {
-    Logger.debug(TAG, `notifySeekCompletion called: time=${time.toFixed(3)}s, waitingForVideoSync=${this.waitingForVideoSync}, seekTargetTime=${this.seekTargetTime.toFixed(3)}s`);
+  private notifySeekCompletion(time: number, forced: boolean = false): void {
+    Logger.debug(TAG, `notifySeekCompletion called: time=${time.toFixed(3)}s, waitingForVideoSync=${this.waitingForVideoSync}, seekTargetTime=${this.seekTargetTime.toFixed(3)}s, forced=${forced}`);
     if (!this.waitingForVideoSync) {
       Logger.warn(TAG, "notifySeekCompletion: early return (waitingForVideoSync=false)");
       return;
     }
+    // Bail if a newer seek has superseded the one that armed this completion.
+    // A stale frame/timeout from a coalesced rapid seek would otherwise run the
+    // resume/paused branch and consume wasPlayingBeforeSeek out from under the
+    // live seek — intermittently leaving rapid seeks stuck paused.
+    if (this.seekArmedSessionId !== this.seekSessionId) {
+      Logger.warn(
+        TAG,
+        `notifySeekCompletion: stale session ${this.seekArmedSessionId} != ${this.seekSessionId} — ignoring`,
+      );
+      return;
+    }
+
+    // Forced completion (safety timeout) with no decoded video frame yet: the
+    // seek didn't actually produce a picture — slow network/decode just hasn't
+    // delivered one. Going straight to "playing" here advances the clock over a
+    // black screen and only recovers on a manual pause→play. Instead, finish
+    // the seek bookkeeping but resume into "buffering" with the play intent
+    // latched, so the normal buffering→resume path flips to "playing" the
+    // moment the first frame is actually decoded — no user interaction needed.
+    const noVideoFrameYet =
+      !!this.videoRenderer && this.videoRenderer.getQueueSize() === 0;
+    const forcedWithoutFrame =
+      forced && noVideoFrameYet && !!this.trackManager.getActiveVideoTrack();
 
     const seekTarget = this.seekTargetTime;
     this.seekTargetTime = -1;
     this.waitingForVideoSync = false;
     this.seekingToKeyframe = false; // Also clear keyframe skip flag
+    // First-play/replay seek has produced its first frame — drop spinner
+    // suppression so any later genuine rebuffer shows the loading UI.
+    this.suppressSeekSpinner = false;
+
+    // How far past the requested target did the first frame actually land?
+    // Long-GOP .ts files can land seconds late; subtract that in
+    // getCurrentTime() so the UI timeline starts where the user clicked.
+    if (seekTarget >= 0) {
+      this.seekKeyframeOffset = Math.max(0, time - seekTarget);
+    }
 
     Logger.debug(
       TAG,
@@ -1189,10 +1374,46 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
     }
 
     // Transition to final state
-    if (this.wasPlayingBeforeSeek || this.wasPlayingBeforeRebuffer) {
+    if (
+      (this.wasPlayingBeforeSeek || this.wasPlayingBeforeRebuffer) &&
+      forcedWithoutFrame
+    ) {
+      // Wanted to resume, but the forced timeout fired before any video frame
+      // decoded. Enter buffering with the play intent kept so the process
+      // loop's buffering→resume path auto-flips to "playing" on the first
+      // frame — instead of advancing the clock over a black screen.
+      Logger.info(
+        TAG,
+        "Seek forced-complete with no video frame yet — buffering until first frame",
+      );
+      this.wasPlayingBeforeSeek = false;
+      this.wasPlayingBeforeRebuffer = true; // resume intent for buffering→play
+      this._bufferingEntryTime = performance.now();
+      this.stateManager.setState("buffering");
+      if (this._playStartTime === 0) {
+        this._playStartTime = performance.now();
+      }
+    } else if (this.wasPlayingBeforeSeek || this.wasPlayingBeforeRebuffer) {
       Logger.info(TAG, "Resuming playback after seek");
+      // Consume the resume intent so it doesn't leak into the next seek. It's
+      // never reset elsewhere, so a stale `true` would make a later paused
+      // user-seek wrongly auto-resume (and would defeat seek()'s re-derivation
+      // guard that now skips re-deriving when this is already true).
+      this.wasPlayingBeforeSeek = false;
       this.wasPlayingBeforeRebuffer = false;
       this.stateManager.setState("playing");
+      // Mark that playback has actually started. When play() is pressed during
+      // the initial poster-seek it early-returns before reaching the body that
+      // normally sets _playStartTime, and the seek-completion resume path takes
+      // over here instead — so _playStartTime would stay 0 for the whole
+      // session. A later mid-playback recovery (decode-error → buffering →
+      // this.play()) would then see _playStartTime === 0, mistake itself for
+      // the "first play", and seek(0) — yanking a video that's an hour in back
+      // to the start. Stamp it here so the first-play branch only ever fires
+      // for a genuine first play.
+      if (this._playStartTime === 0) {
+        this._playStartTime = performance.now();
+      }
       this.clock.start();
       if (!this.disableAudio && !this.audioRenderer.isAudioPlaying()) {
         this.audioRenderer.play();
@@ -1212,6 +1433,7 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
       }
     } else {
       Logger.info(TAG, "Seek completed in paused state");
+      this.wasPlayingBeforeSeek = false;
       this.stateManager.setState("paused");
 
       // Don't decode audio now (AudioRenderer not playing — would drop all data).
@@ -1308,7 +1530,7 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
     // Stall detection: if playing but both video and audio buffers are critically low
     // Skip near end of video to avoid false stall at EOF
     const nearEnd = this.mediaInfo && this.clock.getTime() >= (this.mediaInfo.duration + this.startTime) - 3;
-    // Longer stall timeout for slow + high-FPS: SoundTouch/hardware rate fallback
+    // Longer stall timeout for slow + high-FPS: stretcher / hardware rate fallback
     // causes brief audio gaps that aren't true stalls. 2s vs 500ms default.
     const currentRate = this.clock.getPlaybackRate();
     const currentFps = (this.mediaInfo as any)?.videoFrameRate ?? 30;
@@ -1318,7 +1540,16 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
     // Without this, clicking play on a poster triggers a false stall → buffering → loading spinner.
     const playGraceMs = 3000;
     const inPlayGrace = this._playStartTime > 0 && (performance.now() - this._playStartTime) < playGraceMs;
-    if (this.stateManager.getState() === "playing" && !this.eofReached && !this.waitingForVideoSync && !nearEnd && !this.isBackgrounded && !inPlayGrace) {
+    // Grace while the video decoder is recovering from a transient decode
+    // error (recreate + wait-for-keyframe). The video queue is legitimately
+    // empty for ~1 GOP there — counting it as a stall sends the player into a
+    // buffering→resume loop (seen on high-bitrate 1080p H.264 whose HW decoder
+    // throws an EncodingError on every IDR). The keyframe-wait handler already
+    // shows buffering during the actual recovery; this just stops the stall
+    // detector from piling on right after.
+    const decoderRecovering =
+      !!this.videoDecoder && this.videoDecoder.isRecentlyRecovering();
+    if (this.stateManager.getState() === "playing" && !this.eofReached && !this.waitingForVideoSync && !nearEnd && !this.isBackgrounded && !inPlayGrace && !decoderRecovering) {
       const videoEmpty = this.videoRenderer ? this.videoRenderer.getQueueSize() === 0 : false;
       const hasAudio = !!this.trackManager.getActiveAudioTrack() && !this.disableAudio;
       const audioLow = !hasAudio || this.audioRenderer.getBufferedDuration() < 0.05;
@@ -1368,9 +1599,21 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
         // sustained ~500ms offset than to pause every second.
         const sinceLastResync = performance.now() - this._lastDesyncSeekTime;
         if (audioBehind > 0.5 && sinceLastResync > 5000) {
-          Logger.warn(TAG, `Audio desync detected: video=${videoTime.toFixed(2)}s, audio=${audioTime.toFixed(2)}s, behind=${(audioBehind * 1000).toFixed(0)}ms — resyncing`);
-          this._lastDesyncSeekTime = performance.now();
-          this.seek(this.getCurrentTime()).catch(() => {});
+          // Suppress the seek when the audio renderer already has samples
+          // scheduled past the presented video frame. The gap is just the
+          // buffer runway — audio playback will catch up on its own. Forcing
+          // a seek here would flush already-decoded audio and cause an
+          // audible trip. Most visible after foreground recovery: while
+          // backgrounded the audio worker keeps scheduling buffers (out to
+          // ~maxScheduledMediaTime), the demuxer-seek brings video forward
+          // to that same point, and the playback head is still chewing
+          // through the runway — looks like 1s of "desync" but isn't.
+          const audioBufferEnd = this.audioRenderer.getMaxScheduledMediaTime();
+          if (audioBufferEnd < videoTime - 0.1) {
+            Logger.warn(TAG, `Audio desync detected: video=${videoTime.toFixed(2)}s, audio=${audioTime.toFixed(2)}s, behind=${(audioBehind * 1000).toFixed(0)}ms — resyncing`);
+            this._lastDesyncSeekTime = performance.now();
+            this.seek(this.getCurrentTime()).catch(() => {});
+          }
         }
       }
     }
@@ -1397,15 +1640,74 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
       const timeDone =
         currentTime >= duration + this.startTime - 0.5 || duration === 0;
 
-      const hasAudioTrack = !!this.trackManager?.getActiveAudioTrack();
+      const hasAudioTrack =
+        !!this.trackManager?.getActiveAudioTrack() && !this.disableAudio;
 
       if (hasAudioTrack) {
-        // With audio: queue-based end is reliable (audio provides steady signal)
-        const videoDone =
-          !this.videoRenderer || this.videoRenderer.getQueueSize() === 0;
         const decodersDone =
           this.videoDecoder.queueSize === 0 && this.audioDecoder.queueSize === 0;
-        if (timeDone || (decodersDone && videoDone)) {
+        // The audio renderer keeps playing buffers it already scheduled for
+        // seconds after the decoder queue drains. The clock is synced to that
+        // playout head, so it only reaches maxScheduledMediaTime once the final
+        // samples are actually heard. End when the playout head has caught up to
+        // the furthest scheduled audio — not when the decoder empties — or the
+        // last few seconds get clipped (audible on near-end seeks of audio-only
+        // files). duration===0 keeps the unknown-length fallback.
+        // maxScheduled is already absolute media time (the scheduler stores
+        // raw packet timestamps), same basis as clock.getTime(). Don't add
+        // startTime again — on sources with a non-zero start (e.g. a .ts
+        // beginning at 4200s) the double-add pushes the threshold out of
+        // reach, audioPlayedOut never trips, and EOF never transitions to
+        // ended (timer freezes short of duration).
+        const maxScheduled = this.audioRenderer.getMaxScheduledMediaTime();
+        // Normally audio is "played out" once the clock catches the furthest
+        // scheduled buffer. But maxScheduled can be stale/runaway — e.g. when
+        // a prior decoder instance scheduled audio out to a wrong (longer)
+        // duration and the AudioRenderer carried that value into the new
+        // player (HW→software fallback on the same element). The clock is also
+        // clamped to the true container duration in getTime(), so it plateaus
+        // at `duration` and can never reach an inflated maxScheduled. Treat
+        // audio as done if EITHER the playout head is reached OR the clock has
+        // arrived at the real end of content — whichever the clock can attain.
+        const reachedContentEnd =
+          duration > 0 && currentTime >= duration + this.startTime - 0.25;
+        const audioPlayedOut =
+          (maxScheduled > 0 && currentTime >= maxScheduled - 0.1) ||
+          reachedContentEnd;
+        // The clock is clamped to the audio playout head (getAudioClock caps
+        // at maxScheduledMediaTime). When the last video frame's PTS sits past
+        // that head — e.g. video runs a few ms longer than the audio track —
+        // the presentation loop never reaches it, so it lingers in the queue
+        // forever and a strict queue-empty check would block the ended
+        // transition indefinitely (EOF reached, but never ends). Once the
+        // demuxer and video decoder are both drained, treat the renderer as
+        // done if its queue is empty OR only holds this unpresentable tail
+        // (head frame at/after the audio playout head).
+        const headFrameTime = this.videoRenderer?.getHeadFrameTime() ?? -1;
+        const videoDone =
+          !this.videoRenderer ||
+          this.videoRenderer.getQueueSize() === 0 ||
+          (decodersDone &&
+            maxScheduled > 0 &&
+            headFrameTime >= maxScheduled - 0.05);
+        if ((decodersDone && videoDone && audioPlayedOut) || duration === 0) {
+          this.handleEnded();
+          return;
+        }
+        // Watchdog: the audio has fully played out (it's the master clock and
+        // its playout head has been reached) but the strict conditions above
+        // never all aligned — a marginal float mismatch between the audio tail
+        // and the last video frame can leave one frame unpresentable forever.
+        // Once audio is done and we've waited a beat, end rather than freeze.
+        if (
+          audioPlayedOut &&
+          this.eofSince > 0 &&
+          performance.now() - this.eofSince > 750
+        ) {
+          Logger.warn(
+            TAG,
+            "EOF watchdog: audio played out but pipeline never fully drained; forcing ended",
+          );
           this.handleEnded();
           return;
         }
@@ -1452,10 +1754,59 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
     // hold the same wall-clock duration as at 1x. Without this, at 0.5x the 100-frame
     // video buffer lasts 3.3s wall-time while 2s audio buffer starves after 2s → stutter.
     const rate = Math.max(0.25, this.clock.getPlaybackRate());
-    const rateScale = rate < 1.0 ? 1.0 / rate : 1.0; // e.g. 2x at 0.5x, 4x at 0.25x
+    // Slow rates: keep the same wall-clock buffer duration (so a 2s audio
+    // target doesn't underrun at 0.5x). Fast rates: give the video pipeline
+    // proportional headroom too — at 1.5x the decoder is producing frames
+    // 50% faster than wall-clock, and the base queue cap empties just as
+    // quickly, so any decode jitter shows up as stutter. Cap at 2x scale
+    // so 4x playback doesn't balloon VRAM/audio buffers on heavy sources.
+    const rateScale = rate < 1.0 ? 1.0 / rate : Math.min(2.0, rate);
     const maxAudioBuffered = (isSoftware ? 5.0 : isPostSeek ? 1.5 : 2.0) * rateScale;
-    // Renderer queue limits (in frames)
-    const maxVideoBuffered = Math.round((isSoftware ? 60 : isPostSeek ? 20 : 100) * rateScale);
+    // Renderer queue limits (in frames). Two separate constraints:
+    //
+    //  1. High-res (≥4K): per-frame VRAM cost is huge (8K HDR ≈ 50MB/frame).
+    //     A deep queue locks GBs of VRAM and starves the GPU compositor,
+    //     producing slips even when decode is keeping up. Hard frame cap.
+    //
+    //  2. Mobile at any res: weaker hardware + Chrome Android's conservative
+    //     AV1 HW whitelist mean software dav1d is common; deep buffering
+    //     just delays the inevitable underrun. Cap by wall-clock duration
+    //     (~800ms) so the cap scales with fps — a 25fps source doesn't end
+    //     up with the same tiny 16-frame buffer as 60fps, which would fire
+    //     demuxer backpressure long before audio is ready to refill (this
+    //     was the "audio drift" symptom).
+    //
+    // When both apply (e.g. 8K on mobile), use the tighter of the two.
+    const activeVideo = this.trackManager.getActiveVideoTrack();
+    const pixels = (activeVideo?.width ?? 0) * (activeVideo?.height ?? 0);
+    const fps = Math.max(15, Math.min(120, activeVideo?.frameRate ?? 30));
+    const is8KPlus = pixels >= 7680 * 4320;
+    const isHighRes = pixels >= 3840 * 2160; // 4K and above
+    const isMobile = MoviPlayer._isMobileDevice;
+    let baseHwQueue: number;
+    if (is8KPlus) {
+      // 8K+ desktop: 16 frames is a VRAM-bound sweet spot (8K HDR frames are
+      // ~50MB each; deeper queues stall the compositor and 100 × 50MB ≈ 5GB
+      // VRAM was the original starvation cause). Mobile shifts to software
+      // dav1d so a shallow queue helps the decoder catch up.
+      if (isMobile) baseHwQueue = isPostSeek ? 8 : 12;
+      else baseHwQueue = isPostSeek ? 12 : 16;
+    } else if (isHighRes) {
+      // 4K (not 8K) desktop: 4K HDR RGBA8 frames are ~33MB so 48 × 33MB ≈
+      // 1.6GB VRAM — bounded but deep enough to absorb 250-500ms GC/decode
+      // hiccups without draining the renderer queue. The previous uniform
+      // 16-frame cap (267ms @60fps) was too shallow for 4K60 HEVC HDR: any
+      // jitter emptied the queue, paused demuxing, and starved audio.
+      if (isMobile) baseHwQueue = isPostSeek ? 8 : 16;
+      else baseHwQueue = isPostSeek ? 24 : 48;
+    } else if (isMobile) {
+      // 1080p (and lighter) on mobile is smooth at the 800ms target — keep it.
+      const targetMs = isPostSeek ? 400 : 800;
+      baseHwQueue = Math.max(12, Math.round((fps * targetMs) / 1000));
+    } else {
+      baseHwQueue = isPostSeek ? 20 : 100; // desktop default
+    }
+    const maxVideoBuffered = Math.round((isSoftware ? 60 : baseHwQueue) * rateScale);
 
     // Skip video backpressure when video isn't being consumed:
     // - Background (not PiP): video decode is skipped entirely
@@ -1486,8 +1837,19 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
     // faster than hardware can process, which would otherwise starve the audio pipeline.
     // ONLY at non-1x rates: at 1x, video/audio are consumed at the same rate so skipping
     // video is unnecessary and causes early EOF (video never decoded → queues empty → ended).
+    // Skipping non-keyframe AV1 packets also corrupts the decoder reference chain → decode
+    // errors every few seconds. Mobile audio drift is fixed via queue sizing, not by
+    // dropping packets at 1x.
+    //
+    // Threshold was 0.5s back when AudioContext used latencyHint="playback" (~200ms
+    // output buffer). With latencyHint="interactive" the scheduled buffer hovers in
+    // the 50-150ms range steady-state, so anything close to 500ms reads as "always
+    // starving" and the skip engaged every demux tick — dropping AV1 non-keyframes
+    // constantly, which fired EncodingError once per GOP on non-1x rates. 100ms
+    // matches the interactive buffer's real safety margin; below it audio is
+    // genuinely about to underrun and warrants the packet-drop tradeoff.
     const isNon1xRate = Math.abs(rate - 1.0) > 0.01;
-    const audioStarving = !this.disableAudio && audioBuffered < 0.5;
+    const audioStarving = !this.disableAudio && audioBuffered < 0.1;
     const videoDecoderFull = this.videoDecoder.queueSize > maxVideoQueue;
     const videoBufferFull = !skipVideoBackpressure && videoBuffered > maxVideoBuffered;
     const skipVideoDecodeForAudio = isNon1xRate && !this.muted && (videoBufferFull || videoDecoderFull) && audioStarving;
@@ -1647,6 +2009,7 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
         if (!packet) {
           // EOF reached - mark it but don't stop immediately
           // Let the decoders finish processing
+          if (!this.eofReached) this.eofSince = performance.now();
           this.eofReached = true;
 
           // Clear seeking flag if we hit EOF before finding keyframe
@@ -1684,8 +2047,35 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
             // Skip video decode when video buffer is full but audio is starving.
             // This keeps audio flowing at non-1x rates where video frames accumulate
             // faster than consumed. Some video frames are lost but audio stays smooth.
-            if (skipVideoDecodeForAudio) {
+            //
+            // Keyframes-only during the starve: AV1's inter-frame dependency means
+            // dropping a non-keyframe orphans every delta that references it, so
+            // feeding those deltas to the decoder throws EncodingError → decoder
+            // close → recreate→keyframe-wait recovery (noisy, and a momentary
+            // freeze). Dropping ALL video (the old behavior) is even worse — the
+            // next decoded delta is still an orphan, so the error fires the
+            // moment the starve ends. Instead we keep decoding keyframes and skip
+            // only deltas: each keyframe is a self-contained reference reset, so
+            // nothing the decoder receives is ever orphaned — no EncodingError.
+            // Video updates at roughly one frame per GOP (~0.5fps on a 2s GOP)
+            // until audio recovers, then full-rate decode resumes at the next
+            // keyframe with the reference chain intact.
+            if (skipVideoDecodeForAudio && !packet.keyframe) {
+              // A delta was skipped, so every following delta is now orphaned
+              // until the next keyframe rebuilds the reference chain. Latch this
+              // so that even after the starve clears we keep skipping deltas
+              // until a keyframe — otherwise the first post-starve delta is an
+              // orphan and throws the very EncodingError we're avoiding.
+              this.videoChainBrokenUntilKeyframe = true;
               continue;
+            }
+            // Reference chain broken by an earlier skip: keep dropping deltas
+            // until a keyframe resets it, regardless of current starve state.
+            if (this.videoChainBrokenUntilKeyframe) {
+              if (!packet.keyframe) {
+                continue;
+              }
+              this.videoChainBrokenUntilKeyframe = false;
             }
 
             // After seek, skip non-keyframe video packets until we find a keyframe
@@ -1694,22 +2084,34 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
               // Check timeout - if we've been waiting too long, give up and accept any frame
               const elapsed =
                 performance.now() - this.seekingToKeyframeStartTime;
+              // Prefer a true IDR to restart: on mixed-keyframe HEVC a CRA sent
+              // as `key` is rejected by the HW decoder (open-GOP) and forces a
+              // software fallback, while an IDR restarts cleanly. But accept a
+              // CRA if no IDR arrives quickly — some streams have only CRA
+              // keyframes for long stretches (seeking deep into a DoVi P8 .ts),
+              // where waiting for an IDR never resumes and the video stays black.
+              const idrWaitElapsed = elapsed > MoviPlayer.SEEK_IDR_WAIT_MS;
+              const acceptThisKeyframe =
+                packet.keyframe && (packet.isIdr || idrWaitElapsed);
               if (elapsed > MoviPlayer.KEYFRAME_SEEK_TIMEOUT) {
                 Logger.warn(
                   TAG,
                   `Keyframe seek timeout after ${elapsed}ms, accepting any frame`,
                 );
                 this.seekingToKeyframe = false;
-              } else if (!packet.keyframe) {
-                // Skip this non-keyframe packet, continue to next
+              } else if (!acceptThisKeyframe) {
+                // Not yet: skip non-keyframes, and skip CRA keyframes while still
+                // within the short IDR-wait window (hoping a true IDR is near).
+                if (packet.keyframe) this.seekCraSeen++;
                 continue;
               } else {
-                // Found keyframe, clear the flag and process packet
+                // Found a keyframe to restart on (IDR, or a CRA after the wait).
                 this.seekingToKeyframe = false;
                 Logger.debug(
                   TAG,
-                  "Found keyframe after seek, resuming normal playback",
+                  `Found ${packet.isIdr ? "IDR" : "CRA"} keyframe after seek (craSkipped=${this.seekCraSeen}), resuming normal playback`,
                 );
+                this.seekCraSeen = 0;
               }
             }
 
@@ -1722,6 +2124,8 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
                 packet.timestamp,
                 packet.keyframe,
                 packet.dts,
+                packet.isIdr,
+                packet.isRasl,
               );
             }
           } else if (activeAudio && activeAudio.id === packet.streamIndex) {
@@ -1810,20 +2214,56 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
 
       // Check for fatal errors that indicate corrupted state
       const errorMessage = (e as any).message || "";
-      const isFatalError =
+      // WASM-level traps. Once av_read_frame or any other FFmpeg entry
+      // point dereferences past the heap, the entire WASM module is
+      // unrecoverable — every subsequent ccall hits the same OOB. Without
+      // this branch, processLoop classifies it as transient and retries
+      // every ~17ms, flooding the console and pinning the CPU until the
+      // user closes the tab.
+      const isWasmFatal =
+        /out of bounds memory access|memory access out of bounds|RuntimeError|Aborted\(\)/i.test(
+          errorMessage,
+        );
+      const isCorruptError =
+        isWasmFatal ||
         errorMessage.includes("Invalid packet size") ||
         errorMessage.includes("Invalid typed array length") ||
         errorMessage.includes("State may be corrupted");
 
-      if (isFatalError) {
-        // Fatal error - pause playback and stop processing
-        Logger.error(TAG, "Fatal demux error detected, pausing playback");
+      // Source-level failures (HTTP 4xx/5xx, exhausted retries, CORS, etc.)
+      // surface through here as the demuxer reads its bytes from the source.
+      // Without classifying these as fatal, processLoop just keeps retrying
+      // the demux and the buffering spinner spins indefinitely with no
+      // user-visible reason. The actual messages come from HttpSource —
+      // see the strings it throws in startStream/buildHeaders.
+      const isSourceError =
+        /^HTTP \d{3}/.test(errorMessage) ||
+        errorMessage.includes("Access denied") ||
+        errorMessage.includes("Authentication required") ||
+        errorMessage.includes("Video not found") ||
+        errorMessage.includes("Failed to fetch video resource") ||
+        errorMessage.includes("Stream failed after") ||
+        errorMessage.includes("Server does not support range requests");
+
+      if (isCorruptError || isSourceError) {
+        Logger.error(
+          TAG,
+          isSourceError
+            ? `Fatal source error, pausing playback: ${errorMessage}`
+            : "Fatal demux error detected, pausing playback",
+        );
         this.pause();
-        this.emit("error", new Error("Playback error: corrupt data stream"));
+        this.stateManager.setState("error");
+        this.emit(
+          "error",
+          isSourceError
+            ? (e instanceof Error ? e : new Error(errorMessage))
+            : new Error("Playback error: corrupt data stream"),
+        );
         return; // Exit process loop
       }
 
-      // For non-fatal errors, continue (network glitches, etc.)
+      // For non-fatal errors, continue (transient network glitches, etc.)
     } finally {
       this.demuxInFlight = false;
     }
@@ -1853,10 +2293,32 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
       this.animationFrameId = null;
     }
 
-    // Snap time to end
+    // Snap time to end. Drop the keyframe-jump offset so getCurrentTime()
+    // reports the true duration — otherwise open-GOP sources (where the
+    // first decodable IDR is ~2s in) report end ~2s short of duration.
+    //
+    // Audio-only caveat: VBR MP3 / OGG / similar containers expose a
+    // bitrate-derived duration that's typically overestimated by a few
+    // seconds vs. the actual decoded sample count. Snapping to that
+    // inflated duration makes the time-display jump forward at EOF and
+    // makes the source look like it ended ~4s short of "done." For
+    // audio-only sources, prefer the real last-scheduled audio media
+    // time and update mediaInfo.duration so the seek bar matches.
     if (this.mediaInfo) {
-      this.clock.seek(this.mediaInfo.duration + this.startTime);
-      this.emit("timeUpdate", this.mediaInfo.duration);
+      this.seekKeyframeOffset = 0;
+      const hasVideo = !!this.trackManager?.getActiveVideoTrack?.();
+      const audioEnd = this.audioRenderer.getMaxScheduledMediaTime?.() ?? 0;
+      const useAudioEnd = !hasVideo && audioEnd > 0;
+      const endTime = useAudioEnd ? audioEnd : this.mediaInfo.duration;
+      if (useAudioEnd && Math.abs(audioEnd - this.mediaInfo.duration) > 0.1) {
+        // Correct the cached duration so getDuration() and the timeline
+        // both show the real value instead of the metadata estimate.
+        this.mediaInfo.duration = audioEnd;
+        this.clock.setDuration(audioEnd + this.startTime);
+        this.emit("durationChange", audioEnd);
+      }
+      this.clock.seek(endTime + this.startTime);
+      this.emit("timeUpdate", endTime);
     }
 
     this.stateManager.setState("ended");
@@ -1867,11 +2329,40 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
    * Seek to timestamp
    */
   private seekSessionId = 0;
+  // The seek session whose completion is currently armed (waitingForVideoSync).
+  // notifySeekCompletion bails when this no longer matches seekSessionId, so a
+  // superseded seek's late frame/timeout can't stomp state or consume intent.
+  private seekArmedSessionId = 0;
   private wasPlayingBeforeSeek = false;
 
-  async seek(seconds: number): Promise<void> {
+  // True while an internal seek with no real interruption is in flight: the
+  // initial poster seek(0), first play, and replay-from-ended. These route
+  // through the full seek pipeline (flush + demuxer.seek + keyframe wait) so
+  // the state machine briefly enters "seeking"/"buffering" even though, from
+  // the user's view, nothing is loading. The UI reads this to keep the loading
+  // spinner hidden during that window. Set via seek()'s suppressSpinner opt,
+  // cleared on seek completion (notifySeekCompletion).
+  suppressSeekSpinner = false;
+
+  async seek(
+    seconds: number,
+    opts?: { suppressSpinner?: boolean; preservePlaying?: boolean },
+  ): Promise<void> {
     if (this.hlsWrapper) {
       return this.hlsWrapper.seek(seconds);
+    }
+    // A genuine user seek (no opt) clears any leftover suppression so its
+    // spinner shows; play()-initiated seeks pass suppressSpinner to hide it.
+    this.suppressSeekSpinner = opts?.suppressSpinner ?? false;
+    // preservePlaying: a corrective seek (e.g. rate change) that must NOT flip
+    // the play/pause state. If we were playing — including mid-flight from a
+    // prior corrective seek (state "seeking"/"buffering") — keep the resume
+    // intent so completion lands back in "playing", never "paused".
+    if (opts?.preservePlaying) {
+      const s = this.stateManager.getState();
+      if (s !== "paused" && s !== "ended") {
+        this.wasPlayingBeforeSeek = true;
+      }
     }
 
     const currentState = this.stateManager.getState();
@@ -1891,13 +2382,21 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
     this.stopPauseBuffering();
 
     // Track intent: if we were playing (or already seeking but originally playing), we want to resume
-    // During buffering, preserve the pre-buffering play/pause intent
-    if (currentState !== "seeking") {
+    // During buffering, preserve the pre-buffering play/pause intent.
+    // Don't clobber an explicit pre-seek resume intent (e.g. the replay path
+    // sets wasPlayingBeforeSeek=true before calling seek(0) from the "ended"
+    // state — "ended" isn't "playing", so re-deriving here would wrongly reset
+    // it to false and seek completion would land paused instead of replaying).
+    if (currentState !== "seeking" && !this.wasPlayingBeforeSeek) {
       this.wasPlayingBeforeSeek = currentState === "playing" || (currentState === "buffering" && this.wasPlayingBeforeRebuffer);
     }
 
     // Pause clock so UI time doesn't advance during seek while in loading state
     this.clock.pause();
+
+    // Drop the keyframe-jump offset from the previous seek; it gets
+    // re-measured when this seek completes.
+    this.seekKeyframeOffset = 0;
 
     const mySessionId = ++this.seekSessionId;
     this.stateManager.setState("seeking");
@@ -1958,6 +2457,7 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
 
       // Reset EOF flag after seek - we're now at a new position
       this.eofReached = false;
+      this.eofSince = 0;
 
       // Buffered region restarts from the new position; drop the
       // monotonic clamp so the bar can shrink to reflect the new range.
@@ -1967,6 +2467,10 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
       // This prevents decoder errors from non-keyframe packets after seek
       this.seekingToKeyframe = true;
       this.seekingToKeyframeStartTime = performance.now();
+      this.seekCraSeen = 0;
+      // A seek is a fresh keyframe-anchored start; any pending starve-induced
+      // chain break is moot.
+      this.videoChainBrokenUntilKeyframe = false;
 
       // IMPORTANT: Set seek target time for accurate seek positioning
       // FFmpeg seeks to the nearest keyframe BEFORE the target time,
@@ -1975,6 +2479,12 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
       // Normalize target time against startTime offset
       this.seekTargetTime = seconds + this.startTime;
       this.waitingForVideoSync = true;
+      // Tag which seek session armed this completion. notifySeekCompletion
+      // bails if a newer seek has since superseded this one, so a stale (e.g.
+      // coalesced/rapid-seek) completion can't run the resume/paused branch and
+      // consume wasPlayingBeforeSeek out from under the live seek — which
+      // intermittently left rapid seeks stuck paused.
+      this.seekArmedSessionId = mySessionId;
       this.pendingAudioPackets = [];
       // Stashed prebuffer packets are pre-seek and now stale
       this.pendingPrebufferPackets = [];
@@ -2009,7 +2519,7 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
       const seekTimeout = setTimeout(() => {
         if (this.seekSessionId === mySessionId && this.waitingForVideoSync) {
           Logger.warn(TAG, `Seek timeout after ${seekTimeoutMs}ms, forcing completion at ${seconds}s`);
-          this.notifySeekCompletion(seconds + this.startTime);
+          this.notifySeekCompletion(seconds + this.startTime, true);
         }
       }, seekTimeoutMs);
 
@@ -2083,9 +2593,13 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
    * Generates a preview frame for the given time using C for demuxing and WebCodecs for decoding.
    */
   async getPreviewFrame(time: number): Promise<Blob | null> {
-    if (!this.config.enablePreviews) return null; // Previews disabled
+    if (!this.previewsAllowed()) return null; // Disabled, or source too large for a 2nd WASM context
     if (this.hlsWrapper) return null; // Previews not supported for HLS
     if (this.isPreviewGenerating) return null; // Busy
+    // Audio-only sources have no video track to thumbnail. Bail early
+    // so a hover on the seek bar doesn't trigger a "Thumbnail bindings
+    // or renderer not available" error every time.
+    if (!this.trackManager.getActiveVideoTrack()) return null;
     this.isPreviewGenerating = true;
 
     try {
@@ -2547,7 +3061,12 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
     const isEncrypted = sourceConfig
       && typeof sourceConfig !== "string"
       && (sourceConfig as any).type === "encrypted";
-    if (isEncrypted && this.source) {
+    // Custom user-supplied adapter — we can't safely spin up a second reader
+    // (we don't know the underlying protocol), so reuse the main source.
+    // The user's read() must tolerate interleaved offsets in this case.
+    if (this.config.sourceAdapter && this.source) {
+      this.thumbnailSource = this.source;
+    } else if (isEncrypted && this.source) {
       this.thumbnailSource = this.source;
     } else {
       // Plain HTTP / URL sources: use a dedicated ThumbnailHttpSource that
@@ -2561,15 +3080,20 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
           : null;
       if (typeof sourceConfig === "string") {
         this.thumbnailSource = new ThumbnailHttpSource(sourceConfig, {}, borrowSource);
-      } else if ("url" in sourceConfig && sourceConfig.url) {
+      } else if (sourceConfig && "url" in sourceConfig && sourceConfig.url) {
         this.thumbnailSource = new ThumbnailHttpSource(
           sourceConfig.url,
           sourceConfig.headers || {},
           borrowSource,
         );
-      } else {
+      } else if (sourceConfig) {
         // File source
         this.thumbnailSource = await this.createSource(sourceConfig);
+      } else if (this.source) {
+        // No SourceConfig (custom adapter path) — fall back to main source.
+        this.thumbnailSource = this.source;
+      } else {
+        throw new Error("No source available for thumbnail pipeline");
       }
     }
 
@@ -2827,7 +3351,39 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
     if (this.hlsWrapper) {
       return this.hlsWrapper.getCurrentTime();
     }
-    return Math.max(0, this.clock.getTime() - this.startTime);
+    // Subtract seekKeyframeOffset so the timeline reports the user-requested
+    // time after a seek instead of where the decoder actually landed (which
+    // can be seconds later on long-GOP containers like .ts). Offset is reset
+    // on every new seek and only ever non-negative.
+    return Math.max(
+      0,
+      this.clock.getTime() - this.startTime - this.seekKeyframeOffset,
+    );
+  }
+
+  /**
+   * After a `postertime` seek has painted the poster frame on the canvas,
+   * reset only the CLOCK/playhead bookkeeping back to the start — WITHOUT
+   * flushing the decoder, re-seeking the demuxer, or clearing the renderer
+   * queue. That keeps the poster frame (from ~postertime) visible on the
+   * canvas while the seek bar/getCurrentTime() read 0, and lets the first
+   * play() start cleanly from the beginning (play()'s first-play branch
+   * re-seeks the demuxer to 0 itself). Pure time-math; touches no media state.
+   */
+  resetClockToStartForPoster(): void {
+    if (this.hlsWrapper) return; // HLS owns its own timeline
+    this.clock.seek(this.startTime); // paused → pausedTime = startTime
+    this.seekKeyframeOffset = 0; // so getCurrentTime() === 0
+    this.seekTargetTime = -1; // clear any lingering pre-target frame-drop filter
+    this.waitingForVideoSync = false; // no stale seek-completion armed
+    this._playStartTime = 0; // keep first-play branch eligible
+    this.pendingAudioPackets = []; // poster-era audio is stale; play() re-seeks
+    this.pendingPrebufferPackets = [];
+    // The poster seek advanced HttpSource's monotonic buffered-end to ~poster
+    // time; reset it (as a real seek does) so the buffer bar starts from 0
+    // instead of showing a false prebuffer at the poster timestamp.
+    this.lastBufferedTime = 0;
+    this.emit("timeUpdate", this.getCurrentTime()); // snap seek bar to 00:00
   }
 
   /**
@@ -2901,6 +3457,29 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
       return this.hlsWrapper.getState();
     }
     return this.stateManager.getState();
+  }
+
+  /**
+   * Intended playback state, independent of transient interruptions.
+   *
+   * The raw state flips to "buffering"/"seeking" while the user is still
+   * mid-playback (network stall, internal seek), which would otherwise make
+   * the UI's play/pause icon flicker to "play" even though the user never
+   * paused. This returns true whenever playback is meant to be running —
+   * actually "playing", or interrupted by a buffer/seek that we entered
+   * from a playing state (tracked via wasPlayingBeforeRebuffer/Seek). Use
+   * this to drive the play/pause icon so it stays stable through stalls.
+   */
+  isPlaybackIntended(): boolean {
+    const state = this.getState();
+    if (state === "playing") return true;
+    if (
+      (state === "buffering" || state === "seeking") &&
+      (this.wasPlayingBeforeRebuffer || this.wasPlayingBeforeSeek)
+    ) {
+      return true;
+    }
+    return false;
   }
 
   /**
@@ -3055,6 +3634,16 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
       this.hlsWrapper.setPlaybackRate(rate);
     }
 
+    const savedTime = this.getCurrentTime();
+    // Only the corrective seek's purpose (undoing the audio read-ahead pivot)
+    // applies when playback is actually rolling. At load time the rate is
+    // restored from settings while the player sits in "ready"/"paused" — a
+    // corrective seek then would (via preservePlaying) latch a resume intent
+    // and auto-start playback. Gate it to active playback only.
+    const playingNow =
+      this.stateManager.getState() === "playing" ||
+      this.stateManager.getState() === "buffering";
+
     this.clock.setPlaybackRate(rate);
 
     // Update audio renderer playback rate
@@ -3066,16 +3655,36 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
     if (this.videoRenderer) {
       this.videoRenderer.setPlaybackRate(rate);
     }
+    // Tell the decoder the rate: it only screens out crash-inducing tiny
+    // show_existing_frame packets at non-1x (at 1x they decode fine and
+    // dropping them breaks the reference chain → later keyframe reject).
+    if (this.videoDecoder) {
+      this.videoDecoder.setPlaybackRate(rate);
+    }
     if (this.nativeAudioEl) {
       this.nativeAudioEl.playbackRate = rate;
     }
 
-    // Flush both decoders on rate change to clear stale packets from previous rate.
-    // On heavy content (8K), old packets block the decoder queue and cause hangs.
-    // Audio decoder also needs flush — stale packets cause persistent stalling at 1x.
-    if (this.stateManager.getState() === "playing" || this.stateManager.getState() === "buffering") {
-      if (this.videoDecoder) this.videoDecoder.flush().catch(() => {});
-      this.audioDecoder.flush().catch(() => {});
+    // No decoder flushes on rate change. Flushing the audio decoder drops
+    // its read-ahead queue, so the next chunk arrives with whatever mediaTime
+    // the demuxer has progressed to (often a second or more ahead) — that
+    // audio leap then strands the video decoder behind, causing either
+    // pixelation (no video flush) or a multi-second freeze (with flush, on
+    // low-end hardware or Open GOP AV1). Letting buffered packets keep
+    // flowing means the audible transition is just whatever output buffer
+    // the AudioContext has — small with latencyHint="interactive" — and
+    // the new rate is applied to subsequent stretcher output naturally.
+
+    // Corrective seek to the saved position so the audio clock can't pivot to
+    // the demuxer read-ahead mediaTime (the "jumps ahead on rate change" bug).
+    // preservePlaying keeps the play/pause state across it; the seek-session
+    // guard keeps rapid rate changes from a superseded completion landing
+    // paused. Only when actually playing — see playingNow above.
+    if (playingNow) {
+      this.seek(savedTime, {
+        suppressSpinner: true,
+        preservePlaying: true,
+      }).catch(() => {});
     }
   }
 
@@ -3514,6 +4123,7 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
       this.pendingAudioPackets = [];
       this.pendingPrebufferPackets = [];
       this.eofReached = false;
+      this.eofSince = 0;
     } catch (err) {
       Logger.error(TAG, "Subtitle prefetch failed", err);
     } finally {
@@ -3642,9 +4252,14 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
     if (videoTrack) {
       stats["Video Codec"] = videoTrack.codec ?? "N/A";
       stats["Resolution"] = `${videoTrack.width}x${videoTrack.height}`;
-      // Quality label
+      // Quality label — classify by the larger of actual height and the
+      // 16:9-normalised height (width * 9 / 16). Cinematic / ultrawide
+      // sources letterbox horizontally, so a 3840×2080 cut of 4K UHD
+      // would otherwise misreport as "2K" purely because its pixel
+      // height is < 2160.
       const h = videoTrack.height;
-      stats["Quality"] = h >= 8640 ? "16K" : h >= 4320 ? "8K" : h >= 2160 ? "4K" : h >= 1440 ? "2K" : h >= 1080 ? "1080p" : h >= 720 ? "720p" : h >= 480 ? "480p" : "SD";
+      const eff = Math.max(h, Math.round(videoTrack.width * 9 / 16));
+      stats["Quality"] = eff >= 8640 ? "16K" : eff >= 4320 ? "8K" : eff >= 2160 ? "4K" : eff >= 1440 ? "2K" : eff >= 1080 ? "1080p" : eff >= 720 ? "720p" : eff >= 480 ? "480p" : "SD";
       stats["Frame Rate"] = `${videoTrack.frameRate} fps`;
       stats["Video Bitrate"] = videoTrack.bitRate
         ? `${(videoTrack.bitRate / 1000).toFixed(0)} kbps`
@@ -3775,6 +4390,35 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
   isFileSource(): boolean {
     if (this.hlsWrapper) return false;
     return this.source instanceof FileSource;
+  }
+
+  /**
+   * True when audio is blocked by the browser's autoplay policy — the
+   * AudioContext is stuck suspended despite an unmuted play() because no
+   * user gesture has unlocked it. play()'s promise resolves either way, so
+   * the element polls this after autoplay to decide whether to fall back to
+   * muted playback + a "Tap to unmute" pill.
+   */
+  isAudioBlockedSuspended(): boolean {
+    if (this.disableAudio || this.hlsWrapper) return false;
+    return this.audioRenderer.isBlockedSuspended();
+  }
+
+  /**
+   * True when the active source is not a FileSource (gate inactive), or when
+   * the FileSource's initial preload pass has settled.
+   */
+  isFileSourcePreloadComplete(): boolean {
+    if (!(this.source instanceof FileSource)) return true;
+    return this.source.isPreloadComplete();
+  }
+
+  /**
+   * Public accessor for the mobile-device flag (used by MoviElement to gate
+   * UI behavior on mobile-only paths).
+   */
+  static isMobileDevice(): boolean {
+    return MoviPlayer._isMobileDevice;
   }
 
   /**
@@ -3945,6 +4589,7 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
             // video, background processLoop may have raced to EOF; without this
             // reset, processLoop would early-return and playback stalls.
             this.eofReached = false;
+            this.eofSince = 0;
 
             // Seek demuxer to nearest keyframe before current audio position
             if (this.demuxer) {
@@ -3965,6 +4610,8 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
             this.seekTargetTime = Math.max(audioTime + this.startTime, audioBufferEnd);
             this.seekingToKeyframe = true;
             this.seekingToKeyframeStartTime = performance.now();
+            this.seekCraSeen = 0;
+            this.videoChainBrokenUntilKeyframe = false;
 
             // Restart video pipeline
             if (this.videoRenderer) {
@@ -4358,6 +5005,100 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
   }
 
   /**
+   * Embedded cover art for the loaded source, decoded into an ImageBitmap.
+   * Null when the source has no attached_pic stream (regular video files,
+   * audio files without artwork). Caller MUST NOT close() the bitmap — it
+   * is owned by the player and released on destroy() / next load.
+   */
+  getCoverArt(): ImageBitmap | null {
+    return this.coverArt;
+  }
+
+  /**
+   * Extract embedded cover art once at load and emit a "coverart" event.
+   *
+   * Runs entirely in a short-lived, isolated thumbnail-style WASM context
+   * — the same isolated-demuxer machinery the seek-bar previews use — so
+   * reading the artwork packet never moves the MAIN demuxer's file
+   * position and therefore can't disturb playback or seeking. Done
+   * exactly once (artwork is static), then the context is torn down.
+   *
+   * Deliberately does NOT surface attached_pic through a new C/WASM
+   * StreamInfo field or export: that shifts the WASM memory layout and
+   * trips a latent FFmpeg audio overflow into a production-only OOB (see
+   * project memory "Album Art Crashes WASM"). Using only the existing
+   * thumbnail read/packet exports keeps the WASM binary byte-identical.
+   */
+  private async extractCoverArt(): Promise<void> {
+    // Opt-in via the `thumb` attribute (maps to config.enablePreviews).
+    // Without it the audio source just shows the bare strip — no artwork,
+    // and no isolated WASM context is spun up at all.
+    if (!this.config.enablePreviews) return;
+
+    // Cover art only makes sense for an audio-led source: there must be an
+    // audio track and NO real playable video (a real video file's frames
+    // are the content, not artwork). getVideoTracks() already excludes the
+    // still-image cover stream via the isLikelyCoverArt heuristic, so an
+    // audio file with embedded art reports zero video tracks here.
+    if (this.trackManager.getAudioTracks().length === 0) return;
+    if (this.trackManager.getVideoTracks().length > 0) return;
+
+    const picTracks = this.trackManager.getAttachedPicTracks();
+    if (picTracks.length === 0) return;
+    // Past this point an art track exists, so the UI is holding off the
+    // audio-strip layout waiting for a bitmap. Emit a null "coverart" on every
+    // failure exit so the element can stop waiting and fall back to the strip
+    // instead of sitting on a blank surface forever.
+    if (!this.source || this.fileSize <= 0) {
+      this.emit("coverart", null);
+      return;
+    }
+
+    try {
+      // Demuxer owns the isolated-context read; we just turn the encoded
+      // bytes into a bitmap and publish it.
+      const data = await Demuxer.extractAttachedPicture(
+        this.source,
+        this.fileSize,
+        this.config.wasmBinary,
+      );
+      if (!data || data.length === 0) {
+        this.emit("coverart", null);
+        return;
+      }
+
+      const codec = (picTracks[0].codec || "").toLowerCase();
+      const mime =
+        codec === "png"
+          ? "image/png"
+          : codec === "mjpeg" || codec === "jpeg" || codec === "jpg"
+            ? "image/jpeg"
+            : codec === "webp"
+              ? "image/webp"
+              : "image/*";
+      // getPacketDataCopy already .slice()s into a fresh, non-shared
+      // ArrayBuffer, so it's safe to hand straight to Blob.
+      const blob = new Blob([data.buffer as ArrayBuffer], { type: mime });
+      const bitmap = await createImageBitmap(blob);
+
+      // Release the previous bitmap before stomping the reference — a stale
+      // load → load sequence (playlist next-track) would otherwise leak GPU
+      // memory until the next GC cycle.
+      this.coverArt?.close?.();
+      this.coverArt = bitmap;
+
+      this.emit("coverart", bitmap);
+      Logger.info(
+        TAG,
+        `Cover art extracted: ${bitmap.width}x${bitmap.height} (${codec || "image"})`,
+      );
+    } catch (err) {
+      Logger.warn(TAG, "Cover art extraction failed", err);
+      this.emit("coverart", null);
+    }
+  }
+
+  /**
    * Destroy player and release resources
    */
   destroy(): void {
@@ -4420,6 +5161,11 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
 
     // Clear track manager
     this.trackManager.clear();
+
+    // Release cover art bitmap. close() is a no-op on platforms that
+    // don't implement it (older Firefox); guard with optional call.
+    this.coverArt?.close?.();
+    this.coverArt = null;
 
     // Reset state
     this.stateManager.reset();

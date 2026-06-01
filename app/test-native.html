@@ -1,0 +1,328 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Native &lt;video&gt; smoothness test</title>
+<style>
+  * { box-sizing: border-box; }
+  body { margin: 0; background: #0a0a0a; color: #fff; font: 14px/1.4 -apple-system, sans-serif; padding: 12px; }
+  h2 { margin: 16px 0 8px; font-size: 14px; color: #ccc; }
+  #pick { padding: 12px; background: #151515; border-radius: 8px; margin-bottom: 12px; }
+  .row { display: flex; gap: 8px; margin: 12px 0; flex-wrap: wrap; }
+  button { padding: 10px 14px; background: #2a2a2a; color: #fff; border: 1px solid #333; border-radius: 6px; font-size: 13px; }
+  button:disabled { opacity: 0.5; }
+  video { width: 100%; max-height: 60vh; display: block; background: #000; border-radius: 6px; }
+  #log { padding: 10px; max-height: 40vh; overflow: auto; font-family: ui-monospace, monospace; font-size: 11px; background: #111; border-radius: 6px; margin-top: 10px; }
+  .row-tag { display: inline-block; padding: 2px 6px; border-radius: 3px; font-size: 11px; margin-right: 6px; }
+  .tag-A { background: #1a4; }
+  .tag-B { background: #44a; }
+  .tag-C { background: #a3a; }
+  .tag-D { background: #a83; }
+  .tag-E { background: #38a; }
+  .tag-W { background: #c63; }
+  .tag-P { background: #383; }
+</style>
+</head>
+<body>
+<h2>Test: which setup plays your 4K AV1 file smoothly?</h2>
+
+<div id="pick">
+  <input type="file" id="file" accept="video/*">
+  <div style="margin-top: 8px; color: #aaa; font-size: 12px;">Pick the SAME file you tested in movi-player. We'll try each setup in turn — watch for stalls.</div>
+</div>
+
+<div class="row">
+  <button id="testA">A: bare-bones</button>
+  <button id="testB">B: + WebAudio</button>
+  <button id="testC">C: + shadow DOM</button>
+  <button id="testD">D: + sibling DOM clutter</button>
+  <button id="testE">E: + many event listeners</button>
+  <button id="testF">F: real &lt;movi-player&gt; (minimal page)</button>
+  <button id="stop">Stop / Clear</button>
+</div>
+
+<div id="player"></div>
+<div id="log"></div>
+
+<!-- Load the bundle the same way app/index.html does. The worker
+     strips the version segment from /dist/<v>/* and serves element.js
+     from R2. Loading it at page-parse time guarantees movi-player is
+     registered before Test F runs. -->
+<script type="module" src="/dist/__BUILD_VERSION__/element.js"></script>
+
+<script>
+const logEl = document.getElementById("log");
+// Escape HTML — without this, log msgs containing `<movi-player>` would
+// be parsed as real elements by insertAdjacentHTML, silently inflating the
+// page with a phantom upgraded player on every log call.
+const esc = (s) => String(s).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+const log = (tag, msg) => {
+  const t = new Date().toISOString().slice(11, 23);
+  const tagClass = { A: "tag-A", B: "tag-B", C: "tag-C", D: "tag-D", E: "tag-E", W: "tag-W", P: "tag-P" }[tag] || "";
+  logEl.insertAdjacentHTML("afterbegin", `<div><span class="row-tag ${tagClass}">${tag}</span> [${t}] ${esc(msg)}</div>`);
+};
+
+// One-shot diagnostic: log which element.js URL the browser loaded and
+// whether the registered class has setFile on its prototype. Helps spot
+// stale-cache cases on mobile without devtools.
+window.addEventListener("load", () => {
+  const scriptTag = document.querySelector('script[type="module"][src*="element"]');
+  const src = scriptTag ? scriptTag.getAttribute("src") : "(no element script tag)";
+  log("P", `DIAG: element.js src = ${src}`);
+  if (window.customElements && customElements.get("movi-player")) {
+    const proto = customElements.get("movi-player").prototype;
+    log("P", `DIAG: movi-player.prototype.setFile = ${typeof proto.setFile === "function" ? "function" : "MISSING"}`);
+  } else {
+    log("W", `DIAG: movi-player not yet registered at load`);
+  }
+});
+
+let currentFile = null;
+let currentVideo = null;
+let audioContext = null;
+let audioSource = null;
+
+document.getElementById("file").addEventListener("change", (e) => {
+  currentFile = e.target.files[0];
+  if (currentFile) log("P", `picked: ${currentFile.name} (${(currentFile.size / 1024 / 1024).toFixed(1)} MB)`);
+});
+
+function clearPlayer() {
+  if (currentVideo) {
+    try { currentVideo.pause(); } catch {}
+    try { currentVideo.removeAttribute("src"); currentVideo.load(); } catch {}
+    // Tests C/D/E nest the video inside a shadow-host div — tear the
+    // whole host down so the shadow root + clutter is gone too.
+    const host = currentVideo._shadowHost;
+    if (host) {
+      try { host.remove(); } catch {}
+    } else {
+      currentVideo.remove();
+    }
+    currentVideo = null;
+  }
+  // Belt + braces: any orphaned video / movi-player still inside the
+  // #player container (left over from a test that errored before setting
+  // currentVideo) gets nuked too, so a fresh test always starts clean.
+  document.getElementById("player").innerHTML = "";
+  if (audioSource) {
+    try { audioSource.disconnect(); } catch {}
+    audioSource = null;
+  }
+}
+
+function attachListeners(v, tag) {
+  let lastWaiting = 0;
+  v.addEventListener("waiting", () => {
+    lastWaiting = performance.now();
+    log("W", `${tag}: WAITING at ${v.currentTime.toFixed(2)}s`);
+  });
+  v.addEventListener("playing", () => {
+    const gap = lastWaiting > 0 ? (performance.now() - lastWaiting).toFixed(0) : "-";
+    log(tag, `playing (resumed after ${gap}ms)`);
+    lastWaiting = 0;
+  });
+  v.addEventListener("stalled", () => log("W", `${tag}: stalled`));
+  v.addEventListener("loadedmetadata", () =>
+    log(tag, `metadata: ${v.videoWidth}x${v.videoHeight} dur=${v.duration.toFixed(1)}s`),
+  );
+  v.addEventListener("canplay", () => log(tag, `canplay`));
+  v.addEventListener("error", () => log("W", `${tag}: error code=${v.error?.code}`));
+}
+
+document.getElementById("testA").addEventListener("click", () => {
+  if (!currentFile) { alert("Pick a file first"); return; }
+  clearPlayer();
+  log("A", "=== Test A: bare-bones src + autoplay ===");
+  const v = document.createElement("video");
+  v.controls = true;
+  v.autoplay = true;
+  v.playsInline = true;
+  v.src = URL.createObjectURL(currentFile);
+  attachListeners(v, "A");
+  document.getElementById("player").appendChild(v);
+  currentVideo = v;
+});
+
+document.getElementById("testB").addEventListener("click", () => {
+  if (!currentFile) { alert("Pick a file first"); return; }
+  clearPlayer();
+  log("B", "=== Test B: src + autoplay + createMediaElementSource ===");
+  const v = document.createElement("video");
+  v.controls = true;
+  v.autoplay = true;
+  v.playsInline = true;
+
+  // simplevideoplayer.com's WebAudio routing
+  if (!audioContext) {
+    audioContext = new (window.AudioContext || window.webkitAudioContext)();
+  }
+  try {
+    audioSource = audioContext.createMediaElementSource(v);
+    const gain = audioContext.createGain();
+    audioSource.connect(gain);
+    gain.connect(audioContext.destination);
+    log("B", "audio routed via WebAudio MediaElementSource");
+  } catch (err) {
+    log("W", `B: createMediaElementSource failed: ${err.message}`);
+  }
+
+  v.src = URL.createObjectURL(currentFile);
+  attachListeners(v, "B");
+  document.getElementById("player").appendChild(v);
+  currentVideo = v;
+});
+
+document.getElementById("testC").addEventListener("click", () => {
+  if (!currentFile) { alert("Pick a file first"); return; }
+  clearPlayer();
+  log("C", "=== Test C: video inside a shadow DOM ===");
+  // Mimic movi-player's structural setup: a custom element with a
+  // shadow root, and the video as a child of that shadow root.
+  const host = document.createElement("div");
+  host.id = "shadow-host-C";
+  document.getElementById("player").appendChild(host);
+  const root = host.attachShadow({ mode: "open" });
+  const v = document.createElement("video");
+  v.controls = true;
+  v.autoplay = true;
+  v.playsInline = true;
+  v.style.cssText = "width:100%;max-height:60vh;display:block;background:#000;border-radius:6px;";
+  v.src = URL.createObjectURL(currentFile);
+  attachListeners(v, "C");
+  root.appendChild(v);
+  currentVideo = v;
+  // Track the host for cleanup.
+  currentVideo._shadowHost = host;
+});
+
+document.getElementById("testD").addEventListener("click", () => {
+  if (!currentFile) { alert("Pick a file first"); return; }
+  clearPlayer();
+  log("D", "=== Test D: shadow DOM + sibling clutter (canvas, overlays) ===");
+  const host = document.createElement("div");
+  host.id = "shadow-host-D";
+  document.getElementById("player").appendChild(host);
+  const root = host.attachShadow({ mode: "open" });
+
+  // Sibling clutter that movi-player carries in its shadow root: a
+  // hidden canvas at video size, subtitle overlay, controls bar,
+  // poster overlay, ambient wrapper, context menu placeholder.
+  const canvas = document.createElement("canvas");
+  canvas.width = 3840;
+  canvas.height = 2160;
+  canvas.style.cssText = "display:none;width:100%;height:100%;position:absolute;";
+  root.appendChild(canvas);
+
+  const subOverlay = document.createElement("div");
+  subOverlay.style.cssText = "position:absolute;inset:0;pointer-events:none;";
+  root.appendChild(subOverlay);
+
+  const controls = document.createElement("div");
+  controls.style.cssText = "position:absolute;bottom:0;left:0;right:0;height:60px;background:rgba(0,0,0,0.5);";
+  root.appendChild(controls);
+
+  const ambient = document.createElement("div");
+  ambient.id = "ambient-wrapper-D";
+  ambient.style.cssText = "position:absolute;inset:-100px;filter:blur(40px);opacity:0.7;z-index:-1;";
+  root.appendChild(ambient);
+
+  const ctxMenu = document.createElement("div");
+  ctxMenu.style.cssText = "display:none;position:absolute;";
+  root.appendChild(ctxMenu);
+
+  const v = document.createElement("video");
+  v.controls = true;
+  v.autoplay = true;
+  v.playsInline = true;
+  v.style.cssText = "width:100%;max-height:60vh;display:block;background:#000;border-radius:6px;";
+  v.src = URL.createObjectURL(currentFile);
+  attachListeners(v, "D");
+  root.appendChild(v);
+  currentVideo = v;
+  currentVideo._shadowHost = host;
+});
+
+document.getElementById("testE").addEventListener("click", () => {
+  if (!currentFile) { alert("Pick a file first"); return; }
+  clearPlayer();
+  log("E", "=== Test E: shadow DOM + clutter + 13 event listeners ===");
+  const host = document.createElement("div");
+  host.id = "shadow-host-E";
+  document.getElementById("player").appendChild(host);
+  const root = host.attachShadow({ mode: "open" });
+
+  // Same clutter as D.
+  const canvas = document.createElement("canvas");
+  canvas.width = 3840;
+  canvas.height = 2160;
+  canvas.style.cssText = "display:none;width:100%;height:100%;position:absolute;";
+  root.appendChild(canvas);
+  const subOverlay = document.createElement("div");
+  subOverlay.style.cssText = "position:absolute;inset:0;pointer-events:none;";
+  root.appendChild(subOverlay);
+  const controls = document.createElement("div");
+  controls.style.cssText = "position:absolute;bottom:0;left:0;right:0;height:60px;background:rgba(0,0,0,0.5);";
+  root.appendChild(controls);
+
+  const v = document.createElement("video");
+  v.controls = true;
+  v.autoplay = true;
+  v.playsInline = true;
+  v.style.cssText = "width:100%;max-height:60vh;display:block;background:#000;border-radius:6px;";
+  v.src = URL.createObjectURL(currentFile);
+  attachListeners(v, "E");
+
+  // 13 event listeners — mirrors NativeVideoController's surface so
+  // every lifecycle event passes through a (no-op) JS callback.
+  const extras = ["durationchange","loadedmetadata","canplay","play","pause","ended","ratechange","seeking","seeked","timeupdate","progress","volumechange","emptied"];
+  for (const evt of extras) {
+    v.addEventListener(evt, () => { /* mimic emit + relay */ void v.currentTime; });
+  }
+
+  root.appendChild(v);
+  currentVideo = v;
+  currentVideo._shadowHost = host;
+});
+
+document.getElementById("testF").addEventListener("click", async () => {
+  if (!currentFile) { alert("Pick a file first"); return; }
+  clearPlayer();
+  log("P", "=== Test F: real <movi-player> (docs pattern) ===");
+
+  // Per docs: declare <movi-player> in HTML markup with explicit pixel
+  // sizing (height in px, not %). Innerhtml lets the HTML parser create
+  // the element so it upgrades through the normal path — same as
+  // index.html's pre-declared player.
+  const host = document.getElementById("player");
+  // Canvas mode (no `usenative`). Native cascade currently moves the
+  // <video> into light DOM (commit 23f555c) where the shadow root
+  // hides it because there's no <slot> — audio plays, frame stays
+  // black. Until that ships a slot or sibling fix, stick with canvas
+  // rendering so the frame is actually visible.
+  host.innerHTML = '<movi-player id="f-player" renderer="canvas" controls autoplay objectfit="contain" thumb fastseek showtitle stablevolume style="display:block;width:100%;height:60vh;"></movi-player>';
+
+  // Wait for the element to be defined (script tag at the bottom of body
+  // loads element.js; if user clicks before it finishes, we wait).
+  await customElements.whenDefined("movi-player");
+  const player = document.getElementById("f-player");
+
+  player.addEventListener("playing", () => log("P", `F: playing`));
+  player.addEventListener("waiting", () => log("W", `F: WAITING`));
+  player.addEventListener("error", (e) => log("W", `F: error — ${(e && e.detail && e.detail.message) || e.detail || "unknown"}`));
+
+  // Per docs: assign File to .src (or use setFile helper).
+  player.src = currentFile;
+
+  currentVideo = player;
+});
+
+document.getElementById("stop").addEventListener("click", () => {
+  clearPlayer();
+  logEl.innerHTML = "";
+  log("P", "cleared");
+});
+</script>
+</body>
+</html>

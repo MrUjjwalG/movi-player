@@ -21,11 +21,7 @@ import type {
   PlayerState,
 } from "../types";
 import { Logger, LogLevel } from "../utils/Logger";
-import { ThumbnailBindings } from "../wasm/bindings";
-import { loadWasmModuleNew } from "../wasm/FFmpegLoader";
-import { FileSource } from "../source/FileSource";
-import { ThumbnailHttpSource } from "../source/ThumbnailHttpSource";
-import { Demuxer } from "../demux/Demuxer";
+import type { SourceAdapter } from "../source/SourceAdapter";
 
 import { SettingsStorage } from "../utils/SettingsStorage";
 
@@ -58,13 +54,29 @@ export class MoviElement extends HTMLElement {
   private _isUnsupported: boolean = false;
   private eventHandlers: Map<string, () => void> = new Map();
   private controlsContainer: HTMLElement | null = null;
+  private unmuteOverlay: HTMLButtonElement | null = null;
+  // Sticky latch — once the user has heard audio (whether by clicking
+  // the pill, dragging the slider, or pressing M), suppress the pill
+  // for the rest of the element's life. Re-muting after that is an
+  // intentional choice; the pill is only meant to bridge the browser's
+  // autoplay-with-sound block, not pester on every manual mute.
+  private _userHasUnmuted: boolean = false;
   private brokenIndicator: HTMLElement | null = null;
   private emptyStateIndicator: HTMLElement | null = null;
+  // Cover-art canvas painted when the source has embedded album art and no
+  // playable video stream. Sits above the WebGL canvas; both children below
+  // resize with the host element via updateCoverArtOverlay().
+  private coverArtOverlay: HTMLDivElement | null = null;
+  private coverArtCanvas: HTMLCanvasElement | null = null;
+  private coverArtBitmap: ImageBitmap | null = null;
+  // True once cover-art extraction has settled for the current source (bitmap
+  // arrived OR extraction failed). Until then, if the source has an art track,
+  // we hold the audio-strip layout off so the player doesn't flash strip→cover.
+  private _coverArtResolved: boolean = false;
   private controlsTimeout: number | null = null;
   private isOverControls: boolean = false;
   private isSeeking: boolean = false;
   private pendingSeekTarget: number | null = null; // Coalesces rapid currentTime sets while a seek is in flight
-  private isPosterSeek: boolean = false; // True during initial seek(0) to render first frame
   private isDragging: boolean = false;
   private isTouchDragging: boolean = false;
 
@@ -100,6 +112,10 @@ export class MoviElement extends HTMLElement {
 
   // Internal state
   private _src: string | File | null = null;
+  // Caller-supplied SourceAdapter — wins over _src when present. Lets users
+  // wire any custom protocol (WebSocket, WebRTC data channel, IndexedDB,
+  // bespoke encryption, etc.) into the element without losing the UI.
+  private _sourceAdapter: SourceAdapter | null = null;
   private _audioSrc: string | null = null; // Separate audio source URL
   // Pre-muxed video qualities declared via multiple <source> tags with
   // data-height / data-label. Lets the player drive a YouTube-style quality
@@ -108,7 +124,39 @@ export class MoviElement extends HTMLElement {
   private _audioTracks: { src: string; type?: string; lang: string; label: string }[] = []; // Multi-language audio
   private _subtitleTracks: { src: string; lang: string; label: string; format?: string }[] = []; // External subtitles
   private _autoplay: boolean = false;
+  // True from the moment an autoplay attempt is kicked off until playback
+  // actually reaches "playing" or the browser blocks it. While set, the
+  // center play overlay stays hidden — otherwise the big play icon flashes
+  // over the first frame during the brief pre-play startup window even
+  // though the player is about to start on its own.
+  private _autoplayStarting: boolean = false;
+  // True when autoplay-with-sound was blocked by the browser and we fell
+  // back to muted playback (YouTube/Twitter behaviour). Unlike the `muted`
+  // attribute, this is a runtime decision the user never asked for — so the
+  // "Tap to unmute" pill must surface even without a `controls` attribute,
+  // since the pill is the only path back to audio. Cleared the moment the
+  // user unmutes (set muted / volume slider both latch _userHasUnmuted).
+  private _autoMutedForAutoplay: boolean = false;
+  // True once playback has actually reached "playing" at least once.
+  // Distinguishes a real user pause (worth surfacing the controls bar
+  // for) from the synthetic "paused" state the initial poster seek
+  // lands in before the user has even pressed play.
+  private _hasEverPlayed: boolean = false;
+  // Set briefly by the loop handler so the next end → play transition
+  // doesn't surface the centre pause-confirmation icon. Loop replay
+  // isn't a user click, so the "I clicked and now it's playing" flash
+  // would just look like a glitch at every loop boundary. Cleared
+  // once the player has settled into "playing" again.
+  private _loopRestartInFlight: boolean = false;
   private _pendingPlay: boolean = false;
+  // True while loading spinner + play() must wait for FileSource preload to
+  // complete (mobile only, height >= 2160). Released by the player's
+  // 'preloadcomplete' event, which always fires once preload settles.
+  private _preloadGateActive: boolean = false;
+  // True when the resume dialog was deferred because FileSource preload
+  // hadn't settled yet. Surfaced by the preloadcomplete handler. Independent
+  // of _preloadGateActive — applies to every FileSource, not just mobile 4K+.
+  private _resumeDialogPending: boolean = false;
   private _posterTime: string | null = null;
   private _generatedPosterUrl: string | null = null;
   // Bump on every src change / dispose so in-flight postertime generators
@@ -175,6 +223,11 @@ export class MoviElement extends HTMLElement {
   private _videoUrl: string = "";        // Video endpoint for encrypted playback
   private _videoId: string = "";         // Video ID for encrypted playback
   private _resumeSaveInterval: number | null = null; // Interval to save position
+  // True while the initial postertime poster seek is in flight (until the
+  // clock is reset back to 0). The poster seek lands in a "paused" state which
+  // would otherwise persist the poster timestamp (e.g. 2.8s) as the resume
+  // position — block resume saves during this window.
+  private _posterSeekActive: boolean = false;
   private _titleAutoLoaded: boolean = false; // Track if title was auto-loaded from metadata
   private _resumeCheckedWithTitle: boolean = false; // Track if resume was re-checked after title load
   private _stripTitleAttr: boolean = false; // Guard for suppressing native title tooltip
@@ -186,9 +239,13 @@ export class MoviElement extends HTMLElement {
   private ambientWrapperElement: HTMLElement | null = null; // Reference to external wrapper element
   private _ambientRafId: number | null = null;
   private _lastAmbientSampleTime: number = 0;
-  private _ambientSampleInterval: number = 100; // Start at 100ms (10fps) for better performance
-  private _ambientSampleCanvas: HTMLCanvasElement | null = null;
-  private _ambientSampleCtx: CanvasRenderingContext2D | null = null;
+  // Wall-clock timestamp (performance.now()) of the last playback-rate change.
+  // Ambient sampling skips for a brief cooldown after a rate change so the
+  // ~5–15ms GPU readback doesn't contend with audio decoder refill, which
+  // produces audible "audio late" gaps right after speed switches.
+  private _lastRateChangeTime: number = 0;
+  private static readonly AMBIENT_RATE_CHANGE_COOLDOWN_MS = 600;
+  private _ambientSampleInterval: number = 200; // 5fps; cheap now that we read from a renderer-side 16×16 mirror
   private currentAmbientColors: { r: number; g: number; b: number } = {
     r: 0,
     g: 0,
@@ -377,6 +434,25 @@ export class MoviElement extends HTMLElement {
     // the canvas/video underneath where the player's handlers are attached.
     this.posterElement.style.pointerEvents = "none";
     shadowRoot.appendChild(this.posterElement);
+
+    // Cover-art overlay (only visible for audio-only sources with embedded
+    // artwork). Sits above the WebGL canvas but below subtitles + controls.
+    // A single canvas paints both the blurred backdrop and the centred art
+    // so we don't have to wire two DOM nodes through the resize path.
+    this.coverArtOverlay = document.createElement("div");
+    this.coverArtOverlay.className = "movi-cover-art-overlay";
+    this.coverArtOverlay.style.position = "absolute";
+    this.coverArtOverlay.style.inset = "0";
+    this.coverArtOverlay.style.display = "none";
+    this.coverArtOverlay.style.zIndex = "1";
+    this.coverArtOverlay.style.pointerEvents = "none";
+    this.coverArtOverlay.style.background = "#000";
+    this.coverArtCanvas = document.createElement("canvas");
+    this.coverArtCanvas.style.width = "100%";
+    this.coverArtCanvas.style.height = "100%";
+    this.coverArtCanvas.style.display = "block";
+    this.coverArtOverlay.appendChild(this.coverArtCanvas);
+    shadowRoot.appendChild(this.coverArtOverlay);
 
     // Create subtitle overlay element
     this.subtitleOverlay = document.createElement("div");
@@ -734,8 +810,8 @@ export class MoviElement extends HTMLElement {
     `;
     shadowRoot.appendChild(contextMenu);
 
-    // Move submenus out of the menu so they escape its backdrop-filter / overflow
-    // containing-block trap. They live as siblings of the menu in shadowRoot, and
+    // Move submenus out of the menu so they escape its overflow containing-block
+    // trap. They live as siblings of the menu in shadowRoot, and
     // setupSubmenuHover positions them in :host-relative absolute coordinates.
     const submenuNodes = contextMenu.querySelectorAll(
       ".movi-context-menu-submenu, .movi-context-menu-submenu-audio, .movi-context-menu-submenu-subtitle",
@@ -754,10 +830,19 @@ export class MoviElement extends HTMLElement {
   }
 
   private createControls(shadowRoot: ShadowRoot): void {
+    // Overlay is a sibling of the controls container, not a child, so its
+    // box can span the whole player (top:0 → bottom:controls-height) and
+    // its mouseenter/mouseleave catch the cursor crossing ANY player edge.
+    // Nested inside .movi-controls-container it was confined to the bottom
+    // strip and only fired when the cursor crossed that small region.
+    const overlay = document.createElement("div");
+    overlay.className = "movi-controls-overlay";
+    shadowRoot.appendChild(overlay);
+
     const container = document.createElement("div");
     container.className = "movi-controls-container";
+    // eslint-disable-next-line no-unsanitized/property -- static template, no user data
     container.innerHTML = `
-      <div class="movi-controls-overlay"></div>
       <div class="movi-controls-bar" style="position: relative;">
         <div class="movi-progress-container">
           <div class="movi-progress-bar">
@@ -1005,6 +1090,44 @@ export class MoviElement extends HTMLElement {
     shadowRoot.appendChild(container);
     this.controlsContainer = container;
 
+    // Unmute pill — shown when the player autoplayed muted (browser
+    // policy) and controls are enabled. Mirrors what YouTube/Twitter
+    // surface so the user has a one-tap path to audio without hunting
+    // for the volume button. updateUnmuteOverlay() flips its visibility
+    // based on the current attribute combo and the muted state.
+    const unmuteOverlay = document.createElement("button");
+    unmuteOverlay.className = "movi-unmute-overlay";
+    unmuteOverlay.type = "button";
+    unmuteOverlay.setAttribute("aria-label", "Unmute");
+    unmuteOverlay.style.display = "none";
+    // textContent + appendChild — no innerHTML to keep the security
+    // hook happy and avoid an XSS surface even with a static template.
+    const unmuteSvg = document.createElementNS("http://www.w3.org/2000/svg", "svg");
+    unmuteSvg.setAttribute("viewBox", "0 0 24 24");
+    unmuteSvg.setAttribute("fill", "none");
+    unmuteSvg.setAttribute("stroke", "currentColor");
+    unmuteSvg.setAttribute("stroke-width", "2");
+    unmuteSvg.setAttribute("stroke-linecap", "round");
+    unmuteSvg.setAttribute("stroke-linejoin", "round");
+    unmuteSvg.innerHTML =
+      '<polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5"/>' +
+      '<line x1="23" y1="9" x2="17" y2="15"/>' +
+      '<line x1="17" y1="9" x2="23" y2="15"/>';
+    unmuteOverlay.appendChild(unmuteSvg);
+    const unmuteText = document.createElement("span");
+    unmuteText.textContent = "Tap to unmute";
+    unmuteOverlay.appendChild(unmuteText);
+    unmuteOverlay.addEventListener("click", (e) => {
+      e.stopPropagation();
+      this._userHasUnmuted = true;
+      this.muted = false;
+      // Defensive — updateMuted() should hide it via updateUnmuteOverlay,
+      // but if state is mid-flight this guarantees the click feels instant.
+      unmuteOverlay.style.display = "none";
+    });
+    shadowRoot.appendChild(unmuteOverlay);
+    this.unmuteOverlay = unmuteOverlay;
+
     // Create title bar as a separate element outside controls container
     const titleBar = document.createElement("div");
     titleBar.className = "movi-title-bar";
@@ -1108,27 +1231,27 @@ export class MoviElement extends HTMLElement {
       <div class="movi-shortcuts-body">
         <div class="movi-shortcuts-col">
           <div class="movi-shortcut-row"><kbd>Space</kbd><span>Play / Pause</span></div>
-          <div class="movi-shortcut-row"><kbd>F</kbd><span>Fullscreen</span></div>
-          <div class="movi-shortcut-row"><kbd>P</kbd><span>Picture-in-Picture</span></div>
+          <div class="movi-shortcut-row" data-video-only><kbd>F</kbd><span>Fullscreen</span></div>
+          <div class="movi-shortcut-row" data-video-only><kbd>P</kbd><span>Picture-in-Picture</span></div>
           <div class="movi-shortcut-row"><kbd>M</kbd><span>Mute / Unmute</span></div>
           <div class="movi-shortcut-row"><kbd>&uarr; / &darr;</kbd><span>Volume</span></div>
           <div class="movi-shortcut-row"><kbd>&larr; / &rarr;</kbd><span>Seek ±10s</span></div>
           <div class="movi-shortcut-row"><kbd>0</kbd><span>Seek to Start</span></div>
-          <div class="movi-shortcut-row"><kbd>Ctrl+&larr;/&rarr;</kbd><span>Frame Step</span></div>
+          <div class="movi-shortcut-row" data-video-only><kbd>Ctrl+&larr;/&rarr;</kbd><span>Frame Step</span></div>
           <div class="movi-shortcut-row"><kbd>+/-</kbd><span>Speed Up/Down</span></div>
-          <div class="movi-shortcut-row"><kbd>V</kbd><span>Cycle Subtitles</span></div>
-          <div class="movi-shortcut-row"><kbd>Z / X</kbd><span>Subtitle Delay</span></div>
+          <div class="movi-shortcut-row" data-video-only><kbd>V</kbd><span>Cycle Subtitles</span></div>
+          <div class="movi-shortcut-row" data-video-only><kbd>Z / X</kbd><span>Subtitle Delay</span></div>
           <div class="movi-shortcut-row"><kbd>B</kbd><span>Cycle Audio</span></div>
         </div>
         <div class="movi-shortcuts-col">
-          <div class="movi-shortcut-row"><kbd>A</kbd><span>Aspect Ratio</span></div>
-          <div class="movi-shortcut-row"><kbd>R</kbd><span>Rotate Video</span></div>
+          <div class="movi-shortcut-row" data-video-only><kbd>A</kbd><span>Aspect Ratio</span></div>
+          <div class="movi-shortcut-row" data-video-only><kbd>R</kbd><span>Rotate Video</span></div>
           <div class="movi-shortcut-row"><kbd>L</kbd><span>Loop</span></div>
           <div class="movi-shortcut-row"><kbd>U</kbd><span>Stable Volume</span></div>
-          <div class="movi-shortcut-row"><kbd>H</kbd><span>HDR Mode</span></div>
-          <div class="movi-shortcut-row"><kbd>S</kbd><span>Snapshot</span></div>
+          <div class="movi-shortcut-row" data-video-only><kbd>H</kbd><span>HDR Mode</span></div>
+          <div class="movi-shortcut-row" data-video-only><kbd>S</kbd><span>Snapshot</span></div>
           <div class="movi-shortcut-row"><kbd>I</kbd><span>Stats for Nerds</span></div>
-          <div class="movi-shortcut-row"><kbd>T</kbd><span>Timeline</span></div>
+          <div class="movi-shortcut-row" data-video-only><kbd>T</kbd><span>Timeline</span></div>
           <div class="movi-shortcut-row"><kbd>?</kbd><span>This Panel</span></div>
         </div>
       </div>
@@ -1272,7 +1395,20 @@ export class MoviElement extends HTMLElement {
         if (state === "playing" || state === "buffering") {
           this.pause();
         } else {
-          // Play if in ready, paused, ended, or any other non-playing state
+          // Play if in ready, paused, ended, or any other non-playing state.
+          // Flip the centre icon to "pause" right away. The first play has to
+          // seek/buffer before the state actually reaches "playing", so keying
+          // the icon off the raw state left the play triangle showing for that
+          // whole startup window — the click felt unacknowledged. Optimistic
+          // swap here; updatePlayPauseIcon reconciles once playback settles.
+          const centerPlayIcon = centerPlayPauseBtn.querySelector(
+            ".movi-center-icon-play",
+          ) as HTMLElement | null;
+          const centerPauseIcon = centerPlayPauseBtn.querySelector(
+            ".movi-center-icon-pause",
+          ) as HTMLElement | null;
+          centerPlayIcon?.style.setProperty("display", "none");
+          centerPauseIcon?.style.setProperty("display", "block");
           this.play();
         }
       }
@@ -1358,9 +1494,15 @@ export class MoviElement extends HTMLElement {
       // Schedule this time
       previewLoopState.nextTime = time;
 
+      // Short debounce: hover previews far from the playhead need a fresh
+      // network fetch, so the debounce is pure added latency. 150ms made a
+      // far-position hover feel ~4s vs <2s for a real seek. The serialized
+      // single-flight queue (processPreviewQueue) already coalesces rapid
+      // moves — it drops to the latest pending time when a fetch finishes —
+      // so a tight debounce won't flood the network.
       previewDebounce = window.setTimeout(() => {
         processPreviewQueue();
-      }, 150);
+      }, 40);
     };
 
     // Helper to show/update thumbnail AND progress visuals during dragging/hovering
@@ -1514,31 +1656,26 @@ export class MoviElement extends HTMLElement {
     });
 
     document.addEventListener("mouseup", async (e) => {
-      if (this.isDragging) {
-        this.isDragging = false; // Stop dragging immediately to prevent UI updates during seek
-        await this.seekFromEvent(e); // Actual seek on release
-      }
-      this.isDragging = false;
+      // Only react to mouseup if we were actively dragging the progress
+      // bar — otherwise any click anywhere on the host page (a button on
+      // the embedding site, an unrelated link) was waking the player
+      // controls. The post-drag bookkeeping below (seek, isOverControls,
+      // showControls) is only meaningful at the end of a scrub.
+      if (!this.isDragging) return;
+      this.isDragging = false; // Stop immediately so the seek's UI updates aren't competing
+      await this.seekFromEvent(e); // Actual seek on release
       const controlsContainer = shadowRoot.querySelector(
         ".movi-controls-container",
       ) as HTMLElement;
       if (controlsContainer) {
         const rect = controlsContainer.getBoundingClientRect();
-        const mouseX = e.clientX;
-        const mouseY = e.clientY;
         const stillOverControls =
-          mouseX >= rect.left &&
-          mouseX <= rect.right &&
-          mouseY >= rect.top &&
-          mouseY <= rect.bottom;
-
+          e.clientX >= rect.left &&
+          e.clientX <= rect.right &&
+          e.clientY >= rect.top &&
+          e.clientY <= rect.bottom;
         this.isOverControls = stillOverControls;
-
-        if (stillOverControls) {
-          this.showControls();
-        } else {
-          this.showControls();
-        }
+        this.showControls();
       }
     });
 
@@ -1549,6 +1686,12 @@ export class MoviElement extends HTMLElement {
         if (this.isLoading || this._isUnsupported || !this.player) return;
         if (e.cancelable) e.preventDefault(); // Prevent ghost mouse events
         e.stopPropagation();
+        // stopPropagation above keeps the controls-container's touch
+        // handler from firing, so its lastTouchTime bookkeeping never
+        // runs for scrubs. Set it here so anything that gates on
+        // "recent touch" (e.g. the post-play 200ms hide) treats scrub
+        // start the same as any other in-chrome touch.
+        this.lastTouchTime = Date.now();
         this.isTouchDragging = true;
         hideThumbnail(0); // Ensure thumbnail is hidden at start of touch
         this.showControls();
@@ -1581,6 +1724,12 @@ export class MoviElement extends HTMLElement {
     document.addEventListener("touchend", async (e) => {
       if (this.isTouchDragging) {
         this.isTouchDragging = false; // Stop dragging immediately
+        // Mark the touch as recent on release too — the seek below kicks
+        // the player back into "playing", whose 200ms-delayed hideControls
+        // would otherwise trigger right when the user releases the
+        // scrubber and cause a visible flicker (hide → 1s later re-show
+        // via the controls-container touchend handler).
+        this.lastTouchTime = Date.now();
         const touch = e.changedTouches[0];
         if (touch) {
           await this.seekFromTouchEvent(e); // Actual seek on release
@@ -1855,11 +2004,37 @@ export class MoviElement extends HTMLElement {
       }
     });
 
+    // Refresh disabled/visible state of speed options whenever the menu opens —
+    // 8K+ sources cap at 1.5x because hardware decoders genuinely can't
+    // sustain ≥120 effective fps decode at 8K (decoder errors and stalls
+    // regardless of buffer tuning). 4K handles 2x fine on modern hw.
+    // getMaxAllowedRate() returns the active source's ceiling.
+    const refreshSpeedMenu = () => {
+      const maxRate = this.getMaxAllowedRate();
+      shadowRoot.querySelectorAll(".movi-speed-item").forEach((item) => {
+        const el = item as HTMLElement;
+        const speed = parseFloat(el.dataset.speed || "1");
+        const blocked = speed > maxRate;
+        el.style.opacity = blocked ? "0.4" : "";
+        el.style.pointerEvents = blocked ? "none" : "";
+        el.title = blocked
+          ? "Not available for this source (8K+ tops out at 1.5x)"
+          : "";
+      });
+    };
+    speedBtn?.addEventListener("click", () => {
+      // setBottomMenuOpen's animation runs after the click handler above —
+      // refresh on the next frame so disabled state applies before the menu
+      // actually paints.
+      requestAnimationFrame(refreshSpeedMenu);
+    });
+
     // Speed selection
     shadowRoot.querySelectorAll(".movi-speed-item").forEach((item) => {
       item.addEventListener("click", (e) => {
         e.stopPropagation();
-        const speed = parseFloat((item as HTMLElement).dataset.speed || "1");
+        const requested = parseFloat((item as HTMLElement).dataset.speed || "1");
+        const speed = Math.min(requested, this.getMaxAllowedRate());
         this.playbackRate = speed;
         this.showOSD(
           OSD.speed,
@@ -1970,8 +2145,12 @@ export class MoviElement extends HTMLElement {
         (e as any).pointerType === "touch" ||
         (e as any).sourceCapabilities?.firesTouchEvents;
 
-      // Ignore if this was triggered by a touch gesture
-      if (isTouchClick && this.gesturePerformed) {
+      // Touch input is fully owned by handleTap (which runs from
+      // touchend in setupGestures) — that's where the native-style
+      // "tap toggles chrome, never play/pause" rule lives. Synthetic
+      // clicks fired off touchend would otherwise reach here and
+      // re-introduce the old play/pause toggle on every tap.
+      if (isTouchClick) {
         this.gesturePerformed = false; // Reset for next interaction
         e.preventDefault();
         e.stopPropagation();
@@ -2024,6 +2203,11 @@ export class MoviElement extends HTMLElement {
       // toggles playback like normal.
       if (this.isAnyMenuOpen()) {
         this.closeAllBottomMenus();
+        // Re-arm the auto-hide timer now that the menu is gone. While a
+        // menu is open showControls() refuses to set the timer (the
+        // isAnyMenuOpen gate), so on touch devices the bar would otherwise
+        // stay up indefinitely after closing a popup this way.
+        this.showControls();
         e.stopPropagation();
         return;
       }
@@ -2102,10 +2286,15 @@ export class MoviElement extends HTMLElement {
       () => {
         setTimeout(() => {
           this.isOverControls = false;
-          // Restart hide timer if playing
-          if (this.player?.getState() === "playing") {
-            this.showControls();
-          }
+          // Re-arm the auto-hide timer after a touch interaction with the
+          // bar or a popup menu. Always call showControls() — it re-checks
+          // its own gating (isOverControls / menu open / dragging) and sets
+          // the timer when nothing's holding the bar open. The old `if
+          // playing` guard meant a touch while PAUSED cleared isOverControls
+          // but never re-armed the timer, so the controls stayed up forever
+          // on touch devices. showControls auto-hides on pause too (YouTube
+          // parity), so this is safe.
+          this.showControls();
         }, 1000);
       },
       { passive: true },
@@ -2136,35 +2325,23 @@ export class MoviElement extends HTMLElement {
       }
     });
 
-    // Show controls when mouse enters video area (overlay)
-    overlay?.addEventListener("mouseenter", () => {
-      if (!this.isOverControls) {
-        this.showControls();
-      }
-    });
+    // Overlay's mouseenter/mouseleave used to drive showControls /
+    // hideControls, but the host-level enter/move/leave (added in
+    // setupKeyboardShortcuts) covers the same surface AND every child
+    // that absorbs events. Worse, on overlay it was a re-show vector:
+    // when stateChange→playing strips the center play/pause button's
+    // pointer-events, the browser fires a synthetic mouseenter on the
+    // overlay (cursor's "real" target shifts) which immediately
+    // re-showed the controls a frame after the just-fired hide. Drop
+    // the overlay handlers; host handles it.
 
-    // Hide controls when mouse leaves video area (but not if going to controls)
-    overlay?.addEventListener("mouseleave", (e) => {
-      const relatedTarget = e.relatedTarget as Element;
-      // Don't hide if mouse is moving to controls
-      if (relatedTarget && controlsContainer?.contains(relatedTarget)) {
-        return;
-      }
-      // Only hide if not over controls and not dragging and no menu open
-      if (!this.isOverControls && !this.isDragging && !this.isAnyMenuOpen()) {
-        this.hideControls();
-      }
-    });
-
-    // Show controls when mouse moves over canvas/video/overlay
-    const activityHandler = () => {
-      this.showControls();
-    };
-
-    this.canvas.addEventListener("mousemove", activityHandler);
-    this.video.addEventListener("mousemove", activityHandler);
-    overlay?.addEventListener("mousemove", activityHandler);
-    controlsContainer?.addEventListener("mousemove", activityHandler);
+    // Mousemove → showControls is handled at the host level (see the
+    // listener added in setupKeyboardShortcuts), so it covers EVERY
+    // child — canvas, video, overlay, controls bar, empty-state,
+    // broken-indicator, loading spinner, nerd-stats, and any open
+    // menu. The previous per-child listeners only fired when the
+    // cursor was directly over canvas/video/overlay/controlsContainer,
+    // missing siblings that sit above them.
   }
 
   private async seekFromEvent(e: MouseEvent): Promise<void> {
@@ -2339,6 +2516,12 @@ export class MoviElement extends HTMLElement {
           return;
         }
 
+        // Native mobile behaviour: a tap on the video area only
+        // toggles the chrome on / off — play/pause stays a deliberate
+        // act through the centre play button or the bottom bar's
+        // play/pause icon. (Previously a visible-controls tap also
+        // ran play/pause, which surprised users coming from the
+        // system video player.)
         const controlsContainer = this.controlsContainer;
         const controlsHidden = controlsContainer?.classList.contains(
           "movi-controls-hidden",
@@ -2347,12 +2530,7 @@ export class MoviElement extends HTMLElement {
         if (controlsHidden) {
           this.showControls();
         } else {
-          const state = this.player?.getState();
-          if (state === "playing" || state === "buffering") {
-            this.pause();
-          } else {
-            this.play();
-          }
+          this.hideControls();
         }
         return;
       }
@@ -2397,8 +2575,10 @@ export class MoviElement extends HTMLElement {
         lastTap = now;
 
         tapTimer = window.setTimeout(() => {
-          // Single tap action (show controls or toggle play)
-          // Tap closes any open bottom-controls menu first.
+          // Single tap action: chrome show / hide only — see the
+          // doubleTap-disabled branch above for the rationale. The
+          // play/pause toggle moved off the player surface to keep
+          // tap behaviour consistent with native mobile players.
           if (this.isAnyMenuOpen()) {
             this.closeAllBottomMenus();
             lastTap = 0;
@@ -2413,12 +2593,7 @@ export class MoviElement extends HTMLElement {
           if (controlsHidden) {
             this.showControls();
           } else {
-            const state = this.player?.getState();
-            if (state === "playing" || state === "buffering") {
-              this.pause();
-            } else {
-              this.play();
-            }
+            this.hideControls();
           }
           lastTap = 0;
         }, 300);
@@ -2561,8 +2736,8 @@ export class MoviElement extends HTMLElement {
               startXPercent <= 0.5
             ) {
               if (deltaY < -60) {
-                // Swipe UP -> Enter Fullscreen
-                if (!document.fullscreenElement) {
+                // Swipe UP -> Enter Fullscreen (skip for any audio source)
+                if (!document.fullscreenElement && !this.classList.contains("movi-audio-mode")) {
                   this.requestFullscreen().catch((err) =>
                     Logger.error(TAG, "Error entering fullscreen", err),
                   );
@@ -2729,11 +2904,33 @@ export class MoviElement extends HTMLElement {
         }
       }
 
+      // Video-only shortcuts are meaningless for an audio-only source and
+      // their on-screen controls are already hidden in audio mode (see the
+      // .movi-audio-mode context-menu gate above). Mirror that exact set
+      // here so the keys don't fire actions with no visible surface — e.g.
+      // T opening an empty timeline panel over the cover art / strip, which
+      // is the symptom that surfaced this gap.
+      if (this.classList.contains("movi-audio-mode")) {
+        // a:fit  p:pip  r:rotate  g:ambient  s:snapshot  t:timeline
+        // v:subtitle-track. f (fullscreen) and h (hdr) are intentionally
+        // omitted — they already self-guard: toggleFullscreen() is the
+        // single audio-mode chokepoint, and the h case no-ops because the
+        // hdr-toggle item is display:none for non-HDR (audio) content.
+        const VIDEO_ONLY_KEYS = "aprgstv";
+        if (e.key.length === 1 && VIDEO_ONLY_KEYS.includes(e.key.toLowerCase())) {
+          return;
+        }
+      }
+
       switch (e.key) {
         case " ":
         case "k":
         case "K": {
-          // Space or K: Play/Pause
+          // Space or K: Play/Pause. Don't surface the bar on this
+          // keyboard toggle — matches mouse click + the stateChange
+          // paused handler, which both stopped re-popping chrome on
+          // every play/pause. The centre play icon flashes as the
+          // confirmation; users that want the bar can hover / tap.
           e.preventDefault();
           const state = this.player?.getState();
           if (state === "playing" || state === "buffering") {
@@ -2741,7 +2938,6 @@ export class MoviElement extends HTMLElement {
           } else {
             this.play();
           }
-          this.showControls();
           break;
         }
         case "ArrowLeft":
@@ -2959,19 +3155,23 @@ export class MoviElement extends HTMLElement {
           // Z / X: Subtitle delay — shift subs earlier (Z) or later (X) by
           // 100ms per press. mpv convention: positive value = subs later.
           // File-source only — streamed sources don't expose the timing
-          // controls this nudge depends on.
+          // controls this nudge depends on. Also require an active subtitle
+          // track: nudging a delay value that applies to nothing on screen
+          // would just surface a misleading OSD readout.
           e.preventDefault();
-          if (this.player && this.player.isFileSource()) {
-            const step = 0.1;
-            const direction = e.key === "z" || e.key === "Z" ? -1 : 1;
-            // Round to 3 decimals to keep the displayed value stable across
-            // many presses despite floating-point accumulation.
-            const next = Math.round((this._subtitleDelay + direction * step) * 1000) / 1000;
-            this.subtitleDelay = next;
-            const formatted =
-              next === 0 ? "0s" : `${next > 0 ? "+" : ""}${next.toFixed(2)}s`;
-            this.showOSD(OSD.subOn, `Subtitle Delay: ${formatted}`);
-          }
+          if (!this.player || !this.player.isFileSource()) break;
+          const hasActiveMuxed = !!this.player.trackManager.getActiveSubtitleTrack();
+          const hasActiveExt = this.player.getSubtitleLangs().some((t) => t.active);
+          if (!hasActiveMuxed && !hasActiveExt) break;
+          const step = 0.1;
+          const direction = e.key === "z" || e.key === "Z" ? -1 : 1;
+          // Round to 3 decimals to keep the displayed value stable across
+          // many presses despite floating-point accumulation.
+          const next = Math.round((this._subtitleDelay + direction * step) * 1000) / 1000;
+          this.subtitleDelay = next;
+          const formatted =
+            next === 0 ? "0s" : `${next > 0 ? "+" : ""}${next.toFixed(2)}s`;
+          this.showOSD(OSD.subOn, `Subtitle Delay: ${formatted}`);
           break;
         }
         case "b":
@@ -3059,7 +3259,8 @@ export class MoviElement extends HTMLElement {
           // +: Speed up (VLC standard)
           e.preventDefault();
           {
-            const speeds = [0.25, 0.5, 0.75, 1, 1.25, 1.5, 1.75, 2];
+            const maxRate = this.getMaxAllowedRate();
+            const speeds = [0.25, 0.5, 0.75, 1, 1.25, 1.5, 1.75, 2].filter(s => s <= maxRate);
             const curIdx = speeds.findIndex(s => s >= this._playbackRate);
             const nextIdx = Math.min((curIdx === -1 ? 3 : curIdx) + 1, speeds.length - 1);
             this.playbackRate = speeds[nextIdx];
@@ -3073,7 +3274,8 @@ export class MoviElement extends HTMLElement {
           // -: Speed down (VLC standard)
           e.preventDefault();
           {
-            const speeds = [0.25, 0.5, 0.75, 1, 1.25, 1.5, 1.75, 2];
+            const maxRate = this.getMaxAllowedRate();
+            const speeds = [0.25, 0.5, 0.75, 1, 1.25, 1.5, 1.75, 2].filter(s => s <= maxRate);
             const curIdx = speeds.findIndex(s => s >= this._playbackRate);
             const nextIdx = Math.max((curIdx === -1 ? 3 : curIdx) - 1, 0);
             this.playbackRate = speeds[nextIdx];
@@ -3117,11 +3319,63 @@ export class MoviElement extends HTMLElement {
       this.setAttribute("tabindex", "0");
     }
 
-    // Auto-focus on mouse enter so keyboard shortcuts work without clicking.
-    // preventScroll: focus() would otherwise scroll the player into view,
-    // which yanks the page mid-hover when the player is partly off-screen.
+    // Record every touch on the player so the synthetic mouse events the
+    // browser fires right after a tap (mouseenter/mousemove/mousedown/...)
+    // can be told apart from a real mouse hover. Without this, tapping a
+    // surface like the Resume button — whose own handler never touches the
+    // controls — still flashed the bar for a beat, because the synthetic
+    // mouseenter/mousemove below ran showControls(). Touch devices drive the
+    // chrome through handleTap (tap toggles the bar), so the hover path
+    // should stay inert for touch.
+    this.addEventListener(
+      "touchstart",
+      () => {
+        this.lastTouchTime = Date.now();
+      },
+      { passive: true, capture: true },
+    );
+
+    // Surface controls the moment the cursor enters the player.
     this.addEventListener("mouseenter", () => {
-      this.focus({ preventScroll: true });
+      // Skip when this is a touch-induced synthetic mouse event (a real
+      // hover never follows a recent touchstart).
+      if (Date.now() - this.lastTouchTime < 800) return;
+      // Surface the controls the moment the cursor enters the player,
+      // regardless of which child element is under it. The canvas/video/
+      // overlay mousemove handlers miss the case where the cursor is
+      // over a sibling that absorbs events (empty-state, broken-indicator,
+      // loading spinner, nerd-stats, an open menu), so the host-level
+      // enter/move covers every internal element.
+      if (this._controls) this.showControls();
+    });
+
+    this.addEventListener("mousemove", () => {
+      if (Date.now() - this.lastTouchTime < 800) return;
+      if (this._controls) this.showControls();
+    });
+
+    // Hide controls when the cursor leaves the player's bounding box from
+    // ANY direction. The .movi-controls-overlay's own mouseleave isn't
+    // sufficient because several siblings sit above the overlay with
+    // pointer-events:auto and higher z-index — .movi-empty-state (z:5
+    // when there's no video), .movi-broken-indicator (z:10000), the
+    // loading spinner, nerd-stats, and any open menu. When the cursor is
+    // over one of those and exits the player, the overlay never had the
+    // cursor, so its mouseleave doesn't fire. mouseleave on the host
+    // element doesn't care which child was under the cursor; it fires
+    // whenever the cursor crosses the host's outer edge. The drag/menu/
+    // touch guards mirror the controls-container handler so behavior
+    // matches whether the cursor exits via the bottom or any other side.
+    this.addEventListener("mouseleave", () => {
+      if (
+        this._controls &&
+        !this.isDragging &&
+        !this.isTouchDragging &&
+        !this.isAnyMenuOpen() &&
+        Date.now() - this.lastTouchTime >= 1000
+      ) {
+        this.hideControls();
+      }
     });
   }
 
@@ -3174,11 +3428,25 @@ export class MoviElement extends HTMLElement {
         isInMenu: shadowTarget?.closest(".movi-context-menu"),
       });
 
-      if (
-        shadowTarget &&
-        (shadowTarget.closest(".movi-controls-container") ||
-          shadowTarget.closest(".movi-context-menu"))
-      ) {
+      // Suppress only when the click hits an interactive control or the
+      // menu itself. The original "any click inside controls-container
+      // is blocked" rule worked for video mode (the bar is a thin strip
+      // overlaying the video, so the dead-zone is small) — but in audio
+      // strip mode the controls-container IS the entire player surface,
+      // so blanket-blocking on it would mean right-click never works.
+      // Refined gate: allow context menu unless the click is on a real
+      // button, the progress bar, or the menu itself.
+      const inStripMode = this.classList.contains("movi-audio-strip");
+      const isOnInteractive =
+        !!shadowTarget?.closest(
+          ".movi-btn, .movi-progress-container, .movi-volume-slider, .movi-context-menu",
+        );
+      const blockMenu = inStripMode
+        ? isOnInteractive
+        : shadowTarget &&
+          (shadowTarget.closest(".movi-controls-container") ||
+            shadowTarget.closest(".movi-context-menu"));
+      if (blockMenu) {
         Logger.debug(
           TAG,
           "[ContextMenu] Clicked on controls or menu, not showing menu",
@@ -3224,6 +3492,38 @@ export class MoviElement extends HTMLElement {
           ".movi-context-menu-backdrop",
         ) as HTMLElement;
         if (backdrop) backdrop.style.display = "none";
+
+        // Audio-strip mode: the player is a 56px tall bar, so anchoring
+        // the menu inside its bounds gives a 36px usable region which is
+        // useless. Switch to position:fixed in viewport coordinates so
+        // the menu can spill into the empty page area below the strip.
+        const isStripMode = this.classList.contains("movi-audio-strip");
+        if (isStripMode) {
+          contextMenu.style.position = "fixed";
+          contextMenu.style.maxHeight = `${Math.max(180, window.innerHeight - 40)}px`;
+          contextMenu.style.display = "block";
+          contextMenu.style.visibility = "hidden";
+          const menuWidth = contextMenu.offsetWidth;
+          const menuHeight = contextMenu.offsetHeight;
+          contextMenu.style.visibility = "visible";
+          let fx = e.clientX;
+          let fy = e.clientY;
+          if (fx + menuWidth > window.innerWidth) fx = window.innerWidth - menuWidth - 10;
+          if (fx < 10) fx = 10;
+          if (fy + menuHeight > window.innerHeight) fy = window.innerHeight - menuHeight - 10;
+          if (fy < 10) fy = 10;
+          contextMenu.style.left = `${fx}px`;
+          contextMenu.style.top = `${fy}px`;
+          // skip the host-relative absolute-position path below
+          requestAnimationFrame(() => contextMenu.classList.add("visible"));
+          this._contextMenuVisible = true;
+          return;
+        }
+
+        // Reset any leftover fixed-position state from a previous strip-
+        // mode invocation (track switch from audio to video).
+        contextMenu.style.position = "";
+
         let x = e.clientX - rect.left;
         let y = e.clientY - rect.top;
 
@@ -3479,7 +3779,7 @@ export class MoviElement extends HTMLElement {
 
     // Handle context menu item clicks. The same handler is attached to
     // submenus too because they live as siblings of contextMenu in shadowRoot
-    // (moved out so they escape the menu's backdrop-filter containing block).
+    // (moved out so they escape the menu's overflow containing block).
     const itemClickHandler = (e: Event) => {
       const target = e.target as HTMLElement;
       const item = target.closest(".movi-context-menu-item") as HTMLElement;
@@ -4113,6 +4413,12 @@ export class MoviElement extends HTMLElement {
     if (this.isLoading || this._isUnsupported || !this.player) {
       return;
     }
+    // Audio-only sources (bare strip OR cover-art view) have nothing to show
+    // fullscreen. Block it at this single chokepoint so double-click, the F
+    // key, and the button are all covered, in both audio layouts.
+    if (this.classList.contains("movi-audio-mode")) {
+      return;
+    }
 
     // Give the host a chance to take over (e.g. VS Code webviews where
     // requestFullscreen is blocked, or embedded apps that drive their own
@@ -4600,6 +4906,11 @@ export class MoviElement extends HTMLElement {
     if (volumeContainer) {
       volumeContainer.style.display = hasAudio ? "flex" : "none";
     }
+    // Same reasoning for the "Tap to unmute" pill — if the source has
+    // no audio at all, there's nothing to unmute, so don't bait the
+    // user into clicking it. Refresh whenever audio-track discovery
+    // finishes (this method is the natural hook).
+    this.updateUnmuteOverlay();
 
     // Show audio selector only if multiple tracks total
     if (totalTracks <= 1) {
@@ -4820,14 +5131,16 @@ export class MoviElement extends HTMLElement {
     // MoviPlayer exposes the wrapper as `hlsWrapper`; the previous `.hls`
     // path silently resolved to undefined, leaving the badge blank in Auto.
     let activeHeight = activeTrack?.height || 0;
+    let activeWidth = (activeTrack as any)?.width || 0;
     if (!activeHeight && activeTrack?.id === -1) {
       try {
         const hls = (this.player as any).hlsWrapper?.hls
         const hlsLevel = hls?.levels?.[hls?.currentLevel];
         activeHeight = hlsLevel?.height || 0;
+        activeWidth = hlsLevel?.width || 0;
       } catch {}
     }
-    this._updateQualityBtnBadge(this._heightBadge(activeHeight));
+    this._updateQualityBtnBadge(this._heightBadge(activeHeight, activeWidth));
 
     qualityList.innerHTML = uniqueTracks
       .map((track) => {
@@ -4835,10 +5148,12 @@ export class MoviElement extends HTMLElement {
         const label =
           track.label || (track.height ? `${track.height}p` : "Auto");
         const h = track.height || 0;
+        const w = (track as any).width || 0;
+        const eff = w > 0 ? Math.max(h, Math.round(w * 9 / 16)) : h;
         let badge = "";
-        if (h >= 4320) badge = "8K";
-        else if (h >= 2160) badge = "4K";
-        else if (h >= 1080) badge = "HD";
+        if (eff >= 4320) badge = "8K";
+        else if (eff >= 2160) badge = "4K";
+        else if (eff >= 1080) badge = "HD";
         const badgeHtml = badge
           ? `<span class="movi-quality-badge movi-quality-badge-${badge.toLowerCase()}">${badge}</span>`
           : "";
@@ -4889,10 +5204,13 @@ export class MoviElement extends HTMLElement {
    * Map a video height to its YouTube-style quality badge (HD/4K/8K) or
    * empty string when the resolution doesn't qualify.
    */
-  private _heightBadge(height: number): string {
-    if (height >= 4320) return "8K";
-    if (height >= 2160) return "4K";
-    if (height >= 1080) return "HD";
+  private _heightBadge(height: number, width: number = 0): string {
+    // Use the 16:9-normalised height when a width is known so ultrawide /
+    // letterboxed tracks (e.g. 3840×2080) still tier as 4K rather than HD.
+    const eff = width > 0 ? Math.max(height, Math.round(width * 9 / 16)) : height;
+    if (eff >= 4320) return "8K";
+    if (eff >= 2160) return "4K";
+    if (eff >= 1080) return "HD";
     return "";
   }
 
@@ -5130,6 +5448,14 @@ export class MoviElement extends HTMLElement {
   }
 
   /*
+   * Maximum playback rate the current source can sustain. All sources allow
+   * the full 2x — the previous 8K+ cap has been removed.
+   */
+  private getMaxAllowedRate(): number {
+    return 2;
+  }
+
+  /**
    * Show On-Screen Display (OSD) notification
    */
   private osdTimeout: number | null = null;
@@ -6348,13 +6674,109 @@ export class MoviElement extends HTMLElement {
   private showControls(): void {
     if (!this._controls) return;
     const container = this.controlsContainer;
+
+    // Flush time/progress/volume DOM only when the bar is actually
+    // coming back from hidden — if it's already visible, the rAF loop
+    // has been keeping it current and another flush here just thrashes
+    // the inline `transition: none` toggle on every mousemove (the
+    // restore-on-next-frame loses if a fresh strip lands in the same
+    // task, killing the smooth playback animation entirely).
+    //
+    // The throttled rAF loop in startUIUpdates skips time/progress/
+    // volume writes while the bar is hidden (perf), so without this
+    // catch-up the bar would fade in showing stale values and only
+    // catch up on the next ≤250ms tick — visible as a "bump" right
+    // after the bar appears. Painting fresh values while still at
+    // opacity 0 means the fade-in reveals the already-current state.
+    //
+    // `.movi-progress-filled`/`-handle` carry a `transition: width|all
+    // …` for smooth playback growth, which would otherwise animate the
+    // catch-up write from the stale position to the current one
+    // (visible as a sliding "bump" alongside the fade-in). Strip the
+    // transition while writing, force a reflow so the snap commits,
+    // then restore on the NEXT frame via `removeProperty` — setting
+    // `style.transition = ""` in the same task is unreliable, some
+    // engines coalesce both writes and keep the transition active.
+    const wasHidden = container?.classList.contains("movi-controls-hidden");
+    if (this.player && wasHidden) {
+      const filled = this.shadowRoot?.querySelector(
+        ".movi-progress-filled",
+      ) as HTMLElement | null;
+      const handle = this.shadowRoot?.querySelector(
+        ".movi-progress-handle",
+      ) as HTMLElement | null;
+      const buffer = this.shadowRoot?.querySelector(
+        ".movi-progress-buffer",
+      ) as HTMLElement | null;
+
+      if (filled) filled.style.transition = "none";
+      if (handle) handle.style.transition = "none";
+      if (buffer) buffer.style.transition = "none";
+
+      this.updateTimeDisplay();
+      this.updateProgressBar();
+      this.updateVolumeIcon();
+
+      // Force a sync layout so the snap commits with transition:none
+      // applied before the rAF restore lands.
+      if (filled) void filled.offsetWidth;
+
+      requestAnimationFrame(() => {
+        filled?.style.removeProperty("transition");
+        handle?.style.removeProperty("transition");
+        buffer?.style.removeProperty("transition");
+      });
+    }
+
     if (container) {
       container.classList.add("movi-controls-visible");
       container.classList.remove("movi-controls-hidden");
 
-      // Update cursor
+      // Restore cursor — clear the inline `none` on the host so the
+      // CSS-driven cursor (default on the visible-controls path)
+      // takes back over. Mirrors what hideControls does in reverse.
+      this.style.cursor = "";
       if (this.canvas) this.canvas.style.cursor = "default";
       if (this.video) this.video.style.cursor = "default";
+
+      // Mirror hideControls — clear the inline cursor:none on the center
+      // button so its stylesheet cursor:pointer takes back over.
+      const centerBtn = this.shadowRoot?.querySelector(
+        ".movi-center-play-pause",
+      ) as HTMLElement | null;
+      if (centerBtn) centerBtn.style.cursor = "";
+    }
+
+    // Mirror the hide path — when controls come back, the center play
+    // button should reappear if the player is paused/ready, since
+    // hideControls now strips its visible class. Without this, the
+    // big play button stayed gone until the next state change.
+    //
+    // Gate on the loading INDICATOR's display, not the `isLoading`
+    // field. The field stays true through the entire initializePlayer
+    // call, but the indicator is suppressed during the initial
+    // seek(0) (suppressSpinner) — so visually nothing is loading,
+    // yet the field-based guard kept the big play button hidden on
+    // first paint when autoplay is off. Match the same source-of-
+    // truth `updatePlayPauseIcon` uses (line ~13024) so the two
+    // can't disagree.
+    const centerPlayPause = this.shadowRoot?.querySelector(
+      ".movi-center-play-pause",
+    ) as HTMLElement | null;
+    const loadingIndicator = this.shadowRoot?.querySelector(
+      ".movi-loading-indicator",
+    ) as HTMLElement | null;
+    const spinnerVisible = loadingIndicator?.style.display === "flex";
+    if (
+      centerPlayPause &&
+      !spinnerVisible &&
+      !this._isUnsupported &&
+      !this._autoplayStarting
+    ) {
+      const state = this.player?.getState();
+      if (state !== "playing" && state !== "buffering") {
+        centerPlayPause.classList.add("movi-center-visible");
+      }
     }
 
     // Shift timeline panel up above controls
@@ -6390,26 +6812,26 @@ export class MoviElement extends HTMLElement {
       this.controlsTimeout = null;
     }
 
-    // Auto-hide only if:
-    // 1. Player is playing (as requested)
-    // 2. Not dragging
-    // 3. Mouse is NOT over the controls bar (traditional behavior to keep it visible if manually hovering)
-    // 4. No menu is currently open
-    const state = this.player?.getState();
-    const isPlaying = state === "playing";
-
+    // Auto-hide whenever the player isn't "actively held open":
+    // 1. Not dragging the scrubber
+    // 2. Mouse is NOT over the controls bar
+    // 3. No menu (speed / audio / subtitle / quality) is open
+    //
+    // Previously this only fired during `playing`, which left the
+    // bar stuck on screen indefinitely after a pause + cursor-away.
+    // YouTube hides the bar on pause too once you stop interacting,
+    // so we match that — the player will only stay open while the
+    // user is actually hovering / scrubbing / has a menu out.
     if (
-      isPlaying &&
       !this.isOverControls &&
       !this.isDragging &&
       !this.isTouchDragging &&
       !this.isAnyMenuOpen()
     ) {
       this.controlsTimeout = window.setTimeout(() => {
-        // Double check state before hiding
-        const currentState = this.player?.getState();
+        // Re-check gating conditions before hiding — a menu may have
+        // been opened, the cursor may have moved over the bar, etc.
         if (
-          currentState === "playing" &&
           !this.isOverControls &&
           !this.isDragging &&
           !this.isTouchDragging &&
@@ -6448,6 +6870,15 @@ export class MoviElement extends HTMLElement {
       ) as HTMLElement | null;
       if (ctx && ctx.style.display !== "none") ctx.style.display = "none";
     }
+
+    // Full close (not the open-one/close-others case): re-arm the auto-hide
+    // timer. Selecting a menu item or closing a popup leaves the bar with no
+    // menu open and nothing scheduled to hide it — on touch devices, where
+    // there's no mouseleave to re-trigger showControls(), the bar would stay
+    // up. With `keep` set a different menu is opening, so leave it alone.
+    if (!keep) {
+      this.showControls();
+    }
   }
 
   /**
@@ -6465,6 +6896,15 @@ export class MoviElement extends HTMLElement {
     if (open) {
       if (el.classList.contains("is-open")) return;
       el.style.display = ""; // revert to CSS default (flex/block)
+      // In audio-strip mode the player is a 56px tall bar. Pop-up menus
+      // normally rely on the bar's overflow:visible chain to extend
+      // beyond the host — but the bar lives inside the consumer's own
+      // layout (e.g. a .player-stage flex container), and ANY ancestor
+      // with overflow:hidden will clip the menu regardless of our own
+      // CSS. Sidestep the problem entirely by switching to position:
+      // fixed with the button's bounding rect — viewport coordinates
+      // can't be clipped by ancestor overflow.
+      this.applyStripFixedMenuPosition(el);
       void el.getBoundingClientRect(); // flush layout so transition starts
       el.classList.add("is-open");
       return;
@@ -6480,9 +6920,56 @@ export class MoviElement extends HTMLElement {
       // If the menu was reopened during the exit transition, leave it.
       if (el.classList.contains("is-open")) return;
       el.style.display = "none";
+      // Reset the strip-mode fixed positioning so a subsequent open in
+      // non-strip mode doesn't inherit stale inline coords.
+      el.style.position = "";
+      el.style.top = "";
+      el.style.left = "";
+      el.style.right = "";
+      el.style.bottom = "";
+      // Menu fully closed — if nothing else is open, re-arm the auto-hide
+      // timer. Covers toggling a popup shut from its own button (no
+      // closeAllBottomMenus / mouseleave fires on touch), which otherwise
+      // left the bar pinned open on touch devices.
+      if (!this.isAnyMenuOpen()) {
+        this.showControls();
+      }
     };
     el.addEventListener("transitionend", finish, { once: true });
     setTimeout(finish, 240); // safety net if transitionend doesn't fire
+  }
+
+  /**
+   * Strip-mode menu positioning: place the menu just below the anchor
+   * button using viewport-relative position:fixed. The strip CSS drops
+   * the host's `contain: paint` + `container-type` so fixed coords are
+   * actually viewport-relative again (default behaviour) and paint
+   * extends outside the 56px strip box.
+   */
+  private applyStripFixedMenuPosition(menu: HTMLElement): void {
+    if (!this.classList.contains("movi-audio-strip")) return;
+    const anchor = menu.parentElement?.querySelector(
+      ".movi-btn",
+    ) as HTMLElement | null;
+    if (!anchor) return;
+    const btnRect = anchor.getBoundingClientRect();
+    // Measure intrinsic size by briefly placing the menu offscreen.
+    menu.style.position = "fixed";
+    menu.style.bottom = "auto";
+    menu.style.right = "auto";
+    menu.style.visibility = "hidden";
+    menu.style.left = "0";
+    menu.style.top = "0";
+    const menuW = menu.offsetWidth || 200;
+    // Right-align with the button; clamp into viewport on both edges.
+    let left = btnRect.right - menuW;
+    if (left < 8) left = 8;
+    if (left + menuW > window.innerWidth - 8) {
+      left = window.innerWidth - menuW - 8;
+    }
+    menu.style.left = `${left}px`;
+    menu.style.top = `${btnRect.bottom + 8}px`;
+    menu.style.visibility = "";
   }
 
   private isBottomMenuOpen(el: HTMLElement | null): boolean {
@@ -6630,9 +7117,43 @@ export class MoviElement extends HTMLElement {
       container.classList.remove("movi-controls-visible");
       container.classList.add("movi-controls-hidden");
 
-      // Hide cursor
+      // Hide cursor. Setting the host element's inline cursor is the
+      // single most reliable signal — the :has-based CSS rule below
+      // does the right thing in spec terms, but Safari (and Chrome
+      // on idle frames without mouse movement) sometimes doesn't
+      // repaint the cursor until the pointer moves. Forcing the host
+      // (and canvas/video, which sit underneath the overlay) via
+      // inline style makes the change take effect immediately.
+      this.style.cursor = "none";
       if (this.canvas) this.canvas.style.cursor = "none";
       if (this.video) this.video.style.cursor = "none";
+
+      // The center play/pause button stays visible with pointer-events:auto
+      // while paused (the "click to resume" affordance). It has its own
+      // cursor:pointer, and because the pointer sits over it the host's
+      // cursor:none never wins — leaving a visible pointer over an
+      // otherwise hidden UI. Force it inline so the cursor hides there too.
+      const centerBtn = this.shadowRoot?.querySelector(
+        ".movi-center-play-pause",
+      ) as HTMLElement | null;
+      if (centerBtn) centerBtn.style.cursor = "none";
+    }
+
+    // The center play/pause button is a separate sibling, so the bar's
+    // hidden class doesn't reach it. Only strip it when the player is
+    // actually playing — that's the pause-confirmation flash from a
+    // click, which should fade out alongside the bar. When the player
+    // is paused/ready/ended, keep the big play icon visible so the
+    // user always has a "click to resume" affordance even after the
+    // bottom bar has auto-hidden. updatePlayPauseIcon's paused branch
+    // will re-add the class on the next 250ms tick anyway, but the
+    // visible flicker between strip-and-re-add is what we're avoiding.
+    const centerPlayPause = this.shadowRoot?.querySelector(
+      ".movi-center-play-pause",
+    ) as HTMLElement | null;
+    const state = this.player?.getState();
+    if (centerPlayPause && state === "playing") {
+      centerPlayPause.classList.remove("movi-center-visible");
     }
 
     // Shift timeline panel down when controls hide
@@ -6671,8 +7192,15 @@ export class MoviElement extends HTMLElement {
     ) as HTMLElement;
 
     if (this._controls) {
+      // Make the bar a layout participant, but start it in the hidden
+      // state — the YouTube-style first paint is just the big centre
+      // play icon over the poster/frame, no chrome. The host-level
+      // mouseenter / mousemove handlers surface the bar on the first
+      // real interaction, and stateChange → "paused" / "ended" still
+      // re-shows it after playback has started.
       container.style.display = "block";
-      this.showControls();
+      container.classList.remove("movi-controls-visible");
+      container.classList.add("movi-controls-hidden");
     } else {
       container.style.display = "none";
       if (centerPlayPause) centerPlayPause.classList.remove("movi-center-visible");
@@ -6681,19 +7209,49 @@ export class MoviElement extends HTMLElement {
 
   private startUIUpdates(): void {
     this.updateAspectRatioIcon();
-    const updateUI = () => {
+    // Throttle UI updates to ~4Hz (250ms). Time display, progress bar
+    // and icons don't need 60fps precision — at 60fps the six DOM
+    // mutations below burn ~30-50ms/sec of main-thread time on a
+    // low-end phone, enough to starve the <video> element's media
+    // pipeline and trigger GOP-boundary rebuffering on 4K AV1. This
+    // matches the cadence of HTMLMediaElement's own `timeupdate`
+    // event, so reactive listeners still feel immediate.
+    const UI_UPDATE_MIN_MS = 250;
+    let lastRun = 0;
+    const updateUI = (timestamp: number) => {
       if (!this.player) return;
 
-      this.updatePlayPauseIcon();
-      this.updateTimeDisplay();
-      this.updateProgressBar();
-      this.updateVolumeIcon();
-      this.updateLoadingIndicator(); // Check buffer fill percentage
-      this.updateTitle(); // Auto-load title from metadata if needed
+      if (timestamp - lastRun >= UI_UPDATE_MIN_MS) {
+        lastRun = timestamp;
+        // When the controls *bar* is auto-hidden, progress bar / time /
+        // volume icon are invisible — skip those DOM writes. Play/pause
+        // icon stays out of the gate because its update ALSO drives the
+        // centred big play/pause button overlay, which sits separately
+        // from the controls bar and is visible even when the bar is
+        // hidden — without this update the centre button gets stuck on
+        // its initial "pause" SVG. Loading indicator + title overlay
+        // also stay live; they aren't part of the bar.
+        // In strip mode, controls are permanently visible (the bar IS
+        // the player), so the auto-hide optimisation below would freeze
+        // the time / progress / volume icon updates against an empty
+        // class on the controls-container. Force the updates through.
+        const inStripMode = this.classList.contains("movi-audio-strip");
+        const controlsHidden = !inStripMode && this.controlsContainer?.classList.contains(
+          "movi-controls-hidden",
+        );
+        this.updatePlayPauseIcon();
+        this.updateLoadingIndicator();
+        this.updateTitle();
+        if (!controlsHidden) {
+          this.updateTimeDisplay();
+          this.updateProgressBar();
+          this.updateVolumeIcon();
+        }
+      }
 
       requestAnimationFrame(updateUI);
     };
-    updateUI();
+    requestAnimationFrame(updateUI);
   }
 
   private addStyles(shadowRoot: ShadowRoot): void {
@@ -6759,6 +7317,19 @@ export class MoviElement extends HTMLElement {
         container-type: inline-size;
         container-name: movi-host;
 
+        /* CSS containment isolates the player's layout/style/paint
+           subtree from the host page. On a busy marketing page (heavy
+           CSS, infinite animations, large DOM), every body-level
+           style invalidation otherwise triggers a recalc cascade that
+           reaches into the player's shadow tree and competes with
+           frame presentation. Telling the browser "this subtree
+           cannot affect outside, and outside cannot affect this
+           subtree's internal layout/paint" is a large win on low-end
+           devices when the player is embedded in a non-minimal page.
+           Skipped contain:size so the host can still derive its
+           dimensions from its parent. */
+        contain: layout style paint;
+
         /* Premium Color Palette */
         --movi-primary: #8B5CF6;
         /* Derived so themecolor attribute cascades to light/dark variants */
@@ -6780,8 +7351,15 @@ export class MoviElement extends HTMLElement {
         --movi-text-tertiary: rgba(255, 255, 255, 0.5);
         
         /* Dynamic Theme Backgrounds */
-        --movi-bar-bg: linear-gradient(to top, rgba(0, 0, 0, 0.9) 0%, rgba(0, 0, 0, 0.4) 100%);
-        --movi-overlay-bg: linear-gradient(to top, rgba(0, 0, 0, 0.4) 0%, transparent 30%);
+        /* Same three-stop fade-to-transparent gradient the light
+           theme uses now — feathered top edge reads like proper
+           chrome over the video instead of a hard band. */
+        --movi-bar-bg: linear-gradient(to top, rgba(0, 0, 0, 0.85) 0%, rgba(0, 0, 0, 0.35) 60%, transparent 100%);
+        /* Overlay's dark wash sits behind the controls bar gradient.
+           Fading out at 12% instead of 30% keeps the glow confined
+           to the chrome band — it used to bleed a third of the way
+           up the frame. */
+        --movi-overlay-bg: linear-gradient(to top, rgba(0, 0, 0, 0.35) 0%, transparent 12%);
         --movi-progress-bg: rgba(255, 255, 255, 0.15);
         
         /* Sizing */
@@ -6845,55 +7423,67 @@ export class MoviElement extends HTMLElement {
         --movi-btn-hover-bg: rgba(0, 0, 0, 0.05);
         --movi-progress-buffer-color: rgba(0, 0, 0, 0.15);
 
-        /* Light Theme Backgrounds */
-        --movi-bar-bg: linear-gradient(to top, rgba(255, 255, 255, 0.98) 0%, rgba(255, 255, 255, 0.8) 100%);
-        --movi-overlay-bg: linear-gradient(to top, rgba(255, 255, 255, 0.5) 0%, transparent 30%);
+        /* Light Theme Backgrounds. Bottom bar uses the same dark
+           gradient as the dark theme + as the title bar — the white
+           variant was reading as a washed-out slab on bright frames
+           and made dark icons fight the video underneath. Chrome
+           consistently dark across themes is what YouTube / Netflix
+           do; per-element colour overrides below force the icons
+           and text white inside the bar so the dark theme's icon
+           rules still apply over the dark gradient. */
+        --movi-bar-bg: linear-gradient(to top, rgba(0, 0, 0, 0.85) 0%, rgba(0, 0, 0, 0.35) 60%, transparent 100%);
+        /* Light theme overlay used to bleed bright white halfway up
+           the frame too; match the dark theme's tighter 12% fade. */
+        --movi-overlay-bg: linear-gradient(to top, rgba(0, 0, 0, 0.35) 0%, transparent 12%);
         --movi-progress-bg: rgba(0, 0, 0, 0.1);
       }
       
-      /* Explicitly force colors in Light Theme to override any defaults */
-      :host([theme="light"]) .movi-controls-bar,
-      :host([theme="light"]) .movi-btn,
-      :host([theme="light"]) .movi-time,
-      :host([theme="light"]) .movi-current-time,
-      :host([theme="light"]) .movi-duration,
+      /* Light Theme colour overrides for elements that sit on the
+         light surfaces — dropdown menu rows still need dark text
+         since they pop over the player on a light card. */
       :host([theme="light"]) .movi-speed-item,
       :host([theme="light"]) .movi-audio-track-item,
       :host([theme="light"]) .movi-subtitle-track-item,
       :host([theme="light"]) .movi-quality-item {
          color: #11142d !important;
       }
+
+      /* Inside the bottom controls bar we keep icons / text white
+         in both themes, because the bar surface is now a dark
+         gradient in both themes (see --movi-bar-bg above). Without
+         these overrides the light theme's dark icon colour would
+         disappear into the dark bar. */
+      :host([theme="light"]) .movi-controls-bar,
+      :host([theme="light"]) .movi-controls-bar .movi-btn,
+      :host([theme="light"]) .movi-controls-bar .movi-time,
+      :host([theme="light"]) .movi-controls-bar .movi-current-time,
+      :host([theme="light"]) .movi-controls-bar .movi-duration {
+         color: #FFFFFF !important;
+      }
+
+      :host([theme="light"]) .movi-controls-bar .movi-time-separator {
+         color: rgba(255, 255, 255, 0.5) !important;
+      }
       
-      :host([theme="light"]) .movi-time-separator {
-         color: rgba(0, 0, 0, 0.4) !important; 
-      }
-      
-      :host([theme="light"]) .movi-volume-slider::-webkit-slider-runnable-track {
-         background: rgba(0, 0, 0, 0.15);
-      }
-
-      :host([theme="light"]) .movi-volume-slider::-webkit-slider-thumb {
-         background: #11142d;
-         box-shadow: 0 2px 6px rgba(0, 0, 0, 0.2);
-      }
-
-      :host([theme="light"]) .movi-volume-slider::-moz-range-track {
-         background: rgba(0, 0, 0, 0.15);
-      }
-
-      :host([theme="light"]) .movi-volume-slider::-moz-range-thumb {
-         background: #11142d;
-         box-shadow: 0 2px 6px rgba(0, 0, 0, 0.2);
-      }
+      /* Light theme bar is dark now — drop the light-on-dark slider
+         overrides. The default white-on-dark slider (declared on
+         .movi-volume-slider further down) already reads correctly
+         against the dark gradient, so the previous "dark thumb on
+         light track" overrides would just disappear the thumb. */
 
       /* Light Theme Tooltip */
       :host([theme="light"]) .movi-seek-thumbnail {
         background-color: rgba(255, 255, 255, 0.65) !important;
-        backdrop-filter: blur(20px) !important;
-        -webkit-backdrop-filter: blur(20px) !important;
         color: #11142d !important;
         box-shadow: 0 8px 32px rgba(0, 0, 0, 0.12) !important;
         border: 1px solid rgba(255, 255, 255, 0.4) !important;
+      }
+
+      /* Chapter title inside the seek tooltip has its own hardcoded
+         white color for the dark theme — needs an explicit dark
+         override here or it disappears against the light backdrop. */
+      :host([theme="light"]) .movi-seek-chapter-title {
+        color: #11142d !important;
       }
 
       :host([theme="light"]) .movi-thumbnail-img {
@@ -6901,25 +7491,22 @@ export class MoviElement extends HTMLElement {
          background-color: #f0f0f0 !important;
       }
 
-      /* Light Theme OSD */
-      :host([theme="light"]) .movi-osd-container {
-        background: rgba(255, 255, 255, 0.85) !important;
-        border-color: rgba(0, 0, 0, 0.05) !important;
-        box-shadow: 0 8px 32px rgba(0, 0, 0, 0.12) !important;
-      }
-
-      :host([theme="light"]) .movi-osd-text {
-        color: #11142d !important;
-      }
+      /* OSD stays the dark capsule in light theme too — it's chrome
+         floating over the video, same logic as the bottom bar. The
+         old white pill blended into bright frames and hid behind
+         seek-OSD timing cues. */
 
       /* Light Theme Button Hover */
       :host([theme="light"]) .movi-btn:hover {
         background: var(--movi-btn-hover-bg) !important;
       }
 
-      /* Light Theme Controls Overlay */
+      /* Light theme controls overlay — use the dark wash that
+         matches the dark theme bar; the old white wash on light
+         theme made the bottom third of bright frames look hazy
+         instead of cleanly anchored to the chrome band. */
       :host([theme="light"]) .movi-controls-overlay {
-        background: linear-gradient(to top, rgba(255, 255, 255, 0.4) 0%, transparent 30%) !important;
+        background: linear-gradient(to top, rgba(0, 0, 0, 0.35) 0%, transparent 12%) !important;
       }
 
       /* Light Theme Title Bar — keep dark like dark theme for readability */
@@ -6927,17 +7514,21 @@ export class MoviElement extends HTMLElement {
         background: linear-gradient(to bottom, rgba(0, 0, 0, 0.7) 0%, transparent 100%) !important;
       }
 
-      /* Light Theme Progress Bar */
+      /* Light theme progress bar — bar surface is dark now, so the
+         track / buffer use the same white-on-dark values as the
+         dark theme defaults. Explicit !important needed to win over
+         the more-general dark-theme rules without re-tinting to
+         black-on-light. */
       :host([theme="light"]) .movi-progress-bar {
-        background: rgba(0, 0, 0, 0.15) !important;
+        background: rgba(255, 255, 255, 0.15) !important;
       }
 
       :host([theme="light"]) .movi-progress-bar:hover {
-        background: rgba(0, 0, 0, 0.2) !important;
+        background: rgba(255, 255, 255, 0.25) !important;
       }
 
       :host([theme="light"]) .movi-progress-buffer {
-        background: rgba(0, 0, 0, 0.1) !important;
+        background: rgba(255, 255, 255, 0.25) !important;
       }
 
       /* Light Theme Center Play Button */
@@ -7077,9 +7668,14 @@ export class MoviElement extends HTMLElement {
         transform: translateY(10px);
       }
       
-      /* Hide cursor on canvas when controls are hidden */
-      :host:has(.movi-controls-container.movi-controls-hidden) canvas,
-      :host:has(.movi-controls-container.movi-controls-hidden) video {
+      /* Hide cursor whenever controls are hidden. The overlay (z:1,
+         pointer-events:all) sits on top of canvas/video and was
+         showing the default cursor — covering canvas/video alone
+         wasn't enough. Wildcard inside the host catches the overlay,
+         controls-container, title bar, and any other layered child
+         without having to enumerate them. */
+      :host:has(.movi-controls-container.movi-controls-hidden),
+      :host:has(.movi-controls-container.movi-controls-hidden) * {
         cursor: none !important;
       }
 
@@ -7118,17 +7714,71 @@ export class MoviElement extends HTMLElement {
         top: 0;
         left: 0;
         right: 0;
-        bottom: var(--movi-controls-height);
+        /* Spans the entire player (bottom:0, not bottom:controls-height)
+           so its mouseenter/mouseleave catch the cursor crossing any
+           edge — including over the controls bar. The controls-container
+           sits on z-index:10 (overlay is z:1), so buttons inside the bar
+           still receive their clicks; the overlay just provides the hit
+           surface for cursor-tracking. The gradient is bottom-anchored
+           and fades to transparent in the upper portion, so extending
+           the bottom edge under the bar doesn't change how the gradient
+           reads visually. */
+        bottom: 0;
         pointer-events: all;
         z-index: 1;
-        /* Subtle gradient overlay for better control visibility */
         background: var(--movi-overlay-bg);
         opacity: 0;
         transition: opacity var(--movi-transition-normal);
       }
       
-      .movi-controls-container.movi-controls-visible .movi-controls-overlay {
+      /* Overlay is no longer nested inside .movi-controls-container, so
+         the visibility class isn't an ancestor — use :has on the host. */
+      :host:has(.movi-controls-container.movi-controls-visible) .movi-controls-overlay {
         opacity: 1;
+      }
+
+      /* Unmute pill — surfaces a one-tap path to sound when the player
+         autoplayed muted (browser policy). Top-left so it doesn't fight
+         with the title bar's text on the gradient OR with the close/PiP
+         buttons on the top-right that some integrators add. z-index sits
+         above the canvas/overlay but below the controls-container so the
+         bottom bar can render over it if they ever collide. */
+      .movi-unmute-overlay {
+        position: absolute;
+        top: 16px;
+        left: 16px;
+        z-index: 8;
+        display: none;
+        align-items: center;
+        gap: 8px;
+        padding: 8px 14px;
+        background: rgba(0, 0, 0, 0.75);
+        color: #fff;
+        font-size: 13px;
+        font-weight: 600;
+        border: 1px solid rgba(255, 255, 255, 0.15);
+        border-radius: 999px;
+        cursor: pointer;
+        pointer-events: auto;
+        transition: background 0.18s ease, transform 0.18s ease;
+        font-family: inherit;
+      }
+      .movi-unmute-overlay:hover {
+        background: rgba(0, 0, 0, 0.9);
+        transform: scale(1.03);
+      }
+      .movi-unmute-overlay svg {
+        width: 16px;
+        height: 16px;
+      }
+      @container movi-host (max-width: 480px) {
+        .movi-unmute-overlay {
+          top: 10px;
+          left: 10px;
+          padding: 6px 11px;
+          font-size: 12px;
+        }
+        .movi-unmute-overlay svg { width: 14px; height: 14px; }
       }
 
       .movi-title-bar {
@@ -7168,13 +7818,22 @@ export class MoviElement extends HTMLElement {
         z-index: 10 !important;
         display: flex;
         flex-direction: column;
-        padding: 0 20px 10px;
+        padding: 4px 20px 12px;
         background: var(--movi-bar-bg);
-        backdrop-filter: blur(var(--movi-glass-blur));
-        -webkit-backdrop-filter: blur(var(--movi-glass-blur));
         color: var(--movi-controls-color);
         height: auto;
         min-height: var(--movi-controls-height);
+        /* Hairline top accent. Reads as a separator between video
+           and chrome the way YouTube's progress bar does, but with a
+           wider feel since our progress bar sits inside the bar. */
+        box-shadow: inset 0 1px 0 0 rgba(255, 255, 255, 0.06);
+      }
+
+      /* Light theme bar uses the same dark gradient — keep the
+         hairline accent so the separator between video and chrome
+         is just as visible. */
+      :host([theme="light"]) .movi-controls-bar {
+        box-shadow: inset 0 1px 0 0 rgba(255, 255, 255, 0.06);
       }
 
       .movi-progress-container {
@@ -7219,12 +7878,23 @@ export class MoviElement extends HTMLElement {
       }
 
       .movi-btn:hover {
-        background: color-mix(in srgb, var(--movi-primary) 0.15); /* Purplish hover */
-        transform: scale(1.1);
+        /* Sober hover: neutral tint over the bar instead of a colour
+           splash, plus a barely-there lift. The aggressive 1.1 scale
+           was reading as "jumpy" against the calm surface. */
+        background: rgba(255, 255, 255, 0.1);
+        transform: scale(1.06);
       }
-      
+
+      /* Light theme bar is now dark too (see --movi-bar-bg), so the
+         hover tint should also be the light-on-dark variant — the
+         old dark-on-light tint disappeared into the new dark bar. */
+      :host([theme="light"]) .movi-controls-bar .movi-btn:hover {
+        background: rgba(255, 255, 255, 0.1);
+      }
+
       .movi-btn:active {
-        transform: scale(0.95);
+        transform: scale(0.94);
+        transition-duration: 0.08s;
       }
 
       .movi-btn:focus,
@@ -7254,7 +7924,10 @@ export class MoviElement extends HTMLElement {
       }
       
       .movi-btn:hover svg {
-        filter: drop-shadow(0 0 4px color-mix(in srgb, var(--movi-primary) 0.5));
+        /* Removed the purple glow drop-shadow on icons. Combined with
+           the new neutral hover backdrop it was overdoing the chrome
+           — the backdrop alone reads as "interactive" without making
+           the icon look like it's lighting up. */
       }
       
       .movi-icon-play {
@@ -7267,17 +7940,24 @@ export class MoviElement extends HTMLElement {
         font-weight: 500;
         font-variant-numeric: tabular-nums;
         white-space: nowrap;
-        letter-spacing: 0.02em;
+        letter-spacing: 0.01em;
+        /* Total duration sits secondary; the current-time override
+           below promotes the playhead to primary so the eye can find
+           it without scanning. */
         color: var(--movi-text-secondary);
+        display: inline-flex;
+        align-items: baseline;
+        gap: 4px;
       }
-      
+
       .movi-current-time {
         color: var(--movi-controls-color);
+        font-weight: 600;
       }
-      
+
       .movi-time-separator {
         color: var(--movi-text-tertiary);
-        margin: 0 2px;
+        font-weight: 400;
       }
 
       .movi-progress-container {
@@ -7292,7 +7972,7 @@ export class MoviElement extends HTMLElement {
         position: relative;
         width: 100%;
         height: var(--movi-progress-height);
-        min-height: 5px;
+        min-height: 4px;
         background: var(--movi-progress-bg);
         border-radius: 100px;
         cursor: pointer;
@@ -7300,13 +7980,16 @@ export class MoviElement extends HTMLElement {
         z-index: 11 !important;
         outline: none !important;
         border: none;
-        transition: height var(--movi-transition-fast), background var(--movi-transition-fast);
+        /* Slightly slower than --movi-transition-fast — the height
+           change is the user's *signal* that the bar is interactive,
+           so it should breathe rather than snap. */
+        transition: height 0.18s cubic-bezier(0.4, 0, 0.2, 1), background 0.18s ease;
         overflow: visible;
       }
-      
+
       .movi-progress-bar:hover {
         height: var(--movi-progress-height-hover);
-        background: rgba(255, 255, 255, 0.2);
+        background: rgba(255, 255, 255, 0.25);
       }
 
       .movi-progress-bar:focus,
@@ -7441,7 +8124,17 @@ export class MoviElement extends HTMLElement {
         height: 4px;
         -webkit-appearance: none;
         appearance: none;
-        background: rgba(255, 255, 255, 0.2);
+        /* Two-tone track: primary up to thumb, muted past it. The
+           hard stop at --movi-volume-pct (set in JS on every volume
+           change) means there's no anti-aliased blur where the two
+           colours meet. */
+        background: linear-gradient(
+          to right,
+          var(--movi-primary) 0%,
+          var(--movi-primary) var(--movi-volume-pct, 100%),
+          rgba(255, 255, 255, 0.2) var(--movi-volume-pct, 100%),
+          rgba(255, 255, 255, 0.2) 100%
+        );
         border-radius: 100px;
         outline: none !important;
         pointer-events: auto !important;
@@ -7476,7 +8169,9 @@ export class MoviElement extends HTMLElement {
 
       .movi-volume-slider::-webkit-slider-runnable-track {
         height: 4px;
-        background: rgba(255, 255, 255, 0.2);
+        /* Track must be transparent so the input's gradient
+           background (filled-vs-rest) shows through. */
+        background: transparent;
         border-radius: 100px;
       }
 
@@ -7527,7 +8222,8 @@ export class MoviElement extends HTMLElement {
       
       .movi-volume-slider::-moz-range-track {
         height: 4px;
-        background: rgba(255, 255, 255, 0.2);
+        /* Same as the webkit track — let the input's gradient show. */
+        background: transparent;
         border-radius: 100px;
       }
 
@@ -7548,8 +8244,6 @@ export class MoviElement extends HTMLElement {
         bottom: calc(100% + 12px);
         right: 0;
         background: var(--movi-glass-bg);
-        backdrop-filter: blur(var(--movi-glass-blur));
-        -webkit-backdrop-filter: blur(var(--movi-glass-blur));
         border: 1px solid var(--movi-glass-border);
         border-radius: 14px;
         min-width: 260px;
@@ -8400,8 +9094,6 @@ export class MoviElement extends HTMLElement {
         bottom: calc(100% + 12px);
         right: 0;
         background: var(--movi-glass-bg);
-        backdrop-filter: blur(var(--movi-glass-blur));
-        -webkit-backdrop-filter: blur(var(--movi-glass-blur));
         border: 1px solid var(--movi-glass-border);
         border-radius: 12px;
         min-width: 140px;
@@ -8475,8 +9167,6 @@ export class MoviElement extends HTMLElement {
         left: 12px;
         z-index: 9;
         background: rgba(0, 0, 0, 0.82);
-        backdrop-filter: blur(12px);
-        -webkit-backdrop-filter: blur(12px);
         border: 1px solid rgba(255, 255, 255, 0.1);
         border-radius: 8px;
         padding: 0;
@@ -8691,8 +9381,6 @@ export class MoviElement extends HTMLElement {
         right: 12px;
         z-index: 11;
         background: rgba(0, 0, 0, 0.88);
-        backdrop-filter: blur(16px);
-        -webkit-backdrop-filter: blur(16px);
         border: 1px solid rgba(255, 255, 255, 0.1);
         border-radius: 10px;
         padding: 0;
@@ -8895,8 +9583,6 @@ export class MoviElement extends HTMLElement {
         transform: translate(-50%, -50%);
         z-index: 100;
         background: rgba(0, 0, 0, 0.92);
-        backdrop-filter: blur(20px);
-        -webkit-backdrop-filter: blur(20px);
         border: 1px solid rgba(255, 255, 255, 0.1);
         border-radius: 12px;
         padding: 0;
@@ -8984,8 +9670,6 @@ export class MoviElement extends HTMLElement {
         inset: 0;
         z-index: 200;
         background: rgba(0, 0, 0, 0.78);
-        backdrop-filter: blur(24px);
-        -webkit-backdrop-filter: blur(24px);
         display: flex;
         flex-direction: column;
         font-family: 'Inter', -apple-system, sans-serif;
@@ -9137,12 +9821,13 @@ export class MoviElement extends HTMLElement {
       ======================================== */
       .movi-resume-dialog {
         position: absolute;
+        /* Sits just above the controls bar while it's visible; drops to the
+           bottom edge when the bar auto-hides. The :has() rule below swaps
+           between the two, transition makes it glide rather than jump. */
         bottom: 90px;
         right: 16px;
         z-index: 50;
         background: rgba(0, 0, 0, 0.9);
-        backdrop-filter: blur(16px);
-        -webkit-backdrop-filter: blur(16px);
         border: 1px solid rgba(255, 255, 255, 0.12);
         border-radius: 10px;
         padding: 14px 20px;
@@ -9153,6 +9838,13 @@ export class MoviElement extends HTMLElement {
         font-family: 'Inter', -apple-system, sans-serif;
         pointer-events: auto;
         animation: movi-resume-slide-up 0.3s ease;
+        transition: bottom 0.2s ease;
+      }
+
+      /* Controls hidden (or absent) → drop the dialog to the bottom edge. */
+      :host:has(.movi-controls-container.movi-controls-hidden) .movi-resume-dialog,
+      :host(:not([controls])) .movi-resume-dialog {
+        bottom: 16px;
       }
 
       @keyframes movi-resume-slide-up {
@@ -9252,12 +9944,21 @@ export class MoviElement extends HTMLElement {
         }
 
         /* Disable animations on mobile */
-        .movi-controls-container,
         .movi-controls-overlay,
         .movi-center-play-pause,
         .movi-btn,
         .movi-progress-handle {
           transition: none !important;
+          animation: none !important;
+          transform: none !important;
+        }
+
+        /* Keep a short opacity-only fade on the controls bar — the
+           transform/scale animations are dropped for mobile perf, but
+           a plain opacity transition is cheap and the snap-on/snap-off
+           without it reads as broken. */
+        .movi-controls-container {
+          transition: opacity 0.18s ease !important;
           animation: none !important;
           transform: none !important;
         }
@@ -9273,26 +9974,30 @@ export class MoviElement extends HTMLElement {
            transform: none !important;
         }
         
-        /* Restore explicit transforms that are structural, not animated */
+        /* Restore explicit transforms that are structural, not animated.
+           Sized to a finger-friendly tap target on phones (was 68×68 +
+           32×32 svg, which read as undersized next to the bottom bar);
+           96×96 + 50×50 keeps parity with the desktop default. */
         .movi-center-play-pause {
            /* Center button needs transform for centering */
            transform: translate(-50%, -50%) scale(0.7) !important;
-           width: 68px !important;
-           height: 68px !important;
+           width: 96px !important;
+           height: 96px !important;
            border-width: 1.5px !important;
         }
         .movi-center-play-pause.movi-center-visible {
            transform: translate(-50%, -50%) scale(1) !important;
         }
         .movi-center-play-pause svg {
-           width: 32px !important;
-           height: 32px !important;
+           width: 50px !important;
+           height: 50px !important;
            color: var(--movi-controls-color) !important;
            fill: var(--movi-controls-color) !important;
            filter: drop-shadow(0 2px 4px rgba(0, 0, 0, 0.3)) !important;
         }
         .movi-center-icon-play {
-           margin-left: 5px !important;
+           margin-left: 0 !important;
+           transform: translateX(4px) scale(1.15) !important;
         }
         .movi-progress-handle {
             /* Handle needs transform for centering and positioning */
@@ -9342,6 +10047,22 @@ export class MoviElement extends HTMLElement {
           opacity: 1 !important;
         }
 
+        /* Small player on a hover-capable device (e.g. embedded in a
+           compare/split layout on desktop) still needs hover-to-open
+           with the same width/opacity transition as the full-size
+           player. Just overriding display:none → flex on hover would
+           snap (display can't transition); instead, keep the slider
+           in the layout as display:flex and let the base rule's
+           width:0 + opacity:0 collapse it, so the desktop hover rule
+           (lines ~7514) animates width and opacity smoothly. The
+           wrapping @media keeps touch devices on the tap-to-open
+           path above. */
+        @media (hover: hover) {
+          .movi-volume-slider-container {
+            display: flex !important;
+          }
+        }
+
         .movi-seek-backward,
         .movi-seek-forward {
           display: none !important;
@@ -9364,9 +10085,14 @@ export class MoviElement extends HTMLElement {
           height: 12px;
         }
 
-        .movi-hdr-label {
-          display: none !important;
-        }
+        /* Keep the "HDR" pill label on small/mobile players. Hiding it
+           on mobile (the previous rule) left the button as an empty
+           24×28px pill that turned into a solid white circle whenever
+           .movi-hdr-active flipped the bg to white — a desktop user
+           would see "HDR" text inside the pill, but mobile got a blank
+           blob with no indication of what it was. Showing the label
+           keeps both platforms visually consistent at minimal cost
+           (11px font, fits easily). */
 
         /* Horizontal Expansion Style */
         .movi-controls-right {
@@ -9474,8 +10200,17 @@ export class MoviElement extends HTMLElement {
           transform-origin: bottom center !important;
           width: 90% !important;
           max-width: 300px !important;
-          /* Constrain height: min of 60% viewport height OR 30% viewport width (fits ~108px on 360px wide 16:9 player, strictly avoiding top clip) */
-          max-height: min(60vh, 30vw) !important;
+          /* Cap against the PLAYER's own height (set by JS on connect/
+             resize), not the viewport — an embedded small player on a
+             1400px desktop window had 30vw=420px max-height but only
+             ~380px of player height, so the menu opened above the
+             controls bar and got chopped off the top by :host's
+             contain:paint. The reserve (controls bar ~60px + top
+             breathing room ~60px) keeps the menu visually inside the
+             player instead of butting against its top edge. The 70vh
+             fallback matches the variable's default elsewhere;
+             max(120px,…) keeps one visible row on tiny players. */
+          max-height: max(120px, calc(var(--movi-player-height, 70vh) - 120px)) !important;
           overflow-y: auto !important;
           z-index: 2000 !important;
           -webkit-overflow-scrolling: touch !important;
@@ -9603,7 +10338,6 @@ export class MoviElement extends HTMLElement {
       /* Touch device optimizations */
       @media (hover: none) and (pointer: coarse) {
         /* Aggressively disable animations on touch interactions */
-        .movi-controls-container,
         .movi-controls-overlay,
         .movi-center-play-pause,
         .movi-btn,
@@ -9614,18 +10348,21 @@ export class MoviElement extends HTMLElement {
           transition: none !important;
           animation: none !important;
         }
-
-        /* Remove backdrop filter which causes white flashes on some mobile GPUs */
-        .movi-controls-bar {
-          backdrop-filter: none !important;
-          -webkit-backdrop-filter: none !important;
-          background: rgba(10, 10, 18, 0.95) !important; /* Solid dark background fallback */
+        /* Keep a short opacity-only fade on the controls bar even on
+           touch — without it the bar snaps on/off on every show/hide.
+           Same reasoning as the small-player container query above:
+           transform/scale animations are too expensive on phones but
+           a plain opacity transition is cheap. */
+        .movi-controls-container {
+          transition: opacity 0.18s ease !important;
+          animation: none !important;
         }
 
-        /* Light theme mobile controls bar */
-        :host([theme="light"]) .movi-controls-bar {
-          background: rgba(255, 255, 255, 0.95) !important;
-        }
+        /* No mobile-specific bar background override — desktop's
+           three-stop fade-to-transparent gradient applies on touch
+           too. The old solid-colour fallback was for a backdrop-
+           filter-induced white flash on some mobile GPUs that's no
+           longer applicable since we don't use backdrop-filter. */
 
         /* Remove the slide-up/down effect */
         .movi-controls-container,
@@ -9695,19 +10432,32 @@ export class MoviElement extends HTMLElement {
         }
       }
 
-      /* Loading indicator - positioned over video area */
+      /* Loading indicator — must share the same anchor as the centre
+         play/pause button so a spinner-to-play transition (or vice
+         versa) doesn't jump vertically. Default placement mirrors the
+         button's default (centre of the visible band above the
+         controls bar); the two override blocks below match the
+         button's bar-hidden and both-bars-visible rules exactly. */
       .movi-loading-indicator {
         position: absolute;
-        top: 0;
-        left: 0;
-        right: 0;
-        bottom: 0;
+        top: calc(50% - var(--movi-controls-height) / 2);
+        left: 50%;
+        transform: translate(-50%, -50%);
         display: flex;
         align-items: center;
         justify-content: center;
         z-index: 1000;
         pointer-events: none;
         background: transparent;
+      }
+
+      :host:has(.movi-controls-container.movi-controls-hidden) .movi-loading-indicator,
+      :host(:not([controls])) .movi-loading-indicator {
+        top: 50%;
+      }
+
+      :host:has(.movi-controls-container.movi-controls-visible):has(.movi-title-bar.movi-title-visible) .movi-loading-indicator {
+        top: calc(50% - (var(--movi-controls-height) - 52px) / 2);
       }
 
       .movi-loader-container {
@@ -9741,19 +10491,22 @@ export class MoviElement extends HTMLElement {
         }
       }
 
-      /* Center play/pause button */
+      /* Centre play/pause button. Default placement assumes only the
+         bottom controls bar is visible — sit the icon at the centre
+         of the available video band (50% of player minus half the
+         bar's height) so it reads as "middle" regardless of player
+         size. Bar-hidden and both-bars-visible overrides further
+         down adjust this for the other two layout states. */
       .movi-center-play-pause {
         position: absolute;
-        top: 50%;
+        top: calc(50% - var(--movi-controls-height) / 2);
         left: 50%;
         transform: translate(-50%, -50%) scale(0.8);
         z-index: 5;
-        width: 88px;
-        height: 88px;
+        width: 96px;
+        height: 96px;
         border-radius: 50%;
         background: color-mix(in srgb, var(--movi-primary) 25%, transparent);
-        backdrop-filter: blur(12px);
-        -webkit-backdrop-filter: blur(12px);
         padding: 0;
         border: 2px solid color-mix(in srgb, var(--movi-primary) 40%, transparent);
         display: flex;
@@ -9763,7 +10516,7 @@ export class MoviElement extends HTMLElement {
         opacity: 0;
         visibility: hidden;
         pointer-events: none;
-        transition: opacity var(--movi-transition-bounce), transform var(--movi-transition-bounce), visibility 0s linear 0.3s;
+        transition: opacity var(--movi-transition-bounce), transform var(--movi-transition-bounce), top var(--movi-transition-normal), visibility 0s linear 0.3s;
         box-shadow: 0 8px 32px color-mix(in srgb, var(--movi-primary) 25%, transparent), inset 0 0 0 1px rgba(255, 255, 255, 0.1);
       }
 
@@ -9773,6 +10526,25 @@ export class MoviElement extends HTMLElement {
         transform: translate(-50%, -50%) scale(1);
         pointer-events: auto;
         transition-delay: 0s;
+      }
+
+      /* Bar hidden or no controls attribute → no chrome to balance
+         against, sit at true geometric centre. */
+      :host:has(.movi-controls-container.movi-controls-hidden) .movi-center-play-pause,
+      :host(:not([controls])) .movi-center-play-pause {
+        top: 50%;
+      }
+
+      /* Bar visible AND title bar visible → centre the icon inside
+         the visible video band (between title bottom and controls
+         top), not the full player. The 44% default biases too far up
+         when there's also a title bar to balance the controls; here
+         the offset is just half the *difference* between the two
+         chrome heights (title ≈ 52px, controls 72px → ~10px above
+         centre on desktop). calc() keeps it right on mobile where
+         --movi-controls-height drops to 64px too. */
+      :host:has(.movi-controls-container.movi-controls-visible):has(.movi-title-bar.movi-title-visible) .movi-center-play-pause {
+        top: calc(50% - (var(--movi-controls-height) - 52px) / 2);
       }
 
       .movi-center-play-pause:hover {
@@ -9794,8 +10566,8 @@ export class MoviElement extends HTMLElement {
       }
 
       .movi-center-play-pause svg {
-        width: 48px;
-        height: 48px;
+        width: 52px;
+        height: 52px;
         color: var(--movi-controls-color);
         fill: var(--movi-controls-color);
         transition: all var(--movi-transition-fast);
@@ -9806,10 +10578,15 @@ export class MoviElement extends HTMLElement {
         filter: drop-shadow(0 0 8px color-mix(in srgb, var(--movi-primary) 60%, transparent));
       }
 
-      /* Play icon offset for optical centering */
+      /* Play icon — bumped up ~15% so the triangle isn't dwarfed by
+         the circle's blur halo (the pause SVG stays at the base size
+         since it's already visually heavier). The translate is a
+         small optical-centre nudge — 5px read as too far right in
+         practice, so 2px is enough to take the visual edge off the
+         left-leaning mass without making the tip look pushed. */
       .movi-center-icon-play {
-        margin-left: 6px;
         display: block;
+        transform: translateX(4px) scale(1.15);
       }
 
       .movi-center-play-pause:focus {
@@ -9818,18 +10595,11 @@ export class MoviElement extends HTMLElement {
         box-shadow: 0 0 0 3px color-mix(in srgb, var(--movi-primary) 30%, transparent), 0 8px 32px rgba(0, 0, 0, 0.4);
       }
       
-      /* Mobile center button sizing */
-      @container movi-host (max-width: 720px) {
-        .movi-center-play-pause {
-          width: 72px;
-          height: 72px;
-        }
-        
-        .movi-center-play-pause svg {
-          width: 36px;
-          height: 36px;
-        }
-      }
+      /* Mobile center button — previously shrank to 72px here, but the
+         <=720px responsive block further down enforces 96px with
+         !important, so this rule was dead. Removed to avoid drift; if
+         a smaller phone-sized variant is ever wanted, set it in that
+         block so it survives the !important cascade. */
 
       /* Subtitle overlay - HTML element for better performance */
       .movi-subtitle-overlay {
@@ -9945,8 +10715,6 @@ export class MoviElement extends HTMLElement {
       .movi-context-menu {
         position: absolute;
         background: rgba(15, 15, 22, 0.95);
-        backdrop-filter: blur(30px);
-        -webkit-backdrop-filter: blur(30px);
         border: 1px solid rgba(255, 255, 255, 0.12);
         border-radius: 16px;
         padding: 8px 4px; /* Consistent with submenus */
@@ -9987,8 +10755,6 @@ export class MoviElement extends HTMLElement {
         width: 100%;
         height: 100%;
         background: rgba(0, 0, 0, 0.4);
-        backdrop-filter: blur(4px);
-        -webkit-backdrop-filter: blur(4px);
         z-index: 19999;
         display: none;
       }
@@ -10103,8 +10869,6 @@ export class MoviElement extends HTMLElement {
       .movi-context-menu-submenu {
         position: absolute;
         background: rgba(15, 15, 22, 0.95);
-        backdrop-filter: blur(30px);
-        -webkit-backdrop-filter: blur(30px);
         border: 1px solid rgba(255, 255, 255, 0.12);
         border-radius: 16px;
         padding: 8px 4px;
@@ -10135,8 +10899,6 @@ export class MoviElement extends HTMLElement {
       .movi-context-menu-submenu-subtitle {
         position: absolute;
         background: rgba(15, 15, 22, 0.95);
-        backdrop-filter: blur(30px);
-        -webkit-backdrop-filter: blur(30px);
         border: 1px solid rgba(255, 255, 255, 0.12);
         border-radius: 16px;
         padding: 8px 4px;
@@ -10191,8 +10953,6 @@ export class MoviElement extends HTMLElement {
         transform: none; /* Reset transform */
         margin-bottom: 0;
         background: var(--movi-glass-bg);
-        backdrop-filter: blur(var(--movi-glass-blur));
-        -webkit-backdrop-filter: blur(var(--movi-glass-blur));
         border: 1px solid var(--movi-glass-border);
         border-radius: 12px;
         min-width: 200px;
@@ -10420,52 +11180,72 @@ export class MoviElement extends HTMLElement {
         position: relative; 
       }
 
-      /* OSD Notification Styles */
+      /* OSD Notification — compact glass capsule. Sits in the upper-
+         centre of the player surface, dark translucent surface with
+         a hairline accent so it reads as chrome consistent with the
+         new bottom bar. Icon stays white; the primary tint only
+         shows through a subtle drop-shadow halo (so HDR-on/loop-on/
+         speed cues still feel "active" without screaming colour). */
       .movi-osd-container {
         position: absolute;
-        top: 40px;
+        top: 32px;
         left: 50%;
-        transform: translateX(-50%) translateY(-20px);
-        background: rgba(15, 15, 20, 0.85);
-        backdrop-filter: blur(20px);
-        -webkit-backdrop-filter: blur(20px);
-        padding: 12px 24px;
-        border-radius: 30px;
+        transform: translateX(-50%) translateY(-12px) scale(0.96);
+        transform-origin: top center;
+        background: rgba(0, 0, 0, 0.55);
+        padding: 10px 20px;
+        border-radius: 999px;
         display: none; /* Flex when visible */
         align-items: center;
         justify-content: center;
-        gap: 12px;
+        gap: 10px;
         z-index: 1000;
         pointer-events: none;
         opacity: 0;
-        transition: opacity 0.3s ease, transform 0.3s ease;
-        border: 1px solid rgba(255, 255, 255, 0.1);
-        box-shadow: 0 4px 20px rgba(0, 0, 0, 0.4);
+        /* Spring entry; the exit is a quieter ease so dismissing a
+           cue doesn't pop. */
+        transition:
+          opacity 0.22s ease,
+          transform 0.32s cubic-bezier(0.34, 1.4, 0.5, 1);
+        border: 1px solid rgba(255, 255, 255, 0.08);
+        box-shadow:
+          0 12px 36px rgba(0, 0, 0, 0.45),
+          0 0 0 1px rgba(0, 0, 0, 0.2),
+          inset 0 1px 0 0 rgba(255, 255, 255, 0.06);
+        max-width: min(72%, 540px);
       }
-      
+
       .movi-osd-container.visible {
         opacity: 1;
-        transform: translateX(-50%) translateY(0);
+        transform: translateX(-50%) translateY(0) scale(1);
       }
-      
+
       .movi-osd-icon {
         display: flex;
         align-items: center;
         justify-content: center;
-        color: var(--movi-primary);
+        color: #FFFFFF;
+        /* Subtle primary halo around the icon — keeps the OSD
+           visually anchored to the brand without painting the bg. */
+        filter: drop-shadow(0 0 6px color-mix(in srgb, var(--movi-primary) 45%, transparent));
       }
-      
+
       .movi-osd-icon svg {
-        width: 24px;
-        height: 24px;
+        width: 22px;
+        height: 22px;
       }
-      
+
       .movi-osd-text {
-        font-size: 16px;
+        font-size: 14px;
         font-weight: 600;
-        color: white;
-        font-family: 'Inter', sans-serif;
-        letter-spacing: 0.02em;
+        color: #FFFFFF;
+        font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
+        letter-spacing: 0.01em;
+        line-height: 1.2;
+        font-variant-numeric: tabular-nums;
+        white-space: nowrap;
+        overflow: hidden;
+        text-overflow: ellipsis;
       }
       
       .movi-broken-indicator {
@@ -10484,8 +11264,6 @@ export class MoviElement extends HTMLElement {
         font-family: 'Inter', sans-serif;
         text-align: center;
         padding: clamp(16px, 5%, 40px);
-        backdrop-filter: blur(20px) saturate(180%);
-        -webkit-backdrop-filter: blur(20px) saturate(180%);
         opacity: 0;
         animation: movi-fade-in 0.5s ease forwards;
       }
@@ -10792,15 +11570,18 @@ export class MoviElement extends HTMLElement {
           font-size: 10px !important;
         }
 
-        /* Center play button sized so it doesn't clip into controls bar
-           on narrow 16:9 players (~183px height). */
+        /* Center play button on narrow viewports — 72px keeps it a
+           comfortable tap target on phones (>44pt iOS HIG floor) while
+           leaving more black space around the circle than the 84px
+           sizing felt was eating on a 16:9 pane that fills a 430px
+           phone. SVG scales accordingly. */
         .movi-center-play-pause {
-          width: 52px !important;
-          height: 52px !important;
+          width: 72px !important;
+          height: 72px !important;
         }
         .movi-center-play-pause svg {
-          width: 26px !important;
-          height: 26px !important;
+          width: 38px !important;
+          height: 38px !important;
         }
 
         /* Tighter OSD on very narrow viewports — at 480px the 16px base
@@ -10858,6 +11639,445 @@ export class MoviElement extends HTMLElement {
             font-size: 13px;
             line-height: 1.25;
         }
+      }
+
+      /* ========================================
+         AUDIO STRIP MODE
+         Activated when the source has audio but no playable video stream
+         (and no embedded cover art). Collapses the player to a thin
+         control strip — the layout the browser's native <audio controls>
+         exposes — so the host element doesn't sit as a black box.
+      ======================================== */
+      :host(.movi-audio-strip) canvas,
+      :host(.movi-audio-strip) video,
+      :host(.movi-audio-strip) .movi-poster-overlay,
+      :host(.movi-audio-strip) .movi-cover-art-overlay,
+      :host(.movi-audio-strip) .movi-subtitle-overlay,
+      :host(.movi-audio-strip) .movi-osd-container,
+      :host(.movi-audio-strip) .movi-loading-indicator,
+      :host(.movi-audio-strip) .movi-loader-container,
+      :host(.movi-audio-strip) .movi-center-play-pause,
+      :host(.movi-audio-strip) .movi-title-bar,
+      :host(.movi-audio-strip) .movi-unmute-overlay,
+      :host(.movi-audio-strip) .movi-broken-indicator,
+      :host(.movi-audio-strip) .movi-empty-state {
+        display: none !important;
+      }
+      /* !important here is unavoidable — the host's height is usually
+         driven by the consumer's <movi-player width="..." height="...">
+         attributes, which set inline styles with higher specificity than
+         a stylesheet rule. Strip mode needs to override that to collapse
+         the player to the control row's natural size. */
+      :host(.movi-audio-strip) {
+        min-height: 56px !important;
+        height: 56px !important;
+        max-height: 56px !important;
+        background: #0f0f0f;
+        border-radius: 6px;
+        /* "overflow: visible" is intentional — popups (speed menu,
+           audio-track menu, right-click context menu) anchor inside the
+           shadow root and open upward from the bar. With overflow:hidden
+           they'd be clipped to the 56px strip and look invisible. The
+           strip background itself is the host's solid colour, so visual
+           bleed past the rounded corners is limited to popups when open. */
+        overflow: visible !important;
+        position: relative;
+        /* The default host has "contain: layout style paint" and
+           "container-type: inline-size" for perf isolation — both clip
+           ANY descendant paint to the host's 56px box and re-anchor
+           position:fixed to the host. In strip mode we explicitly want
+           popups to escape the host visually (speed menu, audio-track
+           menu, context menu open below the bar). Drop the paint and
+           layout containment, but keep "style" (still safely scoped)
+           and skip container-type so fixed positioning reaches the
+           viewport again. */
+        contain: style !important;
+        container-type: normal !important;
+      }
+      :host(.movi-audio-strip[theme="light"]) {
+        background: #f5f5f5;
+        border: 1px solid rgba(0, 0, 0, 0.08);
+      }
+      /* Light-theme dark-icon overrides — the default video bar keeps
+         white icons on a dark gradient regardless of theme, because it
+         overlays a video. The strip has no video underneath, so on a
+         light page surface the white icons read as invisible. Flip them
+         (and the time text) back to the theme's dark text colour, and
+         darken the progress-bar groove so the purple fill registers. */
+      :host(.movi-audio-strip[theme="light"]) .movi-controls-bar,
+      :host(.movi-audio-strip[theme="light"]) .movi-controls-bar .movi-btn,
+      :host(.movi-audio-strip[theme="light"]) .movi-controls-bar .movi-time,
+      :host(.movi-audio-strip[theme="light"]) .movi-controls-bar .movi-current-time,
+      :host(.movi-audio-strip[theme="light"]) .movi-controls-bar .movi-duration {
+        color: #11142d !important;
+      }
+      :host(.movi-audio-strip[theme="light"]) .movi-controls-bar .movi-time-separator {
+        color: rgba(17, 20, 45, 0.5) !important;
+      }
+      :host(.movi-audio-strip[theme="light"]) .movi-progress-bar {
+        background: rgba(0, 0, 0, 0.12) !important;
+      }
+      :host(.movi-audio-strip[theme="light"]) .movi-progress-handle {
+        background: #11142d !important;
+      }
+      :host(.movi-audio-strip[theme="light"]) .movi-btn:hover {
+        background: rgba(0, 0, 0, 0.06) !important;
+      }
+      /* Volume slider thumb/track also need to flip in light strip. */
+      :host(.movi-audio-strip[theme="light"]) .movi-volume-slider::-webkit-slider-thumb {
+        background: #11142d !important;
+      }
+      :host(.movi-audio-strip[theme="light"]) .movi-volume-slider {
+        background: rgba(0, 0, 0, 0.18) !important;
+      }
+      /* The buffering shimmer was tuned for a dark bar — on a light
+         groove the white gradient with mix-blend:screen disappears.
+         Use a dark stripe and switch the blend mode so the animation
+         reads as movement against the lighter background. */
+      :host(.movi-audio-strip[theme="light"].is-buffering) .movi-progress-bar::after {
+        background: linear-gradient(
+          90deg,
+          rgba(0, 0, 0, 0) 0%,
+          rgba(17, 20, 45, 0.4) 50%,
+          rgba(0, 0, 0, 0) 100%
+        ) !important;
+        background-size: 40% 100% !important;
+        background-repeat: no-repeat !important;
+        mix-blend-mode: multiply !important;
+      }
+      /* Controls live in the host's natural flow instead of floating above
+         a video canvas — and stay visible regardless of hover state. */
+      :host(.movi-audio-strip) .movi-controls-overlay {
+        display: none !important;
+      }
+      /* Force the controls container visible in strip mode — its base rule
+         is display:none flipped to .movi-controls-visible on hover. In
+         strip mode there's no "hover to reveal" UX; the bar is the entire
+         player surface. */
+      :host(.movi-audio-strip) .movi-controls-container,
+      :host(.movi-audio-strip) .movi-controls-container.movi-controls-hidden {
+        display: flex !important;
+        position: absolute !important;
+        inset: 0 !important;
+        opacity: 1 !important;
+        pointer-events: auto !important;
+        transform: none !important;
+        background: transparent !important;
+        padding: 0 12px;
+        align-items: center;
+      }
+      /* Single-row layout: small play-pause / volume cluster on the left,
+         progress bar takes the remaining width, time on the right. The
+         vertical column the bar normally uses (progress on top, buttons
+         below) wastes the horizontal real estate the strip has plenty of. */
+      :host(.movi-audio-strip) .movi-controls-bar {
+        background: transparent !important;
+        padding: 0 !important;
+        width: 100%;
+        display: flex !important;
+        flex-direction: row !important;
+        align-items: center !important;
+        gap: 12px !important;
+        min-height: 0 !important;
+        box-shadow: none !important;
+      }
+      /* "display: contents" removes .movi-buttons-row from layout while
+         keeping its children — controls-left and controls-right become
+         direct flex items of .movi-controls-bar. Without this, the row's
+         baseline width:100% would push the progress bar to zero width.
+         The CSS "order" property then arranges the row as
+         [left] [progress fills] [right] like native audio. */
+      :host(.movi-audio-strip) .movi-buttons-row {
+        display: contents !important;
+      }
+      :host(.movi-audio-strip) .movi-controls-left {
+        order: 0 !important;
+        flex: 0 0 auto !important;
+      }
+      :host(.movi-audio-strip) .movi-progress-container {
+        order: 1 !important;
+        flex: 1 1 auto !important;
+        margin: 0 !important;
+        min-width: 0 !important;
+        width: auto !important;
+      }
+      :host(.movi-audio-strip) .movi-controls-right {
+        order: 2 !important;
+        flex: 0 0 auto !important;
+      }
+      /* Keep the right-side cluster visible but trim it to controls that
+         actually apply to audio playback. Subtitles, HDR, quality, PiP,
+         fullscreen, and rotation are video-only — hiding the buttons
+         instead of the whole container preserves audio-track switching
+         (multi-lang files), speed, and the stable-audio compressor. */
+      :host(.movi-audio-strip) .movi-controls-right {
+        display: flex !important;
+        align-items: center !important;
+        flex: 0 0 auto !important;
+        gap: 2px !important;
+      }
+      /* The desktop @media (hover) block initialises .movi-mobile-expandable
+         with width:0 + overflow:hidden, expecting a hover-to-reveal flow.
+         Strip mode has no hover affordance — the buttons live in the
+         visible bar permanently — so unwind those defaults completely.
+         Without overflow:visible here, downward-opening pop-ups (the new
+         strip-mode position) get clipped to the 56px row even with the
+         host's overflow:visible. */
+      :host(.movi-audio-strip) .movi-mobile-expandable {
+        display: flex !important;
+        align-items: center !important;
+        gap: 2px !important;
+        width: auto !important;
+        opacity: 1 !important;
+        overflow: visible !important;
+        pointer-events: auto !important;
+      }
+      /* The base CSS collapses .movi-speed-container, .movi-loop-btn,
+         (and the now-strip-hidden quality + aspect-ratio) to width:0
+         height:0 — they're meant to expand only when .movi-controls-right
+         picks up .expanded via the more-button. In strip mode the more-
+         button is hidden on desktop, so the buttons would be permanently
+         zero-sized despite the cluster being "open". Force-restore the
+         dimensions only for the audio-relevant ones (speed, loop) — the
+         video-only collapsed buttons stay hidden via their own display:
+         none strip rules. */
+      :host(.movi-audio-strip) .movi-speed-container {
+        width: auto !important;
+        height: auto !important;
+        margin: 0 !important;
+      }
+      /* Loop is force-shown for ANY audio source (strip + cover-art view),
+         not just the strip — it's relocated next to the more (<) button and
+         must override the base mobile collapse (width/height:0) in both. */
+      :host(.movi-audio-mode) .movi-loop-btn {
+        width: auto !important;
+        height: auto !important;
+        margin: 0 !important;
+      }
+      /* Video-only buttons. The right cluster mixes container divs (for
+         buttons that have flyout menus) with bare <button>s — match both
+         patterns. */
+      :host(.movi-audio-mode) .movi-subtitle-track-container,
+      :host(.movi-audio-mode) .movi-quality-container,
+      :host(.movi-audio-mode) .movi-hdr-container,
+      :host(.movi-audio-mode) .movi-aspect-ratio-btn,
+      :host(.movi-audio-mode) .movi-pip-btn,
+      :host(.movi-audio-mode) .movi-snapshot-btn,
+      :host(.movi-audio-mode) .movi-rotate-btn,
+      :host(.movi-audio-mode) .movi-fullscreen-btn {
+        display: none !important;
+      }
+      /* Strip-mode keyboard-shortcuts panel: the base CSS centres it
+         inside the host via position:absolute + top:50%/left:50%, but
+         the host is only 56px tall in strip mode so the panel lands
+         half-off-screen above the bar. Switch to viewport-fixed
+         centring so the panel sits cleanly in the page area below the
+         strip. Also drop the video-only rows — fullscreen, PiP,
+         frame-step, subtitle keys, aspect, rotate, HDR, snapshot,
+         timeline don't apply to audio playback. */
+      :host(.movi-audio-strip) .movi-shortcuts-panel {
+        position: fixed !important;
+        top: 50% !important;
+        left: 50% !important;
+        transform: translate(-50%, -50%) !important;
+      }
+      :host(.movi-audio-mode) .movi-shortcut-row[data-video-only] {
+        display: none !important;
+      }
+      /* Same treatment for the Stats-for-Nerds panel — its default
+         "position: absolute; top: 12px; left: 12px" anchors it inside
+         the host, which is only 56px tall in strip mode so the panel
+         body extends well past the bar and reads as broken. Switch to
+         viewport-fixed in the top-left and trim min-width since there's
+         no video metadata column (codec/res/fps/bitrate are mostly N/A
+         for an audio file). */
+      :host(.movi-audio-strip) .movi-nerd-stats {
+        position: fixed !important;
+        /* top/left are intentionally non-!important — JS in toggleNerdStats
+           sets them as inline styles based on the strip's bounding rect,
+           so the panel anchors just below the bar instead of overlapping
+           its play/seek controls. */
+        right: auto !important;
+        bottom: auto !important;
+        max-height: calc(100vh - 32px) !important;
+        overflow-y: auto !important;
+      }
+
+      /* Mirror the same gate inside the right-click context menu —
+         aspect ratio / PiP / fullscreen / rotate / ambient / snapshot
+         / timeline make no sense for an audio-only source. Keep
+         play-pause, speed, loop, stable-audio, nerd-stats and
+         keyboard-shortcuts; everything else is video-frame work. */
+      :host(.movi-audio-mode) .movi-context-menu-item[data-action="fit"],
+      :host(.movi-audio-mode) .movi-context-menu-item[data-action="pip"],
+      :host(.movi-audio-mode) .movi-context-menu-item[data-action="fullscreen"],
+      :host(.movi-audio-mode) .movi-context-menu-item[data-action="rotate-video"],
+      :host(.movi-audio-mode) .movi-context-menu-item[data-action="ambient-toggle"],
+      :host(.movi-audio-mode) .movi-context-menu-item[data-action="snapshot"],
+      :host(.movi-audio-mode) .movi-context-menu-item[data-action="timeline"],
+      :host(.movi-audio-mode) .movi-context-menu-item[data-action="hdr-toggle"],
+      :host(.movi-audio-mode) .movi-context-menu-item[data-action="subtitle-track"] {
+        display: none !important;
+      }
+      /* The more-button reveals the mobile-expandable cluster. On a wide
+         viewport everything's visible already, so the button is noise —
+         hide. Below 600px the expandable collapses (rule further down)
+         and the more-btn becomes the only way in. */
+      :host(.movi-audio-strip) .movi-more-btn {
+        display: none !important;
+      }
+      /* The seek bar is the strip's most-used affordance — make sure it
+         renders at a usable height (the default ~4px hairline disappears
+         inside a 32px button row). */
+      :host(.movi-audio-strip) .movi-progress-bar {
+        height: 6px !important;
+        position: relative;
+      }
+      :host(.movi-audio-strip) .movi-progress-handle {
+        width: 14px !important;
+        height: 14px !important;
+      }
+      /* Strip-mode loading indicator. The centre spinner is hidden in
+         strip mode, so when the player is buffering / seeking / doing the
+         initial open, animate the progress bar instead. A moving stripe
+         layered above the progress fill reads as "working on it" without
+         disrupting the bar's normal time-line semantics. */
+      /* Popup positioning in strip mode is JS-driven (setBottomMenuOpen
+         switches the menu to position:fixed with viewport-relative top/
+         left computed from the anchor button's getBoundingClientRect).
+         An !important CSS top/bottom here would override those inline
+         values and pin the menu under the 56px host instead. Only the
+         transform-origin needs tweaking so the entrance scale still
+         feels like it grows from where the button visually sits. */
+      :host(.movi-audio-strip) .movi-audio-track-menu,
+      :host(.movi-audio-strip) .movi-subtitle-track-menu,
+      :host(.movi-audio-strip) .movi-quality-menu,
+      :host(.movi-audio-strip) .movi-speed-menu,
+      :host(.movi-audio-strip) .movi-stable-audio-menu {
+        transform-origin: top right !important;
+      }
+
+      /* The ::after gradient stripe rides on top of the progress fill,
+         buffer, and chapter markers — chapter-marker has z-index:3, so
+         bump this above it. Also brighter colour stops since the gentle
+         opacity on a thin bar against a dark background was almost
+         imperceptible. */
+      :host(.movi-audio-strip.is-buffering) .movi-progress-bar::after {
+        content: "";
+        position: absolute;
+        inset: 0;
+        border-radius: inherit;
+        background: linear-gradient(
+          90deg,
+          rgba(255, 255, 255, 0) 0%,
+          rgba(255, 255, 255, 0.55) 50%,
+          rgba(255, 255, 255, 0) 100%
+        );
+        background-size: 40% 100%;
+        background-repeat: no-repeat;
+        animation: movi-strip-buffer 1.05s linear infinite;
+        pointer-events: none;
+        z-index: 5;
+        mix-blend-mode: screen;
+      }
+      @keyframes movi-strip-buffer {
+        from { background-position: -40% 0; }
+        to   { background-position: 140% 0; }
+      }
+
+      /* ─── Strip mode: responsive breakpoints ─────────────────────
+         The strip has a fixed 56px host height regardless of width, so
+         we trim buttons (not bar height) when the viewport gets narrow.
+         Priority order, kept from widest to narrowest:
+           always  → play/pause, progress, time, mute
+           ≥ 480px → + seek±10s, volume slider
+           ≥ 600px → + audio-track, speed, stable-audio, loop (inline)
+           < 600px → those same buttons fold into the .movi-more-btn
+                     popover (tap "…" to expand) — same UX as native
+                     video mode on narrow viewports, no functionality
+                     dropped, just gated behind one tap.
+         Hidden buttons cascade so we don't have to repeat them at each
+         lower step. */
+      @media (max-width: 600px) {
+        /* Surface the more-button on narrow strip widths and collapse
+           the mobile-expandable cluster (audio-track / speed / stable
+           / loop) back to its default closed state, matching the
+           hover-to-expand UX video mode uses. */
+        :host(.movi-audio-strip) .movi-more-btn {
+          display: inline-flex !important;
+        }
+        :host(.movi-audio-strip) .movi-mobile-expandable {
+          width: 0 !important;
+          opacity: 0 !important;
+          overflow: hidden !important;
+          pointer-events: none !important;
+        }
+        :host(.movi-audio-strip) .movi-controls-right.expanded .movi-mobile-expandable {
+          width: auto !important;
+          opacity: 1 !important;
+          overflow: visible !important;
+          pointer-events: auto !important;
+        }
+      }
+      @media (max-width: 480px) {
+        :host(.movi-audio-strip) .movi-seek-backward,
+        :host(.movi-audio-strip) .movi-seek-forward,
+        :host(.movi-audio-strip) .movi-volume-slider-container {
+          display: none !important;
+        }
+        :host(.movi-audio-strip) .movi-controls-container {
+          padding: 0 8px !important;
+        }
+        :host(.movi-audio-strip) .movi-time {
+          font-size: 11px !important;
+        }
+        :host(.movi-audio-strip) .movi-btn {
+          padding: 4px !important;
+          height: 28px !important;
+          width: 28px !important;
+        }
+        :host(.movi-audio-strip) .movi-btn svg {
+          width: 16px !important;
+          height: 16px !important;
+        }
+        :host(.movi-audio-strip) .movi-controls-bar {
+          gap: 8px !important;
+        }
+      }
+      /* Sub-360 ultranarrow (older phones in portrait): drop everything
+         non-essential — even the time gets a compact mm:ss form via the
+         time-separator hide. The seek bar is what users actually use. */
+      @media (max-width: 360px) {
+        :host(.movi-audio-strip) .movi-volume-container,
+        :host(.movi-audio-strip) .movi-time-separator,
+        :host(.movi-audio-strip) .movi-duration {
+          display: none !important;
+        }
+      }
+      /* Trim the per-button paddings the default bar uses for hover
+         affordance — at 56px host height those add up to ~80px total. */
+      :host(.movi-audio-strip) .movi-controls-left {
+        display: flex !important;
+        align-items: center !important;
+        gap: 4px !important;
+      }
+      :host(.movi-audio-strip) .movi-btn {
+        padding: 6px !important;
+        height: 32px !important;
+        width: 32px !important;
+      }
+      :host(.movi-audio-strip) .movi-btn svg {
+        width: 18px !important;
+        height: 18px !important;
+      }
+      :host(.movi-audio-strip) .movi-time {
+        font-size: 12px !important;
+        white-space: nowrap;
+      }
+      /* The seek thumbnail tooltip is tied to a non-existent video frame
+         in strip mode — suppress so the hover preview doesn't pop up. */
+      :host(.movi-audio-strip) .movi-seek-thumbnail {
+        display: none !important;
       }
     `;
     shadowRoot.appendChild(style);
@@ -11005,6 +12225,9 @@ export class MoviElement extends HTMLElement {
 
     // Update controls visibility based on initial attributes
     this.updateControlsVisibility();
+    // Surface the unmute pill if this player will autoplay muted with
+    // controls — checked here once initial attributes have been read.
+    this.updateUnmuteOverlay();
 
     // Get external ambient wrapper element by ID
     this.updateAmbientWrapperElement();
@@ -11447,6 +12670,10 @@ export class MoviElement extends HTMLElement {
         if (!(this._src instanceof File)) {
           const oldSrc = this._src;
           this._src = newValue || null;
+          // New source → reset the "has been played" flag so the
+          // next source's initial poster-seek "paused" transition
+          // doesn't trigger a premature bar surface.
+          if (newValue !== oldSrc) this._hasEverPlayed = false;
 
           // Show/hide empty state indicator based on src
           if (this.emptyStateIndicator) {
@@ -11470,10 +12697,12 @@ export class MoviElement extends HTMLElement {
       }
       case "autoplay":
         this._autoplay = newValue !== null;
+        this.updateUnmuteOverlay();
         break;
       case "controls":
         this._controls = newValue !== null;
         this.updateControlsVisibility();
+        this.updateUnmuteOverlay();
         break;
       case "loop":
         this._loop = newValue !== null;
@@ -11481,6 +12710,13 @@ export class MoviElement extends HTMLElement {
         // Update loop handler if player exists
         if (this.player) {
           this.setupEventHandlers();
+          // Turning loop on while already at the end won't fire a fresh
+          // "ended" event, so the just-bound loop handler never runs and
+          // playback sits stuck. Kick off the replay here instead.
+          if (this._loop && this.player.getState() === "ended") {
+            this._loopRestartInFlight = true;
+            this.play();
+          }
         }
         break;
       case "muted":
@@ -11494,6 +12730,14 @@ export class MoviElement extends HTMLElement {
         // initializePlayer / restoreState instead).
         if (this.player) {
           this.updateMuted();
+        } else {
+          // No player yet — still keep the UI in sync. updateMuted() also
+          // talks to the player, so when it's absent fall back to just
+          // refreshing the icon and the unmute pill so the integrator
+          // setting `muted` before src is wired up doesn't leave the
+          // overlay/icon stale.
+          this.updateVolumeIcon();
+          this.updateUnmuteOverlay();
         }
         break;
       case "playsinline":
@@ -11679,7 +12923,183 @@ export class MoviElement extends HTMLElement {
         this.canvas.width = width;
         this.canvas.height = height;
       }
+      // Repaint the cover-art overlay against the new host size. No-op
+      // when the overlay is hidden (no bitmap / has video track) since
+      // it bails before any drawImage work.
+      this.updateCoverArtOverlay();
     }
+  }
+
+  /**
+   * Paint embedded cover art (audio-only sources). Shows when:
+   *   - the player has emitted a coverart bitmap, AND
+   *   - there is no active video track (a real video would mask this anyway,
+   *     but hiding upfront keeps unnecessary canvas work off the critical
+   *     path for plain video files that happen to ship a thumbnail track).
+   *
+   * Layout: blurred fill of the artwork stretched over the full surface,
+   * with the sharp artwork centred and sized to ~60% of the smaller host
+   * dimension. Matches the YouTube Music / Apple Music aesthetic.
+   */
+  private updateCoverArtOverlay(): void {
+    const overlay = this.coverArtOverlay;
+    const canvas = this.coverArtCanvas;
+    if (!overlay || !canvas) return;
+
+    const bitmap = this.coverArtBitmap;
+    const hasVideoTrack = !!this.player?.trackManager?.getActiveVideoTrack?.();
+    const hasAudio = !!this.player?.hasAudibleSource?.();
+
+    // Two related-but-distinct host states for an audio source (audio
+    // track, no real video stream):
+    //   .movi-audio-mode  — ANY audio source (with or without cover art).
+    //     Drives hiding of video-only controls (PiP, fullscreen, rotate,
+    //     aspect, snapshot, ambient, timeline, …) which make no sense for
+    //     audio. Applies in cover-art mode too, so the artwork view isn't
+    //     littered with inapplicable buttons.
+    //   .movi-audio-strip — audio source WITHOUT artwork. Collapses the
+    //     player to a native-<audio>-style 56px control strip. Cover art
+    //     needs the full surface to paint, so strip layout is suppressed
+    //     when a bitmap is present (audio-mode still hides the controls).
+    const audioMode = !hasVideoTrack && hasAudio;
+    // VLC-like: if the source HAS an attached-picture track and previews are
+    // on, cover art is on its way — hold the strip layout off until extraction
+    // settles (_coverArtResolved) so we don't flash the 56px strip and then
+    // reflow to the full cover-art surface. If extraction fails, the null
+    // "coverart" event flips _coverArtResolved and we fall back to the strip.
+    const hasArtTrack =
+      (this.player?.trackManager?.getAttachedPicTracks?.()?.length ?? 0) > 0;
+    const coverArtPending =
+      audioMode && !bitmap && this._thumb && hasArtTrack && !this._coverArtResolved;
+    const stripMode = audioMode && !bitmap && !coverArtPending;
+    this.classList.toggle("movi-audio-mode", audioMode);
+    const wasStrip = this.classList.contains("movi-audio-strip");
+    this.classList.toggle("movi-audio-strip", stripMode);
+    if (stripMode !== wasStrip) {
+      // Tell the embedding page so it can collapse its own wrapper. The
+      // host shrinks to 56px via :host CSS, but a parent .player-stage
+      // with aspect-ratio: 16/9 (or any fixed height) would still reserve
+      // its old box and leave a black gap underneath. Consumers listen on
+      // this event and adjust their layout — see index.html.
+      this.dispatchEvent(
+        new CustomEvent("audiostripchange", {
+          detail: { strip: stripMode },
+          bubbles: true,
+          composed: true,
+        }),
+      );
+    }
+
+    // Audio mode (bare strip AND cover-art view): lift the loop button out of
+    // the collapsed mobile-expandable so it stays visible to the RIGHT of the
+    // "more" (<) button instead of hiding behind it on narrow widths. Restore
+    // it into the cluster for video mode. Done deterministically (not just on
+    // a mode transition) and only when out of place, so it survives audio↔video
+    // src swaps and doesn't thrash the DOM on resize.
+    const loopBtn = this.shadowRoot?.querySelector(".movi-loop-btn");
+    const moreBtn = this.shadowRoot?.querySelector(".movi-more-btn");
+    const expandable = this.shadowRoot?.querySelector(".movi-mobile-expandable");
+    if (loopBtn && moreBtn && expandable) {
+      if (audioMode && loopBtn.previousElementSibling !== moreBtn) {
+        moreBtn.after(loopBtn);
+      } else if (!audioMode && loopBtn.parentElement !== expandable) {
+        expandable.appendChild(loopBtn);
+      }
+    }
+
+    if (!bitmap || hasVideoTrack) {
+      overlay.style.display = "none";
+      return;
+    }
+
+    const rect = this.getBoundingClientRect();
+    const cssW = Math.max(1, Math.floor(rect.width));
+    const cssH = Math.max(1, Math.floor(rect.height));
+    // Cap the backbuffer DPR — at 4K host sizes a 2x backbuffer + blur
+    // filter chews ~50ms per resize on integrated GPUs.
+    const dpr = Math.min(window.devicePixelRatio || 1, 2);
+    const pixelW = Math.floor(cssW * dpr);
+    const pixelH = Math.floor(cssH * dpr);
+    if (canvas.width !== pixelW) canvas.width = pixelW;
+    if (canvas.height !== pixelH) canvas.height = pixelH;
+
+    const ctx = canvas.getContext("2d");
+    if (!ctx) return;
+    ctx.save();
+    ctx.scale(dpr, dpr);
+
+    // Blurred backdrop. drawImage with ctx.filter is the only way to get
+    // a real Gaussian on a canvas. Cover the full area like background-
+    // size: cover.
+    const bitmapAR = bitmap.width / bitmap.height;
+    const hostAR = cssW / cssH;
+    let bgW: number, bgH: number, bgX: number, bgY: number;
+    if (bitmapAR > hostAR) {
+      bgH = cssH;
+      bgW = cssH * bitmapAR;
+      bgX = (cssW - bgW) / 2;
+      bgY = 0;
+    } else {
+      bgW = cssW;
+      bgH = cssW / bitmapAR;
+      bgX = 0;
+      bgY = (cssH - bgH) / 2;
+    }
+    ctx.filter = "blur(40px) brightness(0.5)";
+    ctx.drawImage(bitmap, bgX, bgY, bgW, bgH);
+    ctx.filter = "none";
+
+    // Centred sharp artwork — square, 60% of the smaller dimension. The
+    // bitmap itself is rarely a perfect square, so contain it inside the
+    // square frame (no crop) and let the blur backdrop fill the surround.
+    const frameSize = Math.min(cssW, cssH) * 0.6;
+    const artW = bitmapAR >= 1 ? frameSize : frameSize * bitmapAR;
+    const artH = bitmapAR >= 1 ? frameSize / bitmapAR : frameSize;
+    const artX = (cssW - artW) / 2;
+    const artY = (cssH - artH) / 2;
+    // Subtle shadow so the art doesn't bleed into its own blur.
+    ctx.shadowColor = "rgba(0,0,0,0.55)";
+    ctx.shadowBlur = 30;
+    ctx.shadowOffsetY = 6;
+    ctx.drawImage(bitmap, artX, artY, artW, artH);
+    ctx.restore();
+
+    overlay.style.display = "block";
+  }
+
+  /**
+   * After an autoplay attempt, detect the browser blocking audio-with-sound
+   * (AudioContext stuck suspended) and fall back to muted playback so the
+   * video keeps rolling, then surface the "Tap to unmute" pill. No-op when
+   * the user already asked for muted, has deliberately unmuted this session,
+   * there's no audible source, or audio actually started. The AudioContext
+   * resume() kicked off inside play() is async, so we give it a couple of
+   * animation frames to settle before reading the state.
+   */
+  private maybeFallbackToMutedAutoplay(attempt: number = 0): void {
+    if (!this.player || this._muted || this._userHasUnmuted) return;
+    if (!this.player.hasAudibleSource()) return;
+
+    // Give the async resume() a moment; re-check across a few frames before
+    // concluding the context is genuinely blocked rather than mid-wakeup.
+    if (!this.player.isAudioBlockedSuspended()) {
+      if (attempt < 5) {
+        requestAnimationFrame(() => this.maybeFallbackToMutedAutoplay(attempt + 1));
+      }
+      return;
+    }
+
+    // Confirmed blocked — mute and show the pill. Video continues; once the
+    // user taps unmute (pill / volume / M-key), the gesture resumes the
+    // context and audio plays. Mutate _muted directly (not the setter) so we
+    // don't latch _userHasUnmuted — this mute is ours, not the user's.
+    Logger.info(
+      TAG,
+      "Autoplay-with-sound blocked — falling back to muted playback (tap to unmute)",
+    );
+    this._autoMutedForAutoplay = true;
+    this._muted = true;
+    this.updateMuted(); // pushes mute to player + surfaces the pill
   }
 
   private updateMuted() {
@@ -11690,6 +13110,38 @@ export class MoviElement extends HTMLElement {
     // Update icon regardless of player presence so UI reflects state even
     // before src is set / player is initialized.
     this.updateVolumeIcon();
+    this.updateUnmuteOverlay();
+  }
+
+  /**
+   * Show a "Tap to unmute" pill when the player is set up to autoplay
+   * muted (browsers block autoplay-with-sound) and the user has asked
+   * for controls. Hides as soon as the player isn't muted, one of the
+   * prerequisite attributes drops, or audio-track discovery proves
+   * there's no audio to surface — reusing the same hasAudibleSource()
+   * check that gates the volume button (see updateAudioTrackMenu).
+   * Before the player is initialized hasAudibleSource() can't be
+   * answered, so we optimistically show the pill on attrs alone and
+   * let updateAudioTrackMenu re-call this once tracks are known.
+   */
+  private updateUnmuteOverlay() {
+    const overlay = this.unmuteOverlay;
+    if (!overlay) return;
+    // The user unmuting clears the runtime auto-mute fallback latch too —
+    // both the pill click and the setter set _userHasUnmuted, so this keeps
+    // _autoMutedForAutoplay from re-showing the pill on a later re-mute.
+    if (this._userHasUnmuted) this._autoMutedForAutoplay = false;
+    const hasAudio = this.player ? this.player.hasAudibleSource() : true;
+    // Two cases surface the pill:
+    //  (a) integrator asked for `autoplay muted controls` — the classic
+    //      autoplay-muted setup, pill gated on controls being present.
+    //  (b) autoplay-with-sound was blocked and we muted as a fallback — the
+    //      user never asked to mute, so the pill is their only route back to
+    //      audio and must show even without a `controls` attribute.
+    const shouldShow =
+      this._muted && hasAudio && !this._userHasUnmuted &&
+      ((this._controls && this._autoplay) || this._autoMutedForAutoplay);
+    overlay.style.display = shouldShow ? "flex" : "none";
   }
 
   private updateVolume() {
@@ -11731,6 +13183,10 @@ export class MoviElement extends HTMLElement {
   }
 
   private updatePlaybackRate() {
+    // Mark the rate-change time so the ambient sampler can stand down briefly
+    // — its GPU readback otherwise blocks the main thread right when the
+    // audio decoder is refilling, causing audible silence gaps.
+    this._lastRateChangeTime = performance.now();
     if (this.player) {
       this.player.setPlaybackRate(this._playbackRate);
     }
@@ -11840,7 +13296,7 @@ export class MoviElement extends HTMLElement {
       return;
     }
 
-    if (!this._src || this.isLoading || this.player || this._isUnsupported) {
+    if ((!this._src && !this._sourceAdapter) || this.isLoading || this.player || this._isUnsupported) {
       return;
     }
 
@@ -11852,9 +13308,12 @@ export class MoviElement extends HTMLElement {
     }
 
     try {
-      // Determine source type (URL or File)
-      let source: SourceConfig;
-      if (this._src instanceof File) {
+      // Determine source type (URL or File) — skipped entirely when the
+      // caller plugged in their own SourceAdapter.
+      let source: SourceConfig | undefined;
+      if (this._sourceAdapter) {
+        source = undefined;
+      } else if (this._src instanceof File) {
         // File object - use FileSource
         source = { type: "file", file: this._src };
       } else if (typeof this._src === "string") {
@@ -11885,6 +13344,7 @@ export class MoviElement extends HTMLElement {
         cache: { type: "lru", maxSizeMB: 520 },
         enablePreviews: this._thumb,
         ...(this._fps > 0 && { frameRate: this._fps }),
+        ...(this._sourceAdapter && { sourceAdapter: this._sourceAdapter }),
       };
 
       // Separate audio source — multi-language or single
@@ -12024,21 +13484,41 @@ export class MoviElement extends HTMLElement {
       // Update loading indicator after load
       this.updateLoadingIndicator();
 
+      // Mobile 4K+ FileSource: hold the spinner and defer play() until the
+      // initial preload settles. Reads height from the active video track.
+      if (this.player) {
+        const activeVideoTrack = (this.player as any)?.trackManager?.getActiveVideoTrack?.();
+        const videoHeight = activeVideoTrack?.height ?? 0;
+        if (
+          MoviPlayer.isMobileDevice() &&
+          videoHeight >= 2160 &&
+          this.player.isFileSource() &&
+          !this.player.isFileSourcePreloadComplete()
+        ) {
+          this._preloadGateActive = true;
+          this.updateLoadingIndicator();
+        }
+      }
+
       // Auto-play if requested
       // Seek to initial position if set
       if (this._startAt > 0 && this.player) {
         await this.player.seek(this._startAt).catch((e: unknown) => {
           Logger.warn(TAG, "Failed to seek to start time", e);
         });
-      } else if (this._resume && this.player && this._contextLostTime === 0) {
-        // Show resume dialog if saved position exists.
-        // Skip during WebGL context-loss recovery — handleContextRestored will
-        // seek directly to _contextLostTime, so prompting "Resume from X?" is
-        // redundant noise (and would race the silent recovery seek).
-        const savedTime = this.getResumePosition();
-        if (savedTime > 2 && savedTime < this.duration - 5) {
-          this.showResumeDialog(savedTime);
-        }
+      } else if (
+        this.player &&
+        this.player.isFileSource() &&
+        !this.player.isFileSourcePreloadComplete()
+      ) {
+        // Any FileSource: defer the resume dialog until preload settles so
+        // the prompt doesn't compete with disk-I/O-heavy initial load.
+        this._resumeDialogPending = true;
+      } else {
+        // Defer to the load finally-block: showing it here would surface the
+        // prompt while isLoading is still true and the controls are disabled,
+        // so the dialog appears before the chrome is interactive.
+        this._resumeDialogPending = true;
       }
 
       // Start saving position periodically if resume enabled
@@ -12048,37 +13528,59 @@ export class MoviElement extends HTMLElement {
 
       // Auto-play if requested
       if (this._autoplay && this.player) {
+        // Suppress the center play overlay through the startup window so the
+        // big play icon doesn't flash before playback begins on its own.
+        this._autoplayStarting = true;
+        this.updatePlayPauseIcon();
         await this.player.play().catch(() => {
-          // Autoplay may fail due to browser policies
+          // Hard play() rejection (rare for canvas mode — video keeps going
+          // even when audio can't). Surface the overlay so there's something
+          // to click; the suspended-audio check below still runs.
+          this._autoplayStarting = false;
+          this.updatePlayPauseIcon();
         });
-      } else {
-        // Render first frame (poster) if not autoplaying and no custom start time.
-        // Mark as poster seek so the loading indicator stays hidden during this seek —
-        // the user shouldn't see a spinner just to render the first frame.
-        //
-        // Skip this when a `postertime` is set OR an explicit poster URL is
-        // active — in those cases the poster overlay is the source of truth,
-        // and an initial seek(0) would briefly show the first frame on canvas
-        // before the real poster appears, which reads as a glitch.
-        if (
-          this._startAt === 0 &&
-          this.player &&
-          !this._posterTime &&
-          !this._poster
-        ) {
-          this.isPosterSeek = true;
-          // isPosterSeek stays true until state leaves "seeking" (cleared in stateChangeHandler)
-          this.player.seek(0).catch(() => {});
+        // Browser autoplay policy blocks audio-with-sound silently: play()
+        // resolves and video rolls, but the AudioContext stays suspended
+        // (resume() neither throws nor wakes it without a user gesture). So
+        // we can't detect this from the promise — poll the audio state right
+        // after play() and fall back to muted playback + a "Tap to unmute"
+        // pill (YouTube/Twitter behaviour) so the user has a one-tap path to
+        // audio instead of silently-broken sound.
+        this.maybeFallbackToMutedAutoplay();
+      } else if (this._startAt === 0 && this.player && !this._poster) {
+        // Render the poster frame on canvas via a seek on the main decoder
+        // (never the thumbnail pipeline). With a `postertime`, seek to that
+        // timestamp to paint the poster frame, then — once it lands — reset
+        // only the clock/playhead back to 0 (resetClockToStartForPoster keeps
+        // the poster frame on the canvas; it does NOT re-seek). With no
+        // postertime, just seek(0). An explicit poster URL (`_poster`) owns
+        // the overlay, so we skip the seek entirely.
+        const duration = this.player.getDuration() || 0;
+        const posterTime =
+          this._posterTime && this.parsePosterTime(this._posterTime, duration);
+        // suppressSpinner keeps the loading UI hidden through the seek's
+        // "seeking" window; the player auto-clears it on seek completion.
+        if (posterTime) {
+          // seek()'s promise resolves on demuxer.seek, BEFORE the frame is
+          // decoded/painted — resetting the clock there races the poster frame
+          // and loses it. Instead wait for the "seeked" event (fired from
+          // notifySeekCompletion once the frame has actually landed), THEN
+          // reset the clock to 0 with the poster frame already on the canvas.
+          // _posterSeekActive blocks resume-saves through this window so the
+          // poster timestamp isn't persisted as the resume position.
+          this._posterSeekActive = true;
+          this.player.once("seeked", () => {
+            this.player?.resetClockToStartForPoster();
+            this._posterSeekActive = false;
+          });
+          this.player
+            .seek(posterTime, { suppressSpinner: true })
+            .catch(() => {
+              this._posterSeekActive = false;
+            });
+        } else {
+          this.player.seek(0, { suppressSpinner: true }).catch(() => {});
         }
-      }
-
-      // If a postertime is set and no explicit poster URL, generate a
-      // high-quality frame at that timestamp via an isolated thumbnail
-      // pipeline. Fire-and-forget — main playback is unaffected.
-      if (this._posterTime && !this._poster) {
-        this.generatePosterFromTime().catch((err) => {
-          Logger.warn(TAG, "postertime poster generation failed", err);
-        });
       }
 
       // Start UI updates
@@ -12113,6 +13615,15 @@ export class MoviElement extends HTMLElement {
           title = "Network Error";
           message =
             "Failed to fetch video resource. Check your connection or try again.";
+        } else if (
+          /out of bounds memory access|memory access out of bounds|RuntimeError|Aborted\(\)/i.test(message)
+        ) {
+          // Emscripten WASM crash (FFmpeg ran out of memory or hit an
+          // OOB in a codec path). The "Try Software Decoding" button on
+          // the broken-source overlay drives the fallback for this.
+          title = "Playback Error";
+          message =
+            "The decoder ran out of memory while parsing this file. Try software decoding — it uses a different path that handles this case.";
         } else if (message.includes("decode")) {
           title = "Playback Error";
         }
@@ -12130,6 +13641,10 @@ export class MoviElement extends HTMLElement {
       }
       this.updateControlsState();
       this.updatePlayPauseIcon();
+      // The resume dialog is held in _resumeDialogPending and surfaced on the
+      // first transition to "playing" (see stateChangeHandler), so the prompt
+      // only appears once playback has actually started and the bottom-bar
+      // play icon has flipped to pause — not over disabled/paused chrome.
     }
   }
 
@@ -12146,6 +13661,7 @@ export class MoviElement extends HTMLElement {
     // Handle loop
     if (this._loop) {
       const loopHandler = () => {
+        this._loopRestartInFlight = true;
         this.play();
       };
       this.player.on("ended", loopHandler);
@@ -12171,7 +13687,7 @@ export class MoviElement extends HTMLElement {
     // Handle subtitle track changes
     const subtitleTrackChangeHandler = () => {
       this.updateSubtitleTrackMenu();
-      this.dispatchEvent(new Event("subtitleTrackChange"));
+      this.dispatchEvent(new Event("subtitletrackchange"));
     };
     this.player.trackManager.on(
       "subtitleTrackChange",
@@ -12207,10 +13723,6 @@ export class MoviElement extends HTMLElement {
     // Forward player events to element
     const stateChangeHandler = (state: PlayerState) => {
       Logger.info(TAG, `stateChange: ${state}`);
-      // Clear isPosterSeek when state leaves "seeking" (poster seek completed)
-      if (state !== "seeking" && this.isPosterSeek) {
-        this.isPosterSeek = false;
-      }
       // Hide poster on state change to playing
       if (state === "playing" && this.posterElement) {
         // Drop the frozen-frame snapshot overlay used during quality switch
@@ -12230,13 +13742,72 @@ export class MoviElement extends HTMLElement {
       this.updatePlayPauseIcon();
 
       if (state === "playing") {
+        // Autoplay reached playback — startup window is over. Capture it
+        // first so we can skip the click-confirmation UI below.
+        const wasAutoplayStart = this._autoplayStarting;
+        this._autoplayStarting = false;
+        // Surface the resume prompt the moment playback first starts — i.e.
+        // the first time the bottom-bar play icon flips to pause. Checked
+        // before _hasEverPlayed flips below so it only fires on the very
+        // first play. FileSource preload-gated paths still defer it via
+        // preloadCompleteHandler; the flag guards against a double-show.
+        if (this._resumeDialogPending && !this._hasEverPlayed) {
+          this._resumeDialogPending = false;
+          this.maybeShowResumeDialog();
+        }
+        this._hasEverPlayed = true;
+        // Loop boundary fully settled (updatePlayPauseIcon above
+        // already ran with the flag set, so the pause-confirmation
+        // flash got suppressed). Clear here so a subsequent *user*
+        // click still flashes the icon as confirmation.
+        this._loopRestartInFlight = false;
         this.dispatchEvent(new Event("play"));
-        this.showControls();
+        // Autoplay had no user gesture, so there's no click to confirm —
+        // hide the controls immediately rather than running the 200ms
+        // pause-confirmation flash below.
+        if (wasAutoplayStart) {
+          this.hideControls();
+          this.updatePlayPauseIcon();
+          if (this._ambientMode) this._ambientSampleInterval = 200;
+          if ("mediaSession" in navigator && this._title) {
+            navigator.mediaSession.metadata = new MediaMetadata({
+              title: this._title,
+            });
+          }
+          return;
+        }
+
+        // Native-like: when playback starts, hide the controls unless the
+        // user is actively interacting. Delayed ~200ms so the play→pause
+        // icon swap above (updatePlayPauseIcon) has time to render and
+        // be perceived by the user — instant hide felt like the click
+        // never registered, since the bottom bar started fading before
+        // the eye could catch the icon flip. 200ms is long enough to
+        // see "I just pressed play and now it's a pause icon", short
+        // enough that the bar isn't lingering after the fact.
+        window.setTimeout(() => {
+          if (
+            this.player?.getState() === "playing" &&
+            !this.isOverControls &&
+            !this.isDragging &&
+            !this.isTouchDragging &&
+            !this.isAnyMenuOpen() &&
+            // Skip the auto-hide if the user just touched the player —
+            // covers the scrub-then-release path where the seek flips
+            // state back to "playing" and would otherwise yank the bar
+            // away under the user's finger. 1500ms is wide enough to
+            // span the controls-container touchend's 1s re-show window
+            // so the two timers don't fight.
+            Date.now() - this.lastTouchTime > 1500
+          ) {
+            this.hideControls();
+          }
+        }, 200);
         // Reset ambient sampling cadence on resume — the adaptive backoff
         // can ratchet up to ~2s during seek/decode-recovery and would take
         // tens of seconds to shrink back via the per-sample 0.8x recovery.
         if (this._ambientMode) {
-          this._ambientSampleInterval = 100;
+          this._ambientSampleInterval = 200;
         }
         // Update Media Session metadata with clean title
         if ("mediaSession" in navigator && this._title) {
@@ -12246,11 +13817,21 @@ export class MoviElement extends HTMLElement {
         }
       } else if (state === "paused") {
         this.dispatchEvent(new Event("pause"));
-        this.showControls();
+        // Don't auto-surface the bar on pause anymore — the centre
+        // play button already comes back (via updatePlayPauseIcon's
+        // paused branch) and tells the user playback is paused. The
+        // old showControls() here re-popped the entire chrome on
+        // every space-press or remote pause, which felt noisy after
+        // the auto-hide cleanly faded it away. Hover / tap still
+        // surfaces the bar manually.
         if (this._resume) this.saveResumePosition();
       } else if (state === "ended") {
         this.dispatchEvent(new Event("ended"));
-        this.showControls();
+        // Only surface the chrome when the player is actually
+        // stopping. With `loop` on, the player immediately restarts
+        // playback, so popping the bar for the brief end→play
+        // transition was just a noisy flash on every loop boundary.
+        if (!this._loop) this.showControls();
         // Clear resume position when video ends (start fresh next time)
         if (this._resume) this.clearResumePosition();
       }
@@ -12265,11 +13846,39 @@ export class MoviElement extends HTMLElement {
       this.updateLoadingIndicator(this.player?.getState() || "idle");
       this.updateControlsState();
       this.updatePlayPauseIcon();
+      // Tracks are now finalised; pick the right visual mode (video
+      // surface / cover-art overlay / audio strip). Cover-art extraction
+      // is async, so the strip may flip OFF later when the coverart
+      // event lands — updateCoverArtOverlay handles both transitions.
+      this.updateCoverArtOverlay();
       this.dispatchEvent(new Event("loadeddata"));
     };
     this.player.on("loadEnd", loadEndHandler);
     this.eventHandlers.set("loadEnd", () =>
       this.player?.off("loadEnd", loadEndHandler),
+    );
+
+    // Release the mobile 4K+ preload gate when FileSource finishes its
+    // initial chunk preload. Always fires (success, error, or abort) so the
+    // gate can never get stuck. After release, flush any deferred play().
+    const preloadCompleteHandler = () => {
+      // The deferred resume dialog is no longer surfaced here — it now waits
+      // for the first "playing" transition (see stateChangeHandler) so the
+      // prompt only appears once playback has actually started. The pending
+      // flag is left intact for that handler to consume.
+      if (!this._preloadGateActive) return;
+      this._preloadGateActive = false;
+      this.updateLoadingIndicator(this.player?.getState() || "idle");
+      if (this._pendingPlay && this.player && !this._isUnsupported) {
+        this._pendingPlay = false;
+        this.player.play().catch(() => {});
+      }
+      this.updateControlsState();
+      this.updatePlayPauseIcon();
+    };
+    this.player.on("preloadcomplete", preloadCompleteHandler);
+    this.eventHandlers.set("preloadcomplete", () =>
+      this.player?.off("preloadcomplete", preloadCompleteHandler),
     );
 
     const timeUpdateHandler = (time: number) => {
@@ -12290,6 +13899,11 @@ export class MoviElement extends HTMLElement {
 
     const errorHandler = (error: unknown) => {
       this.dispatchEvent(new CustomEvent("error", { detail: error }));
+      // Always log the raw error before the message gets prettified for
+      // the overlay — without this, "State: ... -> error" appears in
+      // the log without any "what crashed" line and debugging requires
+      // the user to take a screenshot of the overlay.
+      Logger.error(TAG, "Player error event", error);
 
       let message = "An error occurred during playback.";
       let title = "Playback Error";
@@ -12300,11 +13914,75 @@ export class MoviElement extends HTMLElement {
         message = error;
       }
 
+      // Prettify the raw HttpSource messages — surfaced verbatim they read
+      // like "HTTP 503" or "Stream failed after maximum retries" which means
+      // nothing to a user staring at a buffering UI that just gave up.
+      const httpMatch = message.match(/^HTTP (\d{3})/);
+      if (httpMatch) {
+        const code = httpMatch[1];
+        title = "Network Error";
+        if (code === "404") message = "Video not found (HTTP 404).";
+        else if (code === "403") message = "Access denied (HTTP 403). Check video permissions.";
+        else if (code === "401") message = "Authentication required (HTTP 401).";
+        else if (code.startsWith("5")) message = `Server error (HTTP ${code}). Try again later.`;
+        else message = `Network error (HTTP ${code}).`;
+      } else if (message.includes("Stream failed after")) {
+        title = "Network Error";
+        message = "Connection lost. The server stopped responding.";
+      } else if (
+        message.toLowerCase().includes("cors") ||
+        message.includes("Failed to fetch video resource")
+      ) {
+        title = "Network Error";
+      } else if (message.includes("does not support range requests")) {
+        title = "Server Not Supported";
+      } else if (
+        // WebAssembly OOM / OOB from the FFmpeg WASM runtime — surfaces
+        // verbatim as "Out of bounds memory access (evaluating 'qe(...$e)')"
+        // (minified) or "memory access out of bounds". Replace the
+        // emscripten/JS-engine text with something useful and steer the
+        // user to the software-decode fallback that already handles the
+        // codec variants where the hardware path explodes.
+        /out of bounds memory access|memory access out of bounds|RuntimeError|Aborted\(\)/i.test(message)
+      ) {
+        title = "Playback Error";
+        message =
+          "The decoder ran out of memory while parsing this file. Try software decoding — it uses a different path that handles this case.";
+      }
+
       this.handleUnsupportedVideo(title, message);
     };
     this.player.on("error", errorHandler);
     this.eventHandlers.set("error", () =>
       this.player?.off("error", errorHandler),
+    );
+
+    const coverArtHandler = (bitmap: ImageBitmap | null) => {
+      // Don't close the previous bitmap here — MoviPlayer owns its instance
+      // and reuses one on subsequent loads. Our reference can be dropped
+      // safely; the player will close() when it stomps its own slot.
+      this.coverArtBitmap = bitmap;
+      // Extraction has settled (success or failure) — release the strip-layout
+      // hold so a failed extraction falls back to the strip cleanly.
+      this._coverArtResolved = true;
+      this.updateCoverArtOverlay();
+      // Re-dispatch to the embedding page (background art, MediaSession
+      // artwork, etc.). The bitmap is owned by the player — listeners must
+      // not close() it. bubbles/composed so it escapes the shadow root.
+      // Only forward real bitmaps; the null signal is internal.
+      if (bitmap) {
+        this.dispatchEvent(
+          new CustomEvent("coverart", {
+            detail: { bitmap, width: bitmap.width, height: bitmap.height },
+            bubbles: true,
+            composed: true,
+          }),
+        );
+      }
+    };
+    this.player.on("coverart", coverArtHandler);
+    this.eventHandlers.set("coverart", () =>
+      this.player?.off("coverart", coverArtHandler),
     );
   }
 
@@ -12315,6 +13993,16 @@ export class MoviElement extends HTMLElement {
     // Reset auto-loaded title flag and duration tracker for new video
     this._titleAutoLoaded = false;
     this._lastDuration = 0;
+
+    // Drop any stale cover art from the previous source. The reference is
+    // owned by MoviPlayer; we just clear our own pointer and hide the
+    // overlay so the new load doesn't briefly show last track's art.
+    this.coverArtBitmap = null;
+    this._coverArtResolved = false;
+    if (this.coverArtOverlay) this.coverArtOverlay.style.display = "none";
+    // Also drop the audio-mode/strip layout — re-decided once the new
+    // source's tracks land via loadEnd → updateCoverArtOverlay.
+    this.classList.remove("movi-audio-strip", "movi-audio-mode");
 
     this.resetTimeline();
 
@@ -12354,7 +14042,16 @@ export class MoviElement extends HTMLElement {
       this._pendingPlay = true;
       return;
     }
+    // Mobile 4K+ FileSource: defer until the preloadcomplete event fires,
+    // which flushes _pendingPlay through the same path.
+    if (this._preloadGateActive) {
+      this._pendingPlay = true;
+      return;
+    }
     if (this.player) {
+      // Replay-from-ended and first-play both re-seek through the seek
+      // pipeline; the player suppresses the spinner for those internal seeks
+      // itself (suppressSeekSpinner), so no element-side handling is needed.
       await this.player.play();
     }
   }
@@ -12384,6 +14081,8 @@ export class MoviElement extends HTMLElement {
   dispose(): void {
     // Cancel any queued play intent
     this._pendingPlay = false;
+    this._preloadGateActive = false;
+    this._resumeDialogPending = false;
 
     // Tear down internal player
     if (this.player) {
@@ -12430,6 +14129,15 @@ export class MoviElement extends HTMLElement {
       this.posterElement.style.display = "none";
     }
 
+    // Drop cover art from the previous source. The File-source path
+    // (set src) routes through dispose() → initializePlayer() and never
+    // touches load(), so without clearing here the old artwork + the
+    // audio-mode/strip layout leak into the next track. The classes are
+    // re-decided once the new source's tracks land (updateCoverArtOverlay).
+    this.coverArtBitmap = null;
+    if (this.coverArtOverlay) this.coverArtOverlay.style.display = "none";
+    this.classList.remove("movi-audio-strip", "movi-audio-mode");
+
     // Reset transient state
     this.isLoading = false;
     this._isUnsupported = false;
@@ -12450,6 +14158,14 @@ export class MoviElement extends HTMLElement {
       const dur = sr.querySelector(".movi-duration") as HTMLElement | null;
       if (cur) cur.textContent = "0:00";
       if (dur) dur.textContent = "0:00";
+      // Hide any resume dialog left over from the previous source — the next
+      // source re-shows it only if it has its own saved position, otherwise
+      // the stale "Resume from X?" prompt would linger.
+      const resumeDialog = sr.querySelector(".movi-resume-dialog") as HTMLElement | null;
+      if (resumeDialog) {
+        resumeDialog.style.display = "none";
+        resumeDialog.style.animation = "";
+      }
       if (!this._title) {
         const titleText = sr.querySelector(".movi-title-text") as HTMLElement | null;
         if (titleText) titleText.textContent = "";
@@ -12503,10 +14219,29 @@ export class MoviElement extends HTMLElement {
     // Show play button if not playing (ready, paused, ended, idle states)
     // Show pause button only when playing
     const isPlaying = this.player?.getState() === "playing";
+    // Bottom-bar + context-menu play/pause icon should reflect the user's
+    // INTENDED state, not the raw one. A network stall / internal seek flips
+    // the raw state to buffering/seeking mid-playback, which would otherwise
+    // bounce the icon to "play" even though the user never paused. Intent
+    // stays true through those interruptions. (The centre icon keeps using
+    // the raw isPlaying above — that's the resume affordance, not a state
+    // indicator, and has its own flicker handling.)
+    const isPlayingIntended = this.player?.isPlaybackIntended() ?? isPlaying;
     const loadingIndicator = this.shadowRoot?.querySelector(
       ".movi-loading-indicator",
     ) as HTMLElement;
     const isLoading = loadingIndicator?.style.display === "flex";
+
+    // A suppressed seek (rate-change correction, first play, replay,
+    // poster seek) briefly drops state to "seeking" with the spinner
+    // hidden. Treat it like loading here so the centre play/pause icon
+    // doesn't flash play→pause during that invisible seek — without this
+    // it momentarily flips to the play icon and back, which reads as a
+    // glitchy blink even though nothing is actually loading.
+    const playerState = this.player?.getState();
+    const isSuppressedSeek =
+      (playerState === "seeking" || playerState === "buffering") &&
+      !!this.player?.suppressSeekSpinner;
 
     const contextMenuPlayIcon = this.shadowRoot?.querySelector(
       ".movi-context-menu-play-icon",
@@ -12525,52 +14260,88 @@ export class MoviElement extends HTMLElement {
       ".movi-center-icon-pause",
     ) as HTMLElement;
 
-    if (isPlaying) {
+    // Bottom-bar + context-menu icon: driven by intended state so a
+    // mid-playback buffer/seek stall doesn't bounce it to "play". Set once
+    // here, outside the centre-icon branch (which still keys off isPlaying).
+    if (isPlayingIntended) {
       playIcon?.style.setProperty("display", "none");
       pauseIcon?.style.setProperty("display", "block");
-
-      // Update context menu
       contextMenuPlayIcon?.style.setProperty("display", "none");
       contextMenuPauseIcon?.style.setProperty("display", "block");
       if (contextMenuLabel) contextMenuLabel.textContent = "Pause";
-
-      // Show center pause icon when playing (if not loading/unsupported)
-      if (isLoading || this._isUnsupported) {
-        if (centerPlayPauseBtn) {
-          centerPlayPauseBtn.classList.remove("movi-center-visible");
-        }
-      } else if (centerPlayPauseBtn) {
-        centerPlayIcon?.style.setProperty("display", "none");
-        centerPauseIcon?.style.setProperty("display", "block");
-
-        // Only show if controls are enabled AND currently visible.
-        // Embeds that opt out of the controls bar entirely
-        // (controls={false} on the host attribute) shouldn't get a
-        // floating center play/pause either — Shorts-style hosts
-        // surface their own actions UI.
-        const controlsDisabled = !this._controls
-        const controlsHidden =
-          controlsDisabled ||
-          this.controlsContainer?.classList.contains("movi-controls-hidden")
-        if (!controlsHidden) {
-          requestAnimationFrame(() => {
-            centerPlayPauseBtn.classList.add("movi-center-visible");
-          });
-        } else {
-          centerPlayPauseBtn.classList.remove("movi-center-visible");
-        }
-      }
     } else {
       playIcon?.style.setProperty("display", "block");
       pauseIcon?.style.setProperty("display", "none");
-
-      // Update context menu
       contextMenuPlayIcon?.style.setProperty("display", "block");
       contextMenuPauseIcon?.style.setProperty("display", "none");
       if (contextMenuLabel) contextMenuLabel.textContent = "Play";
+    }
 
-      // Show center play icon when paused/ready, but hide if loading or unsupported state is shown
-      if (isLoading || this._isUnsupported) {
+    if (isPlayingIntended) {
+      // Use intended state (not raw isPlaying) so the centre icon stays
+      // on "pause" through the play startup window — the first play has to
+      // seek/buffer before the state actually reaches "playing", and keying
+      // off raw isPlaying left it showing the play triangle (and the 250ms
+      // tick would revert the click handler's optimistic flip). With intent,
+      // it reconciles to pause and rides the same fade-out logic below.
+      //
+      // While playing, the center button briefly surfaces as a pause
+      // icon for visual confirmation of the user's click, then fades
+      // out with the controls bar (the stateChange handler's 200ms
+      // setTimeout strips both together). The controlsHidden gate
+      // below ensures the periodic UI refresh (250ms tick) doesn't
+      // re-add the button after that fade-out — otherwise the icon
+      // kept flickering back on every tick while controls were still
+      // hidden but state was still "playing".
+      if (centerPlayPauseBtn) {
+        centerPlayIcon?.style.setProperty("display", "none");
+        centerPauseIcon?.style.setProperty("display", "block");
+        const controlsHidden =
+          !this._controls ||
+          this.controlsContainer?.classList.contains("movi-controls-hidden");
+        // Skip the brief pause-confirmation flash on an autoplay start
+        // OR on a loop boundary — there was no user click to confirm
+        // in either case, so the centre button shouldn't flash. The
+        // loop flag is cleared by the stateChange handler once the
+        // player has settled back into "playing".
+        if (
+          isLoading ||
+          isSuppressedSeek ||
+          this._isUnsupported ||
+          controlsHidden ||
+          this._autoplayStarting ||
+          this._loopRestartInFlight
+        ) {
+          centerPlayPauseBtn.classList.remove("movi-center-visible");
+        } else {
+          centerPlayPauseBtn.classList.add("movi-center-visible");
+        }
+      }
+    } else {
+      // Centre icon only — bottom-bar + context-menu icons already set above.
+      // Show center play icon when paused/ready, but hide if loading or
+      // unsupported state is shown, or while an autoplay attempt is still
+      // starting up (the play icon would flash over the first frame).
+      // Also hide during the brief end→play transition when loop is on
+      // — the player is about to restart, so popping the centre play
+      // icon there reads as a glitchy flash on every loop boundary.
+      //
+      // Deliberately NOT gating on isSuppressedSeek here. A suppressed seek
+      // is a spinner-less internal buffering blip — and on a huge streaming
+      // file the player dips paused→buffering→paused constantly while data
+      // loads in the background. Hiding the centre icon on each of those
+      // dips (then re-showing on the paused tick) is exactly the blink the
+      // user sees while paused on the poster. The spinner stays gated by
+      // isLoading, so nothing visible is "loading" during these blips —
+      // keep the resume affordance steady through them.
+      const currentState = this.player?.getState();
+      const isLoopingEndedTransition = currentState === "ended" && this._loop;
+      if (
+        isLoading ||
+        this._isUnsupported ||
+        this._autoplayStarting ||
+        isLoopingEndedTransition
+      ) {
         if (centerPlayPauseBtn) {
           centerPlayPauseBtn.classList.remove("movi-center-visible");
         }
@@ -12579,10 +14350,32 @@ export class MoviElement extends HTMLElement {
           centerPlayIcon?.style.setProperty("display", "block");
           centerPauseIcon?.style.setProperty("display", "none");
 
-          // Use a small delay for smooth transition
-          requestAnimationFrame(() => {
+          // Paused/ready state: surface the big play icon whenever
+          // controls are enabled — independent of the bottom bar's
+          // current visibility. The bar may be auto-hidden (no hover
+          // on touch, or after the play→pause flash on desktop), but
+          // the user still needs a "click here to resume" affordance.
+          // The playing branch above keeps the controlsHidden gate so
+          // the pause-confirmation flash continues to fade out with
+          // the bar — that's about the click-confirmation flow, not
+          // the resume affordance.
+          if (this._controls) {
+            // Surface the icon synchronously. We only reach this branch when
+            // the spinner is already hidden (isLoading false above) and the
+            // player isn't playing/loading/unsupported — i.e. genuinely
+            // settled into paused/ready. Deferring to rAF here just delayed
+            // the icon by a frame-plus-tick, so the play icon lagged behind
+            // the spinner clearing instead of appearing right after it.
+            //
+            // The earlier flicker came from the opposite case — adding the
+            // class while a huge source kept dipping paused→buffering. That's
+            // now handled by NOT gating on isSuppressedSeek (so spinner-less
+            // buffering blips don't churn the icon) plus the isLoading guard,
+            // so a sync add no longer races a remove.
             centerPlayPauseBtn.classList.add("movi-center-visible");
-          });
+          } else {
+            centerPlayPauseBtn.classList.remove("movi-center-visible");
+          }
         }
       }
     }
@@ -12596,8 +14389,13 @@ export class MoviElement extends HTMLElement {
       ".movi-duration",
     ) as HTMLElement;
 
+    // During the postertime poster seek the clock transiently sits at the
+    // poster timestamp before being reset to 0 — show 0 so the time doesn't
+    // flicker to ~2s and back.
+    const ct = this._posterSeekActive ? 0 : this.currentTime;
+
     if (currentTimeEl) {
-      currentTimeEl.textContent = this.formatTime(this.currentTime);
+      currentTimeEl.textContent = this.formatTime(ct);
     }
     if (durationEl) {
       durationEl.textContent = this.formatTime(this.duration);
@@ -12675,7 +14473,10 @@ export class MoviElement extends HTMLElement {
     ) as HTMLElement;
 
     if (this.duration > 0) {
-      const percent = (this.currentTime / this.duration) * 100;
+      // Clamp to 0 during the postertime poster seek (clock transiently parked
+      // at the poster timestamp) so the filled bar/handle don't flick to ~2s.
+      const ct = this._posterSeekActive ? 0 : this.currentTime;
+      const percent = (ct / this.duration) * 100;
       if (progressFilled) {
         progressFilled.style.width = `${percent}%`;
       }
@@ -12690,7 +14491,12 @@ export class MoviElement extends HTMLElement {
       // notch. bufferEnd math is already correct (relative to real read
       // cursor), so drawing from 0 is purely a visual choice.
       if (this.player && progressBuffer) {
-        const bufferEnd = this.player.getBufferEndTime();
+        // During the postertime poster seek the buffered-end transiently sits
+        // at the poster timestamp (before the clock/buffer are reset to 0);
+        // show 0 so the buffer bar doesn't flash forward to ~2s.
+        const bufferEnd = this._posterSeekActive
+          ? 0
+          : this.player.getBufferEndTime();
         if (bufferEnd > 0) {
           const endPercent = Math.min(100, (bufferEnd / this.duration) * 100);
           progressBuffer.style.left = "0%";
@@ -12717,7 +14523,17 @@ export class MoviElement extends HTMLElement {
     ) as HTMLInputElement;
 
     if (volumeSlider) {
-      volumeSlider.value = this._muted ? "0" : this._volume.toString();
+      const v = this._muted ? 0 : this._volume;
+      volumeSlider.value = v.toString();
+      // Drive the track's fill-up-to-thumb gradient. Native <input
+      // type=range> doesn't expose a separate filled portion across
+      // browsers, so the CSS gradient below reads this custom prop
+      // to draw a coloured segment from 0 to thumb and a muted one
+      // beyond.
+      volumeSlider.style.setProperty(
+        "--movi-volume-pct",
+        `${Math.round(v * 100)}%`,
+      );
     }
 
     // Reset all first
@@ -12750,13 +14566,25 @@ export class MoviElement extends HTMLElement {
     // Don't show loading during normal 'playing' state, even if duration is 0
     let shouldShow = false;
 
-    // Only show loading for interruption states
-    // Don't show spinner during poster seek (initial seek(0) to render first frame)
-    if ((currentState === "seeking" || currentState === "buffering") && !this.isPosterSeek) {
+    // Only show loading for interruption states.
+    // suppressSeekSpinner covers all internal seeks that briefly enter
+    // "seeking"/"buffering" without a real interruption — the initial poster
+    // seek(0), first play, and replay-from-ended. A spinner there is a false
+    // flash, since from the user's view nothing is loading.
+    if (
+      (currentState === "seeking" || currentState === "buffering") &&
+      !this.player?.suppressSeekSpinner
+    ) {
       shouldShow = true;
     } else if (currentState === "loading" && duration === 0) {
       // Show loading only during initial load when duration is not yet available
       // Once playing starts, don't show loading even if duration is still 0
+      shouldShow = true;
+    }
+
+    // Mobile 4K+ FileSource: hold the spinner regardless of player state
+    // until the preload gate releases.
+    if (this._preloadGateActive) {
       shouldShow = true;
     }
 
@@ -12773,6 +14601,11 @@ export class MoviElement extends HTMLElement {
       loadingIndicator.style.display = "none";
       // Center play button visibility will be managed by updatePlayPauseIcon
     }
+
+    // Strip mode has no spinner — the centre-screen loader is hidden via
+    // CSS. Surface the same buffering state by pulsing the progress bar
+    // (see :host(.movi-audio-strip.is-buffering) rules in the style block).
+    this.classList.toggle("is-buffering", shouldShow);
   }
 
   private formatTime(seconds: number): string {
@@ -13070,11 +14903,20 @@ export class MoviElement extends HTMLElement {
   private updateAmbientMode(): void {
     if (this._ambientMode) {
       if (this.ambientWrapperElement) {
+        // Restore to display:block + opaque so the painted background +
+        // CSS filter (typically blur(80px) saturate()) come back.
+        this.ambientWrapperElement.style.display = "";
         this.ambientWrapperElement.style.opacity = "1";
       }
       this.startAmbientColorSampling();
     } else {
       if (this.ambientWrapperElement) {
+        // `opacity: 0` leaves the element composited and its expensive
+        // filter (e.g. blur(80px) on marketing index.html) STILL runs
+        // on the GPU every frame, competing with video rendering. Use
+        // `display: none` so the browser skips it entirely — gives a
+        // visible perf win on low-end devices when ambient is off.
+        this.ambientWrapperElement.style.display = "none";
         this.ambientWrapperElement.style.opacity = "0";
       }
       // Reset letterbox to black
@@ -13085,21 +14927,32 @@ export class MoviElement extends HTMLElement {
 
   private startAmbientColorSampling(): void {
     if (this._ambientRafId !== null) return;
+    // Bail when the player isn't built yet — connectedCallback runs
+    // updateAmbientMode() before initializePlayer() creates the
+    // player, and that pre-init call would otherwise set up an
+    // rAF loop that runs against a missing renderer (no mirror to
+    // enable, sampleCanvasColors returns early). Worse, the rAF
+    // handle would then block the *real* startAmbientColorSampling
+    // call later in initializePlayer — the `_ambientRafId !== null`
+    // guard above made the second call a no-op, so the renderer
+    // never had enableAmbientMirror() invoked on it. Net effect: a
+    // page that loads with `ambientmode` already on showed no
+    // ambient glow until the user toggled the feature off and on.
+    if (!this.player) return;
 
     // Reset adaptive interval — a previously-throttled session may have left
     // it ratcheted up to 2s, which would make ambient appear "frozen" until
     // the per-sample recovery slowly walked it back down.
-    this._ambientSampleInterval = 100;
+    this._ambientSampleInterval = 200;
 
-    // Create helper canvas if needed for performance optimization
-    if (!this._ambientSampleCanvas) {
-      this._ambientSampleCanvas = document.createElement("canvas"); // Not attached to DOM
-      this._ambientSampleCanvas.width = 10;
-      this._ambientSampleCanvas.height = 10;
-      // Hint browser that we will read this frequently
-      this._ambientSampleCtx = this._ambientSampleCanvas.getContext("2d", {
-        willReadFrequently: true,
-      });
+    // Ask the renderer to maintain a 16×16 mirror of each drawn frame.
+    // sampleCanvasColors() will read from that 256-pixel buffer instead of
+    // triggering a full canvas readback per sample — the old path caused
+    // visible frame slips on 8K HDR sources from GPU contention with
+    // presentation.
+    const renderer = (this.player as any)?.videoRenderer;
+    if (renderer && typeof renderer.enableAmbientMirror === "function") {
+      renderer.enableAmbientMirror();
     }
 
     const loop = (timestamp: number) => {
@@ -13110,7 +14963,13 @@ export class MoviElement extends HTMLElement {
       // canvas readback contends with frame presentation, magnifying stutter.
       const playerState = this.player?.getState();
       const isRecovering = playerState === "seeking" || playerState === "buffering";
-      if (isSoftware || isRecovering) {
+      // Skip for a short window after a playback-rate change so audio refill
+      // isn't fighting the GPU readback for main-thread time.
+      const sinceRateChange = timestamp - this._lastRateChangeTime;
+      const isRateChangeCooldown =
+        this._lastRateChangeTime > 0 &&
+        sinceRateChange < MoviElement.AMBIENT_RATE_CHANGE_COOLDOWN_MS;
+      if (isSoftware || isRecovering || isRateChangeCooldown) {
         this._lastAmbientSampleTime = timestamp; // Keep advancing time but skip work
         this._ambientRafId = requestAnimationFrame(loop);
         return;
@@ -13140,13 +14999,13 @@ export class MoviElement extends HTMLElement {
               `Ambient sampling taking too long (${duration.toFixed(1)}ms), slowing down to ${this._ambientSampleInterval.toFixed(0)}ms`,
             );
           }
-        } else if (duration < 5 && this._ambientSampleInterval > 100) {
+        } else if (duration < 5 && this._ambientSampleInterval > 200) {
           // If reasonably fast (<5ms), shrink interval. Threshold was 2ms but
           // GPU readback variance means a healthy machine rarely dips that
           // low, so the interval would ratchet up forever after one slow
           // frame. 5ms still leaves ample headroom on a 16ms (60Hz) budget.
           this._ambientSampleInterval = Math.max(
-            100,
+            200,
             this._ambientSampleInterval * 0.8,
           );
         }
@@ -13165,25 +15024,26 @@ export class MoviElement extends HTMLElement {
       cancelAnimationFrame(this._ambientRafId);
       this._ambientRafId = null;
     }
+    const renderer = (this.player as any)?.videoRenderer;
+    if (renderer && typeof renderer.disableAmbientMirror === "function") {
+      renderer.disableAmbientMirror();
+    }
   }
 
   private sampleCanvasColors(): void {
-    if (!this.canvas || !this.player) return;
+    if (!this.player) return;
 
-    // Use helper canvas context if available, otherwise fallback (should exist from start)
-    const ctx = this._ambientSampleCtx;
-    if (!ctx) return;
+    // Read from the renderer's 16×16 mirror FBO. A 256-pixel readPixels
+    // costs microseconds; the previous canvas readback path stalled the
+    // GPU for ~100ms per sample on 8K HDR sources.
+    const renderer = (this.player as any)?.videoRenderer;
+    const data: Uint8Array | null =
+      renderer && typeof renderer.readAmbientPixels === "function"
+        ? renderer.readAmbientPixels()
+        : null;
+    if (!data) return;
 
     try {
-      // Draw the main canvas into the 10x10 helper canvas
-      // This allows the GPU to handle the downscaling which is much faster than processing 40k pixels in JS
-      ctx.clearRect(0, 0, 10, 10);
-      ctx.drawImage(this.canvas, 0, 0, 10, 10);
-
-      const imageData = ctx.getImageData(0, 0, 10, 10);
-      const data = imageData.data;
-
-      // Calculate average color
       let r = 0,
         g = 0,
         b = 0;
@@ -13348,11 +15208,15 @@ export class MoviElement extends HTMLElement {
     // artifacts (last frame, subtitles, duration, title) leak across.
     this.dispose();
 
+    // Switching to a URL/File source supersedes any custom adapter.
+    this._sourceAdapter = null;
+
     this.dispatchEvent(new CustomEvent("loadstart", { detail: { src: value instanceof File ? value.name : value } }));
 
     if (value instanceof File) {
       // For File objects, store in memory (can't store in attributes)
       this._src = value;
+      this._hasEverPlayed = false;
       // Remove the src attribute if it was a string
       this.removeAttribute("src");
       // updatePoster gates on hasSource — re-evaluate now that _src is set.
@@ -13364,7 +15228,23 @@ export class MoviElement extends HTMLElement {
     } else if (typeof value === "string") {
       // For strings, use attribute
       if (value) {
+        // dispose() above already destroyed the player. Normally
+        // setAttribute fires attributeChangedCallback → load() →
+        // initializePlayer(), which recreates it. But the DOM only
+        // fires that callback when the attribute VALUE actually changes
+        // — re-assigning the SAME url is a no-op write, so the callback
+        // never runs and the player stays destroyed (blank player,
+        // "just destroyed" symptom). Detect that case and re-init
+        // directly, mirroring the File branch below.
+        const sameValue = this.getAttribute("src") === value;
         this.setAttribute("src", value);
+        if (sameValue) {
+          this._src = value;
+          this.updatePoster();
+          if (this.isConnected) {
+            this.load();
+          }
+        }
       } else {
         this.removeAttribute("src");
         this._src = null;
@@ -13388,6 +15268,59 @@ export class MoviElement extends HTMLElement {
    */
   setFile(file: File | null): void {
     this.src = file;
+  }
+
+  /**
+   * Custom SourceAdapter — feeds bytes from any protocol (WebSocket, WebRTC
+   * data channel, IndexedDB, custom encryption, etc.) without writing a
+   * SourceConfig branch. Set to `null` to clear and go back to `src`.
+   *
+   * Usage:
+   * ```ts
+   *   const element = document.querySelector('movi-player');
+   *   element.sourceAdapter = new MyWebSocketSource(url);
+   * ```
+   *
+   * Clearing src + setting adapter is mutually exclusive — the adapter wins.
+   */
+  get sourceAdapter(): SourceAdapter | null {
+    return this._sourceAdapter;
+  }
+
+  set sourceAdapter(adapter: SourceAdapter | null) {
+    if (this._resume) this.saveResumePosition();
+    this.stopResumeSaving();
+    this._resumeCheckedWithTitle = false;
+
+    // Mirror the src setter: full reset so the new adapter starts clean and
+    // no previous-video artifacts (last frame, subtitles, duration) leak.
+    this.dispose();
+
+    this.dispatchEvent(
+      new CustomEvent("loadstart", { detail: { src: adapter ? adapter.getKey() : null } }),
+    );
+
+    this._sourceAdapter = adapter;
+    // An adapter overrides any prior src — keep them mutually exclusive so
+    // initializePlayer's source-type branching isn't ambiguous.
+    if (adapter) {
+      this._src = null;
+      this.removeAttribute("src");
+      this.updatePoster();
+      if (this.isConnected) {
+        this.initializePlayer();
+      }
+    } else if (this.emptyStateIndicator && !this.player) {
+      this.emptyStateIndicator.style.display = "flex";
+    }
+  }
+
+  /**
+   * Convenience method mirroring `setFile()` — same effect as assigning to
+   * the `sourceAdapter` property.
+   */
+  setSourceAdapter(adapter: SourceAdapter | null): void {
+    this.sourceAdapter = adapter;
   }
 
   /**
@@ -13510,9 +15443,9 @@ export class MoviElement extends HTMLElement {
   private guessMediaType(url: string): string {
     const ext = url.split("?")[0].split(".").pop()?.toLowerCase();
     const map: Record<string, string> = {
+      // Video
       mp4: "video/mp4",
       webm: "video/webm",
-      ogg: "video/ogg",
       ogv: "video/ogg",
       m3u8: "application/x-mpegURL",
       mpd: "application/dash+xml",
@@ -13521,6 +15454,26 @@ export class MoviElement extends HTMLElement {
       mov: "video/quicktime",
       ts: "video/mp2t",
       m4v: "video/mp4",
+      // Audio — limited to what the shipped FFmpeg WASM build can decode
+      // (build-ffmpeg.sh demuxer/decoder list). .ogg is ambiguous between
+      // Vorbis audio and Theora video; we map it to audio/ogg because
+      // pure audio Ogg is the dominant case in 2026, and the demuxer will
+      // happily report a video track for the Theora variant either way.
+      mp3: "audio/mpeg",
+      m4a: "audio/mp4",
+      m4b: "audio/mp4",
+      aac: "audio/aac",
+      flac: "audio/flac",
+      wav: "audio/wav",
+      wave: "audio/wav",
+      ogg: "audio/ogg",
+      oga: "audio/ogg",
+      opus: "audio/opus",
+      ac3: "audio/ac3",
+      ec3: "audio/eac3",
+      eac3: "audio/eac3",
+      mka: "audio/x-matroska",
+      dts: "audio/vnd.dts",
     };
     return (ext && map[ext]) || "";
   }
@@ -13605,10 +15558,11 @@ export class MoviElement extends HTMLElement {
       if (this._startAt > 0 && this.player) {
         await this.player.seek(this._startAt).catch(() => {});
       } else if (this._resume && this.player) {
-        const savedTime = this.getResumePosition();
-        if (savedTime > 2 && savedTime < this.duration - 5) {
-          this.showResumeDialog(savedTime);
-        }
+        // Defer to the first "playing" transition (see stateChangeHandler) so
+        // the prompt only appears once playback has actually started — i.e.
+        // when the bottom-bar play icon first flips to pause — not over the
+        // paused/loading chrome.
+        this._resumeDialogPending = true;
       }
 
       // Start resume saving if enabled
@@ -13777,6 +15731,20 @@ export class MoviElement extends HTMLElement {
 
     if (this._nerdStatsVisible) {
       overlay.style.display = "flex";
+      // In strip mode the host is 56px tall — anchoring the panel to
+      // the host (top:16px from above) drops it on top of the strip's
+      // own controls. Compute a viewport position just below the
+      // strip's bottom-left so the panel doesn't overlap the bar.
+      // Non-strip mode keeps the CSS-driven absolute top-left of the
+      // video surface.
+      if (this.classList.contains("movi-audio-strip")) {
+        const hostRect = this.getBoundingClientRect();
+        overlay.style.top = `${hostRect.bottom + 8}px`;
+        overlay.style.left = `${hostRect.left}px`;
+      } else {
+        overlay.style.top = "";
+        overlay.style.left = "";
+      }
       this.networkSpeedHistory = [];
       this.updateNerdStats(shadowRoot);
       // Update every 500ms
@@ -13785,6 +15753,10 @@ export class MoviElement extends HTMLElement {
       }, 500);
     } else {
       overlay.style.display = "none";
+      // Clear strip-mode inline coords so a subsequent non-strip open
+      // doesn't inherit them.
+      overlay.style.top = "";
+      overlay.style.left = "";
       if (this.nerdStatsInterval) {
         clearInterval(this.nerdStatsInterval);
         this.nerdStatsInterval = null;
@@ -14058,6 +16030,19 @@ export class MoviElement extends HTMLElement {
   }
 
   /**
+   * Show resume dialog if a saved position exists and we're not mid-context-
+   * loss recovery. Centralized so the mobile 4K+ preload gate can hold it
+   * back and replay it after preload settles.
+   */
+  private maybeShowResumeDialog(): void {
+    if (!this._resume || !this.player || this._contextLostTime !== 0) return;
+    const savedTime = this.getResumePosition();
+    if (savedTime > 2 && savedTime < this.duration - 5) {
+      this.showResumeDialog(savedTime);
+    }
+  }
+
+  /**
    * Show resume dialog with saved position
    */
   private showResumeDialog(savedTime: number): void {
@@ -14126,6 +16111,9 @@ export class MoviElement extends HTMLElement {
    * Save current position to localStorage
    */
   private saveResumePosition(): void {
+    // The postertime poster seek transiently parks currentTime at the poster
+    // timestamp before the clock is reset to 0; don't persist that.
+    if (this._posterSeekActive) return;
     const key = this.getResumeKey();
     if (!key || !this.player) return;
     const time = this.currentTime;
@@ -14401,9 +16389,24 @@ export class MoviElement extends HTMLElement {
   }
 
   set muted(value: boolean) {
+    // Set `_muted` directly up front rather than relying on the
+    // attributeChangedCallback to do it. The auto-mute autoplay fallback
+    // mutes by setting `_muted = true` WITHOUT adding the `muted` attribute
+    // (so it doesn't trip the user-intent latch). For that case the
+    // attribute is already absent, so removeAttribute() below fires no
+    // change callback — leaving `_muted` stuck true and the pill click a
+    // no-op. Setting it here makes the unmute path attribute-independent.
+    this._muted = value;
     if (value) {
       this.setAttribute("muted", "");
     } else {
+      // Reaching the setter (M-key, integrator JS, slider-driven unmute,
+      // pill click) is by definition a deliberate unmute — latch so the
+      // floating pill doesn't reappear if the user mutes again later.
+      // Init-time attribute parsing and SettingsStorage restore mutate
+      // `_muted` directly without going through this setter, so they
+      // can't accidentally trip the latch.
+      this._userHasUnmuted = true;
       this.removeAttribute("muted");
     }
     this.updateMuted();
@@ -14448,8 +16451,10 @@ export class MoviElement extends HTMLElement {
     this.setAttribute("volume", this._volume.toString());
 
     // If user increases volume while muted, automatically unmute (like YouTube)
-    if (this._muted && this._volume > 0) {
+    const autoUnmuted = this._muted && this._volume > 0;
+    if (autoUnmuted) {
       this._muted = false;
+      this._userHasUnmuted = true;
       this.removeAttribute("muted");
       // Update player muted state immediately
       if (this.player) {
@@ -14458,7 +16463,16 @@ export class MoviElement extends HTMLElement {
     }
 
     this.updateVolume();
-    SettingsStorage.getInstance().save({ volume: this._volume });
+    // Persist `muted: false` here too whenever the slider triggered an
+    // auto-unmute — this path bypasses `set muted` (mutates `_muted`
+    // directly to keep things synchronous with the slider drag), so
+    // without this the persisted state lags behind: a session that
+    // ends unmuted-via-slider reloads as muted because OPFS still
+    // holds the last muted=true write from whenever the user first
+    // muted via M-key or the volume button.
+    SettingsStorage.getInstance().save(
+      autoUnmuted ? { volume: this._volume, muted: false } : { volume: this._volume },
+    );
     this.dispatchEvent(new CustomEvent("volumechange", { detail: { volume: this._volume, muted: this._muted } }));
   }
 
@@ -14467,7 +16481,12 @@ export class MoviElement extends HTMLElement {
   }
 
   set playbackRate(value: number) {
-    this._playbackRate = Math.max(0.25, Math.min(4, value));
+    // Clamp to the source's allowed ceiling — 8K+ sources can't sustain >1.5x
+    // decode in any browser today, so even programmatic callers are clamped
+    // to prevent decoder errors / stalls. getMaxAllowedRate returns 2 when
+    // no track is active yet, so attribute init / settings restore still work.
+    const ceiling = this.getMaxAllowedRate();
+    this._playbackRate = Math.max(0.25, Math.min(ceiling, value));
     this.setAttribute("playbackrate", this._playbackRate.toString());
     this.updatePlaybackRate();
     SettingsStorage.getInstance().save({ playbackRate: this._playbackRate });
@@ -14772,158 +16791,6 @@ export class MoviElement extends HTMLElement {
     return Math.max(0, Math.min(duration, num));
   }
 
-  /**
-   * Generate a poster frame at `postertime` using an isolated thumbnail
-   * pipeline (WASM + ThumbnailBindings). Does not touch the main player's
-   * clock/decoder — purely side-channel frame extraction. Respects the
-   * video's rotation metadata so portrait videos display correctly.
-   */
-  private async generatePosterFromTime(): Promise<void> {
-    // Skip when playback is already happening or about to start — the user
-    // would see the poster flash on top of live video otherwise.
-    const state = this.player?.getState();
-    if (this._pendingPlay || state === "playing" || state === "buffering") {
-      return;
-    }
-
-    // Revoke previous generated poster URL
-    if (this._generatedPosterUrl) {
-      URL.revokeObjectURL(this._generatedPosterUrl);
-      this._generatedPosterUrl = null;
-    }
-
-    if (!this._posterTime || this._poster || !this._src) return;
-
-    const duration = this.player?.getDuration() || 0;
-    const timeSec = this.parsePosterTime(this._posterTime, duration);
-    if (timeSec === null) return;
-
-    // Snapshot our generation id at entry; any later src change / dispose
-    // bumps it, which means this run is stale and must bail before it
-    // overwrites the new source's poster.
-    const genId = ++this._posterGenId;
-    const isStale = () => genId !== this._posterGenId;
-
-    // Only File and plain URL sources are supported here. Encrypted/DRM
-    // sources have their own protected pipelines — skip.
-    let dataSource: FileSource | ThumbnailHttpSource;
-    let size: number;
-    if (this._src instanceof File) {
-      dataSource = new FileSource(this._src);
-      size = this._src.size;
-    } else if (
-      typeof this._src === "string" &&
-      (this._src.startsWith("http") || this._src.startsWith("/"))
-    ) {
-      dataSource = new ThumbnailHttpSource(this._src);
-      size = await dataSource.getSize();
-    } else {
-      return;
-    }
-
-    // Pull rotation from a dedicated isolated-WASM Demuxer — ThumbnailBindings'
-    // StreamInfo.rotation is often 0 for display-matrix metadata.
-    let rotation = 0;
-    try {
-      const dm = new Demuxer(
-        this._src instanceof File
-          ? new FileSource(this._src)
-          : new ThumbnailHttpSource(this._src as string),
-        undefined,
-        true,
-      );
-      await dm.open();
-      rotation = dm.getVideoTracks()[0]?.rotation || 0;
-      try { dm.close(); } catch { /* noop */ }
-    } catch { /* fall back to 0 */ }
-
-    let wasm: any;
-    try {
-      wasm = await loadWasmModuleNew();
-    } catch (err) {
-      Logger.warn(TAG, "postertime: failed to load isolated WASM", err);
-      return;
-    }
-    if (isStale()) return;
-
-    const bindings = new ThumbnailBindings(wasm);
-    try {
-      // FileSource/ThumbnailHttpSource implement the DataSource shape at
-      // runtime; the SourceAdapter type difference is incidental.
-      bindings.setDataSource(dataSource as any);
-      await bindings.create(size);
-      if (isStale()) return;
-      if (!(await bindings.open())) return;
-      if (isStale()) return;
-
-      const info = bindings.getStreamInfo();
-      if (!info || !info.width || !info.height) return;
-
-      const sw = info.width;
-      const sh = info.height;
-      const rot = ((rotation || info.rotation || 0) % 360 + 360) % 360;
-      const isRotated = rot === 90 || rot === 270;
-
-      const pktSize = await bindings.readKeyframe(timeSec);
-      if (isStale() || !pktSize || pktSize <= 0) return;
-
-      const rgba = bindings.decodeCurrentPacket(sw, sh);
-      if (!rgba) return;
-
-      // Put raw frame on a source canvas. Copy into a fresh, plain-ArrayBuffer
-      // backed Uint8ClampedArray — WASM memory may be SharedArrayBuffer and
-      // ImageData requires a non-shared buffer.
-      const src = document.createElement("canvas");
-      src.width = sw;
-      src.height = sh;
-      const sctx = src.getContext("2d");
-      if (!sctx) return;
-      const clamped = new Uint8ClampedArray(sw * sh * 4);
-      clamped.set(rgba);
-      sctx.putImageData(new ImageData(clamped, sw, sh), 0, 0);
-
-      // Output canvas with rotation applied
-      const outW = isRotated ? sh : sw;
-      const outH = isRotated ? sw : sh;
-      const out = document.createElement("canvas");
-      out.width = outW;
-      out.height = outH;
-      const octx = out.getContext("2d");
-      if (!octx) return;
-      octx.save();
-      octx.translate(outW / 2, outH / 2);
-      if (rot) octx.rotate((rot * Math.PI) / 180);
-      octx.drawImage(src, -sw / 2, -sh / 2, sw, sh);
-      octx.restore();
-
-      const blob = await new Promise<Blob | null>((r) =>
-        out.toBlob(r, "image/jpeg", 0.92),
-      );
-      if (!blob) return;
-
-      // Final stale check + don't paint the poster if playback has started
-      // while we were decoding (avoids flashing the overlay on live video).
-      const finalState = this.player?.getState();
-      if (
-        isStale() ||
-        this._pendingPlay ||
-        finalState === "playing" ||
-        finalState === "buffering"
-      ) {
-        return;
-      }
-
-      this._generatedPosterUrl = URL.createObjectURL(blob);
-
-      // Show it via the existing poster overlay (explicit poster URL still
-      // wins — we gated on !this._poster above).
-      this.updatePoster();
-
-      try { bindings.clearBuffer?.(); } catch { /* noop */ }
-    } finally {
-      try { bindings.destroy(); } catch { /* noop */ }
-    }
-  }
 
   get doubletap(): boolean {
     return this._doubleTap;
@@ -15089,7 +16956,15 @@ export class MoviElement extends HTMLElement {
             this._resumeCheckedWithTitle = true;
             const savedTime = this.getResumePosition();
             if (savedTime > 2 && savedTime < this.duration - 5) {
-              this.showResumeDialog(savedTime);
+              if (this._hasEverPlayed) {
+                // Playback already started before the title (and thus the
+                // resume key) resolved — surface the prompt immediately.
+                this.showResumeDialog(savedTime);
+              } else {
+                // Still pre-playback: hold it for the first "playing"
+                // transition so it lands with the play→pause icon flip.
+                this._resumeDialogPending = true;
+              }
             }
           }
         }
@@ -15097,8 +16972,26 @@ export class MoviElement extends HTMLElement {
     }
 
     if (this._showTitle && this._title) {
+      // Detect "title just appeared" — either the text content changed,
+      // or the bar was previously hidden. Covers both explicit-attribute
+      // and auto-load paths: in autoplay+muted with no user interaction
+      // the controls never become visible on their own, so without this
+      // nudge the title would stay at opacity 0 until the user moved
+      // the mouse.
+      const titleAppeared =
+        titleText.textContent !== this._title ||
+        titleBar.style.display === "none";
       titleText.textContent = this._title;
       titleBar.style.display = "block";
+
+      // Surface the bottom bar alongside the title only after playback
+      // has actually started — otherwise the YouTube-style first paint
+      // (poster + centre play icon only) gets disrupted the moment the
+      // title auto-loads from metadata. The autoplay+muted case the
+      // original showControls() call was added for is still covered:
+      // by the time autoplay reaches "playing" and the title becomes
+      // available, _hasEverPlayed is true.
+      if (titleAppeared && this._hasEverPlayed) this.showControls();
 
       // Show title if controls are currently visible
       const container = this.controlsContainer;
@@ -15140,6 +17033,22 @@ export class MoviElement extends HTMLElement {
 
     // Clean up orphan trailing brackets, hyphens, and extra spaces
     title = title.replace(/\s*[\(\[]\s*$/, "").replace(/\s*[-–—]\s*$/, "").replace(/\s+/g, " ").trim();
+
+    // Convert any remaining internal hyphens into spaces. Done AFTER the
+    // release-group strip above (which keys off `-` as the separator
+    // marker) so we don't erase its signal before it runs. Source files
+    // like `sintel-2010-1080p.mkv` would otherwise read as "sintel 2010"
+    // — readable, but visually clunky next to the dot-separated style
+    // (`Sintel.2010.1080p.mkv` → "Sintel 2010") that picker-dropped
+    // files produce. Normalising both styles keeps the overlay
+    // consistent regardless of how the source was named.
+    title = title.replace(/[-–—]+/g, " ").replace(/\s+/g, " ").trim();
+
+    // Title-case words that arrived all-lowercase (e.g. URL filenames
+    // are usually `sintel`, not `Sintel`). Mixed-case tokens like
+    // `iPhone` or `MoviePlayer` are intentional capitalisation — the
+    // `\b[a-z]+\b` guard skips them. Numbers and ALLCAPS stay as-is.
+    title = title.replace(/\b[a-z]+\b/g, (w) => w.charAt(0).toUpperCase() + w.slice(1));
 
     return title || filename;
   }
@@ -15246,6 +17155,17 @@ export class MoviElement extends HTMLElement {
     }
 
     SettingsStorage.getInstance().save({ hdr: this._hdr });
+  }
+
+  /**
+   * Whether the currently loaded source is classified as HDR (BT.2020
+   * primaries or PQ/HLG transfer). Public mirror of the same check the
+   * element uses internally for HDR-button visibility — safe for host
+   * pages to read without reaching into private `.player` internals.
+   * Returns false before a source has loaded.
+   */
+  get isHDRContent(): boolean {
+    return !!this.player?.isHDRSupported?.();
   }
 
   private updateHDRUI(): void {

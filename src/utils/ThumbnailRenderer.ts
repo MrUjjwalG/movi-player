@@ -31,6 +31,25 @@ export class ThumbnailRenderer {
   // WebCodecs support
   private decoder: VideoDecoder | null = null;
   private pendingDecodeResolve: ((success: boolean) => void) | null = null;
+  // Last successful decoder config args, kept so a dead/closed WebCodecs
+  // decoder can be recreated on the fly instead of disabling thumbnails for
+  // the rest of the session (configureDecoder is only ever called once, from
+  // initPreviewPipeline, which early-returns on a second source).
+  private lastDecoderConfig: {
+    codec: string;
+    extradata: Uint8Array | null;
+    width: number;
+    height: number;
+    profile?: number;
+    level?: number;
+  } | null = null;
+  // True after we recreate a dead decoder but before any decode has succeeded
+  // on the new instance. Blocks a second recreate so a single permanently-bad
+  // packet (decode → die → recreate → same packet → die …) can't spin the
+  // decoder forever. Cleared on the first successful decode; the next dead
+  // event (a different packet, or this one once it's no longer being retried)
+  // is then free to recreate again.
+  private decoderRevivedUnproven: boolean = false;
 
   private hasNativeHDRSupport: boolean = false;
   private isHDRSource: boolean = false;
@@ -432,6 +451,10 @@ export class ThumbnailRenderer {
       return false;
     }
 
+    // Remember the args so we can transparently recreate the decoder if
+    // WebCodecs later kills it (error callback / flush throw).
+    this.lastDecoderConfig = { codec, extradata, width, height, profile, level };
+
     // Reset existing decoder if any
     if (this.decoder) {
       if (this.decoder.state !== "closed") {
@@ -661,19 +684,51 @@ export class ThumbnailRenderer {
     pts: number,
     duration?: number,
   ): Promise<boolean> {
-    const decoder = this.decoder;
+    let decoder = this.decoder;
     if (!decoder || decoder.state === "closed") {
-      return false;
+      // Decoder died (WebCodecs error / flush throw). Recreate it from the
+      // saved config so thumbnails resume instead of staying dead for the
+      // rest of the session — but only if the *last* recreate has since
+      // proven itself with a successful decode. Otherwise a permanently-bad
+      // packet would loop: decode → die → recreate → same packet → die …
+      if (this.decoderRevivedUnproven) {
+        Logger.debug(
+          TAG,
+          "Decoder dead again before any successful decode — skipping recreate to avoid a loop",
+        );
+        return false;
+      }
+      const revived = await this.recreateDecoder();
+      if (!revived) {
+        return false;
+      }
+      this.decoderRevivedUnproven = true;
+      decoder = this.decoder;
+      if (!decoder || decoder.state === "closed") {
+        return false;
+      }
     }
 
     return new Promise((resolve) => {
-      this.pendingDecodeResolve = resolve;
+      this.pendingDecodeResolve = (success: boolean) => {
+        // Any successful decode proves the current decoder is healthy and
+        // re-arms the recreate budget for a future death.
+        if (success) this.decoderRevivedUnproven = false;
+        resolve(success);
+      };
 
       try {
         // Convert Annex B packet data to length-prefixed for WebCodecs
         let data = packetData;
         if (this.isAnnexBSource) {
           data = MoviVideoDecoder.annexBToLengthPrefixed(packetData);
+        } else {
+          // Length-prefixed (hvcC) HEVC: the thumbnail decoder flushes after
+          // every frame, so each keyframe is decoded in a post-flush state. As
+          // in the playback path, an Access Unit Delimiter NAL leading the
+          // keyframe makes the HW decoder reject it ("wasn't a key frame") on
+          // 10-bit DoVi/HDR HEVC. Strip the AUD so the keyframe is accepted.
+          data = MoviVideoDecoder.stripAudLengthPrefixed(data);
         }
 
         const chunk = new EncodedVideoChunk({
@@ -699,6 +754,39 @@ export class ThumbnailRenderer {
         }
       }
     });
+  }
+
+  /**
+   * Recreate the WebCodecs decoder from the last-used config. Called when the
+   * decoder has died (closed / errored) so a single decode failure doesn't
+   * disable thumbnails for the whole session. Returns false if there is no
+   * saved config or reconfiguration fails.
+   */
+  private async recreateDecoder(): Promise<boolean> {
+    const cfg = this.lastDecoderConfig;
+    if (!cfg) return false;
+
+    // Drop any half-dead instance and reset Annex B detection so
+    // configureDecoder re-derives it from extradata.
+    if (this.decoder) {
+      try {
+        if (this.decoder.state !== "closed") this.decoder.close();
+      } catch {
+        /* already closed */
+      }
+      this.decoder = null;
+    }
+    this.isAnnexBSource = false;
+
+    Logger.debug(TAG, "Recreating dead thumbnail decoder");
+    return this.configureDecoder(
+      cfg.codec,
+      cfg.extradata,
+      cfg.width,
+      cfg.height,
+      cfg.profile,
+      cfg.level,
+    );
   }
 
   /**

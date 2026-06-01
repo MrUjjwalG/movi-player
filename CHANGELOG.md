@@ -7,6 +7,86 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.3.0] - 2026-06-02
+
+### Added
+- **Signalsmith Stretch audio rate-change pipeline**: Replaced SoundTouch with Signalsmith Stretch as the sole pitch-preserving time-stretcher. Compiled to WASM via `wasm/movi_stretch.cpp`. Delivers clean pitch-preserved playback at non-1x rates without the phase artifacts that SoundTouch exhibited on speech and complex music. Includes eager pre-warm so the first rate change doesn't glitch.
+- **First-class audio-only support with strip UI**: Audio-only files (MP3, FLAC, AAC, Opus, etc.) now play through the canvas pipeline with a dedicated audio strip UI (cover art, title, progress bar, controls) instead of falling back to a hidden native `<audio>`. Always-software decode path ensures every codec works regardless of WebCodecs audio support.
+- **Muted-autoplay fallback with tap-to-unmute**: When autoplay is blocked by browser policy, the player now starts muted and shows an "unmute" pill overlay. Tapping the pill or pressing `M` restores audio with a single user gesture.
+- **Cover art display for audio**: JS-only album art extraction via an isolated demuxer context — reads embedded artwork from MP3/MP4/FLAC containers without requiring a canvas or WebCodecs. Falls back to a gradient placeholder when no art is found.
+- **Custom `SourceAdapter` for `<movi-player>` and `MoviPlayer` (closes #7)**: Plug any custom byte protocol (WebSocket, WebRTC data channel, IndexedDB, custom encryption, etc.) directly into the element or programmatic player. New `sourceAdapter` property on `<movi-player>` and `sourceAdapter` field in `PlayerConfig`. `src` / `sourceAdapter` are mutually exclusive — setting one clears the other.
+- **File-source preload settling gate**: `play()` and resume are gated until the initial preload window fills, preventing the player from entering a buffering loop on large local files.
+- **YouTube-style centre play button**: Always-visible large play/pause icon in the centre of the player. Shows immediately when the spinner clears; suppressed during autoplay startup to avoid flash.
+- **Unified controls chrome — dark gradient bar + redesigned OSD**: Bottom controls use a dark gradient overlay with redesigned on-screen display (volume, time, speed). Opaque backgrounds replace backdrop-filter blurs for better mobile performance.
+- **Extension: playlist shuffle, autoplay toggle, next button**: Chrome extension playlist now supports shuffle mode, an autoplay-next toggle, and a next-track button.
+- **Extension: hover-probe links + opt-in toggle + flag detection**: Links to video files are probed on hover; opt-in toggle in popup settings; automatic flag emoji detection in tab titles.
+- **Compare page (`/compare`)**: Side-by-side comparison of native `<video>` vs `<movi-player>` with sync playback toggle, auto-selected English subtitles, audio codec row, and HDR canvas-flag tip.
+- **VS Code extension — URL streaming via host fetch (closes CORS)**: `Movi: Open Video from URL` streams remote URLs through the extension host (Node.js `fetch`), bypassing webview CORS entirely.
+- **VS Code extension — URL multi-window commands**: `Open URL to the Side` and `Open URL in New Window` for remote URLs.
+- **VS Code extension — Activity Bar entry**: Dedicated Movi Player icon with Quick Actions view.
+- **Homepage redesign**: Simplified landing page targeted at non-technical users.
+
+### Changed
+- **4K playback rate cap raised to 2x**: Removed the blanket 1.5x rate cap for 4K+ sources — only 8K+ is capped at 1.5x now. Hardware decoders can sustain 2x on 4K content.
+- **Renderer queue split for 4K vs 8K**: `baseHwQueue` cap is now resolution-aware — 4K gets a larger queue than 8K, fixing 4K HEVC stutter that was caused by the previous one-size-fits-all cap.
+- **UI update loop throttled to 4Hz**: Progress bar and time display update at 4Hz instead of 60Hz, cutting UI-related jank during playback.
+- **Volume slider uses perceptual (log) gain curve**: Volume slider now maps through a logarithmic curve so 50% slider position sounds like 50% loudness instead of ~25%.
+- **Ambient mode FBO mirror**: Ambient mode now samples a 16x16 RGBA8 FBO instead of reading back the full canvas, eliminating the ~100ms GPU stall per sample on high-resolution content.
+- **Thumbnail hover latency cut**: GOP scan stops after the first keyframe instead of scanning the entire file, reducing hover-to-thumbnail latency.
+- **Dropped backdrop-filter blur from all UI surfaces**: Replaced with opaque backgrounds for better mobile compositing performance.
+- **README redesigned**: centered hero banner image, expanded badge row, quick-link bullets.
+- **Browser support updated**: Firefox 130+ now listed with WebCodecs `Yes` and HDR `Limited`.
+- **Author spelling**: `Ujjwal` → `Ujjawal` in README, `package.json`, and outreach docs.
+- **AGENTS.md shipped in package**: Architecture guide for AI coding assistants included in the npm package.
+- **File picker extended**: Drop-handler and file picker now accept audio extensions alongside video.
+
+### Fixed
+- **Decode: skip orphaned RASL leading pictures after CRA/BLA seek resume**: Prevents decode errors when resuming into a CRA/BLA region that has orphaned RASL reference pictures.
+- **Decode: keep DoVi/HDR HEVC on hardware**: Poster generation now runs on the main decoder instead of the thumbnail pipeline; decoder is recreated on seek; no open-GOP software fallback that would drop DoVi metadata.
+- **Decode: fast software fallback for mid-stream open-GOP HEVC**: Instead of 15 rounds of stutter, the decoder now detects open-GOP HEVC and falls back to software quickly.
+- **Decode: drop tiny corrupt non-keyframe packets before decode**: Small orphaned packets that confuse hardware decoders are dropped pre-decode.
+- **Decode: restrict post-flush keyframe-reject software fallback to HEVC**: The recovery path no longer triggers for non-HEVC codecs.
+- **Decode: limit tiny-packet drop to the post-flush startup window**: Avoids dropping legitimate small packets during mid-playback.
+- **Decode: only drop tiny show_existing_frame packets at non-1x**: Prevents reference chain corruption at normal playback speed.
+- **Demux: prepend AV1 Temporal Delimiter OBU for spec-compliant WebCodecs chunks**: Fixes AV1 decode errors on browsers that require the TD OBU.
+- **Seek: prefer IDR but fall back to CRA so all-CRA regions still resume**: Seek now handles CRA-only streams correctly.
+- **Seek: resume into buffering on forced seek-timeout to avoid black screen**: After a seek timeout, the player enters buffering state instead of showing a black frame.
+- **Playback: don't buffer on mid-playback decode-error recovery**: Keeps audio running during decoder recovery instead of entering a buffering loop.
+- **Playback: don't auto-start on load when playback rate is restored**: Restored rate no longer triggers an unwanted auto-play.
+- **Playback: stop rapid seeks/rate changes from getting stuck paused**: Corrective seek on rate change no longer leaves the player stuck in paused state.
+- **Playback: stamp _playStartTime on seek-completion resume**: Prevents spurious seek(0) after completing a seek.
+- **Playback: skip stall detection during decoder recovery**: Prevents the stall detector from triggering a buffering loop while the decoder is recovering.
+- **Playback: cut old-rate audio tail on rate change without clock leap**: Audio transition between rates is now seamless.
+- **Playback: replace rate-change corrective seek with audio resync**: Corrective seek replaced with audio resync; keyframes-only on audio-starve.
+- **Playback: start at 0 on first play/replay, re-seek on rate change**: First play always starts at 0; rate change triggers a re-seek for correct A/V alignment.
+- **Playback: end playback when video tail sits past audio playout head**: Prevents infinite playback when video ends before audio.
+- **Audio: map volume slider through perceptual (log) gain curve**: 50% slider = 50% perceived loudness.
+- **Audio: no pitch-shift at startup on >1x**: Eager-warm the stretcher so the first frame at non-1x doesn't glitch.
+- **Audio: block video-only keyboard shortcuts in audio-only mode**: Arrow seek and other video shortcuts are suppressed for audio-only sources.
+- **Audio: skip video presentation loop for audio-only sources**: No wasted canvas draws for audio-only playback.
+- **Audio: stop near-end seek clipping audio-only playback**: Seek near the end no longer clips the final seconds.
+- **Audio: drop double startTime add in EOF playout check**: Fixes premature EOF detection.
+- **UI: don't flash controls on tap; drop resume dialog when chrome hides**: Controls no longer flash on tap; resume dialog is dismissed when chrome auto-hides.
+- **UI: keep play/pause icon on intended state through stalls and startup**: Play/pause icon no longer flips during buffering or startup.
+- **UI: show centre play icon immediately when the spinner clears**: Eliminates a visible delay between spinner disappearance and play icon.
+- **UI: stop centre play icon flickering while paused on a buffering source**: Prevents rapid icon toggling.
+- **UI: hide cursor over centre play/pause button when controls hide**: Cursor is hidden along with controls.
+- **UI: replay when loop toggled on while at ended state**: Toggling loop at the end now immediately replays.
+- **Touch: don't flash controls on tap**: Tap no longer briefly shows controls.
+- **Poster: render poster on the main decoder, not the thumbnail pipeline**: Fixes poster generation for sources that don't work with the thumbnail decoder.
+- **Thumbnail: recreate dead WebCodecs decoder instead of disabling previews**: Thumbnail previews recover automatically instead of being permanently disabled.
+- **Extension: detect video links regardless of target=_blank**: Hover-probe now works on all link types.
+- **Extension: loop replays in place + single-file drop skips playlist**: Better UX for single-file and loop scenarios.
+- **HTTP: surface server errors instead of an infinite buffering spinner**: HTTP errors now show a meaningful error message.
+- **Stats: width-aware quality label so 3840x2080 reads as 4K, not 2K**: Quality label uses width-based detection for non-standard aspect ratios.
+- **Canvas: fall back to display-p3 when rec2100-pq is rejected**: HDR canvas now gracefully falls back when the browser rejects the PQ colorspace tag.
+- **Canvas: preserve rec2100-pq tag through HDR toggle**: HDR toggle no longer strips the colorspace tag.
+- **Element: persist muted=false when volume slider auto-unmutes**: Muted state is correctly persisted after using the volume slider.
+- **Controls: flush time/progress/volume on show**: Controls no longer show stale values when re-appearing.
+- **Controls: suppress play/pause overlay flash during autoplay startup**: Eliminates brief icon flash on autoplay.
+- **Controls: suppress spinner flash on poster/first-play/replay seeks**: Spinner no longer briefly appears during seeks.
+- **Controls: hide cursor over overlay when controls hide**: Cursor is hidden with controls in all regions.
+
 ## [0.2.3] - 2026-05-07
 
 ### Added

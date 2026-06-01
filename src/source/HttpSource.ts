@@ -308,12 +308,20 @@ export class HttpSource implements SourceAdapter {
     // Extract filename from Content-Disposition header (e.g., "attachment; filename=\"video.mp4\"")
     const disposition = response.headers.get("Content-Disposition");
     if (disposition) {
-      // Try filename*= (RFC 5987 encoded) first, then filename=
-      let filenameMatch = disposition.match(/filename\*\s*=\s*(?:UTF-8''|utf-8'')([^;\s]+)/i);
+      // Try filename*= (RFC 5987 encoded) first, then filename=.
+      // Per RFC 5987 the value after `UTF-8''` should be percent-encoded
+      // (so spaces become %20), but some CDNs (fsl-buckets.life seen in
+      // the wild) ship the filename with raw spaces. The old `[^;\s]+`
+      // greedy was stopping at the first space — capturing only "The"
+      // from "The Super Mario ...mkv". Capture up to `;` or end-of-string
+      // and trim, so both compliant and lazy servers work.
+      let filenameMatch = disposition.match(/filename\*\s*=\s*(?:UTF-8''|utf-8'')([^;]+)/i);
       if (filenameMatch) {
         try {
-          this._contentDispositionFilename = decodeURIComponent(filenameMatch[1]);
-        } catch { /* ignore decode error */ }
+          this._contentDispositionFilename = decodeURIComponent(filenameMatch[1].trim());
+        } catch {
+          this._contentDispositionFilename = filenameMatch[1].trim();
+        }
       }
       if (!this._contentDispositionFilename) {
         // Try quoted filename first (allows spaces inside quotes)
@@ -873,6 +881,19 @@ export class HttpSource implements SourceAdapter {
           throw error;
         }
 
+        // 4xx client errors (other than 416 → EOF) are flagged with "(Fatal)"
+        // by the response-status check above. Retrying a 404 / 403 / 410
+        // mid-stream just delays the inevitable error by ~MAX_RETRIES × backoff
+        // and leaves the buffering UI spinning. Fail fast so the player can
+        // surface the real reason to the user.
+        const errMsgForFatal = (error as any)?.message || "";
+        if (errMsgForFatal.includes("(Fatal)")) {
+          Logger.error(TAG, `Fatal HTTP error, not retrying: ${errMsgForFatal}`);
+          this.atomicSetStreaming(false);
+          this.streamError = error instanceof Error ? error : new Error(errMsgForFatal);
+          break;
+        }
+
         Logger.warn(TAG, `Stream error, retrying...`, error);
 
         try {
@@ -921,6 +942,13 @@ export class HttpSource implements SourceAdapter {
         if (retryCount > MAX_RETRIES) {
           Logger.error(TAG, `Max retries (${MAX_RETRIES}) reached, giving up.`);
           this.atomicSetStreaming(false);
+          // Surface the last error to waitForData so the player can show
+          // it instead of spinning forever on the buffering UI. Without
+          // this, atomicIsStreaming() flips false silently and consumers
+          // can't tell "EOF" apart from "server died mid-stream."
+          this.streamError = (error instanceof Error)
+            ? error
+            : new Error(typeof error === "string" ? error : "Stream failed after maximum retries");
           break;
         }
         // Backoff — listen for online event or abort signal to exit early

@@ -1,6 +1,7 @@
 <!DOCTYPE html>
 <html>
 <head>
+  <meta charset="utf-8">
   <style>
     * { margin: 0; padding: 0; box-sizing: border-box; }
     :root {
@@ -148,6 +149,93 @@
     }
     .tip b { color: #aaa; font-weight: 600; }
 
+    /* ─── Setting row ────────────────── */
+    .setting {
+      margin: 0 22px 14px;
+      padding: 12px 14px;
+      background: var(--card);
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      transition: border-color 0.18s;
+    }
+    .setting:hover { border-color: var(--border-hover); }
+    .setting-text { flex: 1; }
+    .setting-label {
+      font-size: 12px;
+      font-weight: 600;
+      letter-spacing: -0.1px;
+    }
+    .setting-sub {
+      font-size: 10px;
+      color: var(--muted);
+      margin-top: 2px;
+      line-height: 1.4;
+    }
+    .switch {
+      position: relative;
+      width: 34px;
+      height: 20px;
+      flex-shrink: 0;
+    }
+    .switch input { opacity: 0; width: 0; height: 0; }
+    .slider {
+      position: absolute;
+      inset: 0;
+      background: #2a2a3a;
+      border-radius: 20px;
+      cursor: pointer;
+      transition: background 0.18s;
+    }
+    .slider::before {
+      content: "";
+      position: absolute;
+      width: 14px;
+      height: 14px;
+      left: 3px;
+      top: 3px;
+      background: #fff;
+      border-radius: 50%;
+      transition: transform 0.18s;
+    }
+    .switch input:checked + .slider { background: var(--accent); }
+    .switch input:checked + .slider::before { transform: translateX(14px); }
+
+    .setting-btn {
+      background: var(--accent-soft);
+      color: var(--accent);
+      border: 1px solid rgba(139, 92, 246, 0.3);
+      border-radius: 8px;
+      padding: 6px 12px;
+      font-size: 11px;
+      font-weight: 600;
+      cursor: pointer;
+      font-family: inherit;
+      transition: all 0.15s;
+      flex-shrink: 0;
+    }
+    .setting-btn:hover {
+      background: rgba(139, 92, 246, 0.2);
+      border-color: var(--accent);
+    }
+    .setting-btn:active { transform: translateY(1px); }
+
+    .setting-badge {
+      width: 24px;
+      height: 24px;
+      border-radius: 50%;
+      background: rgba(16, 185, 129, 0.15);
+      color: #10b981;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 12px;
+      font-weight: 700;
+      flex-shrink: 0;
+    }
+
     /* ─── Footer ─────────────────────── */
     .footer {
       padding: 12px 22px 16px;
@@ -190,16 +278,15 @@
   </div>
 
   <div class="tiles">
-    <div class="tile" id="file" title="Open a video file from your device">
+    <div class="tile" id="file" title="Open the player, then pick or drop your videos">
       <div class="tile-icon">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-          <path d="M4 14.9A7 7 0 1 1 15.7 8h1.8a4.5 4.5 0 0 1 2.5 8.2"/>
-          <path d="M12 12v9"/>
-          <path d="m16 16-4-4-4 4"/>
+          <rect x="2" y="4" width="20" height="16" rx="2.5"/>
+          <path d="m10 9 5 3-5 3z" fill="currentColor" stroke="none"/>
         </svg>
       </div>
-      <div class="tile-label">Open File</div>
-      <div class="tile-sub">From your device</div>
+      <div class="tile-label">Open Player</div>
+      <div class="tile-sub">Pick or drop videos</div>
     </div>
 
     <div class="tile" id="paste" title="Play a video link from clipboard">
@@ -220,6 +307,25 @@
       <path d="M12 16v-4M12 8h.01"/>
     </svg>
     <span>Right-click any video link on the web and choose <b>Open with Movi Player</b></span>
+  </div>
+
+  <div class="setting">
+    <div class="setting-text">
+      <div class="setting-label">Detect download links</div>
+      <div class="setting-sub" id="probe-sub">Scan CDN / no-extension links for video</div>
+    </div>
+    <label class="switch">
+      <input type="checkbox" id="probe-toggle">
+      <span class="slider"></span>
+    </label>
+  </div>
+
+  <div class="setting">
+    <div class="setting-text">
+      <div class="setting-label">Experimental features</div>
+      <div class="setting-sub" id="flags-sub">Better codec & HDR support in Chrome</div>
+    </div>
+    <button class="setting-btn" id="open-flags">Enable</button>
   </div>
 
   <div class="footer">

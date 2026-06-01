@@ -42,6 +42,9 @@ The MoviPlayer is the main orchestrator component that coordinates:
 ✅ **Intelligent Seeking:** Keyframe-based with post-seek throttling
 ✅ **Preview Generation:** Isolated WASM instance for thumbnails
 ✅ **Wake Lock:** Prevents screen sleep during playback
+✅ **Pitch-Preserving Time-Stretch:** Signalsmith Stretch for clean non-1x playback
+✅ **Audio-Only Mode:** Dedicated strip UI with embedded cover art extraction
+✅ **Cover Art:** Automatic extraction from MP3/MP4/FLAC/MKV metadata
 
 ---
 
@@ -106,7 +109,8 @@ constructor(config: PlayerConfig)
 
 ```typescript
 interface PlayerConfig {
-  source: SourceConfig;                         // Required — { type, url } or { type, file }
+  source?: SourceConfig;                        // { type, url } or { type, file } — optional when sourceAdapter is set
+  sourceAdapter?: SourceAdapter;                // Pre-built adapter — overrides `source` (custom protocols)
   audioSource?: SourceConfig;                   // Separate audio for split video+audio sources
   audioTracks?: AudioSourceEntry[];             // Multi-language audio with metadata
   subtitleTracks?: SubtitleSourceEntry[];       // External subtitles (VTT/SRT) with metadata
@@ -135,6 +139,21 @@ const player = new MoviPlayer({
   renderer: "canvas",
 });
 ```
+
+**With a custom SourceAdapter** (any protocol — WebSocket, IndexedDB, custom encryption, etc.):
+
+```typescript
+import { MoviPlayer } from "movi-player/player";
+import type { SourceAdapter } from "movi-player";
+
+const player = new MoviPlayer({
+  sourceAdapter: myCustomAdapter,   // wins over `source` when present
+  canvas,
+});
+await player.load();
+```
+
+See [Sources → Creating Custom Sources](./sources.md#creating-custom-sources) for the adapter contract.
 
 ---
 
@@ -236,7 +255,7 @@ Adjusts playback speed.
 
 **Parameters:**
 
-- `rate` - Speed multiplier (0.25 to 4.0 recommended)
+- `rate` - Speed multiplier (0.25 to 2.0)
   - `0.5` = half speed
   - `1.0` = normal speed (default)
   - `2.0` = double speed
@@ -382,7 +401,9 @@ type PlayerState =
   | "loading" // Loading source
   | "ready" // Loaded, paused
   | "playing" // Active playback
+  | "paused" // Paused
   | "seeking" // Seeking in progress
+  | "buffering" // Waiting for data
   | "ended" // Playback finished
   | "error"; // Error occurred
 ```
@@ -480,6 +501,28 @@ if (player.hasAudibleSource()) {
   showVolumeButton();
 }
 ```
+
+---
+
+#### `getCoverArt(): ImageBitmap | null`
+
+Returns the embedded cover art extracted from the media file at load time, or `null` if the source has no embedded artwork or extraction failed. The caller owns the bitmap and must call `close()` on it when done.
+
+```typescript
+const art = player.getCoverArt();
+if (art) {
+  imgElement.src = await createImageBitmap(art).then(bmp => {
+    const canvas = document.createElement("canvas");
+    canvas.width = bmp.width;
+    canvas.height = bmp.height;
+    canvas.getContext("2d")!.drawImage(bmp, 0, 0);
+    bmp.close();
+    return canvas.toDataURL();
+  });
+}
+```
+
+Cover art is extracted from ID3v2 APIC (MP3), `covr` atom (MP4), FLAC PICTURE block, or MKV attachments. The player emits a `coverart` event when extraction completes — the element listens for this and displays it in the audio-strip overlay.
 
 ---
 
@@ -715,6 +758,7 @@ interface PlayerEventMap {
   // Lifecycle
   loadStart: void;
   loadEnd: void;
+  preloadComplete: void;
   stateChange: PlayerState;
   ended: void;
   error: Error;
@@ -732,6 +776,9 @@ interface PlayerEventMap {
   subtitleTrackChange:
     | { lang: string; label: string }
     | { lang: null; label: null };
+
+  // Audio
+  coverArt: ImageBitmap | null;  // Embedded cover art extracted at load (close() the bitmap when done)
 
   // Frame-level (advanced)
   frame: DecodedVideoFrame;
@@ -1175,4 +1222,4 @@ Multi-quality switching is HLS-only at the programmatic-API level; for a non-HLS
 
 ---
 
-**Last Updated:** February 5, 2026
+**Last Updated:** June 2, 2026

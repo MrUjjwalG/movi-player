@@ -4,10 +4,11 @@ Movi-Player provides different source adapters for various input types.
 
 ## Available Sources
 
-| Source       | Use Case    | Import                |
-| ------------ | ----------- | --------------------- |
-| `HttpSource` | Remote URLs | `movi-player/demuxer` |
-| `FileSource` | Local files | `movi-player/demuxer` |
+| Source         | Use Case             | Import                |
+| -------------- | -------------------- | --------------------- |
+| `HttpSource`   | Remote URLs          | `movi-player/demuxer` |
+| `FileSource`   | Local files          | `movi-player/demuxer` |
+| Custom adapter | Any other protocol   | implement `SourceAdapter` |
 
 ## HttpSource
 
@@ -38,7 +39,7 @@ const player = new MoviPlayer({
 await player.load();
 ```
 
-`HttpSource` is created internally — there's no public path for passing a pre-built source instance to `MoviPlayer`. Use `HttpSource` directly with `Demuxer` only when extracting metadata without playing.
+`HttpSource` is created internally for `{ type: "url" }`. If you want to plug a pre-built `HttpSource` (or any other adapter instance) directly into `MoviPlayer` or `<movi-player>` — for tweaked headers, alternate buffering, or a fully custom protocol — use the `sourceAdapter` field instead. See [Custom Sources](#creating-custom-sources).
 
 ### CORS Requirements
 
@@ -154,48 +155,102 @@ All sources implement the `SourceAdapter` interface:
 
 ```typescript
 interface SourceAdapter {
-  // Get total file size
+  // Total size of the source in bytes
   getSize(): Promise<number>;
 
-  // Read bytes from offset
-  read(offset: number, length: number): Promise<Uint8Array>;
+  // Read `length` bytes starting at `offset`. Must return an ArrayBuffer.
+  read(offset: number, length: number): Promise<ArrayBuffer>;
 
-  // Close and cleanup
+  // Seek to a position (sources that need state can track it here)
+  seek(offset: number): number;
+
+  // Current read position
+  getPosition(): number;
+
+  // Close and release resources
   close(): void;
+
+  // Stable, unique identifier — used for the resume-position storage key
+  getKey(): string;
 }
 ```
+
+### What the Player Actually Calls
+
+Out of the six methods, only three are load-bearing for a custom adapter — the rest are required by TypeScript but can be no-ops:
+
+| Method          | Required | Where it's called                                            |
+| --------------- | -------- | ------------------------------------------------------------ |
+| `getSize()`     | **Yes**  | File size cache + demuxer EOF check                          |
+| `read()`        | **Yes**  | Every WASM/FFmpeg I/O request                                |
+| `getKey()`      | **Yes**  | Resume-position storage key (must be stable across sessions) |
+| `seek()`        | No       | WASM probes for it via `typeof === "function"`; safe no-op   |
+| `getPosition()` | No       | Only used inside `instanceof HttpSource` branches            |
+| `close()`       | No       | Called on `destroy()`; no-op if nothing to clean up          |
 
 ### Creating Custom Sources
 
-You can create custom sources:
+Bring your own protocol — WebSocket, WebRTC data channel, IndexedDB, custom encryption, anything — without touching the demuxer or the UI:
 
 ```typescript
-import type { SourceAdapter } from "movi-player/demuxer";
+import type { SourceAdapter } from "movi-player";
 
-class CustomSource implements SourceAdapter {
-  private data: Uint8Array;
+class MySource implements SourceAdapter {
+  constructor(private url: string, private totalSize: number) {}
 
-  constructor(data: Uint8Array) {
-    this.data = data;
+  async getSize() {
+    return this.totalSize;
   }
 
-  async getSize(): Promise<number> {
-    return this.data.byteLength;
+  async read(offset: number, length: number): Promise<ArrayBuffer> {
+    // Fetch bytes [offset, offset + length) from your protocol.
+    // If offset + length > totalSize, return a TRUNCATED buffer — do not throw.
+    // FFmpeg's probe phase expects partial reads near EOF.
   }
 
-  async read(offset: number, length: number): Promise<Uint8Array> {
-    return this.data.slice(offset, offset + length);
+  getKey() {
+    return this.url; // Stable key for resume storage
   }
 
-  close(): void {
-    // Cleanup
-  }
+  // ↓ TS requires these — safe no-ops for read-only random-access adapters
+  seek(o: number) { return o; }
+  getPosition() { return 0; }
+  close() {}
 }
-
-// Usage
-const customSource = new CustomSource(videoData);
-const demuxer = new Demuxer(customSource);
 ```
+
+### Plugging In
+
+Same adapter, three integration surfaces:
+
+```typescript
+// 1. Demuxer (low-level, no playback) — direct constructor argument
+import { Demuxer } from "movi-player/demuxer";
+const dm = new Demuxer(new MySource(url, size));
+await dm.open();
+
+// 2. MoviPlayer (programmatic, no UI) — `sourceAdapter` config field
+import { MoviPlayer } from "movi-player/player";
+const player = new MoviPlayer({
+  sourceAdapter: new MySource(url, size),
+  canvas: document.querySelector("canvas")!,
+});
+await player.load();
+
+// 3. <movi-player> custom element — `sourceAdapter` property
+const el = document.querySelector("movi-player");
+el.sourceAdapter = new MySource(url, size);
+```
+
+When `sourceAdapter` is set, the standard `source` / `src` path is bypassed — the player feeds bytes through your adapter directly. Setting `src` after clears the adapter (and vice versa) so the two stay mutually exclusive.
+
+::: warning Random-access is mandatory
+FFmpeg seeks to the end of the file to find the `moov` atom (MP4), then back to the start. Pure-streaming protocols like a single WebSocket frame won't work — you need either server-side range queries or client-side buffering of the whole file before playback.
+:::
+
+::: tip Return `ArrayBuffer`, not `Uint8Array`
+The adapter contract is `Promise<ArrayBuffer>`. Returning `Uint8Array` works at runtime but forces a silent `new Uint8Array(uint8array)` copy inside the demuxer wrapper.
+:::
 
 ## Source Selection
 

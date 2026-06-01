@@ -51,10 +51,45 @@ export class TrackManager extends EventEmitter<TrackManagerEvents> {
   }
   
   /**
-   * Get video tracks
+   * Identify cover-art / attached-picture video streams (ID3v2 APIC,
+   * FLAC PICTURE, MP4 covr, Matroska attachment) so they're excluded
+   * from the playable video list and surfaced separately for artwork.
+   *
+   * Detection is a pure-JS heuristic: a still-image codec (mjpeg / png /
+   * jpeg) reporting frameRate 0 (a single cached picture, not a motion
+   * stream). We can't use a WASM-side disposition flag — adding the
+   * is_attached_pic field to the StreamInfo struct shifts the WASM
+   * memory layout and trips a latent FFmpeg audio overflow into a
+   * production OOB (see project memory "Album Art Crashes WASM"), so the
+   * whole album-art path stays JS-only. Real video is essentially never
+   * mjpeg/png-with-zero-fps, so the heuristic is safe in practice.
+   */
+  private isLikelyCoverArt(t: VideoTrack): boolean {
+    const codec = (t.codec || "").toLowerCase();
+    const stillCodec = codec === "mjpeg" || codec === "png" || codec === "jpeg";
+    return stillCodec && (!t.frameRate || t.frameRate === 0);
+  }
+
+  /**
+   * Get video tracks. Excludes embedded cover-art streams (ID3v2 APIC,
+   * FLAC PICTURE, etc.) — those are exposed separately via
+   * getAttachedPicTracks() so the player doesn't try to feed a one-frame
+   * PNG into the video decoder and stall on a never-arriving second frame.
    */
   getVideoTracks(): VideoTrack[] {
-    return this.tracks.filter((t): t is VideoTrack => t.type === 'video');
+    return this.tracks.filter(
+      (t): t is VideoTrack => t.type === 'video' && !this.isLikelyCoverArt(t as VideoTrack),
+    );
+  }
+
+  /**
+   * Cover-art / attached-picture tracks (audio file embedded artwork).
+   * Empty for the usual video-with-audio case.
+   */
+  getAttachedPicTracks(): VideoTrack[] {
+    return this.tracks.filter(
+      (t): t is VideoTrack => t.type === 'video' && this.isLikelyCoverArt(t as VideoTrack),
+    );
   }
   
   /**

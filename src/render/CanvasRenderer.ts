@@ -30,9 +30,39 @@ export class CanvasRenderer {
   private isHighBitDepth: boolean = false; // 12-bit+ content needs RGBA16F texture
   private _loggedFrameFormat: boolean = false;
 
+  // Ambient mode mini-render: a 16×16 RGBA8 framebuffer that mirrors each
+  // drawn frame. Lets MoviElement sample average color via a 256-pixel
+  // readPixels (sync, ~microseconds) instead of an 8K canvas readback
+  // (~100ms GPU stall). Created lazily when ambient mode turns on.
+  private static readonly AMBIENT_SIZE = 16;
+  private ambientFbo: WebGLFramebuffer | null = null;
+  private ambientTex: WebGLTexture | null = null;
+  private ambientEnabled: boolean = false;
+  private ambientPixels: Uint8Array | null = null;
+
   // Presentation loop
   private rafId: number | null = null;
   private isPlaying: boolean = false;
+  // Set once configure() runs, which only happens when a real video track is
+  // active. Audio-only sources (incl. cover-art "video" streams that
+  // TrackManager classifies as attached-pic) never configure the renderer, so
+  // this stays false and the presentation loop is skipped — no point spinning a
+  // 60fps rAF + A/V sync against frames that never arrive.
+  private isVideoConfigured: boolean = false;
+
+  // Adaptive DPR — measure first second of playback at full 2x DPR. If
+  // average paint takes more than ~half a frame at 60Hz, the device is
+  // GPU-bound and a 2x backbuffer is the difference between smooth and
+  // stuttering. Drop to 1x DPR (quarter the pixels) and trigger a
+  // resize so the change takes effect. Measurement is one-shot: once
+  // we've decided, no more sampling overhead. Beats `deviceMemory` /
+  // `hardwareConcurrency` heuristics — those misclassify weak-GPU /
+  // strong-RAM phones and undercount iOS where deviceMemory is absent.
+  private _maxDpr: number = 2;
+  private _paintSamples: number[] = [];
+  private _adaptDprChecked: boolean = false;
+  private static readonly PAINT_SAMPLE_COUNT = 60; // ~1 second @ 60Hz
+  private static readonly PAINT_THRESHOLD_MS = 8; // >50% of 16.67ms frame budget
 
   // Audio time provider for A/V sync
   private getAudioTime: (() => number) | null = null;
@@ -188,6 +218,7 @@ export class CanvasRenderer {
     isHDR?: boolean,
     pixelFormat?: string,
   ): void {
+    this.isVideoConfigured = true;
     // Detect high bit-depth (12-bit+) content that needs RGBA16F textures
     const pf = (pixelFormat || "").toLowerCase();
     this.isHighBitDepth = pf.includes("12") || pf.includes("14") || pf.includes("16");
@@ -273,28 +304,82 @@ export class CanvasRenderer {
         return;
       }
 
-      // Configure color space on the GL context (Chrome 104+, Safari 17+)
+      // Configure color space on the GL context (Chrome 104+, Safari 17+).
+      // For HDR PQ/HLG sources on Chromium, tag the canvas with
+      // rec2100-pq/hlg — Chrome's compositor then sends the buffer to the
+      // HDR display at full peak brightness. display-p3 alone is wide-gamut
+      // SDR (~100 nits) and tone-maps PQ highlights down, making HDR look
+      // dim. The HDR Canvas spec's RGBA16F float buffer (drawingBufferStorage)
+      // is NOT required for this — the colorspace tag is independent of the
+      // buffer's bit depth. 8-bit PQ has some quantization banding but
+      // unlocks the full HDR brightness range, which Ujjwal prefers.
       try {
-        // @ts-ignore
-        if (
-          detectedColorSpace !== "srgb" &&
-          this.gl.drawingBufferColorSpace !== undefined
-        ) {
-          // Verify if the browser actually supports the requested color space
-          // WebGL2 only supports 'srgb' and 'display-p3'
-          const supportedSpaces = ["srgb", "display-p3"];
-          const targetSpace = supportedSpaces.includes(detectedColorSpace)
-            ? detectedColorSpace
-            : "srgb";
+        const isChromium = !!(window as any).chrome;
+        const transferLc = (colorTransfer || "").toLowerCase();
+        const isHLGSource =
+          transferLc.includes("hlg") || transferLc.includes("arib-std-b67");
+        const isHDRPath =
+          this.isHDRSource && this.hdrEnabled && isChromium;
+        const hdrSpace = isHLGSource ? "rec2100-hlg" : "rec2100-pq";
 
-          // @ts-ignore
-          this.gl.drawingBufferColorSpace = targetSpace;
-          // @ts-ignore
-          this.gl.unpackColorSpace = targetSpace;
-          Logger.info(
-            TAG,
-            `WebGL drawing buffer color space set to: ${targetSpace} (requested: ${detectedColorSpace})`,
-          );
+        // @ts-ignore
+        if (this.gl.drawingBufferColorSpace !== undefined) {
+          let targetSpace: string;
+          if (isHDRPath) {
+            targetSpace = hdrSpace;
+          } else if (detectedColorSpace !== "srgb") {
+            // Wide-gamut SDR or HDR-disabled fallback
+            const supportedSpaces = ["srgb", "display-p3"];
+            targetSpace = supportedSpaces.includes(detectedColorSpace)
+              ? detectedColorSpace
+              : "srgb";
+          } else {
+            targetSpace = "srgb";
+          }
+
+          if (targetSpace !== "srgb") {
+            // rec2100-pq/hlg is a Chromium extension behind
+            // chrome://flags#enable-experimental-web-platform-features
+            // (and Chrome version dependent). In practice Chromium does
+            // not silently ignore unsupported values — the setter throws.
+            // Try the HDR space first; on throw or readback mismatch,
+            // fall back to display-p3 (wide-gamut SDR) instead of leaving
+            // the canvas on srgb.
+            let applied: string | null = null;
+            try {
+              // @ts-ignore
+              this.gl.drawingBufferColorSpace = targetSpace;
+              // @ts-ignore
+              if (this.gl.drawingBufferColorSpace === targetSpace) {
+                applied = targetSpace;
+              }
+            } catch (_e) {
+              // setter threw — flag likely off, fall through to fallback
+            }
+
+            if (!applied && isHDRPath) {
+              Logger.warn(
+                TAG,
+                `Browser rejected ${targetSpace}. HDR canvas flag likely disabled — falling back to display-p3.`,
+              );
+              try {
+                // @ts-ignore
+                this.gl.drawingBufferColorSpace = "display-p3";
+                applied = "display-p3";
+              } catch (_e2) {
+                applied = null;
+              }
+            }
+
+            if (applied) {
+              // @ts-ignore
+              this.gl.unpackColorSpace = applied;
+              Logger.info(
+                TAG,
+                `WebGL drawing buffer color space set to: ${applied} (requested: ${detectedColorSpace}, HDR path: ${isHDRPath})`,
+              );
+            }
+          }
         }
       } catch (e) {
         Logger.warn(
@@ -505,17 +590,22 @@ export class CanvasRenderer {
       // Apply PQ EOTF to get linear light
       vec3 linear = PQtoLinear(color.rgb);
 
-      // Tone map to SDR range
-      // Adjusted to match Chrome native HDR appearance
-      // When HDR disabled: lower exposure (22.0) for better contrast
-      // When HDR enabled: higher exposure (35.0) to match native Chrome vibrance
-      float exposure = mix(22.0, 35.0, u_hdrEnabled);
+      // Tone map to SDR range.
+      // Reinhard's x/(1+x) curve gets steep fast — every extra unit of
+      // exposure pushes mid-tones harder toward white, which reads as
+      // crushed highlights + boosted contrast on most SDR displays.
+      // The HDR-on path used to push exposure to 35.0 to "match Chrome
+      // native HDR vibrance"; in practice that overshot native, with
+      // visible extra contrast vs the <video> tag on the compare page.
+      // 26.0 keeps the HDR path noticeably punchier than HDR-off (22.0)
+      // without crushing highlights past where Chrome's compositor
+      // lands.
+      float exposure = mix(22.0, 26.0, u_hdrEnabled);
       vec3 sdr = toneMapReinhard(linear, exposure);
 
-      // Saturation boost
-      // When HDR disabled: slight boost (1.1) for better colors
-      // When HDR enabled: strong boost (1.5) to match Chrome native HDR vibrancy
-      float saturation = mix(1.1, 1.5, u_hdrEnabled);
+      // Saturation boost. 1.5 read as oversaturated next to native;
+      // 1.25 keeps the wide-gamut feel without the cartoonish punch.
+      float saturation = mix(1.1, 1.25, u_hdrEnabled);
       sdr = adjustSaturation(sdr, saturation);
 
       // Apply gamma (2.2 for accurate color reproduction)
@@ -615,23 +705,73 @@ export class CanvasRenderer {
     this.hdrEnabled = enabled;
     Logger.info(TAG, `HDR manual override set to: ${enabled}`);
 
-    // Re-detect and re-apply color space if gl exists
-    const newColorSpace = this.detectHDRColorSpace(
+    // Re-detect and re-apply color space if gl exists.
+    // Mirror configure(): upgrade HDR sources on Chromium to rec2100-pq/hlg so
+    // the compositor sends full peak brightness. detectHDRColorSpace() only
+    // returns display-p3 (wide-gamut SDR), which would dim the picture.
+    const detectedColorSpace = this.detectHDRColorSpace(
       this.lastPrimaries,
       this.lastTransfer,
     );
 
     if (this.gl && this.gl.drawingBufferColorSpace !== undefined) {
       try {
-        // @ts-ignore
-        this.gl.drawingBufferColorSpace = newColorSpace;
-        // @ts-ignore
-        this.gl.unpackColorSpace = newColorSpace;
-        this.colorSpace = newColorSpace;
-        Logger.info(
-          TAG,
-          `Updated WebGL color space to ${newColorSpace} following HDR toggle`,
-        );
+        const isChromium = !!(window as any).chrome;
+        const transferLc = (this.lastTransfer || "").toLowerCase();
+        const isHLGSource =
+          transferLc.includes("hlg") || transferLc.includes("arib-std-b67");
+        const isHDRPath = this.isHDRSource && this.hdrEnabled && isChromium;
+        const hdrSpace = isHLGSource ? "rec2100-hlg" : "rec2100-pq";
+
+        let targetSpace: string;
+        if (isHDRPath) {
+          targetSpace = hdrSpace;
+        } else if (detectedColorSpace !== "srgb") {
+          const supportedSpaces = ["srgb", "display-p3"];
+          targetSpace = supportedSpaces.includes(detectedColorSpace)
+            ? detectedColorSpace
+            : "srgb";
+        } else {
+          targetSpace = "srgb";
+        }
+
+        // Chromium throws (not silent-ignore) on unsupported rec2100-pq/hlg
+        // when the HDR canvas flag is off. Try first, fall back to display-p3.
+        let applied: string | null = null;
+        try {
+          // @ts-ignore
+          this.gl.drawingBufferColorSpace = targetSpace;
+          // @ts-ignore
+          if (this.gl.drawingBufferColorSpace === targetSpace) {
+            applied = targetSpace;
+          }
+        } catch (_e) {
+          // setter threw — flag likely off
+        }
+
+        if (!applied && isHDRPath) {
+          Logger.warn(
+            TAG,
+            `Browser rejected ${targetSpace} on toggle. HDR canvas flag likely disabled — falling back to display-p3.`,
+          );
+          try {
+            // @ts-ignore
+            this.gl.drawingBufferColorSpace = "display-p3";
+            applied = "display-p3";
+          } catch (_e2) {
+            applied = null;
+          }
+        }
+
+        if (applied) {
+          // @ts-ignore
+          this.gl.unpackColorSpace = applied;
+          this.colorSpace = applied === targetSpace ? detectedColorSpace : applied;
+          Logger.info(
+            TAG,
+            `Updated WebGL color space to ${applied} (detected: ${detectedColorSpace}, HDR path: ${isHDRPath}) following HDR toggle`,
+          );
+        }
       } catch (e) {
         Logger.warn(TAG, "Failed to update drawingBufferColorSpace on the fly");
       }
@@ -694,13 +834,16 @@ export class CanvasRenderer {
       const targetHeight = isRotated90 ? width : height;
 
       // Backbuffer scales with devicePixelRatio so we don't lose detail
-      // when downsampling high-resolution sources (4K/8K). Capped at 2x —
-      // 3x retina screens get the same backbuffer as 2x, which keeps the
-      // GPU cost reasonable while still delivering a visibly sharper
-      // image. CSS dimensions stay at logical pixels (handled below).
+      // when downsampling high-resolution sources (4K/8K). Starts at 2x
+      // and adapts down to 1x at runtime if the paint loop measures
+      // slow on the actual device — `deviceMemory` and `hardwareConcurrency`
+      // are too coarse / unreliable as a-priori signals (rounded to
+      // powers of 2, absent on iOS, weak GPU often paired with healthy
+      // RAM), so the only honest answer is to measure the device under
+      // load. See `_adaptDprIfSlow` in the presentation loop.
       const dpr = Math.min(
         typeof window !== "undefined" ? window.devicePixelRatio || 1 : 1,
-        2,
+        this._maxDpr,
       );
       const bufferWidth = Math.round(targetWidth * dpr);
       const bufferHeight = Math.round(targetHeight * dpr);
@@ -985,6 +1128,10 @@ export class CanvasRenderer {
    * Start the presentation loop for smooth playback
    */
   startPresentationLoop(): void {
+    // Audio-only source (no video track configured): nothing to present, and
+    // running A/V sync against a non-existent video stream is meaningless. The
+    // cover art, if any, is drawn separately via the overlay canvas.
+    if (!this.isVideoConfigured) return;
     if (this.rafId !== null) return;
 
     this.isPlaying = true;
@@ -1400,6 +1547,7 @@ export class CanvasRenderer {
   private drawFrame(frame: VideoFrame, force: boolean = false): void {
     if (!this.gl || !this.program || !this.texture) return;
     const gl = this.gl;
+    const paintStart = this._adaptDprChecked ? 0 : performance.now();
 
     try {
       // Update current time
@@ -1544,12 +1692,142 @@ export class CanvasRenderer {
       gl.useProgram(this.program);
       gl.bindVertexArray(this.vao);
       gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
+
+      // Mirror the just-drawn frame into a 16×16 framebuffer so ambient mode
+      // can read average color cheaply. Only the extra draw runs here; the
+      // sync readback is deferred until MoviElement asks via readAmbientPixels().
+      if (this.ambientEnabled) {
+        this._renderAmbientThumbnail();
+      }
     } catch (error) {
       if (error instanceof DOMException && error.name === "InvalidStateError") {
         return;
       }
       Logger.error(TAG, "WebGL Draw error", error);
     }
+
+    // Adaptive DPR — sample paint duration for the first N frames after
+    // playback starts. If the device can't keep paint under ~half a
+    // frame budget at 2x DPR, drop to 1x and resize. One-shot: stops
+    // sampling after the decision.
+    if (!this._adaptDprChecked && paintStart > 0) {
+      const paintDuration = performance.now() - paintStart;
+      this._paintSamples.push(paintDuration);
+      if (this._paintSamples.length >= CanvasRenderer.PAINT_SAMPLE_COUNT) {
+        const sum = this._paintSamples.reduce((a, b) => a + b, 0);
+        const avg = sum / this._paintSamples.length;
+        if (
+          avg > CanvasRenderer.PAINT_THRESHOLD_MS &&
+          this._maxDpr > 1 &&
+          this.containerWidth > 0 &&
+          this.containerHeight > 0
+        ) {
+          Logger.info(
+            TAG,
+            `Adaptive DPR: avg paint ${avg.toFixed(1)}ms over ${this._paintSamples.length} frames > ${CanvasRenderer.PAINT_THRESHOLD_MS}ms threshold — capping DPR to 1x`,
+          );
+          this._maxDpr = 1;
+          // Trigger re-resize so the smaller backbuffer takes effect.
+          this.resize(this.containerWidth, this.containerHeight);
+        }
+        this._adaptDprChecked = true;
+        this._paintSamples = []; // free memory
+      }
+    }
+  }
+
+  /**
+   * Enable the 16×16 ambient mirror render. Cheap: ~256 fragment shader
+   * invocations per drawn frame on top of the main draw. Call once when
+   * ambient mode turns on; the matching `readAmbientPixels()` returns the
+   * latest 16×16 RGBA buffer synchronously and effectively for free.
+   */
+  enableAmbientMirror(): void {
+    if (this.ambientEnabled) return;
+    if (!this.gl) return;
+    const gl = this.gl;
+    const size = CanvasRenderer.AMBIENT_SIZE;
+
+    this.ambientTex = gl.createTexture();
+    gl.bindTexture(gl.TEXTURE_2D, this.ambientTex);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
+    gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, size, size, 0, gl.RGBA, gl.UNSIGNED_BYTE, null);
+
+    this.ambientFbo = gl.createFramebuffer();
+    gl.bindFramebuffer(gl.FRAMEBUFFER, this.ambientFbo);
+    gl.framebufferTexture2D(
+      gl.FRAMEBUFFER,
+      gl.COLOR_ATTACHMENT0,
+      gl.TEXTURE_2D,
+      this.ambientTex,
+      0,
+    );
+    const status = gl.checkFramebufferStatus(gl.FRAMEBUFFER);
+    gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+
+    if (status !== gl.FRAMEBUFFER_COMPLETE) {
+      Logger.warn(TAG, `Ambient FBO incomplete (0x${status.toString(16)}); ambient mode will see no updates`);
+      if (this.ambientTex) gl.deleteTexture(this.ambientTex);
+      if (this.ambientFbo) gl.deleteFramebuffer(this.ambientFbo);
+      this.ambientTex = null;
+      this.ambientFbo = null;
+      return;
+    }
+
+    this.ambientPixels = new Uint8Array(size * size * 4);
+    this.ambientEnabled = true;
+  }
+
+  disableAmbientMirror(): void {
+    if (!this.ambientEnabled) return;
+    const gl = this.gl;
+    if (gl) {
+      if (this.ambientTex) gl.deleteTexture(this.ambientTex);
+      if (this.ambientFbo) gl.deleteFramebuffer(this.ambientFbo);
+    }
+    this.ambientTex = null;
+    this.ambientFbo = null;
+    this.ambientPixels = null;
+    this.ambientEnabled = false;
+  }
+
+  /**
+   * Read the latest mirrored frame as a 16×16 RGBA buffer. Synchronous and
+   * cheap (256-pixel readPixels). Returns null if ambient mirror isn't
+   * enabled or no frame has been drawn yet.
+   */
+  readAmbientPixels(): Uint8Array | null {
+    if (!this.ambientEnabled || !this.gl || !this.ambientFbo || !this.ambientPixels) {
+      return null;
+    }
+    const gl = this.gl;
+    const size = CanvasRenderer.AMBIENT_SIZE;
+    gl.bindFramebuffer(gl.FRAMEBUFFER, this.ambientFbo);
+    gl.readPixels(0, 0, size, size, gl.RGBA, gl.UNSIGNED_BYTE, this.ambientPixels);
+    gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+    return this.ambientPixels;
+  }
+
+  private _renderAmbientThumbnail(): void {
+    if (!this.gl || !this.program || !this.texture || !this.ambientFbo) return;
+    const gl = this.gl;
+    const size = CanvasRenderer.AMBIENT_SIZE;
+
+    // Re-bind to mirror FBO and redraw the same textured quad full-viewport.
+    // GPU downscales 8K → 16×16 in one pass; cost is dominated by the 256
+    // fragment shader invocations, not the texture sample. program/vao/
+    // texture are still bound from the main drawArrays above this call.
+    gl.bindFramebuffer(gl.FRAMEBUFFER, this.ambientFbo);
+    gl.viewport(0, 0, size, size);
+    gl.clearColor(0, 0, 0, 1);
+    gl.clear(gl.COLOR_BUFFER_BIT);
+    gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
+    gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+    // Restore main viewport for any subsequent GL work this tick.
+    gl.viewport(0, 0, this.width, this.height);
   }
 
   /**
@@ -1817,12 +2095,35 @@ export class CanvasRenderer {
       // grows/shrinks. Mixing the two would let sizeMult drift the cue's
       // anchor (PGS x is the LEFT edge, so scaling it up shoves the bitmap
       // right of its original centre); keep them separate.
+      //
+      // PGS bitmaps are authored larger than the corresponding text
+      // cue would render at the same player size (BluRay subs target
+      // a reading distance / TV viewing context, not the boxed-in
+      // browser player). 0.85 dials the rendered bitmap down to
+      // visually match the CSS-driven text-subtitle size so toggling
+      // between an SRT and a PGS track doesn't make the line jump in
+      // size. Only the *display* scale shrinks — positions stay on
+      // baseScale, so the cue still lands where the author put it.
+      const IMAGE_SUB_DISPLAY_SHRINK = 0.85;
       const baseScale = Math.min(scaleX, scaleY);
-      const uniformScale = baseScale * userSizeMult;
+      const uniformScale = baseScale * userSizeMult * IMAGE_SUB_DISPLAY_SHRINK;
 
       // Calculate scaled dimensions preserving aspect ratio
       const scaledWidth = cue.image.width * uniformScale;
       const scaledHeight = cue.image.height * uniformScale;
+
+      // The video content is rendered "contain"-fit inside the canvas, so on
+      // an ultrawide window with a 16:9 source the video sits in a centred
+      // band with pillarbox bars on the sides (and vice versa for letterbox).
+      // PGS coordinates live in the 1920x1080 presentation space — i.e.
+      // relative to the video band, not the canvas — so positioned cues
+      // need this offset added to land where the author put them. Without
+      // it, a centred-in-PGS cue gets glued to the canvas's left third on
+      // ultrawide displays.
+      const videoOffsetX =
+        (canvasWidth - subtitleVideoWidth * baseScale) / 2;
+      const videoOffsetY =
+        (canvasHeight - subtitleVideoHeight * baseScale) / 2;
 
       const bottomPadding =
         CanvasRenderer.computeSubtitleBottomPadding(canvasHeight);
@@ -1835,7 +2136,7 @@ export class CanvasRenderer {
       if (cue.position?.x !== undefined) {
         const sourceCentreX =
           (cue.position.x + cue.image.width / 2) * baseScale;
-        x = sourceCentreX - scaledWidth / 2;
+        x = videoOffsetX + sourceCentreX - scaledWidth / 2;
       } else {
         x = (canvasWidth - scaledWidth) / 2;
       }
@@ -1846,7 +2147,7 @@ export class CanvasRenderer {
         // but ensure it doesn't go above top.
         const sourceCentreY =
           (cue.position.y + cue.image.height / 2) * baseScale;
-        y = sourceCentreY - scaledHeight / 2;
+        y = videoOffsetY + sourceCentreY - scaledHeight / 2;
         y = Math.max(0, Math.min(y, canvasHeight - scaledHeight));
       } else {
         // Default: Position at bottom with padding above controls (same as text subtitles)
@@ -2576,6 +2877,17 @@ export class CanvasRenderer {
    */
   getQueueSize(): number {
     return this.frameQueue.length;
+  }
+
+  /**
+   * Timestamp (seconds) of the oldest frame still queued for presentation,
+   * or -1 when the queue is empty. Used at EOF to tell whether the residual
+   * frames are an unpresentable tail (PTS past the audio playout head, which
+   * caps the clock) vs. frames that are still genuinely due.
+   */
+  getHeadFrameTime(): number {
+    if (this.frameQueue.length === 0) return -1;
+    return this.frameQueue[0].timestamp / 1_000_000;
   }
 
   /**

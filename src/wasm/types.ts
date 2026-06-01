@@ -20,6 +20,7 @@ export interface MoviWasmModule {
   HEAPU8: Uint8Array;
   HEAP32: Int32Array;
   HEAPU32: Uint32Array;
+  HEAPF32: Float32Array;
   HEAPF64: Float64Array;
 
   // Memory allocation
@@ -51,6 +52,12 @@ export interface MoviWasmModule {
     infoPtr: number,
   ) => number;
   _movi_get_extradata: (
+    ctx: number,
+    streamIndex: number,
+    buffer: number,
+    bufferSize: number,
+  ) => number;
+  _movi_get_attached_pic_data: (
     ctx: number,
     streamIndex: number,
     buffer: number,
@@ -129,6 +136,21 @@ export interface MoviWasmModule {
   _movi_thumbnail_get_frame_height: (ctx: number) => number;
   _movi_thumbnail_destroy: (ctx: number) => void;
 
+  // Signalsmith Stretch — pitch-preserving time-stretch (sync API).
+  _movi_stretch_new: (channels: number, sampleRate: number) => number;
+  _movi_stretch_delete: (handle: number) => void;
+  _movi_stretch_reset: (handle: number) => void;
+  _movi_stretch_set_transpose_semitones: (handle: number, semitones: number) => void;
+  _movi_stretch_input_latency: (handle: number) => number;
+  _movi_stretch_output_latency: (handle: number) => number;
+  _movi_stretch_process: (
+    handle: number,
+    inPtr: number,
+    inFrames: number,
+    outPtr: number,
+    outFrames: number,
+  ) => void;
+
   // Emscripten utilities
   ccall: (
     name: string,
@@ -168,6 +190,13 @@ export interface StreamInfo {
   colorMatrix: string;
   pixelFormat: string;
   colorRange: string;
+  // True when AV_DISPOSITION_ATTACHED_PIC is set on the stream. Audio
+  // files with embedded cover art (ID3v2 APIC, FLAC PICTURE, MP4 covr,
+  // Matroska attachments) expose a video-codec stream that carries a
+  // single cached picture instead of a real packet stream. Consumers
+  // should skip these when picking the active video track and read the
+  // image via getAttachedPicData() instead.
+  isAttachedPic: boolean;
 }
 
 export interface PacketInfo {
@@ -177,10 +206,20 @@ export interface PacketInfo {
   dts: number;
   duration: number;
   size: number;
+  // True only for a real IDR/BLA random-access keyframe the HW decoder accepts
+  // as a `key` chunk. False for open-GOP CRA sync frames that are flagged as
+  // keyframes but must be sent as `delta` mid-stream (see VideoDecoder). Always
+  // false for non-keyframes.
+  isIdr: boolean;
+  // True for an HEVC RASL leading picture (NAL 8/9). RASL trail a CRA/BLA in
+  // decode order but reference the pre-RAP GOP; orphaned after a random-access
+  // resume, so JS skips them (see VideoDecoder). Always false for keyframes and
+  // non-HEVC codecs.
+  isRasl: boolean;
 }
 
 // StreamInfo struct layout (matches C struct)
-export const STREAM_INFO_SIZE = 336; // Adjusted for pixel format + range
+export const STREAM_INFO_SIZE = 340; // +4 for is_attached_pic (int)
 export const STREAM_INFO_OFFSETS = {
   index: 0,
   type: 4,
@@ -204,10 +243,13 @@ export const STREAM_INFO_OFFSETS = {
   colorMatrix: 240, // 32 bytes
   pixelFormat: 272, // 32 bytes
   colorRange: 304, // 32 bytes
+  isAttachedPic: 336, // 4 bytes (int)
 };
 
-// PacketInfo struct layout
-export const PACKET_INFO_SIZE = 40;
+// PacketInfo struct layout. Contains doubles (8-byte alignment), so the trailing
+// is_idr(36)+is_rasl(40) ints pad the struct from 44 up to 48 bytes — keep this
+// in sync with sizeof(PacketInfo) in movi.h.
+export const PACKET_INFO_SIZE = 48;
 export const PACKET_INFO_OFFSETS = {
   streamIndex: 0,
   keyframe: 4,
@@ -215,4 +257,6 @@ export const PACKET_INFO_OFFSETS = {
   dts: 16, // double
   duration: 24, // double
   size: 32,
+  isIdr: 36, // int — occupies the padding after `size`
+  isRasl: 40, // int
 };

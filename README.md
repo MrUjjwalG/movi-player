@@ -3,7 +3,7 @@
 <img src="docs/images/banner.png" alt="Movi Player" width="100%" />
 
 ### Play any video format directly in the browser.
-##### No transcoding. No server processing. Just `<movi-player src="video.mkv" controls>`.
+##### No transcoding. No server processing. <br /> Just `<movi-player src="video.mkv" controls>`.
 
 [![npm version](https://img.shields.io/npm/v/movi-player.svg?style=flat-square&color=cb3837&logo=npm)](https://www.npmjs.com/package/movi-player)
 [![npm downloads](https://img.shields.io/npm/dm/movi-player.svg?style=flat-square&color=blue)](https://www.npmjs.com/package/movi-player)
@@ -11,7 +11,7 @@
 [![License](https://img.shields.io/badge/license-Apache%202.0-blue.svg?style=flat-square)](LICENSE)
 [![GitHub stars](https://img.shields.io/github/stars/MrUjjwalG/movi-player?style=flat-square&color=yellow&logo=github)](https://github.com/MrUjjwalG/movi-player/stargazers)
 
-**[Documentation](https://mrujjwalg.github.io/movi-player/)** &nbsp;·&nbsp; **[Live Demo](https://movi-player-examples.vercel.app/element.html)** &nbsp;·&nbsp; **[Examples](https://github.com/MrUjjwalG/movi-player-examples)** &nbsp;·&nbsp; **[Changelog](CHANGELOG.md)**
+**[Web App](https://moviplayer.com)** &nbsp;·&nbsp; **[Documentation](https://mrujjwalg.github.io/movi-player/)** &nbsp;·&nbsp; **[Live Demo](https://movi-player-examples.vercel.app/element.html)** &nbsp;·&nbsp; **[Examples](https://github.com/MrUjjwalG/movi-player-examples)** &nbsp;·&nbsp; **[Changelog](CHANGELOG.md)**
 
 ![Movi Player](docs/images/element.gif)
 
@@ -45,11 +45,13 @@
 | No server transcoding | Yes | No | No | No |
 | Canvas rendering (no `<video>`) | Yes | No | No | No |
 | Encrypted playback | Yes | No | No | No |
+| Audio-only mode (cover art + strip UI) | Yes | No | No | No |
 | Built-in subtitle rendering | Yes | Plugin | No | No |
 | Multi-audio track switching | Yes | Plugin | Yes | No |
 | Chapters on progress bar | Yes | Plugin | No | No |
 | Picture-in-Picture | Document PiP | Basic | No | No |
 | DRM (Widevine/FairPlay) | Optional | Plugin | Yes | No |
+| Custom SourceAdapter (any protocol) | Yes | No | No | No |
 | Bundle size | 50-410KB | 500KB+ | 60KB | 25KB |
 
 ## Install
@@ -171,9 +173,9 @@ Use cases: video validators, asset management, HDR detection pipelines, search i
 
 ## Features
 
-**Playback** -- MP4, MKV, WebM, MOV, TS, AVI. H.264, HEVC, VP9, AV1. Hardware decode with software fallback.
+**Playback** -- MP4, MKV, WebM, MOV, TS, AVI. H.264, HEVC, VP9, AV1. Hardware decode with software fallback. Pitch-preserving time-stretch via Signalsmith Stretch.
 
-**Audio** -- AAC, MP3, Opus, FLAC, AC-3, E-AC-3. Multi-track switching. Stable volume (loudness normalization).
+**Audio** -- AAC, MP3, Opus, FLAC, AC-3, E-AC-3. Multi-track switching. Stable volume (loudness normalization). First-class audio-only mode with cover art extraction and a dedicated strip UI. Perceptual (log) volume curve. Muted-autoplay fallback with tap-to-unmute.
 
 **Subtitles** -- SRT, ASS, WebVTT, PGS (image-based), DVB. Multi-track with on-the-fly switching. Per-source delay/offset (`Z` / `X` to nudge ±100ms), full transcript browser with search + click-to-seek, customizable size/color/background/edge (persisted), karaoke-aligned VTT.
 
@@ -200,6 +202,8 @@ Use cases: video validators, asset management, HDR detection pipelines, search i
 **Poster from Timestamp** -- `postertime="10%"` (or `"5"`, `"1:30"`, `"0:01:30"`) generates a native-resolution poster frame from any timestamp. Runs on an isolated thumbnail pipeline, respects rotation metadata, and never paints stale frames after a `src` change.
 
 **Encrypted** -- AES-256-GCM chunked encryption with HMAC-signed token auth. See encrypted-server/.
+
+**Custom SourceAdapter** -- Plug any byte protocol (WebSocket, WebRTC, IndexedDB, custom encryption) directly into the element or player. Same `SourceAdapter` contract works across `<movi-player>`, `MoviPlayer`, and `Demuxer`.
 
 **DRM** -- Optional Widevine/FairPlay for HLS streams via `drm` + `licenseurl` attributes. Uses native `<video>` + EME API.
 
@@ -331,9 +335,9 @@ Videos served over HTTP need:
 
 | Browser | WebCodecs | HDR |
 |---|---|---|
-| Chrome 94+ | Yes | Yes |
-| Edge 94+ | Yes | Yes |
-| Safari 16.4+ | Yes | Yes |
+| Chrome 110+ | Yes | Yes |
+| Edge 110+ | Yes | Yes |
+| Safari 18+ | Yes | Yes |
 | Firefox 130+ | Yes | Limited |
 
 ## Development
@@ -346,6 +350,21 @@ npm run build:wasm    # Requires Docker
 npm run build:ts
 npm run dev
 ```
+
+## AI assistants
+
+[AGENTS.md](./AGENTS.md) is a tour of the architecture, public API, and the
+non-obvious tradeoffs (4K rate cap, ambient-mode cost, `.ts` long-GOP handling,
+audio threshold ↔ AudioContext `latencyHint` coupling, etc.). It's written for
+AI coding assistants — Claude, Cursor, Codex, Copilot — but humans onboarding
+to the codebase will find it useful too.
+
+The file ships inside the npm package as well, so when you install
+`movi-player` you can point your assistant at
+`node_modules/movi-player/AGENTS.md` (most tools either pick it up
+automatically from the workspace or accept it via an `@-mention`). Filename
+follows the [AGENTS.md convention](https://agents.md/) so newer tools that
+auto-discover it work out of the box.
 
 ## License
 

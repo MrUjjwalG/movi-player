@@ -58,6 +58,24 @@ typedef struct {
   double dts;
   double duration;
   int size;
+  // 1 only for a TRUE random-access keyframe the HW decoder will accept as a
+  // `key` chunk: IDR/BLA in HEVC, IDR in H.264, key+no-show-existing in AV1.
+  // 0 for CRA / open-GOP sync frames that AVPacket flags as a keyframe but
+  // whose leading (RASL) pictures reference the previous GOP — sending those
+  // as `key` makes WebCodecs reject them ("wasn't a key frame"). JS sends
+  // is_idr=0 keyframes as `delta` mid-stream so the HW decoder keeps running.
+  // Occupies the 4 bytes the compiler already pads after `size`.
+  int is_idr;
+  // 1 for an HEVC RASL leading picture (NAL type 8=RASL_N / 9=RASL_R). RASL
+  // pictures follow a CRA in decode order but reference the PRE-CRA GOP. When a
+  // CRA is used as a random-access point (post-seek, references flushed) its
+  // RASL pictures are non-decodable and the spec discards them
+  // (NoRaslOutputFlag=1). Chrome's decoder drops them internally; Safari's
+  // VideoToolbox throws a hard EncodingError instead. JS uses this to skip RASL
+  // after resuming on a CRA. Always 0 for keyframes and non-HEVC codecs.
+  // Growing the struct here bumps sizeof(PacketInfo) 40 -> 48 (double alignment
+  // pads the trailing 44 to 48); PACKET_INFO_SIZE in types.ts must match.
+  int is_rasl;
 } PacketInfo;
 
 // Prefetched subtitle cue (populated by movi_prefetch_subtitle_cues).

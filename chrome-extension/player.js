@@ -18,6 +18,9 @@ const playlistCloseBtn = document.getElementById("playlistClose");
 const playlistToggleBtn = document.getElementById("playlistToggle");
 const addFilesBtn = document.getElementById("addFilesBtn");
 const addFolderBtn = document.getElementById("addFolderBtn");
+const nextBtn = document.getElementById("nextBtn");
+const shuffleBtn = document.getElementById("shuffleBtn");
+const autoplayBtn = document.getElementById("autoplayBtn");
 const playlistSearchWrap = document.getElementById("playlistSearchWrap");
 const playlistSearch = document.getElementById("playlistSearch");
 const playlistSearchClear = document.getElementById("playlistSearchClear");
@@ -47,7 +50,29 @@ customElements.whenDefined("movi-player").then(() => {
     const t = playerEl.title;
     if (t) document.title = t + " — Movi Player";
   });
+  // Title typically isn't known at loadeddata — MoviElement auto-loads
+  // it from FFmpeg metadata / Content-Disposition / URL filename after
+  // duration becomes available, then fires `titlechange`. Mirror that
+  // into document.title so the browser tab updates whenever the clean
+  // title resolves (or when an integrator sets the attribute later).
+  playerEl.addEventListener("titlechange", (e) => {
+    const t = e?.detail?.title || playerEl.title;
+    if (t) document.title = t + " — Movi Player";
+  });
+  // Strip-mode layout: tag both the outer shell (centres the strip in
+  // the viewport, swaps the black panel for a neutral surface) and the
+  // inner .player-main (lets it shrink to the strip's natural width
+  // instead of stretching to fill). The classes are toggled together
+  // so we never have a half-applied state.
+  playerEl.addEventListener("audiostripchange", (e) => {
+    const strip = !!e.detail?.strip;
+    document.querySelector(".player-shell")?.classList.toggle("is-audio-strip", strip);
+    document.querySelector(".player-main")?.classList.toggle("is-audio-strip", strip);
+  });
   playerEl.addEventListener("ended", () => {
+    // Loop is on → the element replays the current video itself; don't let
+    // playlist auto-advance steal the end event and jump to the next item.
+    if (playerEl.loop) return;
     if (playlistIndex >= 0) {
       const f = playlist[playlistIndex];
       if (f) {
@@ -56,8 +81,9 @@ customElements.whenDefined("movi-player").then(() => {
         if (playlistItemEls[playlistIndex]) applyItemProgress(playlistItemEls[playlistIndex], f);
       }
     }
-    if (playlist.length && playlistIndex >= 0 && playlistIndex < playlist.length - 1) {
-      playPlaylistItem(playlistIndex + 1);
+    if (autoplayEnabled && playlist.length && playlistIndex >= 0) {
+      const next = getNextIndex();
+      if (next >= 0) playPlaylistItem(next);
     }
   });
   playerEl.addEventListener("timeupdate", () => {
@@ -78,8 +104,15 @@ customElements.whenDefined("movi-player").then(() => {
 });
 
 // ─── Helpers ──────────────────────────────────────────────
-const VIDEO_EXT_RE = /\.(mp4|mkv|webm|mov|avi|ts|m3u8|flv|m4v|ogv|wmv|m2ts|mts|3gp|mpg|mpeg)$/i;
-const isVideoFile = (f) => (f.type && f.type.startsWith("video/")) || VIDEO_EXT_RE.test(f.name || "");
+// Video + audio extensions. The audio set is what's already decodable by the
+// shipped FFmpeg WASM build (see docker/build-ffmpeg.sh — aac/mp3/opus/vorbis/
+// flac/ac3/eac3/dca/truehd/mlp/pcm + ogg/flac/wav/mp3/aac/ac3/eac3/mov/m4a
+// demuxers). Adding more here without first enabling the corresponding decoder
+// in the build would just produce a "no audio track" error at open time.
+const MEDIA_EXT_RE = /\.(mp4|mkv|webm|mov|avi|ts|m3u8|flv|m4v|ogv|wmv|m2ts|mts|evo|3gp|mpg|mpeg|mp3|m4a|m4b|aac|flac|wav|wave|ogg|oga|opus|ac3|ec3|eac3|mka|dts)$/i;
+const isVideoFile = (f) =>
+  (f.type && (f.type.startsWith("video/") || f.type.startsWith("audio/"))) ||
+  MEDIA_EXT_RE.test(f.name || "");
 const naturalCompare = (a, b) => a.localeCompare(b, undefined, { numeric: true, sensitivity: "base" });
 
 // Sort playlist entries in tree DFS order with folders-first at every depth.
@@ -255,6 +288,70 @@ let playlist = [];
 let playlistIndex = -1;
 let currentFile = null;
 const playlistItemEls = [];
+
+// Shuffle: when on, auto-advance follows a random permutation of indices
+// instead of sequential order. shuffleOrder holds the permutation; the
+// currently playing index's position in it determines what plays next.
+let shuffleEnabled = false;
+let shuffleOrder = [];
+
+function rebuildShuffleOrder() {
+  // Fisher–Yates over all indices, with the current item moved to the front
+  // so "next" starts from wherever we are rather than jumping immediately.
+  const order = playlist.map((_, i) => i);
+  for (let i = order.length - 1; i > 0; i--) {
+    const j = Math.floor(Math.random() * (i + 1));
+    [order[i], order[j]] = [order[j], order[i]];
+  }
+  if (playlistIndex >= 0) {
+    const at = order.indexOf(playlistIndex);
+    if (at > 0) [order[0], order[at]] = [order[at], order[0]];
+  }
+  shuffleOrder = order;
+}
+
+// Index that auto-advance (ended) should play after the current one, or -1
+// when the playlist/shuffle run is exhausted.
+function getNextIndex() {
+  if (shuffleEnabled) {
+    if (!shuffleOrder.length) return -1;
+    const pos = shuffleOrder.indexOf(playlistIndex);
+    const next = pos + 1;
+    return next < shuffleOrder.length ? shuffleOrder[next] : -1;
+  }
+  return playlistIndex < playlist.length - 1 ? playlistIndex + 1 : -1;
+}
+
+function setShuffle(on) {
+  shuffleEnabled = on;
+  shuffleBtn.setAttribute("aria-pressed", on ? "true" : "false");
+  if (on) rebuildShuffleOrder();
+  try { localStorage.setItem("movi-shuffle", on ? "1" : "0"); } catch {}
+}
+// Next: explicit user action — plays the next item (shuffle-aware) even when
+// the autoplay toggle is off.
+nextBtn.addEventListener("click", () => {
+  if (!playlist.length || playlistIndex < 0) return;
+  const next = getNextIndex();
+  if (next >= 0) playPlaylistItem(next, { forcePlay: true });
+});
+shuffleBtn.addEventListener("click", () => setShuffle(!shuffleEnabled));
+try { if (localStorage.getItem("movi-shuffle") === "1") setShuffle(true); } catch {}
+
+// Autoplay: when on, the next item plays automatically once the current one
+// ends. Defaults to on so existing auto-advance behaviour is preserved.
+let autoplayEnabled = true;
+function setAutoplay(on) {
+  autoplayEnabled = on;
+  autoplayBtn.setAttribute("aria-checked", on ? "true" : "false");
+  // Keep the element attribute in sync so its own autoplay path doesn't
+  // start playback when the toggle is off.
+  if (on) playerEl.setAttribute("autoplay", "");
+  else playerEl.removeAttribute("autoplay");
+  try { localStorage.setItem("movi-autoplay", on ? "1" : "0"); } catch {}
+}
+autoplayBtn.addEventListener("click", () => setAutoplay(!autoplayEnabled));
+try { setAutoplay(localStorage.getItem("movi-autoplay") !== "0"); } catch { setAutoplay(true); }
 const fileMeta = new Map();
 const metaQueue = [];
 let metaProcessing = false;
@@ -265,6 +362,9 @@ function loadFile(file) {
   document.title = file.name + " — Movi Player";
   if (playerEl.setFile) playerEl.setFile(file);
   else playerEl.src = file;
+  // Opening a single file always autoplays — the playlist toggle only governs
+  // playlist click + auto-advance, not a direct file open.
+  playerEl.play?.().catch(() => {});
 }
 
 function showPlaylist() {
@@ -413,6 +513,7 @@ function setPlaylist(files, { rootName } = {}) {
     playlistSearch.value = "";
     applySearchFilter();
   }
+  if (shuffleEnabled) rebuildShuffleOrder();
   playPlaylistItem(0);
 }
 
@@ -432,6 +533,7 @@ function appendToPlaylist(files) {
     showPlaylist();
   }
   renderPlaylist();
+  if (shuffleEnabled) rebuildShuffleOrder();
   if (wasEmpty) playPlaylistItem(0);
 }
 
@@ -480,7 +582,7 @@ function moveHighlight(delta) {
   setHighlightedIndex(visible[cursor]);
 }
 
-function playPlaylistItem(i) {
+function playPlaylistItem(i, { forcePlay = false } = {}) {
   if (i < 0 || i >= playlist.length) return;
   const file = playlist[i];
   if (!file) return;
@@ -494,7 +596,7 @@ function playPlaylistItem(i) {
   playerEl.setAttribute("postertime", "10%");
   if (playerEl.setFile) playerEl.setFile(file);
   else playerEl.src = file;
-  playerEl.play?.().catch(() => {});
+  if (autoplayEnabled || forcePlay) playerEl.play?.().catch(() => {});
   updateActiveItem(i);
 }
 
@@ -1086,12 +1188,18 @@ function walkEntry(entry, path, out) {
   return new Promise((resolve) => {
     if (entry.isFile) {
       entry.file((file) => {
-        try {
-          Object.defineProperty(file, "webkitRelativePath", {
-            value: path + entry.name,
-            configurable: true,
-          });
-        } catch {}
+        // Only tag a relative path when the file came from inside a dropped
+        // folder (path is non-empty). A bare top-level file must keep an empty
+        // webkitRelativePath so the drop handler loads it directly instead of
+        // mistaking it for a folder member and building a 1-item playlist.
+        if (path) {
+          try {
+            Object.defineProperty(file, "webkitRelativePath", {
+              value: path + entry.name,
+              configurable: true,
+            });
+          } catch {}
+        }
         out.push(file);
         resolve();
       }, () => resolve());

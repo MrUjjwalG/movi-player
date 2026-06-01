@@ -176,15 +176,18 @@ int movi_seek_to(MoviContext *ctx, double timestamp, int stream_index,
     ret = av_seek_frame(ctx->fmt_ctx, -1, seek_target, seek_flags);
   }
 
-  // After seek, flush again and reset position tracking
-  // This ensures FFmpeg's internal buffers are cleared and position is synced
-  // For large files, this prevents FFmpeg from reading sequentially from old
-  // position For Matroska/WebM, this helps with resync after seek
+  // After seek, clear stale EOF state.
+  //
+  // Do NOT avio_flush() here. On a *read* context, avio_flush() discards the
+  // AVIO buffer WITHOUT rewinding s->pos (see FFmpeg aviobuf.c: seekback is
+  // forced to 0 for read). After avformat_seek_file, the raw-audio demuxer has
+  // already read ahead to resync to the next sync frame; that data lives in the
+  // AVIO buffer waiting to be parsed into the first post-seek packets. Flushing
+  // it throws the read-ahead away, so the stream silently jumps forward by the
+  // buffered amount and hits EOF early — duration appears to shrink and seeks
+  // near the end of audio-only (eac3/ac3/mp3) files end prematurely. Indexed
+  // video seeks don't trip this because they don't do byte-estimate resync.
   if (ret >= 0) {
-    if (ctx->avio_ctx) {
-      avio_flush(ctx->avio_ctx);
-    }
-
     // CRITICAL: Clear AVIO eof_reached flag after successful seek.
     // Without this, a prior EOF (e.g. from poster-frame reads reaching end
     // of a short file) causes av_read_frame to immediately return EOF even
@@ -213,20 +216,127 @@ int movi_seek_to(MoviContext *ctx, double timestamp, int stream_index,
           avio_seek(ctx->fmt_ctx->pb, current_pos, SEEK_SET);
         }
       }
-    } else {
-      // For other formats, just sync position
-      // IMPORTANT: Use int64_t for position to handle files >= 2GB
-      if (ctx->fmt_ctx->pb) {
-        int64_t current_pos = avio_tell(ctx->fmt_ctx->pb);
-        ctx->position = current_pos;
-      }
     }
+    // For non-Matroska formats, do NOT overwrite ctx->position here.
+    // ctx->position is the source-side *physical* read cursor; FFmpeg already
+    // keeps it in sync via avio_seek_callback / avio_read_callback during the
+    // seek. avio_tell() returns the *logical consume* position, which trails
+    // the physical cursor by whatever the demuxer read ahead to resync to the
+    // next sync frame (raw eac3/ac3/mp3 etc.). Clobbering the cursor with that
+    // smaller value makes the source replay buffered bytes and hit EOF early
+    // by ~the read-ahead amount — duration appears to shrink near the end.
   }
 
   return ret;
 }
 
-EMSCRIPTEN_KEEPALIVE
+// Find the first VCL slice NAL in a (possibly multi-NAL) packet and return its
+// raw nal_unit_type — HEVC: (byte0 >> 1) & 0x3F (VCL = 0..31); H.264: byte0 &
+// 0x1F (VCL = 1..5). Returns -1 if no VCL slice is found, the packet is too
+// small, or the codec isn't H.264/HEVC.
+//
+// CRITICAL: a packet is NOT just one NAL. In MKV/MP4 a keyframe is typically
+// [AUD][VPS][SPS][PPS][SEI…][slice…]. Reading only the first NAL (an AUD/PS)
+// always misclassifies — we must walk every NAL and inspect the first VCL one.
+// Packets may be Annex B (00 00 01 start codes) or length-prefixed (4-byte
+// big-endian, hvcC/avcC). We detect which by probing for a leading start code.
+static int movi_first_vcl_nal_type(enum AVCodecID codec_id, const uint8_t *data,
+                                   int size) {
+  if (!data || size < 5)
+    return -1; // too small to inspect
+
+  if (codec_id != AV_CODEC_ID_HEVC && codec_id != AV_CODEC_ID_H264)
+    return -1; // only H.264/HEVC carry the NAL types we classify
+
+  // Detect format: Annex B if the packet starts with a 3- or 4-byte start code.
+  int is_annexb = (data[0] == 0 && data[1] == 0 &&
+                   (data[2] == 1 || (data[2] == 0 && data[3] == 1)));
+
+  int i = 0;
+  if (is_annexb) {
+    // Walk NAL units delimited by 00 00 01 / 00 00 00 01 start codes.
+    while (i + 3 < size) {
+      // Find next start code.
+      if (data[i] == 0 && data[i + 1] == 0 && data[i + 2] == 1) {
+        int nal_off = i + 3;
+        if (nal_off >= size)
+          break;
+        int hdr = data[nal_off];
+        int t = (codec_id == AV_CODEC_ID_HEVC) ? ((hdr >> 1) & 0x3F)
+                                               : (hdr & 0x1F);
+        int is_vcl = (codec_id == AV_CODEC_ID_HEVC) ? (t >= 0 && t <= 31)
+                                                    : (t >= 1 && t <= 5);
+        if (is_vcl)
+          return t; // first VCL slice decides
+        i = nal_off + 1;
+      } else {
+        i++;
+      }
+    }
+  } else {
+    // Length-prefixed (4-byte big-endian length before each NAL).
+    while (i + 4 < size) {
+      uint32_t nal_len = ((uint32_t)data[i] << 24) | ((uint32_t)data[i + 1] << 16) |
+                         ((uint32_t)data[i + 2] << 8) | (uint32_t)data[i + 3];
+      int nal_off = i + 4;
+      if (nal_len == 0 || nal_off >= size)
+        break;
+      int hdr = data[nal_off];
+      int t = (codec_id == AV_CODEC_ID_HEVC) ? ((hdr >> 1) & 0x3F)
+                                             : (hdr & 0x1F);
+      int is_vcl = (codec_id == AV_CODEC_ID_HEVC) ? (t >= 0 && t <= 31)
+                                                  : (t >= 1 && t <= 5);
+      if (is_vcl)
+        return t;
+      i = nal_off + (int)nal_len; // advance past this NAL
+    }
+  }
+
+  return -1; // no VCL slice found
+}
+
+// Classify whether a keyframe packet is a TRUE random-access point that a
+// hardware WebCodecs decoder will accept as a `key` chunk.
+//
+// FFmpeg flags both closed-GOP IDR and open-GOP CRA pictures as AV_PKT_FLAG_KEY,
+// but WebCodecs rejects a CRA sent as `key` ("wasn't a key frame") because its
+// leading RASL pictures reference the previous GOP. We tell them apart by the
+// first VCL slice NAL type:
+//   HEVC: 19/20 = IDR, 16-18 = BLA (true RAP). 21 = CRA (open-GOP) — not a key.
+//   H.264: 5 = IDR (true key).
+//
+// Returns 1 if the keyframe is a true IDR/BLA random-access point, 0 otherwise.
+// Falls back to 1 (safe default: assume true key) when no VCL slice is found or
+// the codec isn't H.264/HEVC, so we never wedge waiting for an IDR we failed to
+// recognize.
+static int movi_packet_is_idr(enum AVCodecID codec_id, const uint8_t *data,
+                              int size) {
+  if (codec_id != AV_CODEC_ID_HEVC && codec_id != AV_CODEC_ID_H264)
+    return 1; // other codecs: honor container keyframe flag
+
+  int t = movi_first_vcl_nal_type(codec_id, data, size);
+  if (t < 0)
+    return 1; // too small / no VCL slice — assume true key (safe default)
+
+  if (codec_id == AV_CODEC_ID_HEVC)
+    return (t == 19 || t == 20 || t == 16 || t == 17 || t == 18) ? 1 : 0;
+  return (t == 5) ? 1 : 0; // H.264 IDR
+}
+
+// Classify whether a packet is an HEVC RASL leading picture (NAL type 8=RASL_N
+// / 9=RASL_R). RASL pictures trail a CRA in decode order but reference the
+// pre-CRA GOP; when the CRA is a random-access resume (references flushed) they
+// are orphaned and must be discarded (NoRaslOutputFlag=1). Chrome drops them
+// internally; Safari/VideoToolbox throws a hard EncodingError — so JS skips
+// them after a CRA resume. HEVC only; 0 for every other codec and NAL type.
+static int movi_packet_is_rasl(enum AVCodecID codec_id, const uint8_t *data,
+                               int size) {
+  if (codec_id != AV_CODEC_ID_HEVC)
+    return 0;
+  int t = movi_first_vcl_nal_type(codec_id, data, size);
+  return (t == 8 || t == 9) ? 1 : 0;
+}
+
 int movi_read_frame(MoviContext *ctx, PacketInfo *info, uint8_t *buffer,
                     int buffer_size) {
   if (!ctx || !ctx->fmt_ctx || !ctx->pkt || !info || !buffer)
@@ -241,7 +351,23 @@ int movi_read_frame(MoviContext *ctx, PacketInfo *info, uint8_t *buffer,
   AVStream *stream = ctx->fmt_ctx->streams[ctx->pkt->stream_index];
   info->stream_index = ctx->pkt->stream_index;
   info->keyframe = (ctx->pkt->flags & AV_PKT_FLAG_KEY) != 0;
-  info->size = ctx->pkt->size;
+  // Distinguish true IDR/BLA random-access keyframes from open-GOP CRA frames
+  // so JS can send CRA as `delta` and keep the hardware decoder running. Only
+  // meaningful for keyframes; non-keyframes carry is_idr = 0.
+  if (info->keyframe)
+    info->is_idr =
+        movi_packet_is_idr(stream->codecpar->codec_id, ctx->pkt->data,
+                           ctx->pkt->size);
+  else
+    info->is_idr = 0;
+  // Flag HEVC RASL leading pictures so JS can drop the orphaned ones after a
+  // CRA/BLA random-access resume (Safari hard-errors on them). Keyframes are
+  // never RASL; non-HEVC codecs always carry is_rasl = 0.
+  info->is_rasl =
+      info->keyframe
+          ? 0
+          : movi_packet_is_rasl(stream->codecpar->codec_id, ctx->pkt->data,
+                                ctx->pkt->size);
   if (ctx->pkt->pts != AV_NOPTS_VALUE)
     info->timestamp = ctx->pkt->pts * av_q2d(stream->time_base);
   else if (ctx->pkt->dts != AV_NOPTS_VALUE)
@@ -261,12 +387,39 @@ int movi_read_frame(MoviContext *ctx, PacketInfo *info, uint8_t *buffer,
   else
     info->duration = 0.0;
 
-  int copy_size = ctx->pkt->size;
+  // AV1 Temporal Delimiter prepend: MP4/ISOBMFF stores one temporal unit per
+  // sample and strips the Temporal Delimiter OBU, but the WebCodecs low-overhead
+  // bitstream format (per the AV1 codec registration / ISOBMFF binding) expects
+  // each chunk to be a complete temporal unit. Prepend a TD OBU (0x12 0x00 =
+  // type TEMPORAL_DELIMITER, has_size=1, payload size 0) when the packet doesn't
+  // already start with one, so every chunk is a well-formed temporal unit.
+  // NOTE: this is for spec-compliant packaging; it does NOT cure the separate,
+  // non-deterministic HW-decoder crash on bare show_existing_frame OBUs (~3-byte
+  // re-display frames) — that originates inside Chrome's AV1 decoder and still
+  // recovers via decoder recreate. Harmless to keep: all frames decode with it.
+  int td_prepend = 0;
+  if (stream->codecpar->codec_id == AV_CODEC_ID_AV1 && ctx->pkt->size >= 1) {
+    int obu_type = (ctx->pkt->data[0] >> 3) & 0x0f;
+    if (obu_type != 2) // 2 = OBU_TEMPORAL_DELIMITER; only add if missing
+      td_prepend = 1;
+  }
+
+  int copy_size = ctx->pkt->size + (td_prepend ? 2 : 0);
   if (copy_size > buffer_size) {
     // Log error or return specific code to signal buffer too small
     return AVERROR(ENOBUFS);
   }
-  memcpy(buffer, ctx->pkt->data, copy_size);
+  if (td_prepend) {
+    buffer[0] = 0x12; // TD OBU header: obu_type=2, obu_has_size_field=1
+    buffer[1] = 0x00; // leb128 payload size = 0
+    memcpy(buffer + 2, ctx->pkt->data, ctx->pkt->size);
+  } else {
+    memcpy(buffer, ctx->pkt->data, ctx->pkt->size);
+  }
+  // info->size must reflect the actual emitted byte count (incl. any prepended
+  // TD), because JS slices the packet buffer by info->size — not by this
+  // return value.
+  info->size = copy_size;
   return copy_size;
 }
 
