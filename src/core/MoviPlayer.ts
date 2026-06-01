@@ -343,33 +343,24 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
         // Note: Decoder now has built-in recovery, only pauses after MAX_ERRORS
       });
 
-      // When the decoder enters its "skip non-keyframes until next IDR"
-      // recovery during normal playback (typically Open-GOP IDR rejection on
-      // .ts files), the video presentation freezes silently while audio keeps
-      // running — visible as 1-2s of "audio plays, video frozen" then sync
-      // catches up with a jump. Flip into buffering instead so the clock /
-      // audio pause until the decoder reconnects; the existing buffering
-      // recovery path resumes once a real keyframe lands. Suppress during
-      // seeks — the seek pipeline already manages keyframe-wait.
+      // When the decoder enters its "skip non-keyframes until next IDR" recovery
+      // during normal playback (decode-error recreate, e.g. high-bitrate 1080p
+      // H.264 whose HW decoder throws an EncodingError on an IDR), we deliberately
+      // do NOT flip into buffering. Per request: the clock and audio keep running
+      // and the video simply holds its last frame until the next keyframe lands
+      // (~1 GOP), then A/V sync catches the video up with a jump. The stall
+      // detector is already suppressed across this window via
+      // videoDecoder.isRecentlyRecovering(), so the empty video queue here is not
+      // mistaken for a stall. Seeks are handled by the seek pipeline (suppressed
+      // here via the state/sync guard).
       this.videoDecoder.onKeyframeWaitChange = (waiting) => {
         const state = this.stateManager.getState();
         if (state === "seeking" || this.waitingForVideoSync) return;
-        if (waiting) {
-          if (state === "playing") {
-            Logger.debug(TAG, "Decoder waiting for keyframe mid-playback — entering buffering");
-            this.wasPlayingBeforeRebuffer = true;
-            this.stateManager.setState("buffering");
-            this.clock.pause();
-            if (!this.disableAudio) this.audioRenderer.pause();
-          }
-        } else {
-          if (state === "buffering" && this.wasPlayingBeforeRebuffer) {
-            Logger.debug(TAG, "Decoder recovered — resuming from buffering");
-            this.wasPlayingBeforeRebuffer = false;
-            this.stateManager.setState("playing");
-            this.clock.start();
-            if (!this.disableAudio) this.audioRenderer.play();
-          }
+        if (waiting && state === "playing") {
+          Logger.debug(
+            TAG,
+            "Decoder waiting for keyframe mid-playback — staying in playing (audio/clock continue, video holds until next keyframe)",
+          );
         }
       };
     }
