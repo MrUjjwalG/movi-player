@@ -7,6 +7,45 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.2.4] - 2026-06-02
+
+### Added
+- **Signalsmith Stretch audio rate-change pipeline**: Replaced SoundTouch with Signalsmith Stretch as the sole pitch-preserving time-stretcher.
+- **First-class audio-only support with strip UI**: Audio-only files play through the canvas pipeline with a dedicated audio strip UI (cover art, title, progress bar, controls).
+- **Muted-autoplay fallback with tap-to-unmute**: When autoplay is blocked, the player starts muted and shows an "unmute" pill overlay.
+- **Cover art display for audio**: JS-only album art extraction via an isolated demuxer context.
+- **Custom `SourceAdapter` for `<movi-player>` and `MoviPlayer` (closes #7)**: Plug any custom byte protocol directly into the element or player.
+- **File-source preload settling gate**: `play()` and resume gated until initial preload fills.
+- **YouTube-style centre play button**: Always-visible large play/pause icon.
+- **Unified controls chrome — dark gradient bar + redesigned OSD**: Opaque backgrounds replace backdrop-filter blurs.
+- **Extension: playlist shuffle, autoplay toggle, next button**
+- **Extension: hover-probe links + opt-in toggle + flag detection**
+- **Compare page (`/compare`)**: Side-by-side native vs movi-player.
+- **VS Code extension — URL streaming, multi-window commands, Activity Bar entry**
+- **Homepage redesign**
+
+### Changed
+- **4K playback rate cap raised to 2x** (only 8K+ capped at 1.5x)
+- **Renderer queue split for 4K vs 8K**
+- **UI update loop throttled to 4Hz**
+- **Volume slider uses perceptual (log) gain curve**
+- **Ambient mode FBO mirror** (no more full canvas readback)
+- **Thumbnail hover latency cut**
+- **Dropped backdrop-filter blur from all UI surfaces**
+- **README redesigned**, browser support updated (Firefox 130+)
+- **AGENTS.md shipped in package**
+
+### Fixed
+- **Decode**: RASL leading pictures after CRA/BLA seek, DoVi/HDR HEVC on hardware, open-GOP HEVC fallback, tiny packet drop, AV1 Temporal Delimiter OBU
+- **Seek**: prefer IDR fall back to CRA, resume into buffering on timeout
+- **Playback**: mid-playback decode-error recovery, auto-start on rate restore, rapid seeks stuck, stall detection during recovery, audio tail on rate change, EOF detection
+- **Audio**: log gain curve, pitch-shift at startup, audio-only shortcuts, near-end seek clipping
+- **UI**: controls flash, play/pause icon state, centre play flickering, cursor hiding, loop toggle replay
+- **Canvas**: display-p3 fallback, rec2100-pq preservation
+- **Thumbnail**: recreate dead WebCodecs decoder
+- **Extension**: video link detection, loop replays
+- **HTTP**: surface server errors
+
 ## [0.2.3] - 2026-05-07
 
 ### Added
