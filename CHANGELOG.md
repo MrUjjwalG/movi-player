@@ -7,7 +7,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-## [0.2.4] - 2026-06-02
+## [0.3.0] - 2026-06-02
 
 ### Added
 - **Signalsmith Stretch audio rate-change pipeline**: Replaced SoundTouch with Signalsmith Stretch as the sole pitch-preserving time-stretcher. Compiled to WASM via `wasm/movi_stretch.cpp`. Delivers clean pitch-preserved playback at non-1x rates without the phase artifacts that SoundTouch exhibited on speech and complex music. Includes eager pre-warm so the first rate change doesn't glitch.
