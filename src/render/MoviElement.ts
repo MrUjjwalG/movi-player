@@ -6671,6 +6671,19 @@ export class MoviElement extends HTMLElement {
       });
   }
 
+  /**
+   * True when an actual media source is loaded (plain src, a caller-supplied
+   * SourceAdapter, or the encrypted video URL). Used to gate the controls
+   * auto-hide — in the empty "No Video" state we keep the bar pinned.
+   */
+  private hasMediaSource(): boolean {
+    return (
+      !!this._src ||
+      !!this._sourceAdapter ||
+      (this._encrypted && !!this._videoUrl)
+    );
+  }
+
   private showControls(): void {
     if (!this._controls) return;
     const container = this.controlsContainer;
@@ -6813,16 +6826,22 @@ export class MoviElement extends HTMLElement {
     }
 
     // Auto-hide whenever the player isn't "actively held open":
-    // 1. Not dragging the scrubber
-    // 2. Mouse is NOT over the controls bar
-    // 3. No menu (speed / audio / subtitle / quality) is open
+    // 1. There IS a media source loaded
+    // 2. Not dragging the scrubber
+    // 3. Mouse is NOT over the controls bar
+    // 4. No menu (speed / audio / subtitle / quality) is open
     //
     // Previously this only fired during `playing`, which left the
     // bar stuck on screen indefinitely after a pause + cursor-away.
     // YouTube hides the bar on pause too once you stop interacting,
     // so we match that — the player will only stay open while the
     // user is actually hovering / scrubbing / has a menu out.
+    //
+    // The source gate keeps the bar pinned in the empty "No Video"
+    // state — with nothing loaded there's nothing to interact with,
+    // so hiding the controls would just look broken.
     if (
+      this.hasMediaSource() &&
       !this.isOverControls &&
       !this.isDragging &&
       !this.isTouchDragging &&
@@ -11379,6 +11398,17 @@ export class MoviElement extends HTMLElement {
         box-sizing: border-box;
         opacity: 0;
         animation: movi-fade-in 0.4s ease forwards;
+        /* Animate the re-centering when the controls bar shows/hides, so the
+           placeholder glides up/down in sync with the bar instead of jumping. */
+        transition: padding-bottom var(--movi-transition-normal);
+      }
+
+      /* No controls bar at the bottom (controls disabled, or auto-hidden) —
+         drop the reserved bottom space so the placeholder centers truly.
+         Mirrors the .movi-loading-indicator re-centering above. */
+      :host:has(.movi-controls-container.movi-controls-hidden) .movi-empty-state,
+      :host(:not([controls])) .movi-empty-state {
+        padding-bottom: 40px;
       }
 
       /* Short / narrow players: shrink the placeholder so it fits above
@@ -11386,6 +11416,10 @@ export class MoviElement extends HTMLElement {
       @container movi-host (max-width: 720px) {
         .movi-empty-state {
           padding: 16px 16px calc(var(--movi-controls-height) + 12px);
+        }
+        :host:has(.movi-controls-container.movi-controls-hidden) .movi-empty-state,
+        :host(:not([controls])) .movi-empty-state {
+          padding-bottom: 16px;
         }
         .movi-empty-container {
           gap: 8px !important;
@@ -12677,7 +12711,7 @@ export class MoviElement extends HTMLElement {
 
           // Show/hide empty state indicator based on src
           if (this.emptyStateIndicator) {
-            if (!this._src && !this.player) {
+            if (!this._src && !this.player && !this._isUnsupported) {
               this.emptyStateIndicator.style.display = "flex";
             } else {
               this.emptyStateIndicator.style.display = "none";
@@ -14728,6 +14762,13 @@ export class MoviElement extends HTMLElement {
       if (this.brokenIndicator) {
         this.brokenIndicator.style.display = "flex";
 
+        // Hide the empty-state placeholder so it doesn't render behind the
+        // error overlay — both default to visible with no src, which stacks
+        // the "No Video" text under "Security Headers Missing".
+        if (this.emptyStateIndicator) {
+          this.emptyStateIndicator.style.display = "none";
+        }
+
         const titleEl =
           this.brokenIndicator.querySelector(".movi-broken-title");
         if (titleEl) titleEl.textContent = "Security Headers Missing";
@@ -15249,7 +15290,7 @@ export class MoviElement extends HTMLElement {
         this.removeAttribute("src");
         this._src = null;
         // Show empty state when src is cleared
-        if (this.emptyStateIndicator && !this.player) {
+        if (this.emptyStateIndicator && !this.player && !this._isUnsupported) {
           this.emptyStateIndicator.style.display = "flex";
         }
       }
