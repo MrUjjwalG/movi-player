@@ -6684,6 +6684,22 @@ export class MoviElement extends HTMLElement {
     );
   }
 
+  /**
+   * Mirror "is the controls bar currently taking up bottom space?" onto a
+   * plain host class so the empty-state placeholder can re-center reliably.
+   * The old approach keyed off `:host:has(.movi-controls-hidden)` /
+   * `:host(:not([controls]))`, but `:has()` is flaky in Safari/Firefox (and
+   * an unsupported selector in a comma list drops the WHOLE rule), which left
+   * the "No Video" text stuck off-center there. `:host(.movi-bar-collapsed)`
+   * is universally supported, so the centering works in every browser.
+   */
+  private syncBarCollapsedClass(): void {
+    const collapsed =
+      !this._controls ||
+      !!this.controlsContainer?.classList.contains("movi-controls-hidden");
+    this.classList.toggle("movi-bar-collapsed", collapsed);
+  }
+
   private showControls(): void {
     if (!this._controls) return;
     const container = this.controlsContainer;
@@ -6744,6 +6760,7 @@ export class MoviElement extends HTMLElement {
     if (container) {
       container.classList.add("movi-controls-visible");
       container.classList.remove("movi-controls-hidden");
+      this.syncBarCollapsedClass();
 
       // Restore cursor — clear the inline `none` on the host so the
       // CSS-driven cursor (default on the visible-controls path)
@@ -7135,6 +7152,7 @@ export class MoviElement extends HTMLElement {
     if (container) {
       container.classList.remove("movi-controls-visible");
       container.classList.add("movi-controls-hidden");
+      this.syncBarCollapsedClass();
 
       // Hide cursor. Setting the host element's inline cursor is the
       // single most reliable signal — the :has-based CSS rule below
@@ -7224,6 +7242,7 @@ export class MoviElement extends HTMLElement {
       container.style.display = "none";
       if (centerPlayPause) centerPlayPause.classList.remove("movi-center-visible");
     }
+    this.syncBarCollapsedClass();
   }
 
   private startUIUpdates(): void {
@@ -11405,9 +11424,9 @@ export class MoviElement extends HTMLElement {
 
       /* No controls bar at the bottom (controls disabled, or auto-hidden) —
          drop the reserved bottom space so the placeholder centers truly.
-         Mirrors the .movi-loading-indicator re-centering above. */
-      :host:has(.movi-controls-container.movi-controls-hidden) .movi-empty-state,
-      :host(:not([controls])) .movi-empty-state {
+         Driven by the JS-toggled .movi-bar-collapsed host class rather than
+         :has()/:host(:not(...)), which are flaky in Safari/Firefox. */
+      :host(.movi-bar-collapsed) .movi-empty-state {
         padding-bottom: 40px;
       }
 
@@ -11417,8 +11436,7 @@ export class MoviElement extends HTMLElement {
         .movi-empty-state {
           padding: 16px 16px calc(var(--movi-controls-height) + 12px);
         }
-        :host:has(.movi-controls-container.movi-controls-hidden) .movi-empty-state,
-        :host(:not([controls])) .movi-empty-state {
+        :host(.movi-bar-collapsed) .movi-empty-state {
           padding-bottom: 16px;
         }
         .movi-empty-container {
