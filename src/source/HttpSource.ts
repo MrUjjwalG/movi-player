@@ -302,49 +302,93 @@ export class HttpSource implements SourceAdapter {
       throw new Error(`HTTP ${response.status}`);
     }
 
-    const contentLength = response.headers.get("Content-Length");
-    if (!contentLength) throw new Error("Content-Length missing");
+    // Read the download filename off the HEAD response before any early
+    // return below.
+    this.setFilenameFromDisposition(response.headers.get("Content-Disposition"));
 
-    // Extract filename from Content-Disposition header (e.g., "attachment; filename=\"video.mp4\"")
-    const disposition = response.headers.get("Content-Disposition");
-    if (disposition) {
-      // Try filename*= (RFC 5987 encoded) first, then filename=.
-      // Per RFC 5987 the value after `UTF-8''` should be percent-encoded
-      // (so spaces become %20), but some CDNs (fsl-buckets.life seen in
-      // the wild) ship the filename with raw spaces. The old `[^;\s]+`
-      // greedy was stopping at the first space — capturing only "The"
-      // from "The Super Mario ...mkv". Capture up to `;` or end-of-string
-      // and trim, so both compliant and lazy servers work.
-      let filenameMatch = disposition.match(/filename\*\s*=\s*(?:UTF-8''|utf-8'')([^;]+)/i);
-      if (filenameMatch) {
-        try {
-          this._contentDispositionFilename = decodeURIComponent(filenameMatch[1].trim());
-        } catch {
-          this._contentDispositionFilename = filenameMatch[1].trim();
-        }
-      }
-      if (!this._contentDispositionFilename) {
-        // Try quoted filename first (allows spaces inside quotes)
-        filenameMatch = disposition.match(/filename\s*=\s*"([^"]+)"/i);
-        if (!filenameMatch) {
-          // Unquoted: capture everything until semicolon or end, then trim
-          filenameMatch = disposition.match(/filename\s*=\s*([^;]+)/i);
-        }
-        if (filenameMatch) {
-          const raw = filenameMatch[1].trim();
-          try {
-            this._contentDispositionFilename = decodeURIComponent(raw);
-          } catch {
-            this._contentDispositionFilename = raw;
-          }
-        }
-      }
-      if (this._contentDispositionFilename) {
-        Logger.debug(TAG, `Content-Disposition filename: ${this._contentDispositionFilename}`);
+    const contentLength = response.headers.get("Content-Length");
+    if (contentLength) return parseInt(contentLength, 10);
+
+    // Cloudflare (and some other CDNs) strip Content-Length from null-body
+    // HEAD responses, so a HEAD that's otherwise 200 OK can arrive with no
+    // size — which used to hard-fail here. Recover it from a 1-byte ranged
+    // GET: the 206's Content-Range ("bytes 0-0/<total>") carries the full
+    // length and survives because that response has a real body.
+    const sizeViaRange = await this.resolveSizeViaRange();
+    if (sizeViaRange !== null) return sizeViaRange;
+
+    throw new Error("Content-Length missing");
+  }
+
+  /**
+   * Recover the total file size from a 1-byte ranged GET when HEAD didn't
+   * carry Content-Length. Reads the total out of Content-Range; returns null
+   * if the server gives us nothing usable. The body is cancelled immediately —
+   * we only want headers, and a server that ignores Range would otherwise
+   * start streaming the whole file.
+   */
+  protected async resolveSizeViaRange(): Promise<number | null> {
+    let res: Response;
+    try {
+      res = await fetch(this.url, {
+        method: "GET",
+        headers: await this.buildRequestHeaders({ offset: 0, length: 1 }),
+      });
+    } catch {
+      return null;
+    }
+    res.body?.cancel().catch(() => {});
+    if (!res.ok && res.status !== 206) return null;
+
+    const contentRange = res.headers.get("Content-Range");
+    if (contentRange) {
+      // "bytes 0-0/12345678" — capture the total after the slash (skip "*").
+      const m = /\/\s*(\d+)\s*$/.exec(contentRange);
+      if (m) return parseInt(m[1], 10);
+    }
+    // Server ignored Range and answered 200, but still reported a length.
+    const cl = res.headers.get("Content-Length");
+    if (res.status === 200 && cl) return parseInt(cl, 10);
+    return null;
+  }
+
+  /** Pull a download filename out of a Content-Disposition header, if present. */
+  private setFilenameFromDisposition(disposition: string | null): void {
+    if (!disposition) return;
+    // Try filename*= (RFC 5987 encoded) first, then filename=.
+    // Per RFC 5987 the value after `UTF-8''` should be percent-encoded
+    // (so spaces become %20), but some CDNs (fsl-buckets.life seen in
+    // the wild) ship the filename with raw spaces. The old `[^;\s]+`
+    // greedy was stopping at the first space — capturing only "The"
+    // from "The Super Mario ...mkv". Capture up to `;` or end-of-string
+    // and trim, so both compliant and lazy servers work.
+    let filenameMatch = disposition.match(/filename\*\s*=\s*(?:UTF-8''|utf-8'')([^;]+)/i);
+    if (filenameMatch) {
+      try {
+        this._contentDispositionFilename = decodeURIComponent(filenameMatch[1].trim());
+      } catch {
+        this._contentDispositionFilename = filenameMatch[1].trim();
       }
     }
-
-    return parseInt(contentLength, 10);
+    if (!this._contentDispositionFilename) {
+      // Try quoted filename first (allows spaces inside quotes)
+      filenameMatch = disposition.match(/filename\s*=\s*"([^"]+)"/i);
+      if (!filenameMatch) {
+        // Unquoted: capture everything until semicolon or end, then trim
+        filenameMatch = disposition.match(/filename\s*=\s*([^;]+)/i);
+      }
+      if (filenameMatch) {
+        const raw = filenameMatch[1].trim();
+        try {
+          this._contentDispositionFilename = decodeURIComponent(raw);
+        } catch {
+          this._contentDispositionFilename = raw;
+        }
+      }
+    }
+    if (this._contentDispositionFilename) {
+      Logger.debug(TAG, `Content-Disposition filename: ${this._contentDispositionFilename}`);
+    }
   }
 
   /**

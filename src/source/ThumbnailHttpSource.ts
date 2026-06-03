@@ -71,12 +71,46 @@ export class ThumbnailHttpSource implements SourceAdapter {
     if (!response.ok) throw new Error(`HTTP ${response.status}`);
 
     const contentLength = response.headers.get("Content-Length");
-    if (!contentLength) throw new Error("Content-Length missing");
-
-    this.size = parseInt(contentLength, 10);
+    if (contentLength) {
+      this.size = parseInt(contentLength, 10);
+    } else {
+      // Cloudflare (and some CDNs) strip Content-Length from null-body HEAD
+      // responses — recover the total from a 1-byte ranged GET's Content-Range.
+      // Mirrors HttpSource.resolveSizeViaRange.
+      const viaRange = await this.resolveSizeViaRange();
+      if (viaRange === null) throw new Error("Content-Length missing");
+      this.size = viaRange;
+    }
     Logger.debug(TAG, `File size: ${this.size} bytes`);
 
     return this.size;
+  }
+
+  /**
+   * Recover total size from a 1-byte ranged GET when HEAD lacks Content-Length.
+   * Body is cancelled immediately — we only need the Content-Range header.
+   */
+  private async resolveSizeViaRange(): Promise<number | null> {
+    let res: Response;
+    try {
+      res = await fetch(this.url, {
+        method: "GET",
+        headers: { ...this.headers, Range: "bytes=0-0" },
+      });
+    } catch {
+      return null;
+    }
+    res.body?.cancel().catch(() => {});
+    if (!res.ok && res.status !== 206) return null;
+
+    const contentRange = res.headers.get("Content-Range");
+    if (contentRange) {
+      const m = /\/\s*(\d+)\s*$/.exec(contentRange);
+      if (m) return parseInt(m[1], 10);
+    }
+    const cl = res.headers.get("Content-Length");
+    if (res.status === 200 && cl) return parseInt(cl, 10);
+    return null;
   }
 
   /**
