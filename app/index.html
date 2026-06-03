@@ -3730,7 +3730,16 @@
       });
 
       // --- URL Loading (via proxy for CORS bypass) ---
-      const proxyUrl = (url) => `/proxy?url=${encodeURIComponent(url)}`;
+      // Same-origin URLs (e.g. our own /samples/* served from R2) must NOT go
+      // through /proxy — that would make the worker fetch its own zone, which
+      // Cloudflare routes to a non-existent origin and times out with a 522.
+      // They have no CORS problem anyway, so load them directly.
+      const proxyUrl = (url) => {
+        try {
+          if (new URL(url, location.href).origin === location.origin) return url;
+        } catch { /* not a parseable URL — fall through to proxy */ }
+        return `/proxy?url=${encodeURIComponent(url)}`;
+      };
 
       // ── Turnstile session gate (optional) ──────────────────────────
       // Injected from env.TURNSTILE_SITE_KEY at request time. If empty

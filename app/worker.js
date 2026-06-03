@@ -328,7 +328,7 @@ export default {
 
     // --- Video proxy ---
     if (path === "/proxy") {
-      return handleProxy(request, url);
+      return handleProxy(request, url, env);
     }
 
     // --- Encrypted-playback proxy (auth headers + POST + no cache) ---
@@ -683,7 +683,7 @@ async function preflightSignatureCheck(targetUrl) {
   return { ok: false, reason: "network" };
 }
 
-async function handleProxy(request, url) {
+async function handleProxy(request, url, env) {
   if (!isAllowedProxyReferer(request)) {
     return jsonResponse({ error: "Referer not allowed" }, 403);
   }
@@ -699,6 +699,17 @@ async function handleProxy(request, url) {
     parsed = new URL(targetUrl);
   } catch {
     return jsonResponse({ error: "Invalid URL" }, 400);
+  }
+
+  // Same-origin target → never self-fetch. A fetch() back to our own zone is
+  // routed by Cloudflare to a (non-existent) origin and times out with a 522.
+  // These URLs have no CORS problem anyway: serve /samples/* straight from R2,
+  // and redirect any other same-origin path to itself so it re-enters routing.
+  if (parsed.origin === url.origin) {
+    if (env?.ASSETS && parsed.pathname.startsWith("/samples/")) {
+      return handleR2Sample(env, parsed.pathname.slice(1), request);
+    }
+    return Response.redirect(parsed.toString(), 302);
   }
 
   // Block private/local IPs (SSRF protection)
