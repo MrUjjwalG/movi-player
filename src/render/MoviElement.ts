@@ -5055,15 +5055,16 @@ export class MoviElement extends HTMLElement {
 
     if (!qualityList || !qualityBtn || !qualityContainer) return;
 
-    // Only show quality menu for HLS streams (URLs ending in .m3u8)
-    // Local files or single-file URLs should not show quality selection
-    const isHLS =
+    // Only show the quality menu for adaptive streams (HLS .m3u8 / DASH .mpd).
+    // Local files or single-file URLs should not show quality selection.
+    const isAdaptive =
       typeof this._src === "string" &&
-      (this._src.includes(".m3u8") || this._src.toLowerCase().endsWith("m3u8"));
+      (this._src.toLowerCase().includes(".m3u8") ||
+        this._src.toLowerCase().includes(".mpd"));
 
     // Pre-muxed multi-quality path: build a virtual track list from the
-    // declarative <source> tags so the picker works without HLS.
-    if (!isHLS && this._videoQualities.length > 1) {
+    // declarative <source> tags so the picker works without an adaptive stream.
+    if (!isAdaptive && this._videoQualities.length > 1) {
       this.renderPremuxedQualityMenu(
         qualityList,
         qualityContainer,
@@ -5071,7 +5072,7 @@ export class MoviElement extends HTMLElement {
       return;
     }
 
-    if (!isHLS) {
+    if (!isAdaptive) {
       qualityContainer.style.display = "none";
       return;
     }
@@ -5159,10 +5160,17 @@ export class MoviElement extends HTMLElement {
     let activeWidth = (activeTrack as any)?.width || 0;
     if (!activeHeight && activeTrack?.id === -1) {
       try {
-        const hls = (this.player as any).hlsWrapper?.hls
-        const hlsLevel = hls?.levels?.[hls?.currentLevel];
-        activeHeight = hlsLevel?.height || 0;
-        activeWidth = hlsLevel?.width || 0;
+        const hls = (this.player as any).hlsWrapper?.hls;
+        if (hls) {
+          const hlsLevel = hls?.levels?.[hls?.currentLevel];
+          activeHeight = hlsLevel?.height || 0;
+          activeWidth = hlsLevel?.width || 0;
+        } else {
+          // DASH Auto: read the currently-rendered representation.
+          const rep = (this.player as any).dashWrapper?.dash?.getCurrentRepresentationForType?.("video");
+          activeHeight = rep?.height || 0;
+          activeWidth = rep?.width || 0;
+        }
       } catch {}
     }
     this._updateQualityBtnBadge(this._heightBadge(activeHeight, activeWidth));
@@ -13093,7 +13101,17 @@ export class MoviElement extends HTMLElement {
     //     player to a native-<audio>-style 56px control strip. Cover art
     //     needs the full surface to paint, so strip layout is suppressed
     //     when a bitmap is present (audio-mode still hides the controls).
-    const audioMode = !hasVideoTrack && hasAudio;
+    // A failed load has NO tracks, so hasVideoTrack is always false and the
+    // audio renderer (built at construction) makes hasAudibleSource() read true
+    // — which wrongly flags a failed VIDEO/manifest as audio and, on the next
+    // resize, collapses it to the 56px strip. In the error state there are no
+    // tracks to trust, so decide from the src's own media type instead: a real
+    // audio file stays a strip, a failed video/manifest shows full-size.
+    const errored = this.player?.getState?.() === "error" || this._isUnsupported;
+    const srcIsAudio =
+      typeof this._src === "string" &&
+      this.guessMediaType(this._src).startsWith("audio/");
+    const audioMode = errored ? srcIsAudio : !hasVideoTrack && hasAudio;
     // VLC-like: if the source HAS an attached-picture track and previews are
     // on, cover art is on its way — hold the strip layout off until extraction
     // settles (_coverArtResolved) so we don't flash the 56px strip and then
@@ -13501,12 +13519,14 @@ export class MoviElement extends HTMLElement {
         }));
       }
 
-      // DRM mode: use native video element for HLS (EME requires <video>)
+      // DRM mode: use the native video element for adaptive streams (EME
+      // requires <video>) — applies to HLS (.m3u8) and DASH (.mpd) alike.
       const isDrm = this.hasAttribute("drm");
-      const isHLS = typeof this._src === "string" &&
-        (this._src.includes(".m3u8") || this._src.toLowerCase().endsWith("m3u8"));
+      const isAdaptiveStream = typeof this._src === "string" &&
+        (this._src.toLowerCase().includes(".m3u8") ||
+          this._src.toLowerCase().includes(".mpd"));
 
-      if (isDrm && isHLS) {
+      if (isDrm && isAdaptiveStream) {
         playerConfig.renderer = "video";
         playerConfig.drm = true;
         playerConfig.licenseUrl = this.getAttribute("licenseurl") || "";

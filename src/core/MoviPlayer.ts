@@ -39,6 +39,7 @@ import { AudioRenderer } from "../render/AudioRenderer";
 import { updateAllBindingsLogLevel, ThumbnailBindings } from "../wasm/bindings";
 import { loadWasmModuleNew } from "../wasm/FFmpegLoader";
 import { HLSPlayerWrapper } from "../render/HLSPlayerWrapper";
+import { DASHPlayerWrapper } from "../render/DASHPlayerWrapper";
 import { ThumbnailRenderer } from "../utils/ThumbnailRenderer";
 
 const TAG = "MoviPlayer";
@@ -118,8 +119,14 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
   // pseudo-stream; null for plain video files or audio without artwork.
   private coverArt: ImageBitmap | null = null;
 
-  // HLS Wrapper
+  // Adaptive-streaming wrappers (HLS via hls.js, DASH via dash.js). At most one
+  // is active for a given source; streamWrapper resolves whichever it is so the
+  // delegation throughout the player stays format-agnostic.
   private hlsWrapper: HLSPlayerWrapper | null = null;
+  private dashWrapper: DASHPlayerWrapper | null = null;
+  private get streamWrapper(): HLSPlayerWrapper | DASHPlayerWrapper | null {
+    return this.hlsWrapper ?? this.dashWrapper;
+  }
 
   // Preview pipeline (C-based FFmpeg software decoding)
   private thumbnailBindings: ThumbnailBindings | null = null;
@@ -514,19 +521,30 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
     // Clean up any existing preview pipeline
     this.destroyPreviewPipeline();
 
-    // Check for HLS — only when caller used SourceConfig. A custom
-    // SourceAdapter bypasses URL/HLS detection entirely.
+    // Adaptive streaming — only when the caller used SourceConfig (a custom
+    // SourceAdapter bypasses URL detection entirely). HLS (.m3u8) → hls.js,
+    // DASH (.mpd) → dash.js. Both wrappers expose the same surface, so the
+    // wiring below is shared.
     const src = this.config.source;
-    if (
-      !this.config.sourceAdapter &&
-      src &&
-      src.type === "url" &&
-      src.url &&
-      (src.url.includes(".m3u8") || src.url.toLowerCase().endsWith("m3u8"))
-    ) {
-      Logger.info(TAG, "Detected HLS stream, switching to HLSPlayerWrapper");
+    const streamUrl =
+      !this.config.sourceAdapter && src && src.type === "url" && src.url
+        ? src.url
+        : null;
+    const lowerUrl = streamUrl?.toLowerCase() ?? "";
+    const isHls = !!streamUrl && lowerUrl.includes(".m3u8");
+    const isDash = !!streamUrl && lowerUrl.includes(".mpd");
 
-      this.hlsWrapper = new HLSPlayerWrapper(this.config);
+    if (isHls || isDash) {
+      const wrapper = isHls
+        ? new HLSPlayerWrapper(this.config)
+        : new DASHPlayerWrapper(this.config);
+      if (isHls) {
+        this.hlsWrapper = wrapper as HLSPlayerWrapper;
+        Logger.info(TAG, "Detected HLS stream, switching to HLSPlayerWrapper");
+      } else {
+        this.dashWrapper = wrapper as DASHPlayerWrapper;
+        Logger.info(TAG, "Detected DASH stream, switching to DASHPlayerWrapper");
+      }
 
       // Proxy events
       const events = [
@@ -546,26 +564,22 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
 
       events.forEach((evt) => {
         // @ts-ignore
-        this.hlsWrapper.on(evt, (arg) => this.emit(evt, arg));
+        wrapper.on(evt, (arg) => this.emit(evt, arg));
       });
 
-      // Special handling for tracks to integrate with TrackManager?
-      // HLSWrapper has its own TrackManager. We might need to expose it or sync it.
-      // For now, let's swap the trackManager so external API calls work naturally.
-      // Sync tracks from HLS wrapper to main track manager
-      this.hlsWrapper.trackManager.on("tracksChange", (tracks) => {
+      // The wrapper has its own TrackManager — mirror its tracks onto the main
+      // one and forward quality selection back to it.
+      wrapper.trackManager.on("tracksChange", (tracks) => {
         this.trackManager.setTracks(tracks);
       });
-
-      // Forward track selection from main track manager to HLS wrapper
       this.trackManager.on("videoTrackChange", (track) => {
-        if (this.hlsWrapper) {
-          this.hlsWrapper.selectVideoTrack(track ? track.id : -1);
+        if (this.streamWrapper) {
+          this.streamWrapper.selectVideoTrack(track ? track.id : -1);
         }
       });
 
       try {
-        await this.hlsWrapper.load();
+        await wrapper.load();
         this.stateManager.setState("ready"); // Sync local state manager just in case
         return;
       } catch (e) {
@@ -959,8 +973,8 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
    * Start playback
    */
   async play(): Promise<void> {
-    if (this.hlsWrapper) {
-      return this.hlsWrapper.play();
+    if (this.streamWrapper) {
+      return this.streamWrapper.play();
     }
 
     // Stop pause-time buffering — we're resuming active playback
@@ -1190,8 +1204,8 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
    * Pause playback
    */
   pause(): void {
-    if (this.hlsWrapper) {
-      this.hlsWrapper.pause();
+    if (this.streamWrapper) {
+      this.streamWrapper.pause();
       return;
     }
 
@@ -2356,8 +2370,8 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
     seconds: number,
     opts?: { suppressSpinner?: boolean; preservePlaying?: boolean },
   ): Promise<void> {
-    if (this.hlsWrapper) {
-      return this.hlsWrapper.seek(seconds);
+    if (this.streamWrapper) {
+      return this.streamWrapper.seek(seconds);
     }
     // A genuine user seek (no opt) clears any leftover suppression so its
     // spinner shows; play()-initiated seeks pass suppressSpinner to hide it.
@@ -2602,7 +2616,7 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
    */
   async getPreviewFrame(time: number): Promise<Blob | null> {
     if (!this.previewsAllowed()) return null; // Disabled, or source too large for a 2nd WASM context
-    if (this.hlsWrapper) return null; // Previews not supported for HLS
+    if (this.streamWrapper) return null; // Previews not supported for HLS
     if (this.previewInitGaveUp) return null; // Init failed repeatedly — stop retrying (and re-loading WASM)
     if (this.isPreviewGenerating) return null; // Busy
     // Audio-only sources have no video track to thumbnail. Bail early
@@ -3375,8 +3389,8 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
    * Get current playback time
    */
   getCurrentTime(): number {
-    if (this.hlsWrapper) {
-      return this.hlsWrapper.getCurrentTime();
+    if (this.streamWrapper) {
+      return this.streamWrapper.getCurrentTime();
     }
     // Subtract seekKeyframeOffset so the timeline reports the user-requested
     // time after a seek instead of where the decoder actually landed (which
@@ -3398,7 +3412,7 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
    * re-seeks the demuxer to 0 itself). Pure time-math; touches no media state.
    */
   resetClockToStartForPoster(): void {
-    if (this.hlsWrapper) return; // HLS owns its own timeline
+    if (this.streamWrapper) return; // HLS owns its own timeline
     this.clock.seek(this.startTime); // paused → pausedTime = startTime
     this.seekKeyframeOffset = 0; // so getCurrentTime() === 0
     this.seekTargetTime = -1; // clear any lingering pre-target frame-drop filter
@@ -3417,8 +3431,8 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
    * Get duration
    */
   getDuration(): number {
-    if (this.hlsWrapper) {
-      return this.hlsWrapper.getDuration();
+    if (this.streamWrapper) {
+      return this.streamWrapper.getDuration();
     }
     return this.mediaInfo?.duration ?? 0;
   }
@@ -3480,8 +3494,8 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
    * Get current state
    */
   getState(): PlayerState {
-    if (this.hlsWrapper) {
-      return this.hlsWrapper.getState();
+    if (this.streamWrapper) {
+      return this.streamWrapper.getState();
     }
     return this.stateManager.getState();
   }
@@ -3551,7 +3565,7 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
    * Get HLS video element (DRM mode) for direct DOM insertion
    */
   getHLSVideoElement(): HTMLVideoElement | null {
-    return this.hlsWrapper?.getVideoElement() ?? null;
+    return this.streamWrapper?.getVideoElement() ?? null;
   }
 
 
@@ -3563,8 +3577,8 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
   }
 
   resizeCanvas(width: number, height: number): void {
-    if (this.hlsWrapper) {
-      this.hlsWrapper.resizeCanvas(width, height);
+    if (this.streamWrapper) {
+      this.streamWrapper.resizeCanvas(width, height);
     }
     if (this.videoRenderer) {
       this.videoRenderer.resize(width, height);
@@ -3639,8 +3653,8 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
   }
 
   setFitMode(mode: "contain" | "cover" | "fill" | "zoom" | "control"): void {
-    if (this.hlsWrapper) {
-      this.hlsWrapper.setFitMode(mode);
+    if (this.streamWrapper) {
+      this.streamWrapper.setFitMode(mode);
     }
     if (this.videoRenderer) {
       this.videoRenderer.setFitMode(mode);
@@ -3657,8 +3671,8 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
    * Set playback rate
    */
   setPlaybackRate(rate: number): void {
-    if (this.hlsWrapper) {
-      this.hlsWrapper.setPlaybackRate(rate);
+    if (this.streamWrapper) {
+      this.streamWrapper.setPlaybackRate(rate);
     }
 
     const savedTime = this.getCurrentTime();
@@ -3885,7 +3899,7 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
     return (
       this.trackManager.getAudioTracks().length > 0 ||
       this.hasNativeAudio() ||
-      this.hlsWrapper !== null
+      this.streamWrapper !== null
     );
   }
 
@@ -4019,8 +4033,8 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
    * Get playback rate
    */
   getPlaybackRate(): number {
-    if (this.hlsWrapper) {
-      return this.hlsWrapper.getPlaybackRate();
+    if (this.streamWrapper) {
+      return this.streamWrapper.getPlaybackRate();
     }
     return this.clock.getPlaybackRate();
   }
@@ -4192,8 +4206,8 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
    * Set volume (0-1)
    */
   setVolume(volume: number): void {
-    if (this.hlsWrapper) {
-      this.hlsWrapper.setVolume(volume);
+    if (this.streamWrapper) {
+      this.streamWrapper.setVolume(volume);
     }
     this.audioRenderer.setVolume(volume);
     if (this.nativeAudioEl) {
@@ -4205,8 +4219,8 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
    * Get volume (0-1)
    */
   getVolume(): number {
-    if (this.hlsWrapper) {
-      return this.hlsWrapper.getVolume();
+    if (this.streamWrapper) {
+      return this.streamWrapper.getVolume();
     }
     return this.audioRenderer.getVolume();
   }
@@ -4218,8 +4232,8 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
     if (this.muted === muted) return; // No change
 
     this.muted = muted;
-    if (this.hlsWrapper) {
-      this.hlsWrapper.setMuted(muted);
+    if (this.streamWrapper) {
+      this.streamWrapper.setMuted(muted);
       return;
     }
 
@@ -4265,8 +4279,8 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
    */
   getStats(): Record<string, string | number | boolean> {
     // HLS mode: delegate to HLS wrapper
-    if (this.hlsWrapper) {
-      return this.hlsWrapper.getStats();
+    if (this.streamWrapper) {
+      return this.streamWrapper.getStats();
     }
 
     const mediaInfo = this.mediaInfo;
@@ -4401,8 +4415,8 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
    */
   getNetworkSpeed(): number {
     // HLS mode: delegate to HLS wrapper
-    if (this.hlsWrapper) {
-      return this.hlsWrapper.getNetworkSpeed();
+    if (this.streamWrapper) {
+      return this.streamWrapper.getNetworkSpeed();
     }
     // EncryptedHttpSource extends HttpSource, so the HttpSource branch
     // covers encrypted playback too.
@@ -4419,7 +4433,7 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
    * Check if source is a local file
    */
   isFileSource(): boolean {
-    if (this.hlsWrapper) return false;
+    if (this.streamWrapper) return false;
     return this.source instanceof FileSource;
   }
 
@@ -4442,7 +4456,7 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
    * muted playback + a "Tap to unmute" pill.
    */
   isAudioBlockedSuspended(): boolean {
-    if (this.disableAudio || this.hlsWrapper) return false;
+    if (this.disableAudio || this.streamWrapper) return false;
     return this.audioRenderer.isBlockedSuspended();
   }
 
@@ -4879,8 +4893,8 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
    * Returns the furthest time position that has been buffered
    */
   getBufferedTime(): number {
-    if (this.hlsWrapper) {
-      return this.hlsWrapper.getBufferEndTime();
+    if (this.streamWrapper) {
+      return this.streamWrapper.getBufferEndTime();
     }
 
     if (!this.mediaInfo || !this.source) {
@@ -5182,10 +5196,11 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
     this.stopBackgroundTimer();
     this.stopPauseBuffering();
 
-    // Destroy HLS wrapper
-    if (this.hlsWrapper) {
-      this.hlsWrapper.destroy();
+    // Destroy the adaptive-streaming wrapper (HLS or DASH)
+    if (this.streamWrapper) {
+      this.streamWrapper.destroy();
       this.hlsWrapper = null;
+      this.dashWrapper = null;
     }
 
     this.pendingPrebufferPackets = [];
