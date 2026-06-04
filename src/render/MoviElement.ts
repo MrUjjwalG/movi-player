@@ -195,6 +195,10 @@ export class MoviElement extends HTMLElement {
     "contain"; // Configuration mode
   private _currentFit: "contain" | "cover" | "fill" | "zoom" = "contain"; // Actual fit being applied
   private _thumb: boolean = false;
+  // True once the source falls back to linear (forward-only) playback: server
+  // has no Range support and the file is too big to cache whole. Hides the
+  // timeline and disables seeking + thumbnails.
+  private _linearMode: boolean = false;
   private _hdr: boolean = true; // HDR enabled by default
   private _theme: "dark" | "light" = "dark"; // Default theme
   private _sw: DecoderType = "auto"; // Preferred decoder mode (auto or software)
@@ -1555,7 +1559,18 @@ export class MoviElement extends HTMLElement {
         }
       }
 
-      if (this._thumb) {
+      // In linear (non-range) playback only frames inside the buffered RAM
+      // window can be previewed. Outside it the thumbnailer either fails
+      // (behind — bytes discarded) or clamps to the last buffered keyframe and
+      // returns a STALE frame (ahead — not yet downloaded). Suppress the
+      // preview there so a wrong/old thumbnail never shows.
+      const previewInWindow =
+        !this._linearMode ||
+        !this.player ||
+        (time >= (this.player.getBufferStartTime?.() ?? 0) &&
+          time <= (this.player.getBufferEndTime?.() ?? duration));
+
+      if (this._thumb && previewInWindow) {
         requestPreview(time);
       } else {
         if (thumbnailImg) thumbnailImg.style.display = "none";
@@ -1764,13 +1779,18 @@ export class MoviElement extends HTMLElement {
       // matchMedia is reliable across browsers; pointerType on click events is
       // not (Android Chrome can synthesize click with pointerType="mouse" from
       // a touch tap, which previously fell through to mute on the first tap).
+      // But hybrid / emulated devices can report hover-capable even when the
+      // tap is genuinely touch, so also honour the recent-touchstart signal the
+      // rest of the player uses — otherwise the first tap mutes instead of
+      // opening the slider.
       const noHover = window.matchMedia("(hover: none)").matches;
+      const fromTouch = noHover || Date.now() - this.lastTouchTime < 1000;
       const volumeContainer = shadowRoot.querySelector(
         ".movi-volume-container",
       ) as HTMLElement | null;
 
       // Touch / mobile: first tap opens the slider, second tap mutes.
-      if (noHover && volumeContainer) {
+      if (fromTouch && volumeContainer) {
         if (!volumeContainer.classList.contains("active")) {
           volumeContainer.classList.add("active");
 
@@ -2378,7 +2398,8 @@ export class MoviElement extends HTMLElement {
     const duration = this.duration;
     if (duration <= 0) return;
 
-    const time = percent * duration;
+    // Linear mode: clamp the seek target to the buffered RAM window.
+    const time = this.clampToBufferedWindow(percent * duration);
     const wasPlaying = state === "playing";
 
     this.isSeeking = true;
@@ -2446,7 +2467,8 @@ export class MoviElement extends HTMLElement {
     const duration = this.duration;
     if (duration <= 0) return;
 
-    const time = percent * duration;
+    // Linear mode: clamp the seek target to the buffered RAM window.
+    const time = this.clampToBufferedWindow(percent * duration);
     const wasPlaying = state === "playing";
 
     this.isSeeking = true;
@@ -2505,7 +2527,8 @@ export class MoviElement extends HTMLElement {
         return;
       }
 
-      // If double tap is disabled, handle as single tap immediately (simple toggle)
+      // If double tap is disabled, handle as single tap immediately (simple
+      // toggle). In linear mode the skip seek clamps to the buffered window.
       if (!this._doubleTap) {
         if (tapTimer) clearTimeout(tapTimer);
         tapTimer = null;
@@ -2942,7 +2965,8 @@ export class MoviElement extends HTMLElement {
         }
         case "ArrowLeft":
           // Left Arrow: Seek backward 5 seconds or single frame (if Ctrl)
-          // Only enabled if fastseek is true
+          // Only enabled if fastseek is true. In linear mode the seek clamps to
+          // the buffered RAM window.
           if (!this._fastSeek) break;
 
           e.preventDefault();
@@ -2965,7 +2989,8 @@ export class MoviElement extends HTMLElement {
           break;
         case "ArrowRight":
           // Right Arrow: Seek forward 5 seconds or single frame (if Ctrl)
-          // Only enabled if fastseek is true
+          // Only enabled if fastseek is true. In linear mode the seek clamps to
+          // the buffered RAM window.
           if (!this._fastSeek) break;
 
           e.preventDefault();
@@ -6685,6 +6710,45 @@ export class MoviElement extends HTMLElement {
   }
 
   /**
+   * Switch the UI into linear (forward-only) playback: the source has no Range
+   * support and is too big to cache, so seeking is impossible. Hide the
+   * timeline and disable seek + thumbnail previews via the `movi-linear` host
+   * class. Idempotent — safe to call from both the event and the loadEnd
+   * backstop.
+   */
+  /**
+   * In linear (non-seekable-source) playback only the bytes currently in the
+   * RAM window are reachable, so clamp any seek target to the buffered time
+   * range [bufferStart, bufferEnd]. A small margin keeps the (approximate,
+   * linear byte→time) clamp safely inside the window so the keyframe for the
+   * target is actually present. Returns the time unchanged when not linear.
+   */
+  private clampToBufferedWindow(time: number): number {
+    if (!this._linearMode || !this.player) return time;
+    // Backward edge: getSeekableStartTime already bakes in a byte safety margin
+    // so the seek's keyframe lands inside the window (the linear time→byte
+    // estimate alone is too optimistic — GOP + VBR push the keyframe lower).
+    const lo = this.player.getSeekableStartTime?.()
+      ?? (this.player.getBufferStartTime?.() ?? 0);
+    const end = this.player.getBufferEndTime?.() ?? this.duration;
+    if (!(end > lo)) return time;
+    const hi = Math.max(lo, end - Math.max(1, (end - lo) * 0.02));
+    return Math.min(hi, Math.max(lo, time));
+  }
+
+  private enterLinearMode(): void {
+    if (this._linearMode) return;
+    this._linearMode = true;
+    this.classList.add("movi-linear");
+    // If the seek-dependent timeline strip happens to be open, close it — it
+    // can't generate frames without random access.
+    const panel = this.shadowRoot?.querySelector(
+      ".movi-timeline-panel",
+    ) as HTMLElement | null;
+    if (panel && panel.style.display !== "none") panel.style.display = "none";
+  }
+
+  /**
    * Mirror "is the controls bar currently taking up bottom space?" onto a
    * plain host class so the empty-state placeholder can re-center reliably.
    * The old approach keyed off `:host:has(.movi-controls-hidden)` /
@@ -7068,6 +7132,8 @@ export class MoviElement extends HTMLElement {
    * tracks where the playhead is *headed* even mid-seek.
    */
   private performRelativeSeek(direction: "left" | "right", step = 10): void {
+    // In linear mode the currentTime setter clamps the target to the buffered
+    // RAM window, so skipping stays within what's seekable.
     const now = Date.now();
     const continuing =
       this.lastSeekSide === direction &&
@@ -7153,6 +7219,13 @@ export class MoviElement extends HTMLElement {
       container.classList.remove("movi-controls-visible");
       container.classList.add("movi-controls-hidden");
       this.syncBarCollapsedClass();
+
+      // Collapse the touch-expanded volume slider along with the bar — leaving
+      // it open over a hidden bar looks orphaned.
+      const volumeContainer = this.shadowRoot?.querySelector(
+        ".movi-volume-container",
+      ) as HTMLElement | null;
+      volumeContainer?.classList.remove("active");
 
       // Hide cursor. Setting the host element's inline cursor is the
       // single most reliable signal — the :has-based CSS rule below
@@ -11857,6 +11930,13 @@ export class MoviElement extends HTMLElement {
         order: 2 !important;
         flex: 0 0 auto !important;
       }
+      /* Linear playback (no Range support, over-cap file): the scrubber and
+         skip buttons stay — seeking is allowed but clamped in JS to the
+         buffered RAM window. Only the timeline *strip* (thumbnail grid across
+         the whole file) is dropped, since it needs full random access. */
+      :host(.movi-linear) .movi-context-menu-item[data-action="timeline"] {
+        display: none !important;
+      }
       /* Keep the right-side cluster visible but trim it to controls that
          actually apply to audio playback. Subtitles, HDR, quality, PiP,
          fullscreen, and rotation are video-only — hiding the buttons
@@ -13903,6 +13983,9 @@ export class MoviElement extends HTMLElement {
       // is async, so the strip may flip OFF later when the coverart
       // event lands — updateCoverArtOverlay handles both transitions.
       this.updateCoverArtOverlay();
+      // Backstop for the "linearmode" event in case it fired before this
+      // listener was wired (detection happens during the demux open).
+      if (this.player?.isLinearPlayback?.()) this.enterLinearMode();
       this.dispatchEvent(new Event("loadeddata"));
     };
     this.player.on("loadEnd", loadEndHandler);
@@ -13931,6 +14014,14 @@ export class MoviElement extends HTMLElement {
     this.player.on("preloadcomplete", preloadCompleteHandler);
     this.eventHandlers.set("preloadcomplete", () =>
       this.player?.off("preloadcomplete", preloadCompleteHandler),
+    );
+
+    // Source fell back to linear (non-seekable) playback — drop the timeline,
+    // seeking and thumbnails.
+    const linearModeHandler = () => this.enterLinearMode();
+    this.player.on("linearmode", linearModeHandler);
+    this.eventHandlers.set("linearmode", () =>
+      this.player?.off("linearmode", linearModeHandler),
     );
 
     const timeUpdateHandler = (time: number) => {
@@ -14074,6 +14165,9 @@ export class MoviElement extends HTMLElement {
     this._isUnsupported = false;
     this.isLoading = false;
     if (this.brokenIndicator) this.brokenIndicator.style.display = "none";
+    // A fresh source may well support Range — clear any linear-mode lock.
+    this._linearMode = false;
+    this.classList.remove("movi-linear");
 
     // Show empty state if no src after player cleanup
     if (!this._src && this.emptyStateIndicator) {
@@ -14550,9 +14644,18 @@ export class MoviElement extends HTMLElement {
           ? 0
           : this.player.getBufferEndTime();
         if (bufferEnd > 0) {
+          // In linear mode the RAM window has a moving start (older bytes are
+          // dropped), so draw the buffer bar as [bufferStart, bufferEnd] — the
+          // actual window of bytes held in memory. (Seeks clamp to a slightly
+          // inset seekableStart, but showing the true window reads better — no
+          // gap between the playhead and the buffered segment.) Otherwise from 0.
+          const bufferStart = this._linearMode
+            ? Math.max(0, this.player.getBufferStartTime?.() ?? 0)
+            : 0;
+          const startPercent = Math.min(100, (bufferStart / this.duration) * 100);
           const endPercent = Math.min(100, (bufferEnd / this.duration) * 100);
-          progressBuffer.style.left = "0%";
-          progressBuffer.style.width = `${endPercent}%`;
+          progressBuffer.style.left = `${startPercent}%`;
+          progressBuffer.style.width = `${Math.max(0, endPercent - startPercent)}%`;
         } else {
           progressBuffer.style.width = "0%";
         }
@@ -14985,34 +15088,32 @@ export class MoviElement extends HTMLElement {
   }
 
   private startAmbientColorSampling(): void {
-    if (this._ambientRafId !== null) return;
     // Bail when the player isn't built yet — connectedCallback runs
-    // updateAmbientMode() before initializePlayer() creates the
-    // player, and that pre-init call would otherwise set up an
-    // rAF loop that runs against a missing renderer (no mirror to
-    // enable, sampleCanvasColors returns early). Worse, the rAF
-    // handle would then block the *real* startAmbientColorSampling
-    // call later in initializePlayer — the `_ambientRafId !== null`
-    // guard above made the second call a no-op, so the renderer
-    // never had enableAmbientMirror() invoked on it. Net effect: a
-    // page that loads with `ambientmode` already on showed no
-    // ambient glow until the user toggled the feature off and on.
+    // updateAmbientMode() before initializePlayer() creates the player.
     if (!this.player) return;
+
+    // Ask the CURRENT renderer to maintain a 16×16 mirror of each drawn frame.
+    // sampleCanvasColors() reads from that 256-pixel buffer instead of a full
+    // canvas readback per sample (which caused frame slips on 8K HDR sources).
+    //
+    // This MUST run before the rafId guard below: on a src change a fresh
+    // player/renderer replaces the old one while this rAF loop keeps running,
+    // so a guard-first version would skip enabling the mirror on the NEW
+    // renderer — leaving ambient "on" in the menu but never painting on the new
+    // video. Re-enabling here is idempotent and fixes that.
+    const renderer = (this.player as any)?.videoRenderer;
+    if (renderer && typeof renderer.enableAmbientMirror === "function") {
+      renderer.enableAmbientMirror();
+    }
+
+    // Loop already running (e.g. carried across a src change) — the mirror was
+    // just re-enabled above on the current renderer, so nothing more to start.
+    if (this._ambientRafId !== null) return;
 
     // Reset adaptive interval — a previously-throttled session may have left
     // it ratcheted up to 2s, which would make ambient appear "frozen" until
     // the per-sample recovery slowly walked it back down.
     this._ambientSampleInterval = 200;
-
-    // Ask the renderer to maintain a 16×16 mirror of each drawn frame.
-    // sampleCanvasColors() will read from that 256-pixel buffer instead of
-    // triggering a full canvas readback per sample — the old path caused
-    // visible frame slips on 8K HDR sources from GPU contention with
-    // presentation.
-    const renderer = (this.player as any)?.videoRenderer;
-    if (renderer && typeof renderer.enableAmbientMirror === "function") {
-      renderer.enableAmbientMirror();
-    }
 
     const loop = (timestamp: number) => {
       // If software decoding is active, pause ambient sampling to save main thread cycles
@@ -16094,7 +16195,9 @@ export class MoviElement extends HTMLElement {
    * back and replay it after preload settles.
    */
   private maybeShowResumeDialog(): void {
-    if (!this._resume || !this.player || this._contextLostTime !== 0) return;
+    // Resume means seeking to the saved position — impossible in linear
+    // (non-seekable) playback, so don't offer it.
+    if (!this._resume || !this.player || this._contextLostTime !== 0 || this._linearMode) return;
     const savedTime = this.getResumePosition();
     if (savedTime > 2 && savedTime < this.duration - 5) {
       this.showResumeDialog(savedTime);
@@ -16105,6 +16208,8 @@ export class MoviElement extends HTMLElement {
    * Show resume dialog with saved position
    */
   private showResumeDialog(savedTime: number): void {
+    // Linear (non-seekable) playback can't jump to the saved position.
+    if (this._linearMode) return;
     const shadowRoot = this.shadowRoot;
     if (!shadowRoot) return;
 
@@ -16237,6 +16342,9 @@ export class MoviElement extends HTMLElement {
    * Toggle timeline panel visibility
    */
   private toggleTimeline(): void {
+    // Linear (non-seekable) playback — the timeline strip generates frames by
+    // seeking across the file, which this source can't do. No timeline.
+    if (this._linearMode) return;
     const shadowRoot = this.shadowRoot;
     if (!shadowRoot) return;
     const panel = shadowRoot.querySelector(".movi-timeline-panel") as HTMLElement;
@@ -16629,6 +16737,10 @@ export class MoviElement extends HTMLElement {
 
   set currentTime(value: number) {
     if (!this.player) return;
+    // Linear (non-seekable source) playback — only the bytes in the RAM window
+    // are reachable, so clamp the target to the buffered range instead of
+    // jumping somewhere that was discarded / not yet downloaded.
+    value = this.clampToBufferedWindow(value);
     const state = this.player.getState();
     Logger.info(TAG, `currentTime setter: value=${value.toFixed(2)}, state=${state}, isSeeking=${this.isSeeking}`);
     if (
