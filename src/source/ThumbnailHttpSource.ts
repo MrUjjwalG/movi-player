@@ -36,6 +36,11 @@ export class ThumbnailHttpSource implements SourceAdapter {
   private size: number = -1;
   private position: number = 0;
   private abortController: AbortController | null = null;
+  // Set once a fetch comes back 200 (server ignores Range). From then on we
+  // never hit the network — thumbnails are served purely by borrowing bytes
+  // the main source already has in its RAM window; a borrow miss just yields
+  // no preview rather than a doomed (and spammy) range fetch.
+  private rangeUnsupported: boolean = false;
 
   // Simple buffer cache
   private buffer: Uint8Array | null = null;
@@ -59,6 +64,16 @@ export class ThumbnailHttpSource implements SourceAdapter {
 
   setBorrowSource(source: PeekableSource | null): void {
     this.borrowSource = source;
+  }
+
+  /**
+   * Seed the file size from the main source so getSize() skips its own HEAD /
+   * ranged-GET probe. Essential for non-range servers where that probe can't
+   * recover a size (Cloudflare strips Content-Length on HEAD and may chunk the
+   * 200 GET) — the main source already knows the size, so just reuse it.
+   */
+  seedSize(size: number): void {
+    if (size > 0) this.size = size;
   }
 
   async getSize(): Promise<number> {
@@ -163,6 +178,13 @@ export class ThumbnailHttpSource implements SourceAdapter {
       }
     }
 
+    // Non-range source: the borrow missed and the server can't serve a range,
+    // so there's nothing to fetch. Yield empty — the requested frame just isn't
+    // in the buffered window, so no preview is shown there.
+    if (this.rangeUnsupported) {
+      return new ArrayBuffer(0);
+    }
+
     // Need to fetch - calculate optimal range
     // Fetch a larger chunk to avoid multiple small requests, but cap at MAX_FETCH_SIZE
     const fetchStart = offset;
@@ -217,16 +239,19 @@ export class ThumbnailHttpSource implements SourceAdapter {
         });
         clearTimeout(timeoutId);
 
-        // CRITICAL: Check for 206 Partial Content response
-        // If server returns 200 instead of 206, it's sending the ENTIRE file!
+        // If the server returns 200 instead of 206 it's ignoring Range and
+        // would stream the whole file. Latch range-unsupported and fall back to
+        // borrow-only: abort this download and yield empty (no preview here).
+        // No retries — they'd all come back 200 too (the old behavior spammed
+        // 5 failed fetches per hover).
         if (response.status === 200) {
-          Logger.error(
+          Logger.info(
             TAG,
-            `Server returned 200 instead of 206. Range requests not supported.`
+            "Server returned 200 (no Range support) — thumbnails switch to borrow-only.",
           );
-          // Abort the response to prevent downloading
           controller.abort();
-          throw new Error("Server does not support range requests.");
+          this.rangeUnsupported = true;
+          return new ArrayBuffer(0);
         }
 
         if (!response.ok && response.status !== 206) {

@@ -84,6 +84,9 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
 
   private previewsAllowed(): boolean {
     if (!this.config.enablePreviews) return false;
+    // Non-range sources keep previews ON: the thumbnail source borrows frames
+    // straight from the main source's RAM window (no network), so previews work
+    // for any position inside the buffered/seekable range.
     // NOTE: a file-size cap used to live here — the seek-bar thumbnail
     // pipeline opens a SECOND isolated WASM module + FFmpeg context, and on
     // large 1 GB+ sources the two heaps can exhaust the tab's memory budget,
@@ -126,6 +129,8 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
   private isPreviewGenerating: boolean = false;
   private audioRenderer: AudioRenderer;
   private previewInitPromise: Promise<void> | null = null; // Guard for preview initialization
+  private previewInitAttempts: number = 0; // Bounded retries for preview pipeline init
+  private previewInitGaveUp: boolean = false; // Stop retrying once init has failed too often
 
   // Debug flag to disable audio processing
   private disableAudio: boolean = false; // Set to true to disable audio for debugging
@@ -705,6 +710,9 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
         config.headers,
         maxBufferSizeMB,
       );
+      // Server has no Range support + file too big to cache → forward-only
+      // linear playback. Surface it so the UI can drop the timeline / seeking.
+      source.setOnLinearMode(() => this.emit("linearmode", undefined));
       return source;
     }
 
@@ -2595,6 +2603,7 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
   async getPreviewFrame(time: number): Promise<Blob | null> {
     if (!this.previewsAllowed()) return null; // Disabled, or source too large for a 2nd WASM context
     if (this.hlsWrapper) return null; // Previews not supported for HLS
+    if (this.previewInitGaveUp) return null; // Init failed repeatedly — stop retrying (and re-loading WASM)
     if (this.isPreviewGenerating) return null; // Busy
     // Audio-only sources have no video track to thumbnail. Bail early
     // so a hover on the seek bar doesn't trigger a "Thumbnail bindings
@@ -2614,8 +2623,15 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
             this.previewInitPromise = null;
           }
         }
-        // If still no bindings (init failed or promise was cleared), retry
+        // If still no bindings (init failed or promise was cleared), retry —
+        // but cap attempts so a persistent failure doesn't re-load a fresh WASM
+        // module on every seek-bar hover.
         if (!this.thumbnailBindings) {
+          if (++this.previewInitAttempts > 3) {
+            this.previewInitGaveUp = true;
+            Logger.warn(TAG, "Thumbnail pipeline init failed repeatedly — disabling previews.");
+            return null;
+          }
           Logger.debug(TAG, "Initializing thumbnail pipeline (retry)...");
           this.previewInitPromise = this.initPreviewPipeline();
           try {
@@ -3094,6 +3110,17 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
         this.thumbnailSource = this.source;
       } else {
         throw new Error("No source available for thumbnail pipeline");
+      }
+      // Reuse the size the main source already resolved — a dedicated
+      // ThumbnailHttpSource can't probe it on a non-range server (HEAD strips
+      // Content-Length, the 200 GET may be chunked), which used to fail init.
+      if (
+        this.fileSize > 0 &&
+        this.thumbnailSource &&
+        "seedSize" in this.thumbnailSource &&
+        typeof (this.thumbnailSource as { seedSize?: unknown }).seedSize === "function"
+      ) {
+        (this.thumbnailSource as { seedSize: (n: number) => void }).seedSize(this.fileSize);
       }
     }
 
@@ -3680,7 +3707,11 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
     // preservePlaying keeps the play/pause state across it; the seek-session
     // guard keeps rapid rate changes from a superseded completion landing
     // paused. Only when actually playing — see playingNow above.
-    if (playingNow) {
+    // Linear (non-seekable) playback can't do the corrective seek — the
+    // keyframe before savedTime is usually behind the sliding window and the
+    // read would fail (seek timeout → buffering). Skip it; the worst case is a
+    // brief read-ahead pivot on rate change, far better than a stalled seek.
+    if (playingNow && !this.isLinearPlayback()) {
       this.seek(savedTime, {
         suppressSpinner: true,
         preservePlaying: true,
@@ -4393,6 +4424,17 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
   }
 
   /**
+   * True when the active source has fallen back to linear (forward-only,
+   * non-seekable) playback — server lacks HTTP Range support and the file is
+   * too big to cache whole. Used by the UI as a backstop alongside the
+   * "linearmode" event (in case the event fired before listeners attached).
+   */
+  isLinearPlayback(): boolean {
+    const src = this.source as { isLinearMode?: () => boolean } | null;
+    return typeof src?.isLinearMode === "function" ? src.isLinearMode() : false;
+  }
+
+  /**
    * True when audio is blocked by the browser's autoplay policy — the
    * AudioContext is stuck suspended despite an unmuted play() because no
    * user gesture has unlocked it. play()'s promise resolves either way, so
@@ -4967,6 +5009,31 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
       return ratio * duration;
     }
     return 0;
+  }
+
+  /**
+   * Lowest time a backward seek can SAFELY land in linear (non-range) playback.
+   * The window starts at getBufferStartTime, but a seek's keyframe sits at a
+   * lower byte than the linear time→byte estimate (GOP span + VBR), so seeking
+   * right at the window edge usually reads just below it and fails. Pad the
+   * start by a byte safety margin so the keyframe stays inside the RAM window.
+   * Returns 0 for seekable (range-capable) or non-HTTP sources.
+   */
+  getSeekableStartTime(): number {
+    if (
+      !this.mediaInfo ||
+      !(this.source instanceof HttpSource) ||
+      this.fileSize <= 0 ||
+      !this.source.isLinearMode()
+    ) {
+      return 0;
+    }
+    const MARGIN_BYTES = 96 * 1024 * 1024; // covers a keyframe-before-target gap
+    const safeBytes = Math.min(this.fileSize, this.source.getBufferStart() + MARGIN_BYTES);
+    return Math.min(
+      this.mediaInfo.duration,
+      (safeBytes / this.fileSize) * this.mediaInfo.duration,
+    );
   }
 
   /**

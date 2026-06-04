@@ -292,4 +292,10 @@ export interface PlayerEventMap {
    * present but extraction failed, so listeners waiting on it can stop.
    */
   coverart: ImageBitmap | null;
+  /**
+   * Fired once when playback falls back to linear (forward-only, non-seekable)
+   * mode because the server has no HTTP Range support and the file is too large
+   * to cache whole. The UI hides the timeline and disables seeking/thumbnails.
+   */
+  linearmode: void;
 }

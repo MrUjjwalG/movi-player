@@ -80,6 +80,28 @@ export class HttpSource implements SourceAdapter {
   // In this state, all reads can be served from memory — no re-fetching needed.
   private fullyBuffered: boolean = false;
 
+  // Set once we've confirmed the server ignores Range (returns 200, not 206).
+  // From then on there is exactly one stream — the full file from byte 0 — and
+  // we must never restart it at a non-zero offset (the server would resend from
+  // the start, mis-aligning the buffer).
+  private rangeUnsupported: boolean = false;
+  // Subset of rangeUnsupported: the file is larger than the buffer cap (or its
+  // size is unknown), so it can't be held whole in memory. We run a bounded
+  // forward-only sliding window — playback is linear, seeking is impossible.
+  private linearMode: boolean = false;
+  // Fired once when we enter linearMode, so the UI can disable seek/thumbnails/
+  // the timeline. Wired up by MoviPlayer.createSource.
+  private onLinearMode: (() => void) | null = null;
+  // Forward high-water mark of successful reads (the demuxer's furthest read
+  // point). Monotonic — unlike `position`, an internal rewind doesn't pull it
+  // back — so the linear window can keep ~trail of history behind the frontier.
+  private readMax: number = 0;
+  // Ring of recent read offsets (linear mode). Their minimum approximates the
+  // lowest offset any demuxer stream / a just-happened backward seek still
+  // needs, so the sliding window never drops bytes a live reader is using —
+  // even when streams sit far apart in the file or a rewind just occurred.
+  private recentReads: number[] = [];
+
   // Force restart tracking (to prevent cascading failures)
   private consecutiveForceRestarts: number = 0;
   private lastForceRestartTime: number = 0;
@@ -138,6 +160,32 @@ export class HttpSource implements SourceAdapter {
         : Math.floor(this.size * BUFFER_PERCENTAGE);
       this.resizeBuffer(calculatedBufferSize);
     }
+  }
+
+  /**
+   * Register a callback fired once when the source falls back to linear
+   * (forward-only, non-seekable) playback because the server has no Range
+   * support and the file is too large to cache whole. The UI uses this to
+   * hide the timeline and disable seeking/thumbnails.
+   */
+  setOnLinearMode(cb: () => void): void {
+    this.onLinearMode = cb;
+    // Already linear (callback registered late)? Fire immediately.
+    if (this.linearMode) cb();
+  }
+
+  /** True once the source is in forward-only linear (non-seekable) playback. */
+  isLinearMode(): boolean {
+    return this.linearMode;
+  }
+
+  /**
+   * True once we've confirmed the server has no Range support (covers both the
+   * full-cache and the linear fallback). Callers use it to skip features that
+   * need scattered random-access reads (e.g. the thumbnail pipeline).
+   */
+  isRangeUnsupported(): boolean {
+    return this.rangeUnsupported;
   }
 
   /**
@@ -290,34 +338,61 @@ export class HttpSource implements SourceAdapter {
    * throw on failure.
    */
   protected async resolveSize(): Promise<number> {
-    const response = await fetch(this.url, {
-      method: "HEAD",
-      headers: await this.buildRequestHeaders(),
-    });
+    // CDNs intermittently strip Content-Length from a HEAD (and the ranged-GET
+    // fallback can transiently flake on a cold/concurrent path), so a single
+    // attempt occasionally fails for a file that's perfectly fine. Retry a few
+    // times before giving up; only auth/not-found (4xx) errors are fatal.
+    const MAX_ATTEMPTS = 4;
+    let lastError: Error = new Error("Content-Length missing");
 
-    if (!response.ok) {
-      if (response.status === 403) throw new Error("Access denied. Check video permissions.");
-      if (response.status === 401) throw new Error("Authentication required.");
-      if (response.status === 404) throw new Error("Video not found.");
-      throw new Error(`HTTP ${response.status}`);
+    for (let attempt = 0; attempt < MAX_ATTEMPTS; attempt++) {
+      try {
+        const response = await fetch(this.url, {
+          method: "HEAD",
+          headers: await this.buildRequestHeaders(),
+        });
+
+        if (!response.ok) {
+          if (response.status === 403) throw new Error("Access denied. Check video permissions.");
+          if (response.status === 401) throw new Error("Authentication required.");
+          if (response.status === 404) throw new Error("Video not found.");
+          // 5xx / 429 etc. — retryable.
+          lastError = new Error(`HTTP ${response.status}`);
+        } else {
+          // Read the download filename off the HEAD response.
+          this.setFilenameFromDisposition(response.headers.get("Content-Disposition"));
+
+          const contentLength = response.headers.get("Content-Length");
+          if (contentLength) return parseInt(contentLength, 10);
+
+          // HEAD had no Content-Length — recover the total from a 1-byte ranged
+          // GET's Content-Range ("bytes 0-0/<total>").
+          const sizeViaRange = await this.resolveSizeViaRange();
+          if (sizeViaRange !== null) return sizeViaRange;
+
+          // Last resort: a plain (un-ranged) GET. Some servers strip
+          // Content-Length on HEAD and don't CORS-expose Content-Range on a
+          // 206, yet still send Content-Length on a full 200 response.
+          const sizeViaGet = await this.resolveSizeViaPlainGet();
+          if (sizeViaGet !== null) return sizeViaGet;
+
+          lastError = new Error("Content-Length missing");
+        }
+      } catch (err) {
+        // Auth / not-found are definitive — don't waste retries on them.
+        const msg = (err as Error)?.message || "";
+        if (/Access denied|Authentication required|Video not found/.test(msg)) {
+          throw err;
+        }
+        lastError = err instanceof Error ? err : new Error(String(err));
+      }
+
+      if (attempt < MAX_ATTEMPTS - 1) {
+        await new Promise((r) => setTimeout(r, 400 * (attempt + 1)));
+      }
     }
 
-    // Read the download filename off the HEAD response before any early
-    // return below.
-    this.setFilenameFromDisposition(response.headers.get("Content-Disposition"));
-
-    const contentLength = response.headers.get("Content-Length");
-    if (contentLength) return parseInt(contentLength, 10);
-
-    // Cloudflare (and some other CDNs) strip Content-Length from null-body
-    // HEAD responses, so a HEAD that's otherwise 200 OK can arrive with no
-    // size — which used to hard-fail here. Recover it from a 1-byte ranged
-    // GET: the 206's Content-Range ("bytes 0-0/<total>") carries the full
-    // length and survives because that response has a real body.
-    const sizeViaRange = await this.resolveSizeViaRange();
-    if (sizeViaRange !== null) return sizeViaRange;
-
-    throw new Error("Content-Length missing");
+    throw lastError;
   }
 
   /**
@@ -349,6 +424,36 @@ export class HttpSource implements SourceAdapter {
     // Server ignored Range and answered 200, but still reported a length.
     const cl = res.headers.get("Content-Length");
     if (res.status === 200 && cl) return parseInt(cl, 10);
+    return null;
+  }
+
+  /**
+   * Last-resort size probe: a plain (un-ranged) GET. Catches servers that strip
+   * Content-Length on HEAD and don't CORS-expose Content-Range on a 206, yet
+   * still send Content-Length on a full 200 response. The body is cancelled the
+   * moment headers are in, so nothing past the headers is downloaded.
+   */
+  protected async resolveSizeViaPlainGet(): Promise<number | null> {
+    let res: Response;
+    try {
+      res = await fetch(this.url, {
+        method: "GET",
+        headers: await this.buildRequestHeaders(),
+      });
+    } catch {
+      return null;
+    }
+    res.body?.cancel().catch(() => {});
+    if (!res.ok) return null;
+    const cl = res.headers.get("Content-Length");
+    if (res.status === 200 && cl) return parseInt(cl, 10);
+    // A 206 (server forced a default range) still carries the total in
+    // Content-Range, when it's exposed.
+    const contentRange = res.headers.get("Content-Range");
+    if (contentRange) {
+      const m = /\/\s*(\d+)\s*$/.exec(contentRange);
+      if (m) return parseInt(m[1], 10);
+    }
     return null;
   }
 
@@ -689,11 +794,12 @@ export class HttpSource implements SourceAdapter {
         // If server returns 200, it may be a CDN cache warming issue (e.g. Cloudflare first hit)
         // Retry a few times before treating as fatal — CDN often supports range after caching the file
         if (response.status === 200) {
-          // Abort the 200 response body to prevent downloading entire file
-          try { response.body?.cancel(); } catch {}
-
+          // CDN cache-warming (e.g. Cloudflare's first hit) sometimes answers
+          // 200, then 206 once the file is cached — retry a few times before
+          // concluding the server truly lacks Range support.
           rangeRetryCount++;
           if (rangeRetryCount <= MAX_RANGE_RETRIES) {
+            try { response.body?.cancel(); } catch {}
             Logger.warn(
               TAG,
               `Server returned 200 instead of 206 (attempt ${rangeRetryCount}/${MAX_RANGE_RETRIES}). ` +
@@ -703,9 +809,19 @@ export class HttpSource implements SourceAdapter {
             continue; // Retry the fetch loop
           }
 
-          // Exhausted retries — fatal
+          // Retries exhausted → no Range support. For the initial 0-based
+          // stream we can still play by consuming the whole body sequentially
+          // (full-cache if it fits the cap, else bounded linear mode). A
+          // non-zero offset means a seek, which can't be served without Range.
+          if (startOffset === 0) {
+            Logger.warn(TAG, `No Range support after ${MAX_RANGE_RETRIES} retries — falling back to sequential playback.`);
+            await this.consumeNonRangeStream(response);
+            return; // consumeNonRangeStream drives the buffer to EOF + clears streaming
+          }
+
+          try { response.body?.cancel(); } catch {}
           const rangeError = new Error("Server does not support range requests.");
-          Logger.error(TAG, `Server returned 200 after ${MAX_RANGE_RETRIES} retries. Range requests not supported.`);
+          Logger.error(TAG, `Server returned 200 for offset ${startOffset}; range requests not supported.`);
           this.abortController?.abort();
           this.atomicSetStreaming(false);
           this.streamError = rangeError;
@@ -1033,6 +1149,190 @@ export class HttpSource implements SourceAdapter {
     }
   }
 
+  /**
+   * Consume a single 200 response as the whole file from byte 0, used when the
+   * server has no Range support. Two outcomes:
+   *  - File fits the buffer cap → cache it entirely → full random access
+   *    (seek/thumbnails keep working once downloaded).
+   *  - File exceeds the cap (or size unknown) → bounded forward-only sliding
+   *    window (linearMode): playback is linear, seeking impossible. The UI is
+   *    notified via onLinearMode so it can hide the timeline.
+   * The response body MUST start at byte 0 (caller guarantees startOffset===0).
+   */
+  private async consumeNonRangeStream(response: Response): Promise<void> {
+    this.rangeUnsupported = true;
+
+    // Grow the buffer toward the cap: a ≤cap file caches whole, an over-cap
+    // file gets as large a linear window as the cap allows. resizeBuffer
+    // reallocates the SharedArrayBuffer, which resets the VERSION counter in
+    // the fresh header — an in-flight waitForData() from the first read would
+    // then read a different version and bail as "superseded". Preserve VERSION
+    // across the realloc so that waiter keeps going.
+    if (this.size > 0) {
+      const ver = this.useSharedBuffer && this.headerView
+        ? Atomics.load(this.headerView, HEADER.VERSION)
+        : 0;
+      this.resizeBuffer(this.size);
+      if (this.useSharedBuffer && this.headerView) {
+        Atomics.store(this.headerView, HEADER.VERSION, ver);
+      }
+    }
+    const buffer = this.getBuffer();
+    const fullFit = this.size > 0 && this.bufferSize >= this.size;
+
+    if (!fullFit) {
+      this.linearMode = true;
+      Logger.warn(
+        TAG,
+        `Linear (non-seekable) playback: ${this.size > 0 ? (this.size / 1048576).toFixed(0) + "MB" : "unknown size"} ` +
+        `exceeds the ${this.maxBufferSizeMB}MB cache cap or size is unknown.`,
+      );
+      try { this.onLinearMode?.(); } catch {}
+    } else {
+      Logger.info(TAG, `Caching entire ${(this.size / 1048576).toFixed(1)}MB file in memory (no Range support).`);
+    }
+
+    // The body represents [0, size). Reset the window to the start. NOTE: do
+    // NOT bump the version here — this is a continuation of the same 0-based
+    // stream startStream() already opened, and an in-flight waitForData() from
+    // the first read would treat a version change as "superseded" and bail,
+    // tearing down this consume loop.
+    this.atomicSetBufferStart(0);
+    this.atomicSetWritePos(0);
+    this.maxBufferedEnd = 0;
+    this.fullyBuffered = false;
+    this.atomicSetStreaming(true);
+
+    if (!response.body) {
+      this.streamError = new Error("Empty response body");
+      this.atomicSetStreaming(false);
+      return;
+    }
+
+    const reader = response.body.getReader();
+    this.reader = reader;
+
+    try {
+      while (this.atomicIsStreaming()) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        if (!value || value.length === 0) continue;
+        this.totalBytesDownloaded += value.length;
+        await this.writeSequential(value, buffer, fullFit);
+      }
+    } catch (err) {
+      if ((err as any)?.name !== "AbortError") {
+        this.streamError = err instanceof Error ? err : new Error(String(err));
+        Logger.error(TAG, "Non-range stream failed", err);
+      }
+    } finally {
+      try { await reader.cancel(); } catch {}
+      this.reader = null;
+    }
+
+    // EOF housekeeping.
+    const end = this.atomicGetBufferStart() + this.atomicGetWritePos();
+    if (this.size <= 0) this.size = end; // size was unknown — we know it now
+    if (fullFit && this.atomicGetBufferStart() === 0 && this.size > 0 && end >= this.size) {
+      this.fullyBuffered = true;
+      Logger.info(TAG, `Entire file cached (${(this.size / 1048576).toFixed(1)}MB) — full random access.`);
+    }
+    this.atomicSetStreaming(false);
+  }
+
+  /**
+   * Append a chunk to the buffer for the non-range stream. In full-cache mode
+   * the buffer always has room. In linearMode it slides the window forward by
+   * discarding already-consumed bytes, applying backpressure (waiting for the
+   * demuxer to catch up) when the window can't be advanced yet.
+   */
+  private async writeSequential(
+    value: Uint8Array,
+    buffer: Uint8Array,
+    fullFit: boolean,
+  ): Promise<void> {
+    let written = 0;
+    while (written < value.length) {
+      if (!this.atomicIsStreaming()) return;
+
+      let writePos = this.atomicGetWritePos();
+      if (writePos >= buffer.length) {
+        if (fullFit) return; // Shouldn't happen — buffer >= file. Safety stop.
+        // Linear: the buffer's full of read-ahead. Drop the oldest history to
+        // make room; if readMax hasn't advanced past the trailing window yet
+        // there's nothing droppable — that's normal backpressure (we already
+        // hold ~half a buffer ahead), so just wait for the demuxer to consume.
+        // The while-loop's streaming check exits us cleanly on seek/stop, and an
+        // unreachable read fails on the read side, so no hard stall is needed.
+        if (!(await this.slideWindow(buffer))) {
+          await new Promise((r) => setTimeout(r, 5));
+          continue;
+        }
+        writePos = this.atomicGetWritePos();
+      }
+
+      const room = buffer.length - writePos;
+      const chunk = Math.min(room, value.length - written);
+
+      let locked = false;
+      for (let i = 0; i < 50; i++) {
+        if (this.tryLock()) { locked = true; break; }
+        await new Promise((r) => setTimeout(r, 1));
+      }
+      if (!locked) { await new Promise((r) => setTimeout(r, 5)); continue; }
+
+      buffer.set(value.subarray(written, written + chunk), writePos);
+      const newWritePos = writePos + chunk;
+      this.atomicSetWritePos(newWritePos);
+      const end = this.atomicGetBufferStart() + newWritePos;
+      if (end > this.maxBufferedEnd) this.maxBufferedEnd = end;
+      this.unlock();
+
+      written += chunk;
+    }
+  }
+
+  /**
+   * Slide the linear-mode window forward to make room for new download. Keeps a
+   * trailing history of up to LINEAR_TRAIL_BYTES behind the playhead so the user
+   * can seek backward into already-played content that's still in RAM — only the
+   * bytes older than that are dropped. Returns false when nothing can be dropped
+   * yet (playhead hasn't advanced past the trailing window), so the caller
+   * applies backpressure. This bounds read-ahead to (bufferSize - trail).
+   */
+  private async slideWindow(buffer: Uint8Array): Promise<boolean> {
+    const bufStart = this.atomicGetBufferStart();
+    const writePos = this.atomicGetWritePos();
+    // Decide the oldest byte to keep. Two pulls, take whichever is LOWER so we
+    // never drop something in use:
+    //  - lag: the lowest recent read offset — covers a lagging interleaved
+    //    stream or a just-happened backward seek (their bytes must stay).
+    //  - readMax - trail: keep ~half a buffer of history behind the frontier
+    //    for backward seeking when the streams sit close together.
+    // Both rise as playback advances, so keepFrom advances and the window can
+    // always slide forward to feed the frontier — no deadlock on a rewind.
+    const trail = Math.floor(this.bufferSize / 2);
+    const lag = this.recentReads.length
+      ? Math.min(...this.recentReads)
+      : this.readMax;
+    const keepFrom = Math.max(0, Math.min(lag, this.readMax - trail));
+    const shift = Math.min(keepFrom - bufStart, writePos);
+    if (shift <= 0) return false;
+
+    let locked = false;
+    for (let i = 0; i < 50; i++) {
+      if (this.tryLock()) { locked = true; break; }
+      await new Promise((r) => setTimeout(r, 1));
+    }
+    if (!locked) return false;
+
+    buffer.copyWithin(0, shift, writePos);
+    this.atomicSetBufferStart(bufStart + shift);
+    this.atomicSetWritePos(writePos - shift);
+    this.unlock();
+    return true;
+  }
+
   private async stopStream(): Promise<void> {
     this.atomicSetStreaming(false);
 
@@ -1223,6 +1523,32 @@ export class HttpSource implements SourceAdapter {
       return this.readFromBuffer(offset, length);
     }
 
+    // Non-range source: there is exactly one stream (the full file from 0),
+    // so we can never restart at a different offset. Forward reads wait for the
+    // single sequential stream to reach them; reads behind the sliding window
+    // were discarded (linear mode) and can't be served.
+    if (this.rangeUnsupported) {
+      if (offset < this.atomicGetBufferStart()) {
+        // Behind the window — only happens on a backward seek / random access
+        // in linear mode, which this source can't satisfy.
+        throw new Error("Server does not support range requests.");
+      }
+      // Linear mode holds at most one bufferSize-wide window. A read whose end
+      // is past (windowStart + bufferSize) can never sit in the window — that's
+      // a far forward seek / moov-at-end on an over-cap file, or a single read
+      // bigger than the buffer. Bail rather than wait forever.
+      if (this.linearMode && offset + length > this.atomicGetBufferStart() + this.bufferSize) {
+        throw new Error("Server does not support range requests.");
+      }
+      if (this.atomicIsStreaming()) {
+        const ok = await this.waitForData(offset, length);
+        if (ok) return this.readFromBuffer(offset, length);
+      }
+      if (this.isInBuffer(offset, length)) return this.readFromBuffer(offset, length);
+      if (this.streamError) throw this.streamError;
+      throw new Error("Server does not support range requests.");
+    }
+
     // Optimization: Check if the ACTIVE stream covers this request.
     // If so, we strictly wait for it. Interrupting an active stream that is
     // successfully filling the buffer is inefficient and causes stalls.
@@ -1365,6 +1691,12 @@ export class HttpSource implements SourceAdapter {
     result.set(buffer.subarray(localOffset, localOffset + available));
 
     this.position = offset + available;
+    if (this.position > this.readMax) this.readMax = this.position;
+    // Track recent read offsets so the linear window knows the lowest byte any
+    // stream still needs (see slideWindow). Bounded ring — ~64 reads ≈ 32MB of
+    // activity, plenty to span the streams + a transient rewind.
+    this.recentReads.push(offset);
+    if (this.recentReads.length > 64) this.recentReads.shift();
     return result.buffer;
   }
 
