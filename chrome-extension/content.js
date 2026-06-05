@@ -11,7 +11,7 @@ try {
 // Detect media (video + audio) URLs on page and add a play button overlay.
 // Kept in sync with MEDIA_EXT_RE in player.js so anything the player can open
 // gets a button here too.
-const MEDIA_EXTENSIONS = /\.(mp4|mkv|webm|mov|avi|ts|m3u8|flv|m4v|ogv|wmv|m2ts|mts|evo|3gp|mpg|mpeg|mp3|m4a|m4b|aac|flac|wav|wave|ogg|oga|opus|ac3|ec3|eac3|mka|dts)(\?|$)/i;
+const MEDIA_EXTENSIONS = /\.(mp4|mkv|webm|mov|avi|ts|m3u8|mpd|flv|m4v|ogv|wmv|m2ts|mts|evo|3gp|mpg|mpeg|mp3|m4a|m4b|aac|flac|wav|wave|ogg|oga|opus|ac3|ec3|eac3|mka|dts)(\?|$)/i;
 
 function isMediaUrl(url) {
   return MEDIA_EXTENSIONS.test(url);

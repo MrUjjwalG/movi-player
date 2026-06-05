@@ -109,7 +109,7 @@ customElements.whenDefined("movi-player").then(() => {
 // flac/ac3/eac3/dca/truehd/mlp/pcm + ogg/flac/wav/mp3/aac/ac3/eac3/mov/m4a
 // demuxers). Adding more here without first enabling the corresponding decoder
 // in the build would just produce a "no audio track" error at open time.
-const MEDIA_EXT_RE = /\.(mp4|mkv|webm|mov|avi|ts|m3u8|flv|m4v|ogv|wmv|m2ts|mts|evo|3gp|mpg|mpeg|mp3|m4a|m4b|aac|flac|wav|wave|ogg|oga|opus|ac3|ec3|eac3|mka|dts)$/i;
+const MEDIA_EXT_RE = /\.(mp4|mkv|webm|mov|avi|ts|m3u8|mpd|flv|m4v|ogv|wmv|m2ts|mts|evo|3gp|mpg|mpeg|mp3|m4a|m4b|aac|flac|wav|wave|ogg|oga|opus|ac3|ec3|eac3|mka|dts)$/i;
 const isVideoFile = (f) =>
   (f.type && (f.type.startsWith("video/") || f.type.startsWith("audio/"))) ||
   MEDIA_EXT_RE.test(f.name || "");
