@@ -357,6 +357,9 @@ export class MoviElement extends HTMLElement {
       "videoid",
       "drm",
       "licenseurl",
+      "licenseheaders",
+      "lcevc",
+      "lcevcurl",
       "postertime",
     ];
   }
@@ -915,6 +918,9 @@ export class MoviElement extends HTMLElement {
               <span class="movi-current-time">0:00</span>
               <span class="movi-time-separator"> / </span>
               <span class="movi-duration">0:00</span>
+              <button class="movi-live-badge" type="button" aria-label="Go to live" title="Go to live edge">
+                <span class="movi-live-dot"></span>LIVE
+              </button>
             </div>
           </div>
 
@@ -1375,6 +1381,15 @@ export class MoviElement extends HTMLElement {
       );
     });
 
+    // LIVE badge → jump to the live edge and resume.
+    const liveBadge = shadowRoot.querySelector(".movi-live-badge") as HTMLElement;
+    liveBadge?.addEventListener("click", (e) => {
+      e.stopPropagation();
+      this.player?.seekToLive?.();
+      this.play();
+      this.updateLiveState();
+    });
+
     // Stable Audio Toggle
     const stableAudioBtn = shadowRoot.querySelector(".movi-stable-audio-btn") as HTMLElement;
     stableAudioBtn?.addEventListener("click", (e) => {
@@ -1540,7 +1555,7 @@ export class MoviElement extends HTMLElement {
         return;
       }
 
-      const time = percent * duration;
+      const time = this.barFractionToTime(percent);
       thumbnailTime.textContent = this.formatTime(time);
 
       // Show chapter title if hovering over a chapter
@@ -2398,8 +2413,11 @@ export class MoviElement extends HTMLElement {
     const duration = this.duration;
     if (duration <= 0) return;
 
-    // Linear mode: clamp the seek target to the buffered RAM window.
-    const time = this.clampToBufferedWindow(percent * duration);
+    // Live: map the fraction into the DVR window. Otherwise (linear mode)
+    // clamp the seek target to the buffered RAM window.
+    const time = this.player?.isLiveStream?.()
+      ? this.barFractionToTime(percent)
+      : this.clampToBufferedWindow(percent * duration);
     const wasPlaying = state === "playing";
 
     this.isSeeking = true;
@@ -2467,8 +2485,11 @@ export class MoviElement extends HTMLElement {
     const duration = this.duration;
     if (duration <= 0) return;
 
-    // Linear mode: clamp the seek target to the buffered RAM window.
-    const time = this.clampToBufferedWindow(percent * duration);
+    // Live: map the fraction into the DVR window. Otherwise (linear mode)
+    // clamp the seek target to the buffered RAM window.
+    const time = this.player?.isLiveStream?.()
+      ? this.barFractionToTime(percent)
+      : this.clampToBufferedWindow(percent * duration);
     const wasPlaying = state === "playing";
 
     this.isSeeking = true;
@@ -4719,7 +4740,7 @@ export class MoviElement extends HTMLElement {
         if (!this.player || !this.duration) return;
         const rect = progressBar.getBoundingClientRect();
         const pct = Math.max(0, Math.min(1, (e.clientX - rect.left) / rect.width));
-        this.currentTime = pct * this.duration;
+        this.currentTime = this.barFractionToTime(pct);
       });
 
       // Update progress + time on interval
@@ -5152,25 +5173,16 @@ export class MoviElement extends HTMLElement {
       this.player as any
     ).trackManager?.getActiveVideoTrack();
 
-    // For HLS Auto mode, the active track id is -1 with height 0; surface the
-    // currently-playing level's badge instead so the gear stays informative.
-    // MoviPlayer exposes the wrapper as `hlsWrapper`; the previous `.hls`
-    // path silently resolved to undefined, leaving the badge blank in Auto.
+    // In Auto/ABR mode the active track id is -1 with height 0; surface the
+    // currently-playing rendition's dimensions instead so the gear badge stays
+    // informative. Shaka backs both HLS and DASH via the unified streamWrapper.
     let activeHeight = activeTrack?.height || 0;
     let activeWidth = (activeTrack as any)?.width || 0;
     if (!activeHeight && activeTrack?.id === -1) {
       try {
-        const hls = (this.player as any).hlsWrapper?.hls;
-        if (hls) {
-          const hlsLevel = hls?.levels?.[hls?.currentLevel];
-          activeHeight = hlsLevel?.height || 0;
-          activeWidth = hlsLevel?.width || 0;
-        } else {
-          // DASH Auto: read the currently-rendered representation.
-          const rep = (this.player as any).dashWrapper?.dash?.getCurrentRepresentationForType?.("video");
-          activeHeight = rep?.height || 0;
-          activeWidth = rep?.width || 0;
-        }
+        const res = (this.player as any).streamWrapper?.getActiveResolution?.();
+        activeHeight = res?.height || 0;
+        activeWidth = res?.width || 0;
       } catch {}
     }
     this._updateQualityBtnBadge(this._heightBadge(activeHeight, activeWidth));
@@ -5178,8 +5190,13 @@ export class MoviElement extends HTMLElement {
     qualityList.innerHTML = uniqueTracks
       .map((track) => {
         const isActive = activeTrack?.id === track.id;
-        const label =
+        let label =
           track.label || (track.height ? `${track.height}p` : "Auto");
+        // In Auto mode, show the currently-playing rendition in brackets —
+        // e.g. "Auto (720p)" — so the user sees what ABR is actually serving.
+        if (track.id === -1 && activeTrack?.id === -1 && activeHeight > 0) {
+          label = `Auto (${activeHeight}p)`;
+        }
         const h = track.height || 0;
         const w = (track as any).width || 0;
         const eff = w > 0 ? Math.max(h, Math.round(w * 9 / 16)) : h;
@@ -8078,6 +8095,56 @@ export class MoviElement extends HTMLElement {
         color: var(--movi-text-tertiary);
         font-weight: 400;
       }
+
+      /* LIVE indicator — shown only for live (dynamic) streams. Clicking jumps
+         to the live edge. Bright red + pulsing at the edge; dimmed grey when
+         the viewer has scrubbed back into the DVR window. */
+      /* Badge follows the player theme colour (themecolor / --movi-primary),
+         falling back to a live-red. The dot inherits it via currentColor so the
+         glow ring matches. When scrubbed back ("behind") it dims to grey. */
+      .movi-live-badge {
+        display: none;
+        align-items: center;
+        gap: 5px;
+        background: none;
+        border: none;
+        cursor: pointer;
+        padding: 2px 6px;
+        border-radius: 4px;
+        font: inherit;
+        font-weight: 700;
+        letter-spacing: 0.06em;
+        color: var(--movi-primary, #ff4d4f);
+        line-height: 1;
+      }
+      .movi-live-badge:hover { background: rgba(255, 255, 255, 0.12); }
+      .movi-live-dot {
+        width: 8px;
+        height: 8px;
+        border-radius: 50%;
+        background: currentColor;
+        /* Blink while at the live edge. */
+        animation: movi-live-blink 1.2s ease-in-out infinite;
+      }
+      .movi-live-badge.behind { color: var(--movi-text-tertiary); }
+      .movi-live-badge.behind .movi-live-dot {
+        /* Scrubbed back into the DVR window → steady grey dot, no blink. */
+        animation: none;
+        opacity: 1;
+      }
+      @keyframes movi-live-blink {
+        0%, 100% { opacity: 1; }
+        50%      { opacity: 0.15; }
+      }
+      @media (prefers-reduced-motion: reduce) {
+        .movi-live-dot { animation: none; }
+      }
+      /* Live mode: wall-clock duration is meaningless (Infinity) — show only
+         the LIVE badge, hide the running time / separator / duration. */
+      :host(.movi-live) .movi-current-time,
+      :host(.movi-live) .movi-time-separator,
+      :host(.movi-live) .movi-duration { display: none; }
+      :host(.movi-live) .movi-live-badge { display: inline-flex; }
 
       .movi-progress-container {
         width: 100%;
@@ -13071,6 +13138,28 @@ export class MoviElement extends HTMLElement {
   }
 
   /**
+   * Toggle the LIVE indicator for live (dynamic) adaptive streams. Adds the
+   * `.movi-live` host class (CSS shows the badge + hides the meaningless
+   * wall-clock duration), and marks the badge `.behind` when the viewer has
+   * scrubbed back into the DVR window so it reads grey instead of pulsing red.
+   * Cheap + idempotent — safe to call on every timeupdate.
+   */
+  private updateLiveState(): void {
+    const isLive = !!this.player?.isLiveStream?.();
+    this.classList.toggle("movi-live", isLive);
+    if (!isLive) return;
+    const badge = this.shadowRoot?.querySelector(
+      ".movi-live-badge",
+    ) as HTMLElement | null;
+    if (!badge) return;
+    const edge = this.player?.getLiveEdge?.() ?? 0;
+    const cur = this.player?.getCurrentTime?.() ?? 0;
+    // >12s behind the edge → "behind" (not live). Matches YouTube's threshold.
+    const behind = isFinite(edge) && edge - cur > 12;
+    badge.classList.toggle("behind", behind);
+  }
+
+  /**
    * Paint embedded cover art (audio-only sources). Shows when:
    *   - the player has emitted a coverart bitmap, AND
    *   - there is no active video track (a real video would mask this anyway,
@@ -13520,16 +13609,30 @@ export class MoviElement extends HTMLElement {
       }
 
       // DRM mode: use the native video element for adaptive streams (EME
-      // requires <video>) — applies to HLS (.m3u8) and DASH (.mpd) alike.
-      const isDrm = this.hasAttribute("drm");
+      // requires <video>; protected frames can't be copied to a canvas) —
+      // applies to HLS (.m3u8) and DASH (.mpd) alike. Providing a `licenseurl`
+      // is enough to enable it; the bare `drm` boolean attribute still works.
+      const licenseUrl = this.getAttribute("licenseurl") || "";
+      const isDrm = this.hasAttribute("drm") || licenseUrl.length > 0;
       const isAdaptiveStream = typeof this._src === "string" &&
         (this._src.toLowerCase().includes(".m3u8") ||
-          this._src.toLowerCase().includes(".mpd"));
+          this._src.toLowerCase().includes(".mpd") ||
+          this._src.toLowerCase().includes(".ism"));
 
       if (isDrm && isAdaptiveStream) {
         playerConfig.renderer = "video";
         playerConfig.drm = true;
-        playerConfig.licenseUrl = this.getAttribute("licenseurl") || "";
+        if (licenseUrl) playerConfig.licenseUrl = licenseUrl;
+        // Optional auth headers for the license request, as a JSON object,
+        // e.g. licenseheaders='{"Authorization":"Bearer <token>"}'.
+        const rawHeaders = this.getAttribute("licenseheaders");
+        if (rawHeaders) {
+          try {
+            playerConfig.licenseHeaders = JSON.parse(rawHeaders);
+          } catch {
+            Logger.warn(TAG, "Invalid licenseheaders JSON attribute; ignoring");
+          }
+        }
         this.canvas.style.display = "none";
         this.video.style.display = "block";
       } else {
@@ -13537,6 +13640,15 @@ export class MoviElement extends HTMLElement {
         playerConfig.canvas = this.canvas;
         this.canvas.style.display = "block";
         this.video.style.display = "none";
+      }
+
+      // MPEG-5 LCEVC (opt-in): Shaka composites the enhanced layer onto the
+      // canvas. Needs the external lcevc_dec.js library — point `lcevcurl` at
+      // it to lazy-load, or load it yourself (global LCEVCdec). Without DRM.
+      if (!playerConfig.drm && this.hasAttribute("lcevc")) {
+        playerConfig.lcevc = true;
+        const lcevcUrl = this.getAttribute("lcevcurl");
+        if (lcevcUrl) playerConfig.lcevcUrl = lcevcUrl;
       }
 
       // Create Player instance
@@ -13554,18 +13666,19 @@ export class MoviElement extends HTMLElement {
         this._carryAudioEl = null;
       }
 
-      // In DRM mode, use HLS wrapper's video element directly
+      // In DRM mode, use the stream wrapper's native <video> element directly
+      // (Shaka manages EME on it; protected frames can't go through canvas).
       if (playerConfig.drm) {
-        const hlsVideo = this.player.getHLSVideoElement();
-        if (hlsVideo && this.video) {
-          // Replace our video element with HLS's video element
-          hlsVideo.style.width = "100%";
-          hlsVideo.style.height = "100%";
-          hlsVideo.style.display = "block";
-          hlsVideo.style.objectFit = "contain";
-          this.video.replaceWith(hlsVideo);
-          this.video = hlsVideo;
-          Logger.info(TAG, "DRM: Swapped in HLS native video element");
+        const streamVideo = this.player.getHLSVideoElement();
+        if (streamVideo && this.video) {
+          // Replace our video element with the stream's native video element
+          streamVideo.style.width = "100%";
+          streamVideo.style.height = "100%";
+          streamVideo.style.display = "block";
+          streamVideo.style.objectFit = "contain";
+          this.video.replaceWith(streamVideo);
+          this.video = streamVideo;
+          Logger.info(TAG, "DRM: Swapped in native stream video element");
         }
       }
 
@@ -14003,6 +14116,9 @@ export class MoviElement extends HTMLElement {
       // is async, so the strip may flip OFF later when the coverart
       // event lands — updateCoverArtOverlay handles both transitions.
       this.updateCoverArtOverlay();
+      // Live (dynamic) streams: show the LIVE indicator + hide the meaningless
+      // wall-clock duration.
+      this.updateLiveState();
       // Backstop for the "linearmode" event in case it fired before this
       // listener was wired (detection happens during the demux open).
       if (this.player?.isLinearPlayback?.()) this.enterLinearMode();
@@ -14046,6 +14162,7 @@ export class MoviElement extends HTMLElement {
 
     const timeUpdateHandler = (time: number) => {
       this.dispatchEvent(new CustomEvent("timeupdate", { detail: time }));
+      this.updateLiveState();
     };
     this.player.on("timeUpdate", timeUpdateHandler);
     this.eventHandlers.set("timeUpdate", () =>
@@ -14624,6 +14741,21 @@ export class MoviElement extends HTMLElement {
     }
   }
 
+  /**
+   * Convert a 0..1 seek-bar fraction to a media time. For live streams the bar
+   * spans the seekable DVR window [seekStart .. liveEdge], so the fraction maps
+   * into that window; for VOD it's the usual 0..duration.
+   */
+  private barFractionToTime(fraction: number): number {
+    const f = Math.max(0, Math.min(1, fraction));
+    if (this.player?.isLiveStream?.()) {
+      const start = this.player.getSeekRangeStart?.() ?? 0;
+      const end = this.player.getLiveEdge?.() ?? 0;
+      return start + f * Math.max(0, end - start);
+    }
+    return f * this.duration;
+  }
+
   private updateProgressBar(): void {
     // Don't update visuals if user is scrubbing or seeking
     if (this.isDragging || this.isTouchDragging || this.isSeeking) return;
@@ -14637,6 +14769,31 @@ export class MoviElement extends HTMLElement {
     const progressBuffer = this.shadowRoot?.querySelector(
       ".movi-progress-buffer",
     ) as HTMLElement;
+
+    // Live (dynamic) streams: duration is Infinity, so scale the bar against
+    // the seekable DVR window [seekStart .. liveEdge] instead — the playhead
+    // sits at the right edge when watching live and moves left as you scrub
+    // back into the window.
+    if (this.player?.isLiveStream?.()) {
+      const start = this.player.getSeekRangeStart?.() ?? 0;
+      const end = this.player.getLiveEdge?.() ?? 0;
+      const span = end - start;
+      const ct = this.player.getCurrentTime?.() ?? 0;
+      const pct =
+        span > 0 ? Math.min(100, Math.max(0, ((ct - start) / span) * 100)) : 0;
+      if (progressFilled) progressFilled.style.width = `${pct}%`;
+      if (progressHandle) progressHandle.style.left = `${pct}%`;
+      if (progressBuffer) {
+        const bufEnd = this.player.getBufferEndTime?.() ?? 0;
+        const bufPct =
+          span > 0
+            ? Math.min(100, Math.max(0, ((bufEnd - start) / span) * 100))
+            : 0;
+        progressBuffer.style.left = "0%";
+        progressBuffer.style.width = `${bufPct}%`;
+      }
+      return;
+    }
 
     if (this.duration > 0) {
       // Clamp to 0 during the postertime poster seek (clock transiently parked

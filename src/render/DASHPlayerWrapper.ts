@@ -394,13 +394,25 @@ export class DASHPlayerWrapper extends EventEmitter<PlayerEventMap> {
           audioCapabilities: [{ contentType: 'audio/mp4; codecs="mp4a.40.2"' }],
         }];
 
-        let keySystem = "com.widevine.alpha";
-        let access: MediaKeySystemAccess;
-        try {
-          access = await navigator.requestMediaKeySystemAccess(keySystem, config);
-        } catch {
-          keySystem = "com.apple.fps.1_0";
-          access = await navigator.requestMediaKeySystemAccess(keySystem, config);
+        // Try key systems in order: Widevine, PlayReady (Edge), FairPlay (Safari).
+        const keySystems = [
+          "com.widevine.alpha",
+          "com.microsoft.playready",
+          "com.apple.fps.1_0",
+        ];
+        let keySystem = "";
+        let access: MediaKeySystemAccess | null = null;
+        for (const ks of keySystems) {
+          try {
+            access = await navigator.requestMediaKeySystemAccess(ks, config);
+            keySystem = ks;
+            break;
+          } catch {
+            /* not supported — try the next key system */
+          }
+        }
+        if (!access) {
+          throw new Error("No supported DRM key system (Widevine/PlayReady/FairPlay)");
         }
 
         Logger.info(TAG, `EME: Using ${keySystem}`);

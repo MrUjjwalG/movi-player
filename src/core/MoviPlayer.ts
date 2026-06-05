@@ -23,6 +23,7 @@ import {
   FileSource,
   ThumbnailHttpSource,
   EncryptedHttpSource,
+  analyzeDashFallback,
   type SourceAdapter,
 } from "../source";
 import { LRUCache } from "../cache";
@@ -38,9 +39,18 @@ import { CanvasRenderer } from "../render/CanvasRenderer";
 import { AudioRenderer } from "../render/AudioRenderer";
 import { updateAllBindingsLogLevel, ThumbnailBindings } from "../wasm/bindings";
 import { loadWasmModuleNew } from "../wasm/FFmpegLoader";
+import { ShakaPlayerWrapper } from "../render/ShakaPlayerWrapper";
 import { HLSPlayerWrapper } from "../render/HLSPlayerWrapper";
 import { DASHPlayerWrapper } from "../render/DASHPlayerWrapper";
 import { ThumbnailRenderer } from "../utils/ThumbnailRenderer";
+
+// Any of the three adaptive-streaming engines (Shaka primary; hls.js / dash.js
+// as fallbacks). They share the same surface; the Shaka-only extras (isLive,
+// thumbnails, …) are called through optional chaining where used.
+type StreamWrapper =
+  | ShakaPlayerWrapper
+  | HLSPlayerWrapper
+  | DASHPlayerWrapper;
 
 const TAG = "MoviPlayer";
 
@@ -102,6 +112,21 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
     return true;
   }
 
+  /** Proxy a stream wrapper's events + mirror its TrackManager onto the player. */
+  private wireStreamWrapper(wrapper: StreamWrapper): void {
+    const events = [
+      "loadStart", "loadEnd", "play", "pause", "ended", "timeUpdate",
+      "durationChange", "stateChange", "error", "buffering", "seeking", "seeked",
+    ] as const;
+    events.forEach((evt) => {
+      // @ts-ignore — event names line up across the wrapper and player maps
+      wrapper.on(evt, (arg) => this.emit(evt, arg));
+    });
+    wrapper.trackManager.on("tracksChange", (tracks) => {
+      this.trackManager.setTracks(tracks);
+    });
+  }
+
   // Decoders and Renderers
   private videoDecoder: MoviVideoDecoder;
   private audioDecoder: MoviAudioDecoder;
@@ -119,14 +144,10 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
   // pseudo-stream; null for plain video files or audio without artwork.
   private coverArt: ImageBitmap | null = null;
 
-  // Adaptive-streaming wrappers (HLS via hls.js, DASH via dash.js). At most one
-  // is active for a given source; streamWrapper resolves whichever it is so the
-  // delegation throughout the player stays format-agnostic.
-  private hlsWrapper: HLSPlayerWrapper | null = null;
-  private dashWrapper: DASHPlayerWrapper | null = null;
-  private get streamWrapper(): HLSPlayerWrapper | DASHPlayerWrapper | null {
-    return this.hlsWrapper ?? this.dashWrapper;
-  }
+  // Active adaptive-streaming wrapper (Shaka primary, hls.js/dash.js fallback).
+  // Non-null only while a stream source is active; delegation throughout the
+  // player stays format-agnostic.
+  private streamWrapper: StreamWrapper | null = null;
 
   // Preview pipeline (C-based FFmpeg software decoding)
   private thumbnailBindings: ThumbnailBindings | null = null;
@@ -522,69 +543,105 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
     this.destroyPreviewPipeline();
 
     // Adaptive streaming — only when the caller used SourceConfig (a custom
-    // SourceAdapter bypasses URL detection entirely). HLS (.m3u8) → hls.js,
-    // DASH (.mpd) → dash.js. Both wrappers expose the same surface, so the
-    // wiring below is shared.
+    // SourceAdapter bypasses URL detection entirely). HLS (.m3u8) and DASH
+    // (.mpd) both go through Shaka Player (one engine, MSE under the hood). This
+    // covers multiplexed DASH too — Shaka plays it natively, so there's no
+    // FFmpeg fallback to fork on here.
     const src = this.config.source;
     const streamUrl =
       !this.config.sourceAdapter && src && src.type === "url" && src.url
         ? src.url
         : null;
     const lowerUrl = streamUrl?.toLowerCase() ?? "";
-    const isHls = !!streamUrl && lowerUrl.includes(".m3u8");
-    const isDash = !!streamUrl && lowerUrl.includes(".mpd");
+    // HLS (.m3u8), DASH (.mpd), and Smooth Streaming (.ism/.isml) all go
+    // through Shaka. `.ism` also matches `.isml/manifest`.
+    const isStream =
+      !!streamUrl &&
+      (lowerUrl.includes(".m3u8") ||
+        lowerUrl.includes(".mpd") ||
+        lowerUrl.includes(".ism"));
 
-    if (isHls || isDash) {
-      const wrapper = isHls
-        ? new HLSPlayerWrapper(this.config)
-        : new DASHPlayerWrapper(this.config);
-      if (isHls) {
-        this.hlsWrapper = wrapper as HLSPlayerWrapper;
-        Logger.info(TAG, "Detected HLS stream, switching to HLSPlayerWrapper");
-      } else {
-        this.dashWrapper = wrapper as DASHPlayerWrapper;
-        Logger.info(TAG, "Detected DASH stream, switching to DASHPlayerWrapper");
-      }
+    if (isStream) {
+      const isHls = lowerUrl.includes(".m3u8");
+      const isDash = lowerUrl.includes(".mpd");
+      const kind = isHls ? "HLS" : lowerUrl.includes(".ism") ? "Smooth Streaming" : "DASH";
 
-      // Proxy events
-      const events = [
-        "loadStart",
-        "loadEnd",
-        "play",
-        "pause",
-        "ended",
-        "timeUpdate",
-        "durationChange",
-        "stateChange",
-        "error",
-        "buffering",
-        "seeking",
-        "seeked",
-      ] as const;
-
-      events.forEach((evt) => {
-        // @ts-ignore
-        wrapper.on(evt, (arg) => this.emit(evt, arg));
-      });
-
-      // The wrapper has its own TrackManager — mirror its tracks onto the main
-      // one and forward quality selection back to it.
-      wrapper.trackManager.on("tracksChange", (tracks) => {
-        this.trackManager.setTracks(tracks);
-      });
+      // Forward track selections from the main TrackManager to whichever stream
+      // wrapper is currently active (added once; resolves the live field).
       this.trackManager.on("videoTrackChange", (track) => {
-        if (this.streamWrapper) {
-          this.streamWrapper.selectVideoTrack(track ? track.id : -1);
-        }
+        this.streamWrapper?.selectVideoTrack(track ? track.id : -1);
+      });
+      this.trackManager.on("audioTrackChange", (track) => {
+        if (track) this.streamWrapper?.selectAudioTrack(track.id);
+      });
+      this.trackManager.on("subtitleTrackChange", (track) => {
+        this.streamWrapper?.selectSubtitleTrack(track ? track.id : null);
       });
 
+      // --- Tier 1: Shaka (HLS + DASH + MSS + muxed). ---
       try {
-        await wrapper.load();
-        this.stateManager.setState("ready"); // Sync local state manager just in case
+        const shaka = new ShakaPlayerWrapper(this.config);
+        this.streamWrapper = shaka;
+        this.wireStreamWrapper(shaka);
+        Logger.info(TAG, `Detected ${kind} stream, using ShakaPlayerWrapper`);
+        await shaka.load();
+        this.stateManager.setState("ready");
         return;
-      } catch (e) {
-        this.stateManager.setState("error");
-        throw e;
+      } catch (eShaka) {
+        Logger.warn(TAG, `Shaka failed on ${kind} stream`, eShaka);
+        try { this.streamWrapper?.destroy(); } catch {}
+        this.streamWrapper = null;
+
+        // --- Tier 2: hls.js / dash.js. Their MSE engines play streams Shaka
+        // rejects (e.g. under-specified single-file DASH the browser demuxer
+        // handles but Shaka/FFmpeg won't). ---
+        if (isHls || isDash) {
+          try {
+            const fb = isHls
+              ? new HLSPlayerWrapper(this.config)
+              : new DASHPlayerWrapper(this.config);
+            this.streamWrapper = fb;
+            this.wireStreamWrapper(fb);
+            Logger.info(TAG, `Shaka failed; retrying with ${isHls ? "hls.js" : "dash.js"}`);
+            await fb.load();
+            this.stateManager.setState("ready");
+            Logger.info(TAG, `Recovered via ${isHls ? "hls.js" : "dash.js"}`);
+            return;
+          } catch (eFallback) {
+            Logger.warn(TAG, `${isHls ? "hls.js" : "dash.js"} fallback also failed`, eFallback);
+            try { this.streamWrapper?.destroy(); } catch {}
+            this.streamWrapper = null;
+          }
+        }
+
+        // --- Tier 3: FFmpeg demuxer for bare-<BaseURL> single-file DASH that
+        // even the MSE engines refuse (e.g. muxed single-file). Falls through
+        // to the demuxer path below with the video file as the source (+ the
+        // separate audio file as a native-audio source for demuxed content). ---
+        let fellBack = false;
+        if (isDash) {
+          try {
+            const plan = await analyzeDashFallback(streamUrl!, src?.headers);
+            if (plan) {
+              Logger.info(TAG, "Falling back to the FFmpeg demuxer");
+              this.source = await this.createSource({
+                type: "url",
+                url: plan.videoUrl,
+                headers: src?.headers,
+              });
+              if (plan.audioUrl) {
+                this.config.audioSource = { type: "url", url: plan.audioUrl, headers: src?.headers };
+              }
+              fellBack = true; // fall through to the demuxer path below
+            }
+          } catch (eDemux) {
+            Logger.warn(TAG, "FFmpeg DASH fallback failed", eDemux);
+          }
+        }
+        if (!fellBack) {
+          this.stateManager.setState("error");
+          throw eShaka; // surface the original Shaka error
+        }
       }
     }
 
@@ -592,7 +649,9 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
       // Create source — honor a pre-built adapter if the caller supplied
       // one (custom protocol, encrypted blob, IndexedDB-backed source, etc.)
       // so the demuxer can read through it without going through SourceConfig.
-      if (this.config.sourceAdapter) {
+      if (this.source) {
+        // Already resolved (defensive — a prior load may have set it).
+      } else if (this.config.sourceAdapter) {
         this.source = this.config.sourceAdapter;
       } else if (this.config.source) {
         this.source = await this.createSource(this.config.source);
@@ -2616,7 +2675,11 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
    */
   async getPreviewFrame(time: number): Promise<Blob | null> {
     if (!this.previewsAllowed()) return null; // Disabled, or source too large for a 2nd WASM context
-    if (this.streamWrapper) return null; // Previews not supported for HLS
+    // Adaptive streams: use the manifest's own thumbnail track via Shaka
+    // (DASH-IF tiled thumbnails / HLS image playlists). Returns null when the
+    // manifest has no thumbnail track, so the preview just stays hidden — far
+    // cheaper than the FFmpeg path, which can't byte-range-seek a stream.
+    if (this.streamWrapper) return (this.streamWrapper as any).getThumbnailBlob?.(time) ?? null;
     if (this.previewInitGaveUp) return null; // Init failed repeatedly — stop retrying (and re-loading WASM)
     if (this.isPreviewGenerating) return null; // Busy
     // Audio-only sources have no video track to thumbnail. Bail early
@@ -3292,6 +3355,13 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
       return result;
     }
 
+    // Adaptive streams: Shaka already applied the text-track selection (via the
+    // trackManager → streamWrapper wiring) and renders cues itself. There's no
+    // FFmpeg demuxer / subtitle decoder to configure, so stop here.
+    if (this.streamWrapper) {
+      return result;
+    }
+
     // Configure decoder for new subtitle track
     if (this.demuxer && this.subtitleDecoder) {
       const subtitleTrack = this.trackManager.getActiveSubtitleTrack();
@@ -3901,6 +3971,33 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
       this.hasNativeAudio() ||
       this.streamWrapper !== null
     );
+  }
+
+  /** True for a live (dynamic) adaptive stream — drives the LIVE indicator. */
+  isLiveStream(): boolean {
+    // Shaka-only extras — undefined on the hls.js/dash.js fallback wrappers.
+    return (this.streamWrapper as any)?.isLive?.() ?? false;
+  }
+
+  /** True when the active adaptive stream is audio-only (no video track). */
+  isStreamAudioOnly(): boolean {
+    return (this.streamWrapper as any)?.isAudioOnly?.() ?? false;
+  }
+
+  /** Live-edge time of a live stream (seekable range end). */
+  getLiveEdge(): number {
+    return (this.streamWrapper as any)?.getLiveEdge?.() ?? this.getDuration();
+  }
+
+  /** Start of a live stream's seekable (DVR) window. */
+  getSeekRangeStart(): number {
+    return (this.streamWrapper as any)?.getSeekRangeStart?.() ?? 0;
+  }
+
+  /** Jump to the live edge of a live stream. */
+  seekToLive(): void {
+    const edge = this.getLiveEdge();
+    if (isFinite(edge) && edge > 0) this.streamWrapper?.seek(edge);
   }
 
   /**
@@ -5196,11 +5293,10 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
     this.stopBackgroundTimer();
     this.stopPauseBuffering();
 
-    // Destroy the adaptive-streaming wrapper (HLS or DASH)
+    // Destroy the adaptive-streaming wrapper (HLS or DASH, via Shaka)
     if (this.streamWrapper) {
       this.streamWrapper.destroy();
-      this.hlsWrapper = null;
-      this.dashWrapper = null;
+      this.streamWrapper = null;
     }
 
     this.pendingPrebufferPackets = [];
