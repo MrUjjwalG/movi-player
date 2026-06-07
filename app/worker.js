@@ -418,7 +418,9 @@ movi-player{width:100%;height:100%;display:block}
 import "/dist/${BUILD_VERSION}/element.js";
 const p=document.getElementById("p");
 const url="${videoUrl.replace(/"/g, "&quot;")}";
-if(url) p.src="/proxy?url="+encodeURIComponent(url);
+// Adaptive-streaming manifests (HLS/DASH/Smooth) load directly — the player
+// fetches their (relative-URL) segments itself, which /proxy?url= would break.
+if(url) p.src=/\\.(m3u8|mpd|ism)($|\\?)/i.test(url)?url:"/proxy?url="+encodeURIComponent(url);
 </script>
 </body>
 </html>`;

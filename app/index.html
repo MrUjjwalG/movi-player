@@ -3738,6 +3738,14 @@
         try {
           if (new URL(url, location.href).origin === location.origin) return url;
         } catch { /* not a parseable URL — fall through to proxy */ }
+        // Adaptive-streaming manifests (HLS .m3u8, DASH .mpd, Smooth .ism) must
+        // NOT be proxied. The player (Shaka/hls.js/dash.js) fetches the manifest
+        // AND its segments itself, and segment URLs inside a manifest are
+        // relative — routing the manifest through /proxy?url= breaks that
+        // resolution, and the proxy's content-type allowlist rejects the
+        // text/xml manifests some CDNs serve. These CDNs are CORS-enabled, so
+        // load them directly.
+        if (/\.(m3u8|mpd|ism)(\?|$)/i.test(url)) return url;
         return `/proxy?url=${encodeURIComponent(url)}`;
       };
 
