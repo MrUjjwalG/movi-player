@@ -236,14 +236,21 @@ export class DASHPlayerWrapper extends EventEmitter<PlayerEventMap> {
           (typeof e?.error === "string" ? e.error : e?.error?.code) ||
           "DASH playback error";
         Logger.error(TAG, `DASH error: ${detail}`);
-        // Only fail the load if it hasn't completed yet; later non-fatal errors
-        // surface to listeners without rejecting an already-resolved promise.
         const err = new Error(String(detail));
-        this.emit("error", err);
-        this.setState("error");
         if (!settled) {
+          // Pre-load failure: reject ONLY — don't emit. dash.js is a fallback
+          // behind Shaka, so MoviPlayer is still working through the chain and
+          // surfaces the final (correctly-classified) error itself. Emitting
+          // here flashes the error overlay mid-fallback — and a manifest 403
+          // gets misread as a decode failure, briefly showing an irrelevant
+          // "Try Software Decoding" button. Mirrors ShakaPlayerWrapper, which
+          // throws without emitting.
           settled = true;
           reject(err);
+        } else {
+          // Post-load runtime error — surface to listeners as usual.
+          this.emit("error", err);
+          this.setState("error");
         }
       });
     });

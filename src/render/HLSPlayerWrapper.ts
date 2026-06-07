@@ -227,6 +227,11 @@ export class HLSPlayerWrapper extends EventEmitter<PlayerEventMap> {
     this.hls.attachMedia(this.videoElement);
 
     return new Promise<void>((resolve, reject) => {
+      // Tracks whether load() has resolved. Before it has, a fatal error is a
+      // load failure the caller (MoviPlayer) handles via its fallback chain —
+      // we reject only. After it, errors are runtime and we emit them.
+      let settled = false;
+
       this.hls!.on(Hls.Events.MEDIA_ATTACHED, () => {
         Logger.info(TAG, "HLS Media Attached");
         this.hls!.loadSource(url);
@@ -241,6 +246,7 @@ export class HLSPlayerWrapper extends EventEmitter<PlayerEventMap> {
 
         this.setState("ready");
         this.emit("loadEnd", undefined);
+        settled = true;
         resolve();
       });
 
@@ -268,9 +274,18 @@ export class HLSPlayerWrapper extends EventEmitter<PlayerEventMap> {
           const emitFatal = (msg: string) => {
             this.hls!.destroy();
             const err = new Error(msg);
-            this.emit("error", err);
-            this.setState("error");
-            reject(err);
+            if (!settled) {
+              // Pre-load failure: reject ONLY (no emit). hls.js is a fallback
+              // behind Shaka; MoviPlayer surfaces the final classified error
+              // itself. Emitting here flashes the error overlay mid-fallback —
+              // a manifest 403 gets misread as a decode failure and briefly
+              // shows an irrelevant "Try Software Decoding" button.
+              settled = true;
+              reject(err);
+            } else {
+              this.emit("error", err);
+              this.setState("error");
+            }
           };
 
           switch (data.type) {
