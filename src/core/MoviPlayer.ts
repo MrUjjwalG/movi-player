@@ -83,6 +83,11 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
   // (pre-blob) URL for same-source detection and the object URL for revocation.
   private _nativeAudioObjectUrl: string | null = null;
   private _nativeAudioLogicalUrl: string | null = null;
+  // Set when autoplay-with-sound was blocked for the native <audio> track and we
+  // fell back to muted playback. Surfaces via isAudioBlockedSuspended() so the
+  // element shows the "Tap to unmute" pill (mirrors the WebAudio path). Cleared
+  // on a successful unmuted play or when the user unmutes.
+  private _nativeAudioAutoplayBlocked: boolean = false;
   private _audioTracks: AudioSourceEntry[] = [];
   private _activeAudioLang: string = "";
 
@@ -1231,14 +1236,21 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
       this.nativeAudioEl.playbackRate = this.clock.getPlaybackRate();
       try {
         await this.nativeAudioEl.play();
+        this._nativeAudioAutoplayBlocked = false;
       } catch {
-        Logger.warn(TAG, "Native audio play blocked — staying paused for user gesture");
-        if (!this.disableAudio) this.audioRenderer.pause();
-        if (this.videoRenderer) this.videoRenderer.stopPresentationLoop();
-        if (this.stateManager.getState() !== "paused") {
-          this.stateManager.setState("paused");
-        }
-        return;
+        // Autoplay-with-sound was blocked (no user gesture yet). A bare <audio>
+        // element won't autoplay even when muted (Chrome's muted-autoplay
+        // allowance is really for <video>), so we can't start its audio yet —
+        // but the VIDEO lives on the canvas and needs no autoplay permission.
+        // Roll the video on the wall clock (while the element is paused the
+        // clock's audio provider returns -1, so it falls back automatically),
+        // flag the block, and let the element surface the "Tap to unmute" pill.
+        // The unmute gesture (setMuted(false)) then seeks + plays the audio,
+        // which re-assumes clock-master duty. Mirrors the WebAudio/in-file path,
+        // where video rolls while the AudioContext stays suspended.
+        Logger.warn(TAG, "Native audio autoplay blocked — rolling video muted (tap to unmute)");
+        this._nativeAudioAutoplayBlocked = true;
+        // Fall through — do NOT pause or stop the presentation loop.
       }
     }
 
@@ -4441,6 +4453,19 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
     }
     if (this.nativeAudioEl) {
       this.nativeAudioEl.muted = muted;
+      // Unmuting resolves a native-audio autoplay block. The <audio> couldn't
+      // start without a gesture, so the video has been rolling on the wall clock
+      // with the audio paused — THIS unmute is the gesture. Sync the audio to
+      // the current playhead and start it; it then re-assumes clock-master duty.
+      if (!muted && this._nativeAudioAutoplayBlocked) {
+        this._nativeAudioAutoplayBlocked = false;
+        if (this.nativeAudioEl.paused && this.stateManager.getState() === "playing") {
+          try {
+            this.nativeAudioEl.currentTime = Math.max(0, this.clock.getTime() - this.startTime);
+          } catch {}
+          this.nativeAudioEl.play().catch(() => {});
+        }
+      }
     }
   }
 
@@ -4649,7 +4674,12 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
    * muted playback + a "Tap to unmute" pill.
    */
   isAudioBlockedSuspended(): boolean {
-    if (this.disableAudio || this.streamWrapper) return false;
+    if (this.streamWrapper) return false;
+    // Native <audio> autoplay blocked → muted-and-rolling: report blocked so
+    // the element shows the unmute pill (disableAudio is true in this path, so
+    // it must be checked before the disableAudio short-circuit below).
+    if (this._nativeAudioAutoplayBlocked) return true;
+    if (this.disableAudio) return false;
     return this.audioRenderer.isBlockedSuspended();
   }
 
