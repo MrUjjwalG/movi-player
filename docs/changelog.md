@@ -7,6 +7,38 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.3.1] - 2026-06-10
+
+### Added
+- **MPEG-DASH playback (`.mpd`) (closes #9)**: DASH manifests now play alongside HLS through the adaptive pipeline.
+- **Unified adaptive streaming via Shaka (HLS / DASH / Smooth)**: Shaka is the primary engine for `.m3u8` / `.mpd` / `.ism`; hls.js and dash.js remain as automatic fallbacks. `DashFallback` plays bare-`BaseURL` manifests Shaka rejects via the demuxer.
+- **Live-stream UI**: `LIVE` badge that jumps to the live edge, DVR-window seeking, Auto-mode quality badge.
+- **Custom request headers (`headers` attribute / property)**: Auth tokens / signed headers across manifest + segments, progressive HTTP, thumbnails, and the encrypted source. JSON-string attribute or object property; also `PlayerConfig.headers`.
+- **Audio-only data-saver mode (`audioonly` attribute / `audioOnly` property)**: Play just the audio to save CPU/bandwidth — muxed files skip the video decode, streams switch to an audio-only rendition, split sources stop downloading the video body. Live-toggleable, forces the album-art strip UI.
+- **Non-range (no-Range) server playback**: Servers that ignore `Range` (`200` not `206`) now play via a forward-only sliding window (**linear mode**); a new `linearmode` event lets the UI adapt.
+- **MPEG-5 LCEVC decoding (`lcevc` / `lcevcurl` attributes)**: Opt-in LCEVC enhancement-layer decoding for adaptive streams.
+- **Muted-autoplay fallback for split native-audio tracks**: rolls video muted + shows the tap-to-unmute pill instead of freezing.
+- **Extension: detect `.mpd` (DASH) URLs in page scan.**
+- **VS Code extension: adaptive streaming via URL** — `Movi: Open Video from URL` plays `.m3u8` / `.mpd` / `.ism` by loading them directly in the player engine (no host byte-range proxy); progressive files still use the proxy.
+- **VS Code extension: `.ts` (MPEG-TS) added to the open-file dialog** (not the single-click association).
+
+### Changed
+- **DRM key-system order**: Widevine → PlayReady → FairPlay.
+- **Manifests load directly, never via `/proxy`**: fixes relative segment resolution and the proxy content-type allowlist for `.m3u8` / `.mpd` / `.ism`.
+- **Size resolution hardened**: HEAD → ranged GET → plain GET retry chain for CDNs that strip `Content-Length`.
+- **deps**: add `shaka-player ^4.11.2`, `dashjs ^5.2.0`; bump `hls.js` to `^1.6.16`.
+
+### Fixed
+- **Robust startup**: visible play affordance on blocked autoplay, guarded first-play seek, background-tab autoplay deferred until visible.
+- **Don't flash wrapper errors mid-fallback**: no spurious "Try Software Decoding" while falling back behind Shaka.
+- **HTTP errors surface real messages**: `403` / `404` / `5xx` map to access-denied / not-found / server-error.
+- **Wake lock**: skip while hidden, retry transient failure, re-acquire on visible/resize.
+- **Don't collapse a loading/errored video into the 56px audio strip on resize.**
+- **App proxy**: don't proxy same-origin URLs (522 loop); don't magic-sniff tiny range probes.
+- **Volume slider opens on first touch; ambient re-applies after `src` change.**
+- **Cover-art backdrop blur** via CSS `filter:blur()` (works in Safari < 17); audio-only `poster` renders as album art.
+- **Audio-only replay/loop restarts the native `<audio>`; no context menu without `controls`.**
+
 ## [0.3.0] - 2026-06-02
 
 ### Added

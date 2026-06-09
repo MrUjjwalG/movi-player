@@ -2,7 +2,9 @@
 
 Play modern video formats directly inside VS Code — **MKV, HEVC, AV1, HDR, WebM, MOV, AVI, M2TS** and more, including formats VS Code can't natively handle.
 
-100% local. Nothing uploaded. Powered by FFmpeg WebAssembly + WebCodecs hardware decoding. True streaming — multi-GB and 8K HDR files no longer hit the 4 GB Blob limit. **Remote URLs stream through the extension host**, so cross-origin videos play without CORS errors that block them in browsers.
+![Movi Player](https://raw.githubusercontent.com/MrUjjwalG/movi-player/main/docs/images/element.gif)
+
+100% local. Nothing uploaded. Powered by FFmpeg WebAssembly + WebCodecs hardware decoding. True streaming — multi-GB and 8K HDR files no longer hit the 4 GB Blob limit. **Progressive remote URLs stream through the extension host**, so cross-origin videos play without CORS errors that block them in browsers. **Adaptive streams (HLS `.m3u8`, MPEG-DASH `.mpd`, Smooth `.ism`)** load directly in the player engine against CORS-enabled CDNs.
 
 ## Usage
 
@@ -30,7 +32,7 @@ Right-click any video in the Explorer to get extra options:
 | `Movi: Open Video File` | File picker |
 | `Movi: Open Video File to the Side` | File picker, opens beside the active editor |
 | `Movi: Open Video File in New Window` | File picker, opens in a new VS Code window |
-| `Movi: Open Video from URL` | Paste a remote video URL |
+| `Movi: Open Video from URL` | Paste a remote video URL — progressive files or adaptive streams (`.m3u8` / `.mpd` / `.ism`) |
 | `Movi: Open URL to the Side` | Paste a remote URL beside the active editor |
 | `Movi: Open URL in New Window` | Paste a remote URL in a new VS Code window |
 | `Movi: Play with Movi Player` | Open the active editor's file |
@@ -39,7 +41,9 @@ Right-click any video in the Explorer to get extra options:
 
 ## Supported formats
 
-**Containers:** MP4, MKV, WebM, MOV, M2TS, AVI, FLV, WMV, MPG/MPEG, 3GP
+**Containers:** MP4, MKV, WebM, MOV, MPEG-TS (`.ts`), M2TS, AVI, FLV, WMV, MPG/MPEG, 3GP
+
+**Adaptive streaming (via URL):** HLS (`.m3u8`), MPEG-DASH (`.mpd`), Smooth Streaming (`.ism`) — paste a manifest URL via `Movi: Open Video from URL`
 
 **Video codecs:** H.264, HEVC (H.265), AV1, VP9, VP8 — hardware-accelerated where available
 

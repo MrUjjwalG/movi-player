@@ -34,7 +34,9 @@
 - **Picture-in-Picture** -- Document PiP with controls (play/pause, seek, mute, progress). Chromium 116+.
 - **Ambient mode** -- Dynamic letterbox glow that samples video colors in real-time. Press `G` or use context menu.
 - **Split sources** -- Separate video, audio, and subtitle file URLs via `videosrc`, `audiosrc`, `subtitlesrc` attributes.
-- **DRM ready** -- Optional Widevine/FairPlay support via `drm` + `licenseurl` attributes for HLS streams.
+- **Adaptive streaming** -- HLS (`.m3u8`), MPEG-DASH (`.mpd`), and Smooth Streaming (`.ism`) unified through Shaka Player, with a live-edge UI and DVR seeking.
+- **Custom request headers** -- Send auth tokens / signed headers across manifests, segments, progressive HTTP, and the encrypted source via the `headers` attribute.
+- **DRM ready** -- Optional Widevine/PlayReady/FairPlay support via `drm` + `licenseurl` attributes for adaptive streams.
 
 ### vs. Other Players
 
@@ -116,7 +118,40 @@ await player.play();
 AES-256-GCM encrypted, HMAC signed, 2s token expiry, IP + fingerprint binding.
 See [encrypted-server/](encrypted-server/) for the server example.
 
-### DRM (HLS + Widevine/FairPlay)
+### Adaptive Streaming (HLS / DASH / Smooth)
+
+```html
+<!-- HLS -->
+<movi-player src="https://example.com/master.m3u8" controls autoplay muted></movi-player>
+
+<!-- MPEG-DASH -->
+<movi-player src="https://example.com/manifest.mpd" controls autoplay muted></movi-player>
+
+<!-- Smooth Streaming -->
+<movi-player src="https://example.com/manifest.ism/manifest" controls autoplay muted></movi-player>
+```
+
+`.m3u8`, `.mpd`, and `.ism` are unified through Shaka Player (with hls.js / dash.js as automatic fallbacks) and drawn to the same canvas pipeline, so the quality menu, stats, and track switching work identically across all three. Live streams get a `LIVE` badge, jump-to-edge, DVR-window seeking, and an Auto-mode quality badge.
+
+### Custom Request Headers
+
+```html
+<!-- JSON attribute -->
+<movi-player
+  src="https://example.com/master.m3u8"
+  headers='{"Authorization":"Bearer <token>"}'
+  controls autoplay muted
+></movi-player>
+```
+
+```js
+// Or the property (preferred for non-trivial maps)
+player.headers = { Authorization: `Bearer ${token}` };
+```
+
+Headers ride along on every media request -- manifest + segments, progressive HTTP, thumbnails, and the encrypted source.
+
+### DRM (Widevine / PlayReady / FairPlay)
 
 ```html
 <movi-player
@@ -127,7 +162,7 @@ See [encrypted-server/](encrypted-server/) for the server example.
 ></movi-player>
 ```
 
-Requires a DRM license server (PallyCon, EZDRM, BuyDRM, etc.). In DRM mode, native `<video>` element is used (canvas features like rotation are disabled).
+Requires a DRM license server (PallyCon, EZDRM, BuyDRM, etc.). Key systems are tried Widevine → PlayReady → FairPlay. In DRM mode, the native `<video>` element is used (canvas features like rotation are disabled).
 
 ### Demuxer Only (50KB)
 
@@ -175,7 +210,13 @@ Use cases: video validators, asset management, HDR detection pipelines, search i
 
 **Playback** -- MP4, MKV, WebM, MOV, TS, AVI. H.264, HEVC, VP9, AV1. Hardware decode with software fallback. Pitch-preserving time-stretch via Signalsmith Stretch.
 
-**Audio** -- AAC, MP3, Opus, FLAC, AC-3, E-AC-3. Multi-track switching. Stable volume (loudness normalization). First-class audio-only mode with cover art extraction and a dedicated strip UI. Perceptual (log) volume curve. Muted-autoplay fallback with tap-to-unmute.
+**Adaptive Streaming** -- HLS (`.m3u8`), MPEG-DASH (`.mpd`), and Smooth Streaming (`.ism`) unified through Shaka Player (hls.js / dash.js fallbacks). Live-edge badge, DVR-window seeking, Auto-mode quality badge. Optional MPEG-5 LCEVC enhancement-layer decoding via `lcevc` + `lcevcurl`.
+
+**Custom Headers** -- Send auth tokens / signed headers across the whole media flow (manifest, segments, progressive HTTP, thumbnails, encrypted source) via the `headers` attribute (JSON) or property (object).
+
+**Audio** -- AAC, MP3, Opus, FLAC, AC-3, E-AC-3. Multi-track switching. Stable volume (loudness normalization). First-class audio-only mode with cover art extraction and a dedicated strip UI. Data-saver `audioonly` mode skips the video decode (and fetches an audio-only stream rendition). Perceptual (log) volume curve. Muted-autoplay fallback with tap-to-unmute.
+
+**Non-Range Servers** -- Servers that ignore `Range` (respond `200`, not `206`) still play via a forward-only sliding-window "linear mode" with in-window seeking; the `linearmode` event lets your UI adapt.
 
 **Subtitles** -- SRT, ASS, WebVTT, PGS (image-based), DVB. Multi-track with on-the-fly switching. Per-source delay/offset (`Z` / `X` to nudge ±100ms), full transcript browser with search + click-to-seek, customizable size/color/background/edge (persisted), karaoke-aligned VTT.
 
@@ -246,7 +287,11 @@ Use cases: video validators, asset management, HDR detection pipelines, search i
   resume                    <!-- Resume from last position -->
   stablevolume              <!-- Loudness normalization -->
   buffersize="200"          <!-- Max prefetch window in MB (HTTP + encrypted) -->
-  renderer="canvas"         <!-- canvas (HLS/DRM auto-pick their own pipeline) -->
+  renderer="canvas"         <!-- canvas (HLS/DASH/DRM auto-pick their own pipeline) -->
+  headers='{"k":"v"}'       <!-- Custom request headers (JSON) for all media requests -->
+  audioonly                 <!-- Data-saver: play audio only, skip video decode -->
+  lcevc                     <!-- Enable MPEG-5 LCEVC enhancement decoding (adaptive streams) -->
+  lcevcurl="https://..."    <!-- URL to lazy-load the lcevc_dec.js decoder library -->
   sw                        <!-- Force software decoding -->
   fps="60"                  <!-- Override frame rate -->
   gesturefs                 <!-- Gestures only in fullscreen -->
@@ -255,8 +300,8 @@ Use cases: video validators, asset management, HDR detection pipelines, search i
   tokenurl="/api/token"     <!-- Token endpoint (encrypted) -->
   videourl="/api/video"     <!-- Video endpoint (encrypted) -->
   videoid="movie.mp4"       <!-- Video ID (encrypted) -->
-  drm                       <!-- DRM mode for HLS (native video + EME) -->
-  licenseurl="https://..."  <!-- Widevine/FairPlay license server URL -->
+  drm                       <!-- DRM mode for adaptive streams (native video + EME) -->
+  licenseurl="https://..."  <!-- Widevine/PlayReady/FairPlay license server URL -->
 ></movi-player>
 ```
 

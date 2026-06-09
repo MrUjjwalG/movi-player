@@ -11,11 +11,40 @@ import { MoviActionsProvider } from "./actionsView";
 const VIDEO_EXTS = [
   // Video
   "mp4", "mkv", "webm", "mov", "avi", "flv", "wmv",
-  "m4v", "3gp", "mpg", "mpeg", "m2ts", "mts", "evo", "hevc", "265",
+  "m4v", "3gp", "mpg", "mpeg", "ts", "m2ts", "mts", "evo", "hevc", "265",
   // Audio
   "mp3", "m4a", "m4b", "aac", "flac", "wav", "wave",
   "ogg", "oga", "opus", "ac3", "ec3", "eac3", "mka", "dts",
 ];
+
+// Adaptive-streaming manifests (HLS / DASH / Smooth) are played by the bundled
+// player's own engine (Shaka / hls.js / dash.js), which fetches the manifest
+// AND its segments itself. They must load directly via the player's `src`
+// (against CORS-enabled CDNs) — NOT through the host byte-range proxy, which
+// only works for progressive single-file sources.
+const ADAPTIVE_STREAM_EXTS = ["m3u8", "mpd", "ism", "isml"];
+
+function isAdaptiveStreamUrl(url: string): boolean {
+  try {
+    const p = new URL(url).pathname.toLowerCase();
+    if (/\.isml?(\/manifest)?$/.test(p)) return true; // Smooth: .ism / .ism/manifest
+    return ADAPTIVE_STREAM_EXTS.includes(p.split(".").pop() || "");
+  } catch {
+    return false;
+  }
+}
+
+function streamNameFromUrl(url: string): string {
+  try {
+    const parts = new URL(url).pathname.split("/").filter(Boolean);
+    let last = decodeURIComponent(parts.pop() || "stream");
+    // For Smooth's .ism/manifest, the meaningful name is the parent segment.
+    if (/^manifest$/i.test(last)) last = parts.pop() || last;
+    return last.replace(/\.[^.]+$/, "") || "Stream";
+  } catch {
+    return "Stream";
+  }
+}
 
 let commandPanel: vscode.WebviewPanel | undefined;
 let logChannel: vscode.OutputChannel | undefined;
@@ -593,15 +622,27 @@ async function openCommandPanelWithUrl(
   const webviewRoot = vscode.Uri.joinPath(context.extensionUri, "webview");
   const folders = vscode.workspace.workspaceFolders ?? [];
 
-  // Probe URL on the extension host (no CORS) before opening the panel —
-  // gives us size + mime + post-redirect URL for the streaming pipeline.
-  let probed: Awaited<ReturnType<typeof probeHttpUrl>>;
-  try {
-    probed = await probeHttpUrl(url);
-  } catch (err: unknown) {
-    const message = err instanceof Error ? err.message : String(err);
-    vscode.window.showErrorMessage(`Movi: Failed to load URL — ${message}`);
-    return;
+  // Adaptive streams (HLS/DASH/Smooth) load directly in the player — the
+  // engine fetches the manifest + segments itself, so we skip the host
+  // byte-range proxy (it can't resolve a manifest's relative segment URLs).
+  const adaptive = isAdaptiveStreamUrl(url);
+
+  // Progressive sources are probed on the extension host (no CORS) before
+  // opening the panel — gives us size + mime + post-redirect URL for the
+  // byte-range streaming pipeline. Adaptive streams skip this entirely.
+  let probed: Awaited<ReturnType<typeof probeHttpUrl>> | undefined;
+  let title: string;
+  if (adaptive) {
+    title = streamNameFromUrl(url);
+  } else {
+    try {
+      probed = await probeHttpUrl(url);
+      title = probed.name;
+    } catch (err: unknown) {
+      const message = err instanceof Error ? err.message : String(err);
+      vscode.window.showErrorMessage(`Movi: Failed to load URL — ${message}`);
+      return;
+    }
   }
 
   // Active reuses the singleton commandPanel slot (one URL at a time in
@@ -619,7 +660,7 @@ async function openCommandPanelWithUrl(
 
   const panel = vscode.window.createWebviewPanel(
     "moviPlayer",
-    probed.name + " — Movi Player",
+    title + " — Movi Player",
     column,
     {
       enableScripts: true,
@@ -643,13 +684,19 @@ async function openCommandPanelWithUrl(
       // Aux windows can't host Zen Mode (settings-driven chrome hide
       // targets the main window) — disable Movi fullscreen there.
       if (isAux) panel.webview.postMessage({ type: "disableFullscreen" });
-      panel.webview.postMessage({
-        type: "loadStream",
-        name: probed.name,
-        size: probed.size,
-        mimeType: probed.mimeType,
-      });
+      if (adaptive) {
+        // Direct load — the player's Shaka/hls.js/dash.js engine handles it.
+        panel.webview.postMessage({ type: "loadUrl", url });
+      } else {
+        panel.webview.postMessage({
+          type: "loadStream",
+          name: probed!.name,
+          size: probed!.size,
+          mimeType: probed!.mimeType,
+        });
+      }
     } else if (msg?.type === "readChunk") {
+      if (!probed) return; // byte-range proxy only — adaptive streams never ask
       const { id, start, length } = msg;
       try {
         const buffer = await fetchHttpRange(

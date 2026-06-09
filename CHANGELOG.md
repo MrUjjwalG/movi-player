@@ -7,6 +7,41 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.3.1] - 2026-06-10
+
+### Added
+- **MPEG-DASH playback (`.mpd`) (closes #9)**: DASH manifests now play through the adaptive-streaming pipeline alongside HLS. Standard demuxed DASH is fully supported; the player draws dash.js/Shaka frames to the shared canvas via `requestVideoFrameCallback` so all UI, stats, and the quality menu stay format-agnostic.
+- **Unified adaptive streaming via Shaka Player (HLS / DASH / Smooth)**: Shaka Player is now the primary adaptive engine, collapsing the old hls.js/dash.js wrapper pair into a single format-agnostic `streamWrapper` that handles `.m3u8` (HLS), `.mpd` (DASH), and `.ism` (Smooth Streaming). hls.js and dash.js remain as automatic fallbacks. `DashFallback` resolves bare-`BaseURL` manifests Shaka rejects (`DASH_EMPTY_PERIOD`) by playing the fragmented MP4s through the demuxer.
+- **Live-stream UI**: A `LIVE` badge that jumps to the live edge, DVR-window seeking, and an Auto-mode quality badge showing the currently-served rendition.
+- **Custom request headers (`headers` attribute / property)**: Send auth tokens or signed headers across the *entire* media network flow — manifest + segments (Shaka request filter, hls.js `xhrSetup`, dash.js request interceptor), progressive HTTP, thumbnails, and the encrypted source (stream GET + token refresh). Set via the `headers` attribute (JSON string) or the `headers` property (object) on `<movi-player>`, or `PlayerConfig.headers`. Native `<audio>` can't carry headers, so split-audio tracks are fetched with headers and played from an in-memory blob URL.
+- **Audio-only data-saver mode (`audioonly` attribute / `audioOnly` property)**: Play just the audio to save CPU and bandwidth. Muxed files skip the video decode; adaptive streams switch to an audio-only (or smallest) rendition with ABR off; split sources stop the demux loop entirely so the video body never downloads. Live-toggleable without a reload, and the UI forces the album-art / strip surface.
+- **Non-range (no-Range) server playback**: Servers that ignore `Range` (respond `200`, not `206`) now play instead of hard-failing. Small bodies are cached whole for full random access; larger bodies use a bounded forward-only sliding window (**linear mode**) with a trailing history so in-window seeking still works. A new `linearmode` event lets the UI adapt (keep the scrubber, hide the seek-dependent thumbnail strip, clamp seeks to the buffered RAM window).
+- **MPEG-5 LCEVC decoding (`lcevc` / `lcevcurl` attributes)**: Opt-in LCEVC enhancement-layer decoding for adaptive streams via the external `lcevc_dec.js` library (`PlayerConfig.lcevc` / `lcevcUrl`).
+- **Muted-autoplay fallback for split native-audio tracks**: When autoplay-with-sound is blocked and audio comes from a separate native `<audio>` track, the player now rolls the video muted on the wall clock and shows the "Tap to unmute" pill (matching the WebAudio path) instead of freezing on the first frame.
+- **Extension: detect `.mpd` (DASH) URLs in page scan**: The Chrome extension's play-button overlay, URL probe, and player now recognise `.mpd` links and the `application/dash+xml` content-type.
+- **VS Code extension: adaptive streaming via URL**: `Movi: Open Video from URL` now plays HLS (`.m3u8`), MPEG-DASH (`.mpd`), and Smooth (`.ism`) manifests by loading them **directly** in the bundled player's engine against CORS-enabled CDNs, instead of the host byte-range proxy — the proxy can't resolve a manifest's relative segment URLs, so progressive files still use it while adaptive streams bypass it.
+- **VS Code extension: `.ts` (MPEG-TS) in the open-file dialog**: added to the `Movi: Open Video File` picker filter (kept out of the single-click custom-editor association so `.ts` TypeScript files aren't hijacked).
+
+### Changed
+- **DRM key-system order**: Adaptive-streaming DRM now tries Widevine → PlayReady → FairPlay in order.
+- **Manifests load directly, never via `/proxy`**: Adaptive-streaming players fetch the manifest and its (relative) segment URLs themselves, so `.m3u8` / `.mpd` / `.ism` manifests are now loaded directly in both the web app and the `/embed` page. Routing them through `/proxy` broke relative segment resolution and tripped the proxy's content-type allowlist on the `text/xml` manifests some CDNs serve.
+- **Size resolution hardened for CDNs that strip `Content-Length`**: Source size is recovered via a retry chain — HEAD → ranged GET → last-resort plain GET — so seeking and progress work on servers that omit `Content-Length` on HEAD.
+- **deps**: add `shaka-player ^4.11.2` and `dashjs ^5.2.0`; bump `hls.js` to `^1.6.16`.
+
+### Fixed
+- **Robust startup**: blocked-autoplay sources now keep a visible play affordance (the centre play button no longer stays hidden after a rejected `ready → paused` transition); the first-play demuxer seek is guarded so a degenerate source goes to `error` instead of throwing an uncaught `error -1` and looping `play()`; background-tab autoplay is deferred until the tab is visible (browsers throttle/gate background autoplay anyway).
+- **Stream: don't emit wrapper errors mid-fallback**: hls.js/dash.js (fallbacks behind Shaka) no longer fire an `error` event on a *pre-load* failure — they reject `load()` only — so the error overlay no longer flashes a spurious "Try Software Decoding" button while the player works through the fallback chain.
+- **HTTP errors surface real messages**: `403` / `404` / `5xx` now read as access-denied / not-found / server-error (Shaka `NETWORK` code split on `BAD_HTTP_STATUS`) instead of a generic "check your internet" / decode-failure message.
+- **Wake lock**: skip the request entirely while the page is hidden (the API rejects there), retry once (~600 ms) on a transient failure while visible, and re-acquire idempotently on tab-visible and on resize (fullscreen / orientation / PiP transitions) so a dropped lock recovers.
+- **Don't collapse a loading/errored video into the 56px audio strip**: a still-loading or failed video source (which has no tracks yet) is no longer mistaken for audio-only on a resize — audio-only is decided from the `src` media type until tracks resolve.
+- **App: don't proxy same-origin URLs**: avoids a `522` self-fetch loop.
+- **App: don't magic-sniff tiny range probes in `/proxy`**.
+- **Volume slider opens on first touch** even when `matchMedia` reports hover-capable, and collapses when the controls bar hides.
+- **Ambient mode re-applies after a `src` change** instead of staying "on" in the menu but not painting.
+- **Audio-only replay/loop restarts the separate native `<audio>`** (the `wasEnded` path previously left it paused); no custom right-click context menu when there's no `controls` attribute.
+- **Cover-art backdrop blur** moved from canvas `ctx.filter` (ignored by Safari < 17) to a CSS `filter: blur()` layer — a real Gaussian in every browser; an audio-only `poster` now renders as album art (blurred backdrop + centred) instead of the bare strip.
+- **Empty-state centring** uses a host class instead of `:has()`, and the "Security Headers Missing" diagnostic no longer doubles up.
+
 ## [0.3.0] - 2026-06-02
 
 ### Added

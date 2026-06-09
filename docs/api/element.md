@@ -132,6 +132,7 @@ Specifies the video source URL or File object.
 - QuickTime (`.mov`)
 - MPEG-TS (`.ts`)
 - Any FFmpeg-supported format
+- Adaptive streams — HLS (`.m3u8`), MPEG-DASH (`.mpd`), Smooth Streaming (`.ism`) — auto-routed to Shaka Player (see [Adaptive Streaming](#adaptive-streaming))
 
 ---
 
@@ -338,8 +339,8 @@ Chooses the rendering backend.
 <movi-player src="video.mp4" renderer="canvas"></movi-player>
 ```
 
-::: info MSE / HLS / DRM
-There is no separate `mse` renderer — HLS streams (`.m3u8`) are handled internally via `hls.js` + a hidden native `<video>` element, and DRM is opt-in via the `drm` + `licenseurl` attributes. Both paths are selected automatically; you don't pick them via `renderer`.
+::: info MSE / Adaptive streaming / DRM
+There is no separate `mse` renderer — adaptive streams (HLS `.m3u8`, MPEG-DASH `.mpd`, Smooth Streaming `.ism`) are handled internally via Shaka Player (with hls.js / dash.js as automatic fallbacks) feeding a hidden native `<video>` element whose frames are drawn to the canvas. DRM is opt-in via the `drm` + `licenseurl` attributes. All of these paths are selected automatically from the source URL; you don't pick them via `renderer`.
 :::
 
 ---
@@ -702,6 +703,70 @@ Supported providers: PallyCon, EZDRM, BuyDRM, AWS Media Services, custom.
 
 ---
 
+#### `headers`
+
+Custom HTTP headers applied to **every** media network request — adaptive-stream manifests *and* their segments (Shaka request filter, hls.js `xhrSetup`, dash.js request interceptor), progressive HTTP, thumbnails, and the encrypted source (stream GET + token refresh). Use it to carry auth tokens, signed-URL headers, or API keys.
+
+```html
+<!-- Declarative: a JSON object string -->
+<movi-player
+  src="https://example.com/master.m3u8"
+  headers='{"Authorization":"Bearer eyJ..."}'
+  controls
+></movi-player>
+```
+
+```typescript
+// Property form (preferred for non-trivial maps) — takes an object, not a string
+player.headers = { Authorization: `Bearer ${token}`, "X-Api-Key": key };
+```
+
+**Notes:**
+- The attribute must be valid JSON; an invalid string is ignored with a console warning.
+- A native `<audio>` element can't carry custom headers, so when `headers` is set a split-audio track is fetched (with the headers) and played from an in-memory blob URL.
+- Changing `headers` on a connected element with a source reloads it.
+
+---
+
+#### `audioonly`
+
+Data-saver mode — play only the audio and skip the video decode to save CPU and bandwidth. Toggleable live (no reload for muxed/file sources).
+
+```html
+<movi-player src="podcast.mkv" audioonly controls></movi-player>
+```
+
+```typescript
+player.audioOnly = true;   // switch to audio-only at runtime
+player.audioOnly = false;  // restore video
+```
+
+**Behavior by source type:**
+- **Muxed file** — the process loop skips the video decode (saves CPU).
+- **Adaptive stream** — switches to an audio-only variant (or the smallest video rendition) with ABR off (saves bandwidth), done live via track selection.
+- **Split source** — stops the demux loop entirely so the video file body never downloads; the native `<audio>` drives playback.
+
+The UI forces the album-art / strip surface and disables previews. The attribute maps to the `audioOnly` property and `PlayerConfig.audioOnly`.
+
+---
+
+#### `lcevc` / `lcevcurl`
+
+Enables MPEG-5 Part 2 **LCEVC** enhancement-layer decoding for adaptive streams. Requires the external `lcevc_dec.js` library — point `lcevcurl` at it to lazy-load, or expose a global `LCEVCdec`.
+
+```html
+<movi-player
+  src="https://example.com/manifest.mpd"
+  lcevc
+  lcevcurl="https://cdn.example.com/lcevc_dec.min.js"
+  controls
+></movi-player>
+```
+
+Maps to `PlayerConfig.lcevc` / `lcevcUrl`. Ignored when `drm` is set.
+
+---
+
 ### Standard HTML Attributes
 
 #### `width` / `height`
@@ -976,6 +1041,28 @@ Gets/sets the target prefetch window in **megabytes**. Applies to both HTTP and 
 ```typescript
 player.buffersize = 400; // Keep ~400 MB buffered ahead
 player.buffersize = 0;   // Restore library default
+```
+
+---
+
+#### `headers: Record<string, string> | null`
+
+Gets/sets custom HTTP headers applied to all media requests. See the [`headers` attribute](#headers) for scope and caveats. Unlike the attribute (a JSON string), the property takes an object.
+
+```typescript
+player.headers = { Authorization: `Bearer ${token}` };
+player.headers = null; // Clear
+```
+
+---
+
+#### `audioOnly: boolean`
+
+Gets/sets data-saver audio-only mode. See the [`audioonly` attribute](#audioonly).
+
+```typescript
+player.audioOnly = true;  // Skip video decode / fetch audio-only rendition
+player.audioOnly = false; // Restore video
 ```
 
 ---
@@ -1387,6 +1474,7 @@ The element re-exposes player activity as DOM events so you can wire `addEventLi
 | `subtitledelaychange`  | `{ subtitleDelay: number }`          | Subtitle offset changed via property/attr          |
 | `coverart`             | `ImageBitmap \| null`                | Embedded cover art extracted at load (close the bitmap when done) |
 | `preloadcomplete`      | —                                    | Initial preload buffer filled, ready to play       |
+| `linearmode`           | —                                    | Source server ignores `Range` (`200`, not `206`) — playback is forward-only via a sliding RAM window; hide seek-dependent UI like the thumbnail strip |
 | `filerevoked`          | `{ offset, length, reason }`         | Underlying `File` handle was revoked by the browser (mobile background / memory pressure) |
 
 ::: tip Casing note
@@ -1764,6 +1852,33 @@ if (
 
 ---
 
+### Adaptive Streaming
+
+HLS (`.m3u8`), MPEG-DASH (`.mpd`), and Smooth Streaming (`.ism`) are all played through **Shaka Player** (with `hls.js` / `dash.js` as automatic fallbacks). The engine and format are picked automatically from the source URL — you just set `src`. Frames are drawn to the same canvas pipeline as progressive files, so the quality menu, nerd stats, audio/subtitle track switching, and gestures behave identically.
+
+```html
+<!-- HLS / DASH / Smooth — same element, no extra config -->
+<movi-player src="https://example.com/master.m3u8"   controls autoplay muted></movi-player>
+<movi-player src="https://example.com/manifest.mpd"  controls autoplay muted></movi-player>
+<movi-player src="https://example.com/manifest.ism/manifest" controls autoplay muted></movi-player>
+```
+
+**Live streams** show a `LIVE` badge that jumps back to the live edge, support DVR-window seeking, and display an Auto-mode quality badge with the currently-served rendition.
+
+**Auth** — pass signed/token headers to the manifest and every segment via the [`headers`](#headers) attribute/property.
+
+**Data saver** — set [`audioonly`](#audioonly) to fetch an audio-only (or smallest) rendition with ABR disabled.
+
+**LCEVC** — opt into MPEG-5 enhancement-layer decoding with [`lcevc` / `lcevcurl`](#lcevc-lcevcurl).
+
+**DRM** — opt in with `drm` + `licenseurl`; key systems are tried Widevine → PlayReady → FairPlay (see [`drm`](#drm)).
+
+::: tip Manifests load directly
+Adaptive players fetch the manifest *and* its (often relative) segment URLs themselves, so manifests are never routed through a same-origin proxy. Make sure your manifest/segment hosts send the right CORS headers.
+:::
+
+---
+
 ### Multi-Quality Streaming
 
 Switch the active audio language at runtime (the element doesn't expose direct video-track switching — see the note in [Track Selection](#track-selection)):
@@ -2048,4 +2163,4 @@ observer.observe(player);
 
 ---
 
-**Last Updated:** June 2, 2026
+**Last Updated:** June 10, 2026

@@ -7,7 +7,7 @@ Play any video URL with Movi Player directly in Chrome.
 - **Play button overlay** on video links detected on any page
 - **Right-click context menu** → "Open with Movi Player" on any link
 - **Popup** to paste and play any video URL
-- Supports: MP4, MKV, WebM, MOV, TS, AVI, HLS, HEVC, AV1, HDR
+- Supports: MP4, MKV, WebM, MOV, TS, AVI, HLS (`.m3u8`), MPEG-DASH (`.mpd`), HEVC, AV1, HDR
 
 ## Setup
 

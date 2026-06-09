@@ -121,9 +121,13 @@ interface PlayerConfig {
   wasmBinary?: Uint8Array;                      // Pre-loaded WASM (skips fetch)
   enablePreviews?: boolean;                     // Enable thumbnail-pipeline preview frames
   frameRate?: number;                           // Override fps (0 = auto from metadata)
-  drm?: boolean;                                // DRM mode for HLS (native <video> + EME)
-  licenseUrl?: string;                          // Widevine/FairPlay license server URL
+  headers?: Record<string, string>;             // Custom HTTP headers for all media requests (manifest + segments + progressive + thumbnails + encrypted)
+  audioOnly?: boolean;                          // Data saver: skip video decode; adaptive streams fetch an audio-only rendition
+  drm?: boolean;                                // DRM mode for adaptive streams (native <video> + EME)
+  licenseUrl?: string;                          // Widevine/PlayReady/FairPlay license server URL
   licenseHeaders?: Record<string, string>;      // Auth headers for license requests
+  lcevc?: boolean;                              // Enable MPEG-5 LCEVC decoding (needs lcevc_dec.js)
+  lcevcUrl?: string;                            // URL to lazy-load the lcevc_dec.js decoder library
 }
 ```
 

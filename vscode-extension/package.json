@@ -2,7 +2,7 @@
   "name": "movi-player-vscode",
   "displayName": "Movi Player",
   "description": "A modern video player that handles formats and codecs VS Code can't play natively — right inside your editor.",
-  "version": "0.3.0",
+  "version": "0.3.1",
   "publisher": "mrujjwalg",
   "engines": {
     "vscode": "^1.80.0"
