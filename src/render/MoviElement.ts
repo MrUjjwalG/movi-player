@@ -399,8 +399,11 @@ export class MoviElement extends HTMLElement {
   constructor() {
     super();
 
-    // Enable keyboard focus
-    this.tabIndex = 0;
+    // NOTE: do NOT set attributes (or anything that reflects to one, e.g.
+    // `this.tabIndex`) here. The Custom Elements spec forbids a constructor
+    // from gaining attributes, so `document.createElement("movi-player")`
+    // throws `NotSupportedError: The result must not have attributes`.
+    // Keyboard focus is enabled in connectedCallback instead. (issue #9)
 
     // Set log level to INFO by default (change to DEBUG for troubleshooting)
     Logger.setLevel(LogLevel.DEBUG);
@@ -12427,6 +12430,11 @@ export class MoviElement extends HTMLElement {
   };
 
   connectedCallback() {
+    // Enable keyboard focus. Set here (not in the constructor) because
+    // assigning tabIndex reflects to a `tabindex` attribute, which a custom
+    // element constructor is not allowed to do. (issue #9)
+    if (!this.hasAttribute("tabindex")) this.tabIndex = 0;
+
     // Read initial attributes
     const srcAttr = this.getAttribute("src");
     this._src = srcAttr || null;
