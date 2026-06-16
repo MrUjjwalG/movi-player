@@ -1,0 +1,30 @@
+# MoviPlayer
+
+> Free, open-source online video player that plays MKV, HEVC (H.265), AV1, VP9, 4K and HDR video directly in the browser — no install, no plugins, no server-side transcoding. Every file is decoded locally on the user's device using the browser's WebCodecs API plus an FFmpeg WebAssembly demuxer, so videos are never uploaded.
+
+MoviPlayer exists to play the files browsers normally refuse: HEVC that won't open in Chrome or Firefox, MKV containers the native `<video>` tag ignores, AV1/VP9 streams, and 10-bit 4K HDR movies. It runs anywhere a modern browser runs — including locked-down or managed work laptops where installing VLC is not allowed. It is also published as an npm package (`movi-player`) and a verified Chrome extension.
+
+## Key facts
+
+- Plays in the browser: MKV, MP4, WebM, AVI, MOV, FLV, WMV, MPEG-TS, M4V containers; H.264, H.265/HEVC, AV1, VP8, VP9 video; AAC, Opus, FLAC, MP3, AC3 audio; HDR10 and HLG.
+- 100% client-side: nothing is uploaded, stored, or transcoded on a server. Decoding happens locally via WebCodecs, with a software fallback through FFmpeg compiled to WebAssembly.
+- No install required: works on managed/work laptops and Chromebooks where desktop players like VLC are blocked.
+- Free and open source (Apache-2.0). No ads, no sign-up, no file-size limits.
+- Features: external + embedded subtitles (SRT, ASS, VTT), multiple audio tracks, picture-in-picture, playback speed, keyboard shortcuts, thumbnail scrubbing, folder-as-playlist.
+
+## Links
+
+- [Live app](https://moviplayer.com/): open a local file or paste a video URL to play instantly in the browser.
+- [GitHub repository](https://github.com/mrujjwalg/movi-player): source code, issues, and releases.
+- [npm package](https://www.npmjs.com/package/movi-player): install `movi-player` to embed the `<movi-player>` element or player API in your own site.
+- [Documentation](https://mrujjwalg.github.io/movi-player/): API reference, embedding, and the `<movi-player>` web component.
+- [Chrome extension](https://chromewebstore.google.com/detail/movi-player/ckleeigcopjnpehkjokijokjegknfgej): adds a "Play here" button to any video link.
+- [VS Code extension](https://marketplace.visualstudio.com/items?itemName=mrujjwalg.movi-player-vscode): play and preview video files directly inside Visual Studio Code.
+- [Compare to native &lt;video&gt;](https://moviplayer.com/compare): side-by-side test of MoviPlayer against the browser's built-in player.
+
+## Common questions
+
+- Can browsers play HEVC? Most cannot natively — HEVC/H.265 is licensed — but MoviPlayer decodes it in the browser via WebCodecs.
+- How to play MKV without VLC? Open the .mkv in MoviPlayer at moviplayer.com; no VLC or other software is needed.
+- Does it upload my files? No. All decoding is local; files never leave the device.
+- Which browsers are supported? Any modern browser with WebCodecs support (Chrome, Edge, Safari, Firefox).

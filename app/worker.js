@@ -3,6 +3,7 @@ import TEST_NATIVE_HTML from "./test-native.html";
 import COMPARE_HTML from "./compare.html";
 import SITEMAP from "./sitemap.xml";
 import ROBOTS from "./robots.txt";
+import LLMS from "./llms.txt";
 
 const BUILD_VERSION = "__BUILD_VERSION__";
 const HTML_WITH_VERSION = HTML_RAW.replace(/__BUILD_VERSION__/g, BUILD_VERSION);
@@ -354,6 +355,19 @@ export default {
     if (path === "/robots.txt") {
       return new Response(ROBOTS, { headers: { "Content-Type": "text/plain", "Cache-Control": "public, max-age=86400" } });
     }
+    if (path === "/llms.txt") {
+      return new Response(LLMS, { headers: { "Content-Type": "text/plain;charset=UTF-8", "Cache-Control": "public, max-age=86400" } });
+    }
+
+    // --- Extension install/usage badges, proxied from upstream badge
+    //     services. We can't <img> them directly: COEP require-corp on
+    //     this zone blocks cross-origin subresources that lack a CORP
+    //     header (vsmarketplacebadges.dev sends none). Re-serving them
+    //     same-origin sidesteps COEP, edge-caches the count, and lets us
+    //     fall back to a static badge if the upstream is down. ---
+    if (path === "/badge/chrome.svg") return handleBadge("chrome");
+    if (path === "/badge/vscode.svg") return handleBadge("vscode");
+    if (path === "/badge/npm.svg") return handleBadge("npm");
 
     // --- Serve static assets from R2 (favicons, etc.) ---
     if (path.startsWith("/favicon") || path === "/apple-touch-icon.png" || path === "/og-image.png") {
@@ -535,6 +549,62 @@ async function handleR2Sample(env, key, request) {
       "Content-Range": `bytes ${start}-${end}/${total}`,
     },
   });
+}
+
+// Upstream badge endpoints, all themed to the site accent (#7c6cf0) and
+// explicitly labelled so each one names its platform. Chrome Web Store
+// only exposes a "users" count; the VS Code Marketplace and npm expose
+// download totals. shields.io retired its visual-studio-marketplace
+// badges, so VS Code goes through vsmarketplacebadges.dev instead. The
+// npm total-downloads endpoint 301-redirects; Workers fetch follows it.
+const BADGE_SOURCES = {
+  chrome:
+    "https://img.shields.io/chrome-web-store/users/ckleeigcopjnpehkjokijokjegknfgej?label=Chrome%20Web%20Store&color=7c6cf0&labelColor=23232e",
+  vscode:
+    "https://vsmarketplacebadges.dev/downloads-short/mrujjwalg.movi-player-vscode.svg?label=VS%20Code&color=7c6cf0",
+  npm:
+    "https://img.shields.io/npm/dt/movi-player?label=npm%20downloads&color=7c6cf0&labelColor=23232e",
+};
+
+async function handleBadge(which) {
+  const src = BADGE_SOURCES[which];
+  if (!src) return new Response("Not Found", { status: 404 });
+  try {
+    // cf.cacheEverything caches the upstream SVG at the edge for 12h so
+    // we don't hit the badge service on every page view.
+    const upstream = await fetch(src, {
+      cf: { cacheTtl: 43200, cacheEverything: true },
+      headers: { "User-Agent": "movi-app-badge-proxy" },
+    });
+    if (!upstream.ok) throw new Error("badge upstream " + upstream.status);
+    const svg = await upstream.text();
+    return new Response(svg, {
+      headers: {
+        "Content-Type": "image/svg+xml;charset=utf-8",
+        "Cache-Control": "public, max-age=21600, s-maxage=43200",
+        "Cross-Origin-Resource-Policy": "cross-origin",
+      },
+    });
+  } catch {
+    // Upstream down/changed → serve a static badge so the <img> never
+    // renders broken. Short cache so it self-heals when upstream returns.
+    const label =
+      { chrome: "Chrome Web Store", vscode: "VS Code", npm: "npm downloads" }[which] ||
+      "extension";
+    const w = Math.max(60, label.length * 7 + 16);
+    const fallback =
+      `<svg xmlns="http://www.w3.org/2000/svg" width="${w}" height="20" role="img" aria-label="${label} extension">` +
+      `<rect width="${w}" height="20" rx="3" fill="#23232e"/>` +
+      `<text x="${w / 2}" y="14" fill="#ffffff" font-family="Verdana,Geneva,sans-serif" font-size="11" text-anchor="middle">${label}</text>` +
+      `</svg>`;
+    return new Response(fallback, {
+      headers: {
+        "Content-Type": "image/svg+xml;charset=utf-8",
+        "Cache-Control": "public, max-age=600",
+        "Cross-Origin-Resource-Policy": "cross-origin",
+      },
+    });
+  }
 }
 
 async function handleStaticAsset(env, key) {

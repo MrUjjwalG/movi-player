@@ -11,7 +11,7 @@
     <link rel="apple-touch-icon" sizes="180x180" href="/apple-touch-icon.png" />
 
     <!-- SEO Meta -->
-    <meta name="description" content="Free online video player — play MKV, HEVC, AV1, HDR, VP9 and any video format directly in your browser. No downloads, no installs, no uploads. Drop a file or paste a URL — 100% private and local." />
+    <meta name="description" content="Free online video player — play MKV, HEVC, AV1 & 4K HDR in your browser. No install, no VLC, no upload. WebCodecs-powered, 100% local and private." />
     <meta name="keywords" content="online video player, video player, free online video player, best online video player, browser video player, web video player, play video online, play video online free, MKV player, MKV online player, HEVC player, H.265 player, AV1 player, HDR video player, VP9 player, play MKV online, play HEVC online, play AV1 online, video player no download, video player no install, private video player, local video player, WebCodecs video player, play any video format online" />
     <meta name="author" content="MoviPlayer" />
     <meta name="robots" content="index, follow, max-image-preview:large, max-snippet:-1, max-video-preview:-1" />
@@ -80,13 +80,6 @@
         "priceCurrency": "USD",
         "availability": "https://schema.org/InStock"
       },
-      "aggregateRating": {
-        "@type": "AggregateRating",
-        "ratingValue": "4.8",
-        "ratingCount": "127",
-        "bestRating": "5",
-        "worstRating": "1"
-      },
       "featureList": [
         "Play MKV files online",
         "Play HEVC / H.265 videos in browser",
@@ -102,7 +95,7 @@
       ],
       "image": "https://moviplayer.com/og-image.png",
       "screenshot": "https://moviplayer.com/og-image.png",
-      "softwareVersion": "0.2.4",
+      "softwareVersion": "0.3.1",
       "datePublished": "2025-08-15",
       "dateModified": "2026-04-28",
       "inLanguage": "en",
@@ -111,7 +104,7 @@
         "@type": "Organization",
         "name": "MoviPlayer",
         "url": "https://moviplayer.com",
-        "sameAs": ["https://github.com/mrujjwalg/movi-player"]
+        "sameAs": ["https://github.com/mrujjwalg/movi-player", "https://www.npmjs.com/package/movi-player", "https://chromewebstore.google.com/detail/movi-player/ckleeigcopjnpehkjokijokjegknfgej", "https://marketplace.visualstudio.com/items?itemName=mrujjwalg.movi-player-vscode"]
       },
       "publisher": {
         "@type": "Organization",
@@ -241,7 +234,7 @@
       "name": "MoviPlayer",
       "url": "https://moviplayer.com",
       "logo": "https://moviplayer.com/favicon-512x512.png",
-      "sameAs": ["https://github.com/mrujjwalg/movi-player"]
+      "sameAs": ["https://github.com/mrujjwalg/movi-player", "https://www.npmjs.com/package/movi-player", "https://chromewebstore.google.com/detail/movi-player/ckleeigcopjnpehkjokijokjegknfgej", "https://marketplace.visualstudio.com/items?itemName=mrujjwalg.movi-player-vscode"]
     }
     </script>
     <link rel="preconnect" href="https://fonts.googleapis.com" />
@@ -691,18 +684,18 @@
         background: var(--btn-ghost-bg);
       }
 
-      /* ========== Hero primary CTA ==========
-         The single, prominent "Pick a video" pill. This is the main action
-         in the hero — large, glowing, with a soft pulse to draw the eye.
-         Wraps the file-input so the whole pill is a clickable label. */
+      /* ========== Hero secondary CTA ==========
+         The "Pick a video file" pill. Secondary to the URL bar above it —
+         a quiet ghost button, not the headline action. Wraps the
+         file-input so the whole pill is a clickable label. */
       .hero-cta-primary {
         display: inline-flex;
         align-items: center;
-        gap: 0.95rem;
-        padding: 0.7rem 1.6rem 0.7rem 0.7rem;
-        background: linear-gradient(135deg, #8a7cf2 0%, #6c5dd3 100%);
-        color: #fff;
-        border: 1px solid rgba(255, 255, 255, 0.14);
+        gap: 0.7rem;
+        padding: 0.4rem 1.1rem 0.4rem 0.4rem;
+        background: var(--btn-ghost-bg);
+        color: var(--text-primary);
+        border: 1px solid var(--border-subtle);
         border-radius: 999px;
         cursor: pointer;
         -webkit-user-select: none;
@@ -723,12 +716,9 @@
         -webkit-tap-highlight-color: transparent;
         position: relative;
         text-decoration: none;
-        margin-top: 0.5rem;
-        box-shadow:
-          0 14px 40px rgba(124, 108, 240, 0.45),
-          0 0 0 6px rgba(124, 108, 240, 0.10),
-          inset 0 1px 0 rgba(255, 255, 255, 0.18);
-        transition: transform 0.18s ease, filter 0.18s ease, box-shadow 0.25s ease;
+        margin-top: 0;
+        box-shadow: none;
+        transition: transform 0.18s ease, background 0.18s ease, border-color 0.18s ease;
         /* No custom animation here — inherits fadeUp from `.hero-content > *`.
            The earlier ctaPulse box-shadow loop was removed because hover
            had to disable it (`animation: none`), which also cancelled
@@ -747,33 +737,23 @@
       }
 
       .hero-cta-primary:hover {
-        transform: translateY(-2px);
-        filter: brightness(1.06);
-        box-shadow:
-          0 22px 60px rgba(124, 108, 240, 0.6),
-          0 0 0 10px rgba(124, 108, 240, 0.14),
-          inset 0 1px 0 rgba(255, 255, 255, 0.22);
+        transform: translateY(-1px);
+        background: var(--btn-ghost-hover);
+        border-color: var(--border-hover);
       }
 
       .hero-cta-primary:active { transform: translateY(0) scale(0.98); }
 
       .hero-cta-primary:focus-visible {
-        /* `outline` ignores border-radius in Chromium/Safari, which
-           drew a square box around the pill. Use a layered box-shadow
-           instead — it follows the pill's rounded shape. */
         outline: none;
-        box-shadow:
-          0 14px 40px rgba(124, 108, 240, 0.45),
-          inset 0 1px 0 rgba(255, 255, 255, 0.18),
-          0 0 0 3px rgba(255, 255, 255, 0.9),
-          0 0 0 5px var(--accent);
+        box-shadow: 0 0 0 3px var(--accent-glow);
       }
 
       .hero-cta-icon {
-        width: 56px;
-        height: 56px;
+        width: 38px;
+        height: 38px;
         border-radius: 50%;
-        background: rgba(255, 255, 255, 0.18);
+        background: var(--badge-bg);
         display: flex;
         align-items: center;
         justify-content: center;
@@ -784,13 +764,9 @@
       /* Pulsing ring around the play icon — runs only when the button is
          not being hovered, so it stops "competing" with the hover state. */
       .hero-cta-icon::after {
-        content: "";
-        position: absolute;
-        inset: -4px;
-        border-radius: 50%;
-        border: 2px solid rgba(255, 255, 255, 0.25);
-        animation: ctaRingPulse 2.2s ease-out infinite;
-        pointer-events: none;
+        /* Pulse ring removed — this is the secondary action now, no
+           need to draw the eye to it. */
+        display: none;
       }
       .hero-cta-primary:hover .hero-cta-icon::after { animation: none; opacity: 0; }
 
@@ -801,11 +777,10 @@
       }
 
       .hero-cta-icon svg {
-        width: 22px;
-        height: 22px;
-        margin-left: 4px; /* visually centers the play triangle */
-        fill: #fff;
-        filter: drop-shadow(0 1px 2px rgba(0, 0, 0, 0.18));
+        width: 15px;
+        height: 15px;
+        margin-left: 3px; /* visually centers the play triangle */
+        fill: var(--accent);
       }
 
       .hero-cta-text {
@@ -819,15 +794,15 @@
       }
 
       .hero-cta-text strong {
-        font-size: 1.05rem;
-        font-weight: 700;
+        font-size: 0.9rem;
+        font-weight: 600;
         letter-spacing: -0.01em;
       }
 
       .hero-cta-text small {
-        font-size: 0.74rem;
+        font-size: 0.7rem;
         font-weight: 500;
-        opacity: 0.88;
+        opacity: 0.62;
       }
 
       /* Standard "visually hidden" pattern — clips the input to a
@@ -873,8 +848,8 @@
       }
       .hero-or span { flex: 0 0 auto; }
 
-      /* Slimmer, pill-shaped URL bar in the hero — secondary path, not
-         the headline action. Smaller padding, smaller "Play" button.
+      /* Primary hero action — the URL input is the headline control now,
+         so it gets width, a soft accent glow and a larger "Play" button.
 
          The base `.url-bar` rule sets `flex: 1`, which made sense when
          the bar lived inside the row-flex `.hero-actions`. As a direct
@@ -884,20 +859,37 @@
       .url-bar.hero-url-bar {
         flex: 0 0 auto;
         width: 100%;
-        max-width: 560px;
+        max-width: 600px;
         border-radius: 999px;
+        margin-top: 0.75rem;
+        border-color: rgba(124, 108, 240, 0.45);
+        box-shadow:
+          0 14px 40px rgba(124, 108, 240, 0.28),
+          0 0 0 5px rgba(124, 108, 240, 0.08);
+      }
+      .url-bar.hero-url-bar:hover {
+        transform: translateY(-2px);
+        box-shadow:
+          0 20px 52px rgba(124, 108, 240, 0.36),
+          0 0 0 8px rgba(124, 108, 240, 0.10);
+      }
+      .url-bar.hero-url-bar:focus-within {
+        box-shadow:
+          0 14px 40px rgba(124, 108, 240, 0.30),
+          0 0 0 3px var(--accent-glow);
       }
       .url-bar.hero-url-bar input {
-        padding: 0.7rem 1.1rem;
-        font-size: 0.85rem;
+        padding: 1rem 1.35rem;
+        font-size: 1rem;
       }
       .url-bar.hero-url-bar .url-bar-btn {
         border-radius: 999px;
-        min-height: 42px;
-        padding: 0 1.1rem;
-        font-size: 0.82rem;
+        min-height: 50px;
+        padding: 0 1.6rem;
+        font-size: 0.95rem;
+        font-weight: 600;
         animation: none;
-        background: linear-gradient(135deg, rgba(124, 108, 240, 0.95), rgba(145, 132, 245, 0.95));
+        background: linear-gradient(135deg, #8a7cf2 0%, #6c5dd3 100%);
       }
 
       /* Subtle secondary actions row (Open folder, Show playlist, Embed) */
@@ -2608,6 +2600,25 @@
         opacity: 0.6;
       }
 
+      /* Extension install/usage badges in the hero — proxied same-origin
+         from /badge/*.svg (see worker.js) so COEP doesn't block them. */
+      .hero-badges {
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        flex-wrap: wrap;
+        gap: 0.6rem;
+        margin-top: 0.25rem;
+      }
+      .hero-badges img {
+        height: 20px;
+        width: auto;
+        display: block;
+        opacity: 0.9;
+        transition: opacity 0.2s ease;
+      }
+      .hero-badges a:hover img { opacity: 1; }
+
       /* File input hidden */
       input[type="file"] {
         display: none;
@@ -3000,7 +3011,7 @@
           <line x1="12" y1="3" x2="12" y2="15"></line>
         </svg>
         <p>Drop to Play</p>
-        <span>Release to start playing your video</span>
+        <span>Release to play — a file, several files, or a whole folder</span>
       </div>
     </div>
 
@@ -3190,24 +3201,7 @@
           Movies, shows, downloads — open them right here in your browser. No app to install, no uploads, nothing leaves your device.
         </p>
 
-        <!-- Big primary CTA: opens file picker. Drag &amp; drop also works anywhere on the page. -->
-        <label class="hero-cta-primary" tabindex="0" draggable="false" aria-label="Pick a video to play">
-          <span class="hero-cta-icon" aria-hidden="true" draggable="false">
-            <svg viewBox="0 0 24 24" fill="currentColor" draggable="false">
-              <polygon points="6 4 22 12 6 20 6 4"></polygon>
-            </svg>
-          </span>
-          <span class="hero-cta-text">
-            <strong>Pick a video to play</strong>
-            <small>or just drop one anywhere on the page</small>
-          </span>
-          <input type="file" id="file-input" accept="video/*,audio/*,.mkv,.ts,.m2ts,.mts,.evo,.avi,.flv,.wmv,.mov,.mka,.m4b,.opus,.oga,.dts,.ac3,.ec3,.eac3" multiple />
-        </label>
-
-        <!-- "or paste a link" divider -->
-        <div class="hero-or" aria-hidden="true"><span>or paste a video link</span></div>
-
-        <!-- URL input -->
+        <!-- Primary action: paste a video URL. The big, prominent input. -->
         <div class="url-bar hero-url-bar">
           <input
             type="text"
@@ -3232,6 +3226,23 @@
             Play
           </button>
         </div>
+
+        <!-- "or pick a file" divider -->
+        <div class="hero-or" aria-hidden="true"><span>or pick a video file</span></div>
+
+        <!-- Secondary action: opens the file picker. Drag &amp; drop also works anywhere on the page. -->
+        <label class="hero-cta-primary" tabindex="0" draggable="false" aria-label="Pick a video file to play">
+          <span class="hero-cta-icon" aria-hidden="true" draggable="false">
+            <svg viewBox="0 0 24 24" fill="currentColor" draggable="false">
+              <polygon points="6 4 22 12 6 20 6 4"></polygon>
+            </svg>
+          </span>
+          <span class="hero-cta-text">
+            <strong>Pick a video file</strong>
+            <small>or just drop one anywhere on the page</small>
+          </span>
+          <input type="file" id="file-input" accept="video/*,audio/*,.mkv,.ts,.m2ts,.mts,.evo,.avi,.flv,.wmv,.mov,.mka,.m4b,.opus,.oga,.dts,.ac3,.ec3,.eac3" multiple />
+        </label>
 
         <!-- Subtle secondary actions -->
         <div class="hero-secondary">
@@ -3289,6 +3300,19 @@
           <a class="trust-item trust-item-verified" href="https://chromewebstore.google.com/detail/movi-player/ckleeigcopjnpehkjokijokjegknfgej" target="_blank" rel="noopener" title="Verified publisher on the Chrome Web Store">
             <svg viewBox="0 0 24 24" aria-hidden="true"><path fill="#4d9bff" d="M23 12l-2.44-2.78.34-3.68-3.61-.82-1.89-3.18L12 3 8.6 1.54 6.71 4.72 3.1 5.53l.34 3.68L1 12l2.44 2.78-.34 3.69 3.61.82 1.89 3.18L12 21l3.4 1.46 1.89-3.18 3.61-.82-.34-3.68L23 12z"/><path fill="#fff" d="M10.09 16.72 6 12.59l1.41-1.41 2.68 2.68 6.68-6.68L18.18 8.6l-8.09 8.12z"/></svg>
             Verified Chrome extension
+          </a>
+        </div>
+
+        <!-- Install/usage badges, proxied same-origin from /badge/*.svg (worker.js) -->
+        <div class="hero-badges" aria-label="Extension stats">
+          <a href="https://chromewebstore.google.com/detail/movi-player/ckleeigcopjnpehkjokijokjegknfgej" rel="noopener" target="_blank" title="MoviPlayer on the Chrome Web Store">
+            <img src="/badge/chrome.svg" height="20" decoding="async" alt="Chrome Web Store users" />
+          </a>
+          <a href="https://marketplace.visualstudio.com/items?itemName=mrujjwalg.movi-player-vscode" rel="noopener" target="_blank" title="Movi Player on the VS Code Marketplace">
+            <img src="/badge/vscode.svg" height="20" decoding="async" alt="VS Code Marketplace downloads" />
+          </a>
+          <a href="https://www.npmjs.com/package/movi-player" rel="noopener" target="_blank" title="movi-player on npm">
+            <img src="/badge/npm.svg" height="20" decoding="async" alt="npm total downloads" />
           </a>
         </div>
 
@@ -3454,6 +3478,43 @@
       <p class="section-desc"><strong>File types:</strong> MKV, MP4, AVI, FLV, MOV, MPEG-TS, WebM and more. <strong>Video codecs:</strong> H.264, H.265 (HEVC), AV1, VP8, VP9. <strong>Audio:</strong> AAC, Opus, FLAC, MP3, AC3, and more. <strong>HDR:</strong> HDR10 and HLG also work on compatible displays.</p>
     </section>
 
+    <!-- ===== WHY THE BROWSER FAILS (pain-point / search-intent block) ===== -->
+    <section class="features-section">
+      <h2>Why won't my browser play this video?</h2>
+      <p class="section-desc">When Chrome or Firefox shows &ldquo;this video can&rsquo;t be played&rdquo; or a black screen, it&rsquo;s almost always the codec inside the file &mdash; not the file itself. MoviPlayer fills exactly those gaps: it decodes everything locally with your browser&rsquo;s WebCodecs engine, with <strong>no server transcoding</strong> and nothing to install.</p>
+      <div class="features-grid">
+        <div class="feature-card">
+          <div class="feature-icon">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M10.29 3.86 1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/><line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg>
+          </div>
+          <h3>HEVC not playing in Chrome or Firefox</h3>
+          <p>H.265 (HEVC) is licensed, so most browsers refuse to decode it &mdash; you get an error or no picture at all. MoviPlayer plays HEVC right in the browser, including 10-bit and 4K HDR.</p>
+        </div>
+        <div class="feature-card">
+          <div class="feature-icon">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><polygon points="10 8 16 12 10 16 10 8"/></svg>
+          </div>
+          <h3>Play MKV without VLC</h3>
+          <p>Browsers don&rsquo;t understand the MKV container, so the &lt;video&gt; tag simply gives up. Drop the .mkv here and it plays instantly &mdash; no VLC, no MPV, no download.</p>
+        </div>
+        <div class="feature-card">
+          <div class="feature-icon">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="4" y="4" width="16" height="16" rx="2"/><rect x="9" y="9" width="6" height="6"/><line x1="9" y1="1" x2="9" y2="4"/><line x1="15" y1="1" x2="15" y2="4"/><line x1="9" y1="20" x2="9" y2="23"/><line x1="15" y1="20" x2="15" y2="23"/><line x1="20" y1="9" x2="23" y2="9"/><line x1="20" y1="14" x2="23" y2="14"/><line x1="1" y1="9" x2="4" y2="9"/><line x1="1" y1="14" x2="4" y2="14"/></svg>
+          </div>
+          <h3>AV1 and VP9 with no codec installed</h3>
+          <p>Newer AV1 files and some VP9 streams won&rsquo;t open on older browsers or machines missing the codec. This WebCodecs video player decodes them in software when hardware can&rsquo;t, so they play anyway.</p>
+        </div>
+        <div class="feature-card">
+          <div class="feature-icon">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="11" width="18" height="11" rx="2" ry="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg>
+          </div>
+          <h3>Works on locked-down work laptops</h3>
+          <p>Can&rsquo;t install VLC on a managed or work laptop? You don&rsquo;t need to. MoviPlayer is a browser video player with no install &mdash; just open the page and play, even where software is blocked.</p>
+        </div>
+      </div>
+      <p class="section-desc" style="margin-top: 2rem; margin-bottom: 0;">There&rsquo;s no server transcoding involved: your file is never uploaded or re-encoded in the cloud. Demuxing, decoding and subtitles all happen on your own device.</p>
+    </section>
+
     <!-- ===== FAQ ===== -->
     <!-- Visible FAQ content for users. Structured-data FAQPage is declared
          once via JSON-LD in <head>; we intentionally do NOT repeat it here
@@ -3515,7 +3576,7 @@
     <!-- ===== FOOTER ===== -->
     <footer class="footer">
       <p>Made with <a href="https://github.com/mrujjwalg/movi-player" target="_blank" rel="noopener">movi-player</a> &mdash; an open-source video player that runs in your browser.</p>
-      <p class="disclaimer"><a href="https://mrujjwalg.github.io/movi-player/" target="_blank" rel="noopener">Docs</a> &middot; <a href="https://chromewebstore.google.com/detail/movi-player/ckleeigcopjnpehkjokijokjegknfgej" rel="noopener">Chrome extension</a> &middot; <a href="https://github.com/mrujjwalg/movi-player/issues" rel="noopener">Report a problem</a></p>
+      <p class="disclaimer"><a href="https://mrujjwalg.github.io/movi-player/" target="_blank" rel="noopener">Docs</a> &middot; <a href="https://chromewebstore.google.com/detail/movi-player/ckleeigcopjnpehkjokijokjegknfgej" rel="noopener">Chrome extension</a> &middot; <a href="https://marketplace.visualstudio.com/items?itemName=mrujjwalg.movi-player-vscode" target="_blank" rel="noopener">VS Code extension</a> &middot; <a href="https://www.npmjs.com/package/movi-player" target="_blank" rel="noopener">npm package</a> &middot; <a href="https://github.com/mrujjwalg/movi-player/issues" rel="noopener">Report a problem</a></p>
       <p class="disclaimer" style="margin-top: 0.5rem;">You bring the videos &mdash; we don't host or store any media. Whatever you play is your own responsibility.</p>
     </footer>
 
@@ -5052,17 +5113,84 @@
         e.preventDefault();
       });
 
-      document.addEventListener("drop", (e) => {
+      // Read a FileSystemDirectoryReader fully — it hands back entries in
+      // batches, so we keep calling until it returns an empty batch.
+      function readAllDirEntries(reader) {
+        return new Promise((resolve, reject) => {
+          const all = [];
+          const next = () =>
+            reader.readEntries((batch) => {
+              if (!batch.length) return resolve(all);
+              all.push(...batch);
+              next();
+            }, reject);
+          next();
+        });
+      }
+
+      // Recursively walk a dropped FileSystemEntry, collecting File objects.
+      // We mirror the folder structure onto webkitRelativePath so setPlaylist
+      // sorts the tree and derives the folder-name title exactly like the
+      // "Open a folder" picker does.
+      async function collectEntryFiles(entry, out) {
+        if (entry.isFile) {
+          const file = await new Promise((res, rej) => entry.file(res, rej));
+          const rel = (entry.fullPath || "").replace(/^\//, "");
+          if (rel.includes("/")) {
+            try {
+              Object.defineProperty(file, "webkitRelativePath", {
+                value: rel,
+                configurable: true,
+              });
+            } catch {}
+          }
+          out.push(file);
+        } else if (entry.isDirectory) {
+          const children = await readAllDirEntries(entry.createReader());
+          for (const child of children) await collectEntryFiles(child, out);
+        }
+      }
+
+      document.addEventListener("drop", async (e) => {
         e.preventDefault();
         dragCounter = 0;
         dropOverlay.classList.remove("active");
+        if (!player) return;
 
-        const files = Array.from(e.dataTransfer.files || []);
-        if (!files.length || !player) return;
+        const dt = e.dataTransfer;
+        // The DataTransfer is only valid during this event tick, so grab the
+        // directory entries AND the flat file list synchronously, before any
+        // await. webkitGetAsEntry() is what exposes dropped folders — their
+        // contents never appear in dataTransfer.files.
+        const flatFiles = Array.from((dt && dt.files) || []);
+        const entries = [];
+        if (dt && dt.items) {
+          for (const item of dt.items) {
+            const entry = item.webkitGetAsEntry && item.webkitGetAsEntry();
+            if (entry) entries.push(entry);
+          }
+        }
 
+        let files = [];
+        if (entries.length) {
+          try {
+            for (const en of entries) await collectEntryFiles(en, files);
+          } catch (err) {
+            console.error("Folder drop read failed:", err);
+          }
+        }
+        // Browsers without the entries API (or if traversal turned up nothing)
+        // fall back to the flat list captured above.
+        if (!files.length) files = flatFiles;
+        if (!files.length) return;
+
+        const droppedFolder = entries.some((en) => en && en.isDirectory);
         const videos = files.filter(isVideoFile);
-        if (videos.length > 1) {
-          setPlaylist(videos);
+
+        if (droppedFolder || videos.length > 1) {
+          // setPlaylist filters to playable files, sorts the tree and titles
+          // the panel by folder name.
+          setPlaylist(files);
         } else {
           clearPlaylist();
           const file = videos[0] || files[0];
