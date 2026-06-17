@@ -6954,7 +6954,13 @@ export class MoviElement extends HTMLElement {
     }
     // Bar visible → lift the centre button + loading spinner slightly to
     // balance against it (host class the CSS keys off; see hideControls).
-    this.classList.add("movi-bar-visible");
+    // But only once playback has started — on the initial load / autoplay-off
+    // screen the big play button and the spinner belong at the true centre.
+    if (this._hasEverPlayed) {
+      this.classList.add("movi-bar-visible");
+    } else {
+      this.classList.remove("movi-bar-visible");
+    }
 
     // Shift timeline panel up above controls
     const bar = this.shadowRoot?.querySelector(".movi-controls-bar") as HTMLElement;

@@ -144,8 +144,15 @@ export class MoviVideoDecoder {
 
 
     if (!("VideoDecoder" in window)) {
-      Logger.error(TAG, "WebCodecs VideoDecoder not supported");
-      return false;
+      // No WebCodecs (e.g. Firefox, esp. mobile) — fall back to the WASM
+      // software decoder instead of failing (which left video stuck buffering
+      // while audio fell back on its own).
+      Logger.warn(
+        TAG,
+        "WebCodecs VideoDecoder not supported — falling back to software decoder",
+      );
+      this.useSoftware = true;
+      return this.initSoftwareDecoder();
     }
 
     // Use codec string from CodecParser if extradata is available
