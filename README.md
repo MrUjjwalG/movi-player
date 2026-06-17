@@ -62,6 +62,8 @@
 npm i movi-player
 ```
 
+Also available as a **desktop app** (Windows / macOS / Linux) for playing local files and URLs with native always-on-top Picture-in-Picture and a playlist — see [`desktop/`](desktop/). Browser and editor integrations live in [`chrome-extension/`](chrome-extension/) and [`vscode-extension/`](vscode-extension/).
+
 ## Usage
 
 ### HTML Element (simplest)

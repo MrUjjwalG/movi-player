@@ -70,6 +70,11 @@ Press `?` inside the player for the full keyboard shortcut panel.
 
 | Setting | Default | Effect |
 |---|---|---|
+| `movi.autoplay` | `false` | Start playback automatically when a video is opened |
+| `movi.muted` | `false` | Start playback muted |
+| `movi.loop` | `false` | Loop playback when the video reaches the end |
+| `movi.objectFit` | `contain` | How the video is scaled to fit the player area (`contain` / `cover` / `fill` / `zoom`) |
+| `movi.theme` | `dark` | Player UI theme (`dark` / `light`) |
 | `movi.ambientMode` | `true` | Color glow around the video |
 | `movi.resume` | `true` | Resume playback from last position |
 

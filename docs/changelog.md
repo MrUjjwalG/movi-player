@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.3.2] - 2026-06-17
+
+### Added
+- **Desktop app — Windows / macOS / Linux (`desktop/`)**: a new Electron app wrapping the player engine. Plays MKV, HEVC, AV1 and 4K HDR locally through the same WebCodecs + FFmpeg-WASM pipeline, served from a cross-origin-isolated localhost server so the WASM demuxer keeps `SharedArrayBuffer`. Includes drag-and-drop, native **Open With** / file associations for every supported format, URL playback through a built-in proxy (no CORS limits), a **multi-file playlist** with auto-advance, recent files, an Open-URL dialog with clipboard paste, full-window keyboard shortcuts, and a **native always-on-top Picture-in-Picture** window (Electron doesn't render Document PiP, so PiP is a real OS window that hands the source off and resumes on return). Cross-platform installers (`dmg` / `nsis` / `AppImage` + `deb`) and document icons via electron-builder.
+
+### Fixed
+- **Software-decoder fallback without WebCodecs**: when the browser has no WebCodecs `VideoDecoder` (e.g. Firefox, especially on mobile) the player now falls back to the WASM software decoder instead of failing — video was left stuck buffering while audio fell back on its own.
+- **Seek before ready is queued**: the `currentTime` setter now holds a seek requested before the player is ready and applies it on the next seekable state, so a hand-off / early seek no longer stalls on a still-loading source.
+- **`<movi-player hidden>` now hides**: the component's `:host { display: block }` was overriding the UA `[hidden]` rule, so the standard `hidden` attribute did nothing.
+- **Centre play/pause + loading spinner positioning**: sit at the true centre on the initial / autoplay-off screen and lift slightly to balance the controls bar only once playback has started; they also animate in compact / PiP layouts. (Previously keyed off a `:host:has()` rule that some engines, e.g. Electron's Chromium, don't apply to shadow descendants.)
+
 ## [0.3.1] - 2026-06-10
 
 ### Added
