@@ -245,6 +245,17 @@ export class MoviElement extends HTMLElement {
   private _showTitle: boolean = false; // Show title at top if true
   private _resume: boolean = false; // Resume playback from last position (opt-in)
   private _stableVolume: boolean = false; // Stable volume / loudness normalization (opt-in)
+  // 360° VR (equirectangular). Opt-in via the `vr` attribute, or surfaced as a
+  // control-bar button when the source carries equirectangular spherical
+  // metadata (track.projection from the WASM demuxer).
+  private _vr360: boolean = false; // Currently rendering in VR (360 or 180) mode
+  private _vrPointerDown: boolean = false; // Mouse drag-to-look in progress
+  private _vrMoved: boolean = false; // Drag exceeded the click threshold
+  private _vrLastX: number = 0; // Last pointer/touch X for incremental pan
+  private _vrLastY: number = 0;
+  private _vrPinchDist: number = 0; // Two-finger pinch baseline (touch zoom)
+  private _vrSuppressClick: boolean = false; // Swallow the click that ends a drag
+  private _vrPadDragging: boolean = false; // On-screen joystick is being dragged
   private _encrypted: boolean = false;   // Encrypted source mode
   private _tokenUrl: string = "";        // Token endpoint for encrypted playback
   private _videoUrl: string = "";        // Video endpoint for encrypted playback
@@ -394,6 +405,8 @@ export class MoviElement extends HTMLElement {
       "lcevc",
       "lcevcurl",
       "postertime",
+      "vr",
+      "vrpad",
     ];
   }
 
@@ -1144,6 +1157,24 @@ export class MoviElement extends HTMLElement {
     `;
     shadowRoot.appendChild(container);
     this.controlsContainer = container;
+
+    // 360° on-screen pan joystick (YouTube-style compass), top-left. CSS only
+    // reveals it when 360 is active AND the controls are visible AND the device
+    // has a fine pointer (hidden on touch). Drag the knob to look around; it
+    // springs back to centre on release and pans continuously while held.
+    const vrPad = document.createElement("div");
+    vrPad.className = "movi-vr360-pad";
+    vrPad.setAttribute("aria-label", "360° look around");
+    // eslint-disable-next-line no-unsanitized/property -- static template, no user data
+    vrPad.innerHTML = `
+      <div class="movi-vr360-pad-ring">
+        <span class="movi-vr360-pad-arrow movi-vr360-pad-arrow-n">▲</span>
+        <span class="movi-vr360-pad-arrow movi-vr360-pad-arrow-s">▼</span>
+        <span class="movi-vr360-pad-arrow movi-vr360-pad-arrow-w">◀</span>
+        <span class="movi-vr360-pad-arrow movi-vr360-pad-arrow-e">▶</span>
+        <div class="movi-vr360-pad-knob"></div>
+      </div>`;
+    shadowRoot.appendChild(vrPad);
 
     // Unmute pill — shown when the player autoplayed muted (browser
     // policy) and controls are enabled. Mirrors what YouTube/Twitter
@@ -2213,6 +2244,13 @@ export class MoviElement extends HTMLElement {
     // Click on video to play/pause (only on canvas/video area, not controls)
     // Handle clicks on both overlay and canvas
     const handleVideoClick = (e: MouseEvent) => {
+      // A 360° look-around drag ends with a synthetic click — swallow it so the
+      // drag doesn't also toggle play/pause. A pure click (no drag) still does.
+      if (this._vrSuppressClick) {
+        this._vrSuppressClick = false;
+        e.stopPropagation();
+        return;
+      }
       // If context menu is open or was just closed, don't toggle play/pause
       if (this._contextMenuVisible || this._contextMenuJustClosed) {
         // Context menu will be hidden by its own click handler
@@ -2324,6 +2362,9 @@ export class MoviElement extends HTMLElement {
 
     // Setup gestures
     this.setupGestures(shadowRoot);
+
+    // Setup 360° look-around (mouse drag + wheel zoom)
+    this.setupVRControls(shadowRoot);
 
     // Setup context menu
     this.setupContextMenu(shadowRoot);
@@ -2705,6 +2746,9 @@ export class MoviElement extends HTMLElement {
             this.gesturePerformed = false;
             this.touchStartX = e.touches[0].clientX;
             this.touchStartY = e.touches[0].clientY;
+            // Baseline for 360° incremental panning.
+            this._vrLastX = e.touches[0].clientX;
+            this._vrLastY = e.touches[0].clientY;
 
             // Check for edge start to prevent conflict with system gestures
             // Safe area: 40px from edges
@@ -2731,6 +2775,32 @@ export class MoviElement extends HTMLElement {
         "touchmove",
         (e: TouchEvent) => {
           if (isEdgeStart) return;
+          // 360° mode owns touch: one finger looks around, two fingers pinch
+          // to zoom. Bypasses the volume/seek gestures entirely.
+          if (this._vr360) {
+            if (e.touches.length === 1) {
+              const t = e.touches[0];
+              const dx = t.clientX - this._vrLastX;
+              const dy = t.clientY - this._vrLastY;
+              this._vrLastX = t.clientX;
+              this._vrLastY = t.clientY;
+              this.player?.nudgeVR360(dx, dy, this.getBoundingClientRect().height);
+              this._vrPinchDist = 0;
+            } else if (e.touches.length === 2) {
+              const dist = Math.hypot(
+                e.touches[0].clientX - e.touches[1].clientX,
+                e.touches[0].clientY - e.touches[1].clientY,
+              );
+              if (this._vrPinchDist > 0) {
+                // Spread fingers → zoom in (FOV down); pinch → zoom out.
+                this.player?.zoomVR360((this._vrPinchDist - dist) * 2);
+              }
+              this._vrPinchDist = dist;
+            }
+            this.gesturePerformed = true;
+            if (e.cancelable) e.preventDefault();
+            return;
+          }
           if (e.touches.length === 1) {
             const touch = e.touches[0];
             const deltaX = touch.clientX - this.touchStartX;
@@ -2902,6 +2972,297 @@ export class MoviElement extends HTMLElement {
     });
 
     // Mouse single click - handled by overlay click handler for play/pause
+  }
+
+  /**
+   * 360° look-around for mouse + trackpad. Touch is handled inside
+   * setupGestures (it already owns touchstart/move). These listeners no-op
+   * unless 360° mode is active, and a drag past a few pixels suppresses the
+   * trailing click so dragging never toggles play/pause.
+   */
+  private setupVRControls(shadowRoot: ShadowRoot): void {
+    const overlay = shadowRoot.querySelector(
+      ".movi-controls-overlay",
+    ) as HTMLElement;
+    const targets = [overlay, this.canvas].filter(Boolean) as HTMLElement[];
+
+    targets.forEach((target) => {
+      target.addEventListener("pointerdown", (e: PointerEvent) => {
+        if (!this._vr360 || e.pointerType !== "mouse" || e.button !== 0) return;
+        // Ignore drags that begin on the control bar / buttons.
+        const t = e.target as Element;
+        if (t.closest(".movi-controls-bar") || t.closest("button")) return;
+        this._vrPointerDown = true;
+        this._vrMoved = false;
+        this._vrLastX = e.clientX;
+        this._vrLastY = e.clientY;
+        try {
+          target.setPointerCapture?.(e.pointerId);
+        } catch {
+          /* capture is best-effort */
+        }
+      });
+
+      target.addEventListener("pointermove", (e: PointerEvent) => {
+        if (!this._vr360 || !this._vrPointerDown) return;
+        const dx = e.clientX - this._vrLastX;
+        const dy = e.clientY - this._vrLastY;
+        this._vrLastX = e.clientX;
+        this._vrLastY = e.clientY;
+        if (Math.abs(dx) > 2 || Math.abs(dy) > 2) this._vrMoved = true;
+        this.player?.nudgeVR360(dx, dy, this.getBoundingClientRect().height);
+      });
+
+      const endDrag = (e: PointerEvent) => {
+        if (!this._vrPointerDown) return;
+        this._vrPointerDown = false;
+        if (this._vrMoved) this._vrSuppressClick = true;
+        try {
+          target.releasePointerCapture?.(e.pointerId);
+        } catch {
+          /* capture is best-effort */
+        }
+      };
+      target.addEventListener("pointerup", endDrag);
+      target.addEventListener("pointercancel", endDrag);
+
+      target.addEventListener(
+        "wheel",
+        (e: WheelEvent) => {
+          if (!this._vr360) return;
+          e.preventDefault();
+          this.player?.zoomVR360(e.deltaY);
+        },
+        { passive: false },
+      );
+    });
+
+    // ── On-screen pan joystick (the YouTube-style compass, desktop only) ──
+    const pad = shadowRoot.querySelector(".movi-vr360-pad") as HTMLElement | null;
+    const knob = pad?.querySelector(".movi-vr360-pad-knob") as HTMLElement | null;
+    if (pad && knob) {
+      const RADIUS = 22; // max knob travel from centre (px)
+      let padDragging = false;
+      let offX = 0;
+      let offY = 0;
+      let raf: number | null = null;
+
+      // Continuous pan while the knob is held off-centre; speed scales with the
+      // deflection and (via nudgeVR360's fov/viewport math) with the zoom level.
+      const tick = () => {
+        if (!padDragging) {
+          raf = null;
+          return;
+        }
+        if (offX || offY) {
+          const vp = this.getBoundingClientRect().height;
+          // Negate so pushing the knob toward a direction looks that way
+          // (camera-follows-knob, opposite of the grab-world video drag).
+          this.player?.nudgeVR360(-offX * 0.6, -offY * 0.6, vp);
+        }
+        raf = requestAnimationFrame(tick);
+      };
+
+      const moveKnob = (e: PointerEvent) => {
+        const r = pad.getBoundingClientRect();
+        let dx = e.clientX - (r.left + r.width / 2);
+        let dy = e.clientY - (r.top + r.height / 2);
+        const dist = Math.hypot(dx, dy);
+        if (dist > RADIUS) {
+          dx = (dx / dist) * RADIUS;
+          dy = (dy / dist) * RADIUS;
+        }
+        offX = dx;
+        offY = dy;
+        knob.style.transform = `translate(${dx}px, ${dy}px)`;
+      };
+
+      pad.addEventListener("pointerdown", (e: PointerEvent) => {
+        if (!this._vr360) return;
+        e.preventDefault();
+        e.stopPropagation();
+        padDragging = true;
+        // Keep the chrome (and therefore the joystick itself) on screen while
+        // panning — the pad captures the pointer, so the host never sees the
+        // mouse move that would otherwise reset the auto-hide timer.
+        this._vrPadDragging = true;
+        this.showControls();
+        pad.classList.add("movi-vr360-pad-dragging");
+        try {
+          pad.setPointerCapture?.(e.pointerId);
+        } catch {
+          /* best-effort */
+        }
+        moveKnob(e);
+        if (raf === null) raf = requestAnimationFrame(tick);
+      });
+      pad.addEventListener("pointermove", (e: PointerEvent) => {
+        if (padDragging) moveKnob(e);
+      });
+      const padEnd = (e: PointerEvent) => {
+        if (!padDragging) return;
+        padDragging = false;
+        offX = 0;
+        offY = 0;
+        // Spring the knob back to centre (transition re-enabled by class removal).
+        pad.classList.remove("movi-vr360-pad-dragging");
+        knob.style.transform = "";
+        // Restart the auto-hide countdown now that the drag is over.
+        this._vrPadDragging = false;
+        this.showControls();
+        try {
+          pad.releasePointerCapture?.(e.pointerId);
+        } catch {
+          /* best-effort */
+        }
+      };
+      pad.addEventListener("pointerup", padEnd);
+      pad.addEventListener("pointercancel", padEnd);
+    }
+  }
+
+  /**
+   * Enable/disable VR rendering and pick the format:
+   *  - half: VR180 (front hemisphere) vs full 360°.
+   *  - fisheye: equidistant fisheye vs equirectangular.
+   *  - sbs: side-by-side stereo (render the left eye) vs mono.
+   * Forwards to the player's renderer and flips the host class (for cursor +
+   * touch-action CSS). There's no toggle button: VR turns on automatically for
+   * sources we know are 360/180 (spherical metadata or the `vr` attribute), the
+   * same way YouTube treats them.
+   */
+  setVR360(
+    enabled: boolean,
+    half: boolean = false,
+    fisheye: boolean = false,
+    sbs: boolean = false,
+    stereographic: boolean = false,
+  ): void {
+    this._vr360 = enabled;
+    this.player?.setVR360(enabled);
+    if (enabled) {
+      this.player?.setVRProjection(half, fisheye, sbs, stereographic);
+    }
+    this.classList.toggle("movi-vr360-active", enabled);
+    if (enabled) {
+      // A custom/generated poster is a flat <img> overlay that the player never
+      // decodes — project it onto the 360 canvas and hide the flat overlay.
+      void this.renderVRPosterIfNeeded();
+    } else if (this.posterElement) {
+      // Leaving 360: un-hide the flat poster overlay we may have suppressed.
+      this.posterElement.style.visibility = "";
+      this.updatePoster();
+    }
+  }
+
+  /**
+   * When a custom/generated poster image is showing and 360° is on, draw the
+   * poster onto the canvas through the equirectangular projection (so it looks
+   * right, not flat-distorted) and hide the flat <img> overlay. No-op for the
+   * decoded-frame poster path (seek/postertime) — that already paints in 360.
+   */
+  private async renderVRPosterIfNeeded(): Promise<void> {
+    if (!this._vr360 || !this.player) return;
+    if (!this._poster && !this._generatedPosterUrl) return;
+    if (this.player.getState?.() === "playing") return;
+    const img = this.posterElement;
+    if (!img || !img.getAttribute("src")) return;
+
+    const draw = async () => {
+      try {
+        // Match the backbuffer to the display box so the 360 aspect is correct.
+        this.updateCanvasSize();
+        const bmp = await createImageBitmap(img);
+        this.player?.renderPosterImage(bmp);
+        try {
+          bmp.close();
+        } catch {
+          /* ignore */
+        }
+        // Hide the flat overlay so only the 360-projected canvas shows.
+        img.style.visibility = "hidden";
+      } catch (e) {
+        Logger.warn(TAG, "VR poster render failed", e);
+      }
+    };
+
+    if (img.complete && img.naturalWidth > 0) {
+      await draw();
+    } else {
+      img.addEventListener("load", () => void draw(), { once: true });
+    }
+  }
+
+  /**
+   * Resolve the VR format for the CURRENT source from spherical metadata
+   * (track.projection) + the live `vr` attribute. Never carries the previous
+   * clip's state over — switching to a normal clip drops back to flat unless
+   * `vr` is still set.
+   *
+   * `vr` attribute tokens (space/comma separated), e.g. `vr="fisheye sbs"`:
+   *   (bare) / 360 → full 360°; 180 → VR180; sbs / 3d → side-by-side stereo
+   *   (left eye); fisheye → equidistant fisheye (implies 180).
+   *
+   * projection metadata: 0/undefined = none; 1 = equirectangular;
+   * 3 = equirectangular-tile; 4 = half-equirectangular (VR180). Stereo/fisheye
+   * aren't auto-surfaced, so those need the attribute.
+   */
+  private resolveVRMode(): {
+    enable: boolean;
+    half: boolean;
+    fisheye: boolean;
+    sbs: boolean;
+    stereographic: boolean;
+  } {
+    const track = (this.player as any)?.trackManager?.getActiveVideoTrack?.();
+    const projection = track?.projection ?? 0;
+    const metaEquirect = projection === 1 || projection === 3; // 360
+    const metaHalf = projection === 4; // VR180
+
+    const attr = this.getAttribute("vr");
+    const forced = attr !== null;
+    const tokens = (attr ?? "").toLowerCase().split(/[\s,]+/).filter(Boolean);
+    const has = (t: string) => tokens.includes(t);
+
+    // Stereographic "little planet" is a standalone full-360 layout — it
+    // overrides the other flags.
+    const stereographic =
+      forced &&
+      (has("littleplanet") ||
+        has("planet") ||
+        has("tinyplanet") ||
+        has("stereographic"));
+    if (stereographic) {
+      return {
+        enable: true,
+        half: false,
+        fisheye: false,
+        sbs: false,
+        stereographic: true,
+      };
+    }
+
+    const fisheye = forced && has("fisheye");
+    const sbs = forced && (has("sbs") || has("3d"));
+    let half: boolean;
+    if (forced) {
+      // Bare `vr` (no tokens) → 360. `360` token forces full; otherwise any of
+      // 180 / sbs / 3d / fisheye implies the front-hemisphere layout.
+      half = has("360")
+        ? false
+        : has("180") || has("sbs") || has("3d") || has("fisheye");
+    } else {
+      half = metaHalf;
+    }
+    const enable = forced || metaEquirect || metaHalf;
+    return { enable, half, fisheye, sbs, stereographic: false };
+  }
+
+  /** Apply the resolved VR format to the renderer (enable OR disable). */
+  private detectAndApplyVR360(): void {
+    const m = this.resolveVRMode();
+    this.setVR360(m.enable, m.half, m.fisheye, m.sbs, m.stereographic);
+    if (m.enable) void this.renderVRPosterIfNeeded();
   }
 
   private setupKeyboardShortcuts(): void {
@@ -7015,15 +7376,18 @@ export class MoviElement extends HTMLElement {
       !this.isOverControls &&
       !this.isDragging &&
       !this.isTouchDragging &&
+      !this._vrPadDragging &&
       !this.isAnyMenuOpen()
     ) {
       this.controlsTimeout = window.setTimeout(() => {
         // Re-check gating conditions before hiding — a menu may have
-        // been opened, the cursor may have moved over the bar, etc.
+        // been opened, the cursor may have moved over the bar, the 360°
+        // joystick may now be in use, etc.
         if (
           !this.isOverControls &&
           !this.isDragging &&
           !this.isTouchDragging &&
+          !this._vrPadDragging &&
           !this.isAnyMenuOpen()
         ) {
           this.hideControls();
@@ -8142,7 +8506,97 @@ export class MoviElement extends HTMLElement {
            — the backdrop alone reads as "interactive" without making
            the icon look like it's lighting up. */
       }
-      
+
+      /* 360° on-screen pan joystick (YouTube-style), top-left. Hidden unless
+         360 is active AND the controls are visible. */
+      .movi-vr360-pad {
+        position: absolute;
+        top: 16px;
+        left: 16px;
+        z-index: 11;
+        width: 76px;
+        height: 76px;
+        opacity: 0;
+        pointer-events: none;
+        transition: opacity var(--movi-transition-normal), top var(--movi-transition-normal);
+        touch-action: none;
+      }
+      /* Opt-in via the vrpad attribute. Without it the pad never shows —
+         drag-to-look + wheel-zoom already cover desktop navigation; the pad is
+         for those who want a YouTube-style continuous-pan compass. */
+      :host(.movi-vr360-active[vrpad]) .movi-vr360-pad {
+        opacity: 1;
+        pointer-events: auto;
+      }
+      /* Sit below the title bar so they never overlap. Keyed on the showtitle
+         feature (not the title's transient visibility) so the pad position
+         stays put as the controls/title fade — no snap up over the title. */
+      :host(.movi-vr360-active[showtitle]) .movi-vr360-pad {
+        top: 60px;
+      }
+      /* Fold away with the controls when they auto-hide. */
+      :host(.movi-vr360-active):has(.movi-controls-container.movi-controls-hidden) .movi-vr360-pad {
+        opacity: 0;
+        pointer-events: none;
+      }
+      /* Never on touch / coarse-pointer devices — there you just drag the video. */
+      @media (hover: none), (pointer: coarse) {
+        .movi-vr360-pad { display: none !important; }
+      }
+      .movi-vr360-pad-ring {
+        position: relative;
+        width: 100%;
+        height: 100%;
+        border-radius: 50%;
+        background: rgba(0, 0, 0, 0.55);
+        border: 1.5px solid rgba(255, 255, 255, 0.5);
+        box-shadow: 0 2px 8px rgba(0, 0, 0, 0.4);
+        cursor: grab;
+      }
+      .movi-vr360-pad-ring:active {
+        cursor: grabbing;
+      }
+      .movi-vr360-pad-arrow {
+        position: absolute;
+        color: rgba(255, 255, 255, 0.55);
+        font-size: 9px;
+        line-height: 1;
+        pointer-events: none;
+        user-select: none;
+      }
+      .movi-vr360-pad-arrow-n { top: 4px; left: 50%; transform: translateX(-50%); }
+      .movi-vr360-pad-arrow-s { bottom: 4px; left: 50%; transform: translateX(-50%); }
+      .movi-vr360-pad-arrow-w { left: 5px; top: 50%; transform: translateY(-50%); }
+      .movi-vr360-pad-arrow-e { right: 5px; top: 50%; transform: translateY(-50%); }
+      .movi-vr360-pad-knob {
+        position: absolute;
+        top: 50%;
+        left: 50%;
+        width: 30px;
+        height: 30px;
+        margin: -15px 0 0 -15px;
+        border-radius: 50%;
+        background: rgba(255, 255, 255, 0.92);
+        box-shadow: 0 1px 4px rgba(0, 0, 0, 0.5);
+        transition: transform 0.18s ease-out;
+        pointer-events: none;
+      }
+      .movi-vr360-pad.movi-vr360-pad-dragging .movi-vr360-pad-knob {
+        transition: none;
+      }
+      /* In 360° the canvas is a draggable viewport. Grab cursor + disable
+         browser touch panning so one-finger drags look around instead of
+         scrolling the page. */
+      :host(.movi-vr360-active) .movi-controls-overlay,
+      :host(.movi-vr360-active) canvas {
+        cursor: grab;
+        touch-action: none;
+      }
+      :host(.movi-vr360-active) .movi-controls-overlay:active,
+      :host(.movi-vr360-active) canvas:active {
+        cursor: grabbing;
+      }
+
       .movi-icon-play {
         margin-left: 2px;
       }
@@ -12932,6 +13386,14 @@ export class MoviElement extends HTMLElement {
       case "resume":
         this._resume = newValue !== null;
         break;
+      case "vr": {
+        // Tokens: (bare)/360 → 360°, 180 → VR180, sbs/3d → stereo SBS,
+        // fisheye → fisheye, littleplanet/planet → stereographic. resolveVRMode
+        // reads the attribute live.
+        const m = this.resolveVRMode();
+        this.setVR360(m.enable, m.half, m.fisheye, m.sbs, m.stereographic);
+        break;
+      }
       case "stablevolume":
         this._stableVolume = newValue !== null;
         if (this.player) {
@@ -13978,6 +14440,7 @@ export class MoviElement extends HTMLElement {
         this.player.setHDREnabled(this._hdr);
         this.player.setStableAudio(this._stableVolume);
         this.updateStableAudioUI();
+        this.detectAndApplyVR360();
       }
       this.updateHDRVisibility();
       this.updateControlsVisibility();
@@ -17441,6 +17904,14 @@ export class MoviElement extends HTMLElement {
       this.posterElement.style.objectFit = this.posterObjectFit();
     } else {
       this.posterElement.style.display = "none";
+    }
+
+    // In 360° mode the flat poster <img> is replaced by the equirectangular
+    // projection of the same image on the canvas. renderVRPosterIfNeeded hides
+    // the <img> only once it has actually drawn, so a load failure leaves the
+    // flat overlay visible rather than a blank canvas.
+    if (this._vr360 && this.posterElement.style.display !== "none") {
+      void this.renderVRPosterIfNeeded();
     }
   }
 

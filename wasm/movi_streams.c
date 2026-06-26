@@ -124,6 +124,21 @@ int movi_get_stream_info(MoviContext *ctx, int stream_index, StreamInfo *info) {
       info->rotation = 0;
   }
 
+  // Extract 360° spherical projection from side data (MP4 sv3d/st3d, Matroska
+  // ProjectionType — the Google Spherical Video metadata). Stored as
+  // projection+1 so 0 unambiguously means "no spherical metadata".
+  const AVPacketSideData *spherical = av_packet_side_data_get(
+      codecpar->coded_side_data, codecpar->nb_coded_side_data,
+      AV_PKT_DATA_SPHERICAL);
+  if (spherical && spherical->data &&
+      spherical->size >= sizeof(AVSphericalMapping)) {
+      const AVSphericalMapping *mapping =
+          (const AVSphericalMapping *)spherical->data;
+      info->projection = (int)mapping->projection + 1;
+  } else {
+      info->projection = 0;
+  }
+
   return 0;
 }
 

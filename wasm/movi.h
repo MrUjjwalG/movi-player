@@ -8,6 +8,7 @@
 #include <libavutil/avutil.h>
 #include <libavutil/display.h>
 #include <libavutil/pixdesc.h>
+#include <libavutil/spherical.h>
 #include <libswresample/swresample.h>
 #include <libswscale/swscale.h>
 #include <stdint.h>
@@ -48,6 +49,13 @@ typedef struct {
   char color_matrix[32];
   char pixel_format[32];
   char color_range[32];
+  // 360° spherical projection, stored as AVSphericalProjection + 1 so that a
+  // zero-initialised struct (i.e. an older WASM that predates this field) reads
+  // as 0 = "no spherical metadata" rather than 0 = equirectangular.
+  //   0 = none/not spherical
+  //   1 = equirectangular, 2 = cubemap, 3 = equirectangular-tile,
+  //   4 = half-equirectangular (180°), …
+  int projection;
 } StreamInfo;
 
 // Packet info struct

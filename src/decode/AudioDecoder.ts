@@ -194,6 +194,12 @@ export class MoviAudioDecoder {
       "truehd",
       "mlp",
       "opus",
+      // FLAC's WebCodecs path reliably throws "EncodingError: Decoding error"
+      // (the FLAC STREAMINFO description it wants is finicky / browser-specific).
+      // The error→software fallback recovers in some browsers but not others, so
+      // decode FLAC in software from the start — like opus. (FFmpeg WASM handles
+      // it fine; verified producing samples.)
+      "flac",
     ];
     return transcodingCodecs.includes(codec.toLowerCase());
   }

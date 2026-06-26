@@ -190,6 +190,9 @@ export interface StreamInfo {
   colorMatrix: string;
   pixelFormat: string;
   colorRange: string;
+  // 360° spherical projection: 0 = none, else AVSphericalProjection+1
+  // (1=equirectangular, 2=cubemap, 3=equirectangular-tile, 4=half-equirectangular).
+  projection: number;
   // True when AV_DISPOSITION_ATTACHED_PIC is set on the stream. Audio
   // files with embedded cover art (ID3v2 APIC, FLAC PICTURE, MP4 covr,
   // Matroska attachments) expose a video-codec stream that carries a
@@ -219,7 +222,11 @@ export interface PacketInfo {
 }
 
 // StreamInfo struct layout (matches C struct)
-export const STREAM_INFO_SIZE = 340; // +4 for is_attached_pic (int)
+// 336 = end of color_range; +4 projection (336) +4 is_attached_pic placeholder
+// (340); padded to 8-byte alignment (int64 bit_rate) → 344. Keep in sync with
+// sizeof(StreamInfo) in movi.h after any field change, and clear
+// node_modules/.vite after build:wasm so the new layout is picked up.
+export const STREAM_INFO_SIZE = 344;
 export const STREAM_INFO_OFFSETS = {
   index: 0,
   type: 4,
@@ -243,7 +250,8 @@ export const STREAM_INFO_OFFSETS = {
   colorMatrix: 240, // 32 bytes
   pixelFormat: 272, // 32 bytes
   colorRange: 304, // 32 bytes
-  isAttachedPic: 336, // 4 bytes (int)
+  projection: 336, // 4 bytes (int) — AVSphericalProjection+1, 0 = none
+  isAttachedPic: 340, // 4 bytes (int)
 };
 
 // PacketInfo struct layout. Contains doubles (8-byte alignment), so the trailing

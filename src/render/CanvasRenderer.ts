@@ -97,6 +97,73 @@ export class CanvasRenderer {
   private letterboxColor: [number, number, number] = [0, 0, 0]; // Current smoothed RGB (0-255)
   private letterboxTarget: [number, number, number] = [0, 0, 0]; // Target RGB from ambient sampling
 
+  // 360° VR (equirectangular) projection. When enabled, drawFrame renders the
+  // frame as the inside of a sphere viewed from its centre, via a per-fragment
+  // equirectangular raycast, instead of the flat scaled/letterboxed quad. The
+  // same fullscreen-quad VAO and texture upload are reused — only the program
+  // and a handful of camera uniforms differ. The VR program is compiled lazily
+  // the first time 360 mode is switched on (initVRProgram), so the 99% of
+  // playback that is flat 2D pays nothing.
+  private vr360Enabled: boolean = false;
+  private vrProgram: WebGLProgram | null = null;
+  private vrLocs: {
+    image: WebGLUniformLocation | null;
+    yaw: WebGLUniformLocation | null;
+    pitch: WebGLUniformLocation | null;
+    fov: WebGLUniformLocation | null;
+    aspect: WebGLUniformLocation | null;
+    lonDiv: WebGLUniformLocation | null;
+    latDiv: WebGLUniformLocation | null;
+    proj: WebGLUniformLocation | null;
+    fishFov: WebGLUniformLocation | null;
+    uScale: WebGLUniformLocation | null;
+    uOffset: WebGLUniformLocation | null;
+    planetScale: WebGLUniformLocation | null;
+    srcAspect: WebGLUniformLocation | null;
+  } | null = null;
+  // VR180 (half-equirectangular): the frame covers only the front hemisphere.
+  // The longitude span halves (π instead of 2π). false = full 360°.
+  private vrHalf: boolean = false;
+  // Fisheye projection (equidistant) instead of equirectangular — common in
+  // VR180 camera captures (circular lens image with black corners).
+  private vrFisheye: boolean = false;
+  // Stereo side-by-side: the frame holds two eyes; sample only the left one.
+  private vrStereoSbs: boolean = false;
+  // Stereographic "little planet" projection (tiny-planet 360 clips).
+  private vrStereographic: boolean = false;
+  // Fisheye lens coverage (radians); 180° lenses → π.
+  private static readonly VR_FISHEYE_FOV = Math.PI;
+  // Stereographic horizon radius in image half-height units (tuned so a typical
+  // tiny-planet's horizon sits sensibly; the camera reaches the rim/zenith).
+  private static readonly VR_PLANET_SCALE = 0.5;
+  // Source pixel aspect (width/height), used to derive the latitude span and to
+  // clamp the VR180 camera so the viewport never exits the content (no black).
+  private vrTexAspect: number = 2;
+  // The camera is animated: input updates the *target*, and a light spring
+  // eases the rendered (current) value toward it each frame — slightly
+  // underdamped so it settles with a soft, YouTube-like glide/bounce instead
+  // of snapping. drawVRFrame reads the current values; the targets are what
+  // nudge/zoom/reset move.
+  private vrYaw: number = 0; // current rendered yaw (radians)
+  private vrPitch: number = 0; // current rendered pitch (radians)
+  private vrFov: number = 1.2217; // current rendered FOV (radians, ~70°)
+  private vrYawTarget: number = 0;
+  private vrPitchTarget: number = 0;
+  private vrFovTarget: number = 1.2217;
+  private vrYawVel: number = 0; // spring velocity (rad/s)
+  private vrPitchVel: number = 0;
+  private vrAnimRaf: number | null = null;
+  // Spring constants. DAMPING < 2·√STIFFNESS → underdamped. ζ ≈ 0.6 here
+  // (DAMPING / 2·√STIFFNESS) gives a clear-but-tasteful ~9% overshoot — the
+  // soft "bounce" YouTube has on release — while staying tight enough during
+  // a drag not to feel laggy.
+  private static readonly VR_STIFFNESS = 210;
+  private static readonly VR_DAMPING = 17;
+  private static readonly VR_FOV_LERP = 0.22; // zoom eases linearly, no bounce
+  private static readonly VR_DEFAULT_FOV = 1.2217;
+  private static readonly VR_MIN_FOV = 0.5236; // 30° — most zoomed-in
+  private static readonly VR_MAX_FOV = 2.0944; // 120° — most zoomed-out
+
 
   // Subtitle rendering
   private activeSubtitleCue: SubtitleCue | null = null;
@@ -390,6 +457,12 @@ export class CanvasRenderer {
       }
 
       this.initWebGL();
+      // If 360° was requested before the context existed (e.g. the `vr`
+      // attribute), compile the VR program now so the first/poster frame
+      // paints in 360 rather than flat.
+      if (this.vr360Enabled && !this.vrProgram) {
+        this.initVRProgram();
+      }
       this.colorSpace = detectedColorSpace;
       Logger.info(
         TAG,
@@ -692,6 +765,504 @@ export class CanvasRenderer {
       );
     }
 
+  }
+
+  /**
+   * Compile the 360° VR program lazily on first use. Reuses the existing
+   * fullscreen-quad VAO (location 0 = a_position spans the clip-space quad)
+   * and the existing video texture; only this program + its camera uniforms
+   * are new. The fragment shader reconstructs a view ray per pixel from the
+   * NDC position + camera yaw/pitch/fov, then maps that direction to an
+   * equirectangular (longitude/latitude) texture coordinate.
+   */
+  private initVRProgram(): boolean {
+    if (this.vrProgram) return true;
+    if (!this.gl) return false;
+    const gl = this.gl;
+
+    const vsSource = `#version 300 es
+    layout(location = 0) in vec2 a_position;
+    out vec2 v_ndc;
+    void main() {
+      v_ndc = a_position;
+      gl_Position = vec4(a_position, 0.0, 1.0);
+    }`;
+
+    const fsSource = `#version 300 es
+    precision highp float;
+    uniform sampler2D u_image;
+    uniform float u_yaw;     // radians, look left/right
+    uniform float u_pitch;   // radians, look up/down
+    uniform float u_fov;     // vertical field of view (radians)
+    uniform float u_aspect;  // viewport width / height
+    uniform float u_lonDiv;  // longitude span (radians): 2π for 360, π for VR180
+    uniform float u_latDiv;  // latitude span (radians), derived from source aspect
+    uniform float u_proj;    // 0 = equirectangular, 1 = fisheye, 2 = stereographic
+    uniform float u_fishFov; // fisheye coverage (radians), e.g. π for a 180° lens
+    uniform float u_uScale;  // eye selection: 1 = full width, 0.5 = one SBS eye
+    uniform float u_uOffset; // 0 = left eye, 0.5 = right eye
+    uniform float u_planetScale; // stereographic: image radius of the horizon
+    uniform float u_srcAspect;   // source frame width/height (keeps the disc round)
+    in vec2 v_ndc;
+    out vec4 outColor;
+
+    const float PI = 3.14159265358979323846;
+
+    void main() {
+      // Camera-space ray: -z forward, scaled by the half-FOV tangent so the
+      // vertical FOV matches u_fov and the horizontal FOV follows the aspect.
+      float t = tan(u_fov * 0.5);
+      vec3 dir = normalize(vec3(v_ndc.x * t * u_aspect, v_ndc.y * t, -1.0));
+
+      // Rotate the ray by pitch (about X), then yaw (about Y).
+      float cp = cos(u_pitch), sp = sin(u_pitch);
+      dir = vec3(dir.x, cp * dir.y - sp * dir.z, sp * dir.y + cp * dir.z);
+      float cy = cos(u_yaw), sy = sin(u_yaw);
+      dir = vec3(cy * dir.x + sy * dir.z, dir.y, -sy * dir.x + cy * dir.z);
+
+      // Map the ray to a position inside ONE eye's 0..1 square.
+      vec2 eye;
+      if (u_proj < 0.5) {
+        // Equirectangular: longitude across X, latitude up Y. Spans come from
+        // the source so pixels stay square (a 2:1 frame → 180° vertical, etc.).
+        float lon = atan(dir.x, -dir.z);
+        float lat = asin(clamp(dir.y, -1.0, 1.0));
+        eye = vec2(lon / u_lonDiv + 0.5, 0.5 - lat / u_latDiv);
+      } else if (u_proj < 1.5) {
+        // Equidistant fisheye: angle θ from the forward axis maps to a radius,
+        // azimuth φ to the angle around the circle inscribed in the square.
+        float theta = acos(clamp(-dir.z, -1.0, 1.0));
+        float phi = atan(dir.y, dir.x);
+        float r = theta / (u_fishFov * 0.5); // 0 at centre, 1 at the lens edge
+        eye = vec2(0.5 + 0.5 * r * cos(phi), 0.5 - 0.5 * r * sin(phi));
+      } else {
+        // Stereographic "little planet": nadir (straight down) sits at the disc
+        // centre, the horizon on a circle and the zenith out toward the rim.
+        // Inverse-project: angle a from nadir → image radius r = tan(a/2),
+        // azimuth around the vertical axis. Divide x by the source aspect so a
+        // disc that's circular in pixels stays circular here.
+        float a = acos(clamp(-dir.y, -1.0, 1.0)); // 0 down → π up
+        float az = atan(dir.z, dir.x);
+        float r = tan(a * 0.5) * u_planetScale;
+        // +sin so tilting up samples toward the image top (where the zenith/sky
+        // sits in a tiny-planet), keeping the scene right-side up.
+        eye = vec2(0.5 + r * cos(az) / u_srcAspect, 0.5 + r * sin(az));
+      }
+
+      // Pick the eye half for side-by-side stereo (full width when mono). The
+      // camera is clamped to the content and S/T wrap is CLAMP_TO_EDGE, so the
+      // edge never shows a black void.
+      vec2 uv = vec2(eye.x * u_uScale + u_uOffset, eye.y);
+      outColor = texture(u_image, uv);
+    }`;
+
+    const createShader = (type: number, source: string) => {
+      const shader = gl.createShader(type);
+      if (!shader) return null;
+      gl.shaderSource(shader, source);
+      gl.compileShader(shader);
+      if (!gl.getShaderParameter(shader, gl.COMPILE_STATUS)) {
+        Logger.error(TAG, "VR shader compile error:", gl.getShaderInfoLog(shader));
+        gl.deleteShader(shader);
+        return null;
+      }
+      return shader;
+    };
+
+    const vert = createShader(gl.VERTEX_SHADER, vsSource);
+    const frag = createShader(gl.FRAGMENT_SHADER, fsSource);
+    if (!vert || !frag) return false;
+
+    const program = gl.createProgram();
+    if (!program) return false;
+    gl.attachShader(program, vert);
+    gl.attachShader(program, frag);
+    gl.linkProgram(program);
+    if (!gl.getProgramParameter(program, gl.LINK_STATUS)) {
+      Logger.error(TAG, "VR program link error:", gl.getProgramInfoLog(program));
+      gl.deleteProgram(program);
+      return false;
+    }
+
+    this.vrProgram = program;
+    this.vrLocs = {
+      image: gl.getUniformLocation(program, "u_image"),
+      yaw: gl.getUniformLocation(program, "u_yaw"),
+      pitch: gl.getUniformLocation(program, "u_pitch"),
+      fov: gl.getUniformLocation(program, "u_fov"),
+      aspect: gl.getUniformLocation(program, "u_aspect"),
+      lonDiv: gl.getUniformLocation(program, "u_lonDiv"),
+      latDiv: gl.getUniformLocation(program, "u_latDiv"),
+      proj: gl.getUniformLocation(program, "u_proj"),
+      fishFov: gl.getUniformLocation(program, "u_fishFov"),
+      uScale: gl.getUniformLocation(program, "u_uScale"),
+      uOffset: gl.getUniformLocation(program, "u_uOffset"),
+      planetScale: gl.getUniformLocation(program, "u_planetScale"),
+      srcAspect: gl.getUniformLocation(program, "u_srcAspect"),
+    };
+    gl.useProgram(program);
+    if (this.vrLocs.image) gl.uniform1i(this.vrLocs.image, 0);
+    Logger.info(TAG, "VR 360° equirectangular program compiled");
+    return true;
+  }
+
+  /**
+   * Render one frame as a viewed sphere. The texture has already been bound +
+   * uploaded by drawFrame; here we only set the full-canvas viewport, switch
+   * to the VR program, push the camera uniforms and draw the fullscreen quad.
+   * Full 360° wraps horizontally (WRAP_S = REPEAT for a seamless ±180° seam);
+   * VR180 covers a single front hemisphere, so it clamps and clips to black.
+   */
+  private drawVRFrame(gl: WebGL2RenderingContext, frame: VideoFrame): void {
+    gl.viewport(0, 0, this.width, this.height);
+    gl.clearColor(0, 0, 0, 1);
+    gl.clear(gl.COLOR_BUFFER_BIT);
+
+    // Only full 360° equirect wraps horizontally; VR180, fisheye and
+    // stereographic all clamp at the edge.
+    gl.texParameteri(
+      gl.TEXTURE_2D,
+      gl.TEXTURE_WRAP_S,
+      this.vrHalf || this.vrStereographic ? gl.CLAMP_TO_EDGE : gl.REPEAT,
+    );
+
+    if (frame.displayHeight > 0) {
+      this.vrTexAspect = frame.displayWidth / frame.displayHeight;
+    }
+    // For side-by-side stereo each eye is half the frame width, so the per-eye
+    // aspect (what the projection maps) halves.
+    const eyeAspect = this.vrStereoSbs
+      ? this.vrTexAspect / 2
+      : this.vrTexAspect;
+    // Equirect: longitude span fixed by coverage (full turn vs hemisphere),
+    // latitude span follows the per-eye aspect so pixels stay square.
+    const lonDiv = this.vrHalf ? Math.PI : 2 * Math.PI;
+    const latDiv = Math.min(Math.PI, lonDiv / eyeAspect);
+
+    gl.useProgram(this.vrProgram);
+    gl.bindVertexArray(this.vao);
+    const locs = this.vrLocs!;
+    if (locs.yaw) gl.uniform1f(locs.yaw, this.vrYaw);
+    if (locs.pitch) gl.uniform1f(locs.pitch, this.vrPitch);
+    if (locs.fov) gl.uniform1f(locs.fov, this.vrFov);
+    if (locs.aspect)
+      gl.uniform1f(locs.aspect, this.height > 0 ? this.width / this.height : 1);
+    if (locs.lonDiv) gl.uniform1f(locs.lonDiv, lonDiv);
+    if (locs.latDiv) gl.uniform1f(locs.latDiv, latDiv);
+    const projMode = this.vrStereographic ? 2 : this.vrFisheye ? 1 : 0;
+    if (locs.proj) gl.uniform1f(locs.proj, projMode);
+    if (locs.fishFov) gl.uniform1f(locs.fishFov, CanvasRenderer.VR_FISHEYE_FOV);
+    // Left eye for SBS (scale 0.5, offset 0); full width for mono.
+    if (locs.uScale) gl.uniform1f(locs.uScale, this.vrStereoSbs ? 0.5 : 1);
+    if (locs.uOffset) gl.uniform1f(locs.uOffset, 0);
+    if (locs.planetScale)
+      gl.uniform1f(locs.planetScale, CanvasRenderer.VR_PLANET_SCALE);
+    if (locs.srcAspect) gl.uniform1f(locs.srcAspect, this.vrTexAspect || 1);
+    gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
+  }
+
+  /**
+   * Shared adaptive-DPR paint sampling. Called from both the flat and VR draw
+   * paths so 360 playback also benefits from the 2x→1x backbuffer downgrade on
+   * GPU-bound devices (360 raycasting is fragment-heavy at 4K).
+   */
+  private sampleAdaptiveDpr(paintStart: number): void {
+    if (this._adaptDprChecked || paintStart <= 0) return;
+    const paintDuration = performance.now() - paintStart;
+    this._paintSamples.push(paintDuration);
+    if (this._paintSamples.length >= CanvasRenderer.PAINT_SAMPLE_COUNT) {
+      const sum = this._paintSamples.reduce((a, b) => a + b, 0);
+      const avg = sum / this._paintSamples.length;
+      if (
+        avg > CanvasRenderer.PAINT_THRESHOLD_MS &&
+        this._maxDpr > 1 &&
+        this.containerWidth > 0 &&
+        this.containerHeight > 0
+      ) {
+        Logger.info(
+          TAG,
+          `Adaptive DPR: avg paint ${avg.toFixed(1)}ms over ${this._paintSamples.length} frames > ${CanvasRenderer.PAINT_THRESHOLD_MS}ms threshold — capping DPR to 1x`,
+        );
+        this._maxDpr = 1;
+        this.resize(this.containerWidth, this.containerHeight);
+      }
+      this._adaptDprChecked = true;
+      this._paintSamples = [];
+    }
+  }
+
+  // ───────────────────────── 360° VR public API ─────────────────────────
+
+  /** Turn equirectangular 360° rendering on/off. The intent is stored
+   *  unconditionally; the VR program is compiled when GL is ready — which may
+   *  be NOW (toggled during playback) or later (the `vr` attribute requests 360
+   *  before the first frame/poster has configured the context). configure() and
+   *  drawFrame both compile lazily, so an early enable still paints the poster
+   *  in 360. Repaints immediately when paused so the toggle is visible. */
+  setVR360(enabled: boolean): void {
+    if (this.vr360Enabled === enabled) return;
+    this.vr360Enabled = enabled;
+    if (enabled) {
+      // Best-effort compile now; harmless no-op if GL isn't configured yet.
+      if (this.gl) this.initVRProgram();
+      // Sync targets to current so toggling on never kicks off a stray spring.
+      this.vrYawTarget = this.vrYaw;
+      this.vrPitchTarget = this.vrPitch;
+      this.vrFovTarget = this.vrFov;
+      this.vrYawVel = 0;
+      this.vrPitchVel = 0;
+    } else if (this.gl && this.texture) {
+      // Restore CLAMP_TO_EDGE for the flat path when leaving VR.
+      this.gl.bindTexture(this.gl.TEXTURE_2D, this.texture);
+      this.gl.texParameteri(
+        this.gl.TEXTURE_2D,
+        this.gl.TEXTURE_WRAP_S,
+        this.gl.CLAMP_TO_EDGE,
+      );
+    }
+    this.redrawForVR();
+    Logger.info(TAG, `360° VR ${enabled ? "enabled" : "disabled"}`);
+  }
+
+  isVR360Enabled(): boolean {
+    return this.vr360Enabled;
+  }
+
+  /** Choose the VR projection/layout:
+   *  - half: false = full 360° equirectangular, true = front-hemisphere (VR180).
+   *  - fisheye: true = equidistant fisheye instead of equirectangular.
+   *  - stereoSbs: true = side-by-side stereo (render the left eye only).
+   *  drawVRFrame reads these. */
+  setVRProjection(
+    half: boolean,
+    fisheye = false,
+    stereoSbs = false,
+    stereographic = false,
+  ): void {
+    if (
+      this.vrHalf === half &&
+      this.vrFisheye === fisheye &&
+      this.vrStereoSbs === stereoSbs &&
+      this.vrStereographic === stereographic
+    ) {
+      return;
+    }
+    const enteringPlanet = stereographic && !this.vrStereographic;
+    this.vrHalf = half;
+    this.vrFisheye = fisheye;
+    this.vrStereoSbs = stereoSbs;
+    this.vrStereographic = stereographic;
+    if (enteringPlanet) {
+      // Open looking down at the planet — the recognisable tiny-planet view.
+      // Tilt up to "unwrap" toward the horizon; spin yaw to rotate the world.
+      this.vrPitch = this.vrPitchTarget = -1.35; // ~ -77°, mostly down
+      this.vrYaw = this.vrYawTarget = 0;
+      this.vrPitchVel = this.vrYawVel = 0;
+    }
+    this.clampVRCamera();
+    this.redrawForVR();
+  }
+
+  /**
+   * Keep the VR180 camera inside the content so no black void is ever shown.
+   * The viewport's half-FOV (vertical from u_fov, horizontal via the canvas
+   * aspect) is subtracted from the content's angular half-extents to get the
+   * yaw/pitch limits, and zoom-out is capped so the viewport can't grow past
+   * the content vertically. No-op for full 360° (it covers everything).
+   */
+  private clampVRCamera(): void {
+    if (!this.vrHalf) return;
+    // Per-eye aspect (SBS halves the width). Fisheye lenses are a circle in a
+    // square eye, so treat them as 1:1 (180° both axes).
+    const eyeAspect = this.vrStereoSbs
+      ? this.vrTexAspect / 2
+      : this.vrTexAspect;
+    const lonSpan = Math.PI; // VR180 horizontal coverage = 180°
+    const latSpan = this.vrFisheye
+      ? Math.PI // fisheye covers ~180° vertically too
+      : Math.min(Math.PI, lonSpan / eyeAspect);
+
+    // Cap zoom-out so the vertical FOV never exceeds the content's vertical span.
+    const maxFov = Math.min(CanvasRenderer.VR_MAX_FOV, latSpan);
+    if (this.vrFovTarget > maxFov) this.vrFovTarget = maxFov;
+    if (this.vrFov > maxFov) this.vrFov = maxFov;
+
+    const vpAspect = this.height > 0 ? this.width / this.height : 16 / 9;
+    const vHalf = this.vrFov * 0.5;
+    const hHalf = Math.atan(Math.tan(vHalf) * vpAspect);
+    const maxYaw = Math.max(0, lonSpan * 0.5 - hHalf);
+    const maxPitch = Math.max(0, latSpan * 0.5 - vHalf);
+
+    const clampAxis = (
+      cur: number,
+      tgt: number,
+      lim: number,
+    ): [number, number, boolean] => {
+      const t = Math.max(-lim, Math.min(lim, tgt));
+      let c = cur,
+        hitEdge = false;
+      if (c > lim) {
+        c = lim;
+        hitEdge = true;
+      } else if (c < -lim) {
+        c = -lim;
+        hitEdge = true;
+      }
+      return [c, t, hitEdge];
+    };
+
+    let hitY: boolean, hitP: boolean;
+    [this.vrYaw, this.vrYawTarget, hitY] = clampAxis(
+      this.vrYaw,
+      this.vrYawTarget,
+      maxYaw,
+    );
+    [this.vrPitch, this.vrPitchTarget, hitP] = clampAxis(
+      this.vrPitch,
+      this.vrPitchTarget,
+      maxPitch,
+    );
+    if (hitY) this.vrYawVel = 0; // stop the spring overshooting into the void
+    if (hitP) this.vrPitchVel = 0;
+  }
+
+  /** Pan the camera by a pointer drag. dx/dy are CSS pixels; viewportPx is the
+   *  canvas CSS height, so pan speed scales with the current zoom (FOV). Moves
+   *  the *target* — the spring eases the rendered view toward it. */
+  nudgeVR360(dx: number, dy: number, viewportPx: number): void {
+    if (!this.vr360Enabled) return;
+    // "Grab the world" convention (YouTube / Street View): dragging right pans
+    // the scene right, so the camera rotates left; dragging down reveals the
+    // sky, so the camera pitches up. Hence += on both.
+    const radPerPx = this.vrFov / Math.max(1, viewportPx);
+    this.vrYawTarget += dx * radPerPx;
+    this.vrPitchTarget += dy * radPerPx;
+    const lim = Math.PI / 2 - 0.01;
+    this.vrPitchTarget = Math.max(-lim, Math.min(lim, this.vrPitchTarget));
+    this.clampVRCamera();
+    this.ensureVRAnimating();
+  }
+
+  /** Zoom by adjusting FOV. delta>0 zooms out (e.g. wheel deltaY). Eases. */
+  zoomVR360(delta: number): void {
+    if (!this.vr360Enabled) return;
+    this.vrFovTarget = Math.max(
+      CanvasRenderer.VR_MIN_FOV,
+      Math.min(CanvasRenderer.VR_MAX_FOV, this.vrFovTarget + delta * 0.0015),
+    );
+    this.clampVRCamera(); // re-clamp look range — a wider FOV shrinks it
+    this.ensureVRAnimating();
+  }
+
+  /** Recentre the camera (yaw/pitch 0, default FOV) — animated, not a snap. */
+  resetVRView(): void {
+    this.vrYawTarget = 0;
+    this.vrPitchTarget = 0;
+    this.vrFovTarget = CanvasRenderer.VR_DEFAULT_FOV;
+    this.clampVRCamera();
+    this.ensureVRAnimating();
+  }
+
+  /**
+   * Advance the camera one tick toward its target: an underdamped spring for
+   * yaw/pitch (soft settle/bounce) and a linear ease for FOV. Returns true once
+   * everything has effectively converged.
+   */
+  private stepVRCamera(dt: number): boolean {
+    const k = CanvasRenderer.VR_STIFFNESS;
+    const c = CanvasRenderer.VR_DAMPING;
+
+    // Yaw spring
+    const yawForce = k * (this.vrYawTarget - this.vrYaw) - c * this.vrYawVel;
+    this.vrYawVel += yawForce * dt;
+    this.vrYaw += this.vrYawVel * dt;
+
+    // Pitch spring
+    const pitchForce =
+      k * (this.vrPitchTarget - this.vrPitch) - c * this.vrPitchVel;
+    this.vrPitchVel += pitchForce * dt;
+    this.vrPitch += this.vrPitchVel * dt;
+
+    // FOV — simple linear ease, no overshoot.
+    this.vrFov += (this.vrFovTarget - this.vrFov) * CanvasRenderer.VR_FOV_LERP;
+
+    // Keep within the VR180 content (clamps spring overshoot at the edges).
+    this.clampVRCamera();
+
+    const settled =
+      Math.abs(this.vrYawTarget - this.vrYaw) < 1e-4 &&
+      Math.abs(this.vrPitchTarget - this.vrPitch) < 1e-4 &&
+      Math.abs(this.vrYawVel) < 1e-3 &&
+      Math.abs(this.vrPitchVel) < 1e-3 &&
+      Math.abs(this.vrFovTarget - this.vrFov) < 1e-4;
+    if (settled) {
+      this.vrYaw = this.vrYawTarget;
+      this.vrPitch = this.vrPitchTarget;
+      this.vrFov = this.vrFovTarget;
+      this.vrYawVel = 0;
+      this.vrPitchVel = 0;
+    }
+    return settled;
+  }
+
+  /**
+   * Drive the camera spring on its own rAF loop while it's unsettled. Steps at
+   * a fixed 60Hz dt so the feel is frame-rate independent. During playback the
+   * presentation loop already repaints each frame (reading the stepped current
+   * values), so this loop only repaints when paused — it never double-draws.
+   */
+  private ensureVRAnimating(): void {
+    if (this.vrAnimRaf !== null) return;
+    const tick = () => {
+      this.vrAnimRaf = null;
+      if (!this.vr360Enabled) return;
+      const settled = this.stepVRCamera(1 / 60);
+      if (!this.isPlaying && this.lastRenderedFrame) {
+        try {
+          this.drawFrame(this.lastRenderedFrame, true);
+        } catch (e) {
+          Logger.debug(TAG, "VR spring redraw skipped", e);
+        }
+      }
+      if (!settled) this.vrAnimRaf = requestAnimationFrame(tick);
+    };
+    this.vrAnimRaf = requestAnimationFrame(tick);
+  }
+
+  /** Repaint the retained frame once (e.g. on toggle) so the change is visible
+   *  immediately even while paused. Continuous animation goes through the
+   *  spring loop (ensureVRAnimating). */
+  private redrawForVR(): void {
+    if (this.lastRenderedFrame) {
+      try {
+        this.drawFrame(this.lastRenderedFrame, true);
+      } catch (e) {
+        Logger.debug(TAG, "VR redraw skipped", e);
+      }
+    }
+  }
+
+  /**
+   * Draw a still image (custom or postertime-generated poster) to the canvas
+   * through the normal frame path, so 360° mode projects it like a video frame.
+   * A `poster` URL makes the player skip the initial decode, so without this the
+   * canvas stays blank in 360 and only the flat <img> overlay shows. Retained as
+   * lastRenderedFrame so resize and camera nudges repaint it.
+   */
+  renderPosterImage(image: CanvasImageSource): void {
+    if (!this.gl || !this.program || !this.texture) return;
+    let frame: VideoFrame;
+    try {
+      frame = new VideoFrame(image, { timestamp: 0 });
+    } catch (e) {
+      Logger.warn(TAG, "Failed to wrap poster image as VideoFrame", e);
+      return;
+    }
+    try {
+      this.render(frame);
+    } finally {
+      frame.close();
+    }
   }
 
   private lastPrimaries?: string;
@@ -1542,6 +2113,40 @@ export class CanvasRenderer {
   }
 
   /**
+   * Upload a decoded VideoFrame into the currently-bound 2D texture. Tries
+   * RGBA16F for high bit-depth content and falls back to RGBA8 on GL error or
+   * exception. Shared by the flat and 360° draw paths.
+   */
+  private uploadFrameTexture(gl: WebGL2RenderingContext, frame: VideoFrame): void {
+    try {
+      if (this.isHighBitDepth) {
+        gl.texImage2D(
+          gl.TEXTURE_2D,
+          0,
+          gl.RGBA16F,
+          gl.RGBA,
+          gl.HALF_FLOAT,
+          frame,
+        );
+        // Check for GL error — some VideoFrame formats don't work with RGBA16F
+        const err = gl.getError();
+        if (err !== gl.NO_ERROR) {
+          Logger.warn(TAG, `RGBA16F texImage2D failed (GL error ${err}), falling back to RGBA8`);
+          this.isHighBitDepth = false; // Disable for future frames
+          gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, frame);
+        }
+      } else {
+        gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, frame);
+      }
+    } catch (texError) {
+      // If RGBA16F throws, fall back to standard
+      Logger.warn(TAG, `texImage2D failed, retrying with RGBA8:`, texError);
+      this.isHighBitDepth = false;
+      gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, frame);
+    }
+  }
+
+  /**
    * Draw a frame to the canvas
    */
   private drawFrame(frame: VideoFrame, force: boolean = false): void {
@@ -1562,6 +2167,24 @@ export class CanvasRenderer {
 
       const contentWidth = frame.displayWidth;
       const contentHeight = frame.displayHeight;
+
+      // 360° VR fast-path: bind + upload the frame, then render it as a
+      // viewed sphere instead of the flat fit/letterbox quad. Compile the VR
+      // program here if it wasn't ready when 360 was first requested (e.g. the
+      // `vr` attribute enabled it before the context was configured) — drawFrame
+      // only runs once GL/program/texture exist, so this compile always lands,
+      // and the very first (poster) frame paints in 360.
+      if (this.vr360Enabled) {
+        if (!this.vrProgram) this.initVRProgram();
+        if (this.vrProgram && this.vrLocs) {
+          gl.activeTexture(gl.TEXTURE0);
+          gl.bindTexture(gl.TEXTURE_2D, this.texture);
+          this.uploadFrameTexture(gl, frame);
+          this.drawVRFrame(gl, frame);
+          this.sampleAdaptiveDpr(paintStart);
+          return;
+        }
+      }
 
       let targetScaleX: number;
       let targetScaleY: number;
@@ -1662,32 +2285,7 @@ export class CanvasRenderer {
       }
 
       // Upload frame — try RGBA16F for high bit-depth, fallback to RGBA8
-      try {
-        if (this.isHighBitDepth) {
-          gl.texImage2D(
-            gl.TEXTURE_2D,
-            0,
-            gl.RGBA16F,
-            gl.RGBA,
-            gl.HALF_FLOAT,
-            frame,
-          );
-          // Check for GL error — some VideoFrame formats don't work with RGBA16F
-          const err = gl.getError();
-          if (err !== gl.NO_ERROR) {
-            Logger.warn(TAG, `RGBA16F texImage2D failed (GL error ${err}), falling back to RGBA8`);
-            this.isHighBitDepth = false; // Disable for future frames
-            gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, frame);
-          }
-        } else {
-          gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, frame);
-        }
-      } catch (texError) {
-        // If RGBA16F throws, fall back to standard
-        Logger.warn(TAG, `texImage2D failed, retrying with RGBA8:`, texError);
-        this.isHighBitDepth = false;
-        gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, frame);
-      }
+      this.uploadFrameTexture(gl, frame);
 
       gl.useProgram(this.program);
       gl.bindVertexArray(this.vao);
@@ -1707,33 +2305,9 @@ export class CanvasRenderer {
     }
 
     // Adaptive DPR — sample paint duration for the first N frames after
-    // playback starts. If the device can't keep paint under ~half a
-    // frame budget at 2x DPR, drop to 1x and resize. One-shot: stops
-    // sampling after the decision.
-    if (!this._adaptDprChecked && paintStart > 0) {
-      const paintDuration = performance.now() - paintStart;
-      this._paintSamples.push(paintDuration);
-      if (this._paintSamples.length >= CanvasRenderer.PAINT_SAMPLE_COUNT) {
-        const sum = this._paintSamples.reduce((a, b) => a + b, 0);
-        const avg = sum / this._paintSamples.length;
-        if (
-          avg > CanvasRenderer.PAINT_THRESHOLD_MS &&
-          this._maxDpr > 1 &&
-          this.containerWidth > 0 &&
-          this.containerHeight > 0
-        ) {
-          Logger.info(
-            TAG,
-            `Adaptive DPR: avg paint ${avg.toFixed(1)}ms over ${this._paintSamples.length} frames > ${CanvasRenderer.PAINT_THRESHOLD_MS}ms threshold — capping DPR to 1x`,
-          );
-          this._maxDpr = 1;
-          // Trigger re-resize so the smaller backbuffer takes effect.
-          this.resize(this.containerWidth, this.containerHeight);
-        }
-        this._adaptDprChecked = true;
-        this._paintSamples = []; // free memory
-      }
-    }
+    // playback starts. If the device can't keep paint under ~half a frame
+    // budget at 2x DPR, drop to 1x and resize. One-shot.
+    this.sampleAdaptiveDpr(paintStart);
   }
 
   /**
@@ -2999,6 +3573,10 @@ export class CanvasRenderer {
    */
   destroy(): void {
     this.stopPresentationLoop();
+    if (this.vrAnimRaf !== null) {
+      cancelAnimationFrame(this.vrAnimRaf);
+      this.vrAnimRaf = null;
+    }
 
     // Clear retained frame on destroy
     if (this.lastRenderedFrame) {
@@ -3010,6 +3588,7 @@ export class CanvasRenderer {
     if (this.gl) {
       if (this.texture) this.gl.deleteTexture(this.texture);
       if (this.program) this.gl.deleteProgram(this.program);
+      if (this.vrProgram) this.gl.deleteProgram(this.vrProgram);
       // Extensions etc
       // WebGL2 contexts are garbage collected but good to delete resources
     }

@@ -43,6 +43,13 @@ export interface VideoTrack extends Track {
   colorRange?: string;
   isHDR?: boolean;
   /**
+   * 360° spherical projection from container metadata: 0 / undefined = not a
+   * 360 video, else AVSphericalProjection+1 (1=equirectangular, 2=cubemap,
+   * 3=equirectangular-tile, 4=half-equirectangular). Only equirectangular
+   * (1 and 3) is renderable by the current 360 viewer.
+   */
+  projection?: number;
+  /**
    * True when this is an embedded cover-art pseudo-stream (ID3v2 APIC,
    * FLAC PICTURE, MP4 covr, Matroska attachment). These look like single-
    * frame PNG/JPEG video streams to the demuxer; consumers picking an

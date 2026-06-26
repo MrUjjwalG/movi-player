@@ -196,6 +196,7 @@ export class Demuxer {
           rotation: info.rotation,
           pixelFormat: info.pixelFormat,
           colorRange: info.colorRange,
+          projection: info.projection || undefined,
           isAttachedPic: info.isAttachedPic || undefined,
         } as VideoTrack;
 

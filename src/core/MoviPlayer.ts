@@ -3886,6 +3886,51 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
     }
   }
 
+  // ───────────────────────── 360° VR ─────────────────────────
+
+  /** Enable/disable 360° equirectangular projection on the video renderer. */
+  setVR360(enabled: boolean): void {
+    this.videoRenderer?.setVR360(enabled);
+  }
+
+  isVR360Enabled(): boolean {
+    return this.videoRenderer?.isVR360Enabled() ?? false;
+  }
+
+  /** Select the VR projection/layout: half = VR180, fisheye = equidistant
+   *  fisheye, stereoSbs = side-by-side stereo (left eye), stereographic =
+   *  little-planet. */
+  setVRProjection(
+    half: boolean,
+    fisheye = false,
+    stereoSbs = false,
+    stereographic = false,
+  ): void {
+    this.videoRenderer?.setVRProjection(half, fisheye, stereoSbs, stereographic);
+  }
+
+  /** Pan the 360° camera by a pointer drag (CSS px) over a viewport of
+   *  viewportPx CSS height. */
+  nudgeVR360(dx: number, dy: number, viewportPx: number): void {
+    this.videoRenderer?.nudgeVR360(dx, dy, viewportPx);
+  }
+
+  /** Zoom the 360° camera (delta>0 zooms out, e.g. wheel deltaY). */
+  zoomVR360(delta: number): void {
+    this.videoRenderer?.zoomVR360(delta);
+  }
+
+  /** Recentre the 360° camera. */
+  resetVRView(): void {
+    this.videoRenderer?.resetVRView();
+  }
+
+  /** Paint a still poster image onto the canvas (so a custom `poster` shows in
+   *  360° before playback, since a poster URL skips the initial decode). */
+  renderPosterImage(image: CanvasImageSource): void {
+    this.videoRenderer?.renderPosterImage(image);
+  }
+
   /**
    * Set playback rate
    */

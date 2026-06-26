@@ -38,7 +38,7 @@
     "build": "npm run build:wasm && npm run build:ts",
     "build:ts": "node scripts/check-wasm.js && tsc && node scripts/build-standalone.js",
     "build:wasm": "mkdir -p dist/wasm && docker compose run --rm build",
-    "build:wasm:force": "mkdir -p dist/wasm && docker compose run --rm -e FORCE_FFMPEG=true build",
+    "build:wasm:force": "mkdir -p dist/wasm && docker compose run --rm -e FORCE_FFMPEG=true -e FORCE_DAV1D=true build",
     "dev": "vite",
     "test": "vitest",
     "clean": "rm -rf dist",

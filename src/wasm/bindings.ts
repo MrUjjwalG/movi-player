@@ -128,6 +128,7 @@ function parseStreamInfo(module: MoviWasmModule, ptr: number): StreamInfo {
     colorMatrix: readString(module, ptr + STREAM_INFO_OFFSETS.colorMatrix, 32),
     pixelFormat: readString(module, ptr + STREAM_INFO_OFFSETS.pixelFormat, 32),
     colorRange: readString(module, ptr + STREAM_INFO_OFFSETS.colorRange, 32),
+    projection: view.getInt32(STREAM_INFO_OFFSETS.projection, true),
     isAttachedPic:
       view.getInt32(STREAM_INFO_OFFSETS.isAttachedPic, true) !== 0,
   };
