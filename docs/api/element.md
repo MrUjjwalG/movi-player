@@ -813,6 +813,46 @@ CORS mode for cross-origin videos.
 
 ---
 
+#### `vr`
+
+Render immersive / spherical video. The player auto-enters the right projection from the source's spherical metadata, so for ordinary 360 clips you don't need this at all — `vr` is for forcing a projection or marking a source whose metadata is missing.
+
+**Tokens** (space-separated, combinable):
+
+- _(bare)_ / `360` — 360° equirectangular
+- `180` — 180° (VR180) hemisphere
+- `fisheye` — equidistant fisheye un-projection
+- `sbs` / `3d` — side-by-side **stereo** (uses the left eye)
+- `littleplanet` / `planet` / `tinyplanet` — stereographic "little planet"
+
+```html
+<movi-player src="360.mp4" vr></movi-player>
+<movi-player src="vr180-3d.mp4" vr="180 fisheye sbs"></movi-player>
+<movi-player src="planet.mp4" vr="littleplanet"></movi-player>
+```
+
+Drag (or arrow keys) to look around; scroll / pinch to zoom.
+
+#### `vrpad`
+
+Opt-in on-screen joystick for looking around in `vr` mode (handy on touch / without a mouse).
+
+```html
+<movi-player src="360.mp4" vr vrpad></movi-player>
+```
+
+#### `audiooutput`
+
+Route audio to a specific output device (speakers, Bluetooth, a virtual device) via `AudioContext.setSinkId`. Accepts a concrete `deviceId` **or** a **label substring** (case-insensitive) — handy because device ids are session-salted, so a substring like `"Headphones"` reliably targets the same physical device across reloads. `""` / `"default"` routes to the system default.
+
+```html
+<movi-player src="video.mkv" audiooutput="Headphones"></movi-player>
+```
+
+Also settable at runtime — see [`setAudioOutput()`](#setaudiooutput-deviceid-string-promise-boolean). A right-click **Audio Output** submenu lets the viewer pick a device too.
+
+---
+
 ## Properties
 
 ### Media Properties
@@ -1384,6 +1424,35 @@ await player.selectSubtitleLang(null);    // Turn off
 
 ---
 
+#### `getAudioOutputs(): Promise<{ deviceId, label }[]>`
+
+Lists the available audio **output** devices. Labels are populated once the page holds audio-device permission (granted hosts list them directly; a bare web embed may need the viewer to allow access first).
+
+```typescript
+const devices = await player.getAudioOutputs();
+// → [{ deviceId: "…", label: "MacBook Air Speakers" }, …]
+```
+
+---
+
+#### `setAudioOutput(deviceId: string): Promise<boolean>`
+
+Routes playback to an output device via `AudioContext.setSinkId`. Accepts a concrete `deviceId` or a **label substring** (case-insensitive); `""` / `"default"` → the system default. Resolves to `false` when unsupported or the device is gone.
+
+```typescript
+await player.setAudioOutput("Headphones");      // by label substring
+await player.setAudioOutput(devices[1].deviceId); // by exact id
+await player.setAudioOutput("");                  // back to system default
+```
+
+---
+
+#### `getAudioOutput(): string`
+
+Returns the current output device id (`""` = system default).
+
+---
+
 ### Other Helpers
 
 #### `getCanvas(): HTMLCanvasElement`
@@ -1539,6 +1608,18 @@ player.addEventListener("volumechange", (e: CustomEvent) => {
 
 player.addEventListener("ratechange", (e: CustomEvent) => {
   speedLabel.textContent = `${e.detail.playbackRate}x`;
+});
+```
+
+---
+
+### Audio output
+
+```typescript
+// Fires whenever the output device changes — via setAudioOutput(),
+// the `audiooutput` attribute, or the right-click "Audio Output" menu.
+player.addEventListener("audiooutputchange", (e: CustomEvent) => {
+  console.log("routing audio to:", e.detail.deviceId || "(system default)");
 });
 ```
 

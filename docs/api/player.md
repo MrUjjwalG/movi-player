@@ -563,6 +563,17 @@ There is **no** `selectVideoTrack()` on `MoviPlayer` — for HLS quality switchi
 
 ---
 
+#### `setAudioOutputDevice(deviceId: string): Promise<boolean>` / `getAudioOutputDevice(): string`
+
+Routes audio to a specific output device through `AudioContext.setSinkId` (`""` = system default). Resolves to `false` when unsupported or the device is gone. The core takes a raw `deviceId` — enumerate devices yourself via `navigator.mediaDevices.enumerateDevices()` (the `<movi-player>` element adds `getAudioOutputs()` + label-substring resolution on top).
+
+```typescript
+await player.setAudioOutputDevice(deviceId);
+player.getAudioOutputDevice(); // "" = system default
+```
+
+---
+
 #### `selectSubtitleTrack(trackId: number | null): Promise<boolean>`
 
 Enables a subtitle track or disables subtitles.

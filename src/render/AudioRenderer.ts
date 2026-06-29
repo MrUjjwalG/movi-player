@@ -50,6 +50,11 @@ export class AudioRenderer {
   // Stable audio: master toggle (off by default, opt-in via element attribute)
   private _stableAudio: boolean = false;
 
+  // Audio output device (AudioContext.setSinkId). "" = system default.
+  // Remembered here so it survives AudioContext re-creation (init runs again
+  // on source change / device loss); re-applied at the end of init().
+  private _sinkId: string = "";
+
   // Stable audio: gain ramp duration for smooth transitions (prevents clicks/pops)
   private static readonly GAIN_RAMP_TIME = 0.015; // 15ms ramp
   private static readonly FADE_OUT_TIME = 0.03; // 30ms fade-out before seek/reset
@@ -187,6 +192,12 @@ export class AudioRenderer {
       // Apply muted state if set before initialization
       this.gainNode.gain.value = this._muted ? 0 : this.perceptualGain(this.volume);
 
+      // Re-apply the chosen output device to the freshly-created context.
+      // Non-blocking: a stale/removed deviceId just falls back to default.
+      if (this._sinkId) {
+        this.applySinkId(this._sinkId).catch(() => {});
+      }
+
       // Don't resume here — play() handles resume when user clicks play.
       // Pre-init creates AudioContext during load for fast startup;
       // resuming here would cause poster-seek audio to leak.
@@ -209,6 +220,48 @@ export class AudioRenderer {
       return true;
     } catch (error) {
       Logger.error(TAG, "Failed to initialize", error);
+      return false;
+    }
+  }
+
+  /**
+   * Route audio to a specific output device via AudioContext.setSinkId
+   * (Chromium 110+). `deviceId` "" → the system default. Stored so it
+   * survives the AudioContext re-creation in init(). Returns false when
+   * unsupported or the device can't be selected (e.g. unplugged).
+   */
+  async setSinkId(deviceId: string): Promise<boolean> {
+    this._sinkId = deviceId || "";
+    return this.applySinkId(this._sinkId);
+  }
+
+  /** Current output device id ("" = system default). */
+  getSinkId(): string {
+    const live = (this.audioContext as unknown as { sinkId?: string } | null)
+      ?.sinkId;
+    return typeof live === "string" ? live : this._sinkId;
+  }
+
+  /** True when the running engine can route output to a chosen device. */
+  static isSinkSelectionSupported(): boolean {
+    return (
+      typeof AudioContext !== "undefined" &&
+      typeof (AudioContext.prototype as unknown as { setSinkId?: unknown })
+        .setSinkId === "function"
+    );
+  }
+
+  private async applySinkId(deviceId: string): Promise<boolean> {
+    const ctx = this.audioContext as unknown as {
+      setSinkId?: (id: string) => Promise<void>;
+    } | null;
+    if (!ctx || typeof ctx.setSinkId !== "function") return false;
+    try {
+      await ctx.setSinkId(deviceId || "");
+      Logger.info(TAG, `Output device set: ${deviceId || "(default)"}`);
+      return true;
+    } catch (e) {
+      Logger.warn(TAG, `setSinkId failed for "${deviceId}"`, e);
       return false;
     }
   }

@@ -1,7 +1,7 @@
 {
   "name": "movi-player-desktop",
   "productName": "MoviPlayer",
-  "version": "0.3.2",
+  "version": "0.3.3",
   "description": "MoviPlayer desktop app — play MKV, HEVC, AV1, 4K HDR locally on Windows, macOS and Linux. WebCodecs + FFmpeg WASM, no transcoding server.",
   "author": "MoviPlayer",
   "license": "Apache-2.0",
@@ -12,8 +12,11 @@
     "smoke": "node scripts/run-electron.mjs scripts/smoke.js",
     "predist": "node scripts/sync-assets.mjs",
     "dist": "electron-builder",
+    "predist:mac": "node scripts/sync-assets.mjs",
     "dist:mac": "electron-builder --mac",
+    "predist:win": "node scripts/sync-assets.mjs",
     "dist:win": "electron-builder --win",
+    "predist:linux": "node scripts/sync-assets.mjs",
     "dist:linux": "electron-builder --linux",
     "sync": "node scripts/sync-assets.mjs"
   },

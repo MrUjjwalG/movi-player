@@ -3473,6 +3473,19 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
   }
 
   /**
+   * Route audio output to a specific device (AudioContext.setSinkId).
+   * "" → system default. Returns false when unsupported / device gone.
+   */
+  setAudioOutputDevice(deviceId: string): Promise<boolean> {
+    return this.audioRenderer.setSinkId(deviceId);
+  }
+
+  /** Current audio output device id ("" = system default). */
+  getAudioOutputDevice(): string {
+    return this.audioRenderer.getSinkId();
+  }
+
+  /**
    * Select subtitle track
    */
   async selectSubtitleTrack(trackId: number | null): Promise<boolean> {

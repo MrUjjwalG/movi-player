@@ -216,13 +216,15 @@ Use cases: video validators, asset management, HDR detection pipelines, search i
 
 **Custom Headers** -- Send auth tokens / signed headers across the whole media flow (manifest, segments, progressive HTTP, thumbnails, encrypted source) via the `headers` attribute (JSON) or property (object).
 
-**Audio** -- AAC, MP3, Opus, FLAC, AC-3, E-AC-3. Multi-track switching. Stable volume (loudness normalization). First-class audio-only mode with cover art extraction and a dedicated strip UI. Data-saver `audioonly` mode skips the video decode (and fetches an audio-only stream rendition). Perceptual (log) volume curve. Muted-autoplay fallback with tap-to-unmute.
+**Audio** -- AAC, MP3, Opus, FLAC, AC-3, E-AC-3. Multi-track switching. **Output-device routing** (`audiooutput` attribute / `setAudioOutput()` / right-click "Audio Output" menu, via `AudioContext.setSinkId`). Stable volume (loudness normalization). First-class audio-only mode with cover art extraction and a dedicated strip UI. Data-saver `audioonly` mode skips the video decode (and fetches an audio-only stream rendition). Perceptual (log) volume curve. Muted-autoplay fallback with tap-to-unmute.
 
 **Non-Range Servers** -- Servers that ignore `Range` (respond `200`, not `206`) still play via a forward-only sliding-window "linear mode" with in-window seeking; the `linearmode` event lets your UI adapt.
 
 **Subtitles** -- SRT, ASS, WebVTT, PGS (image-based), DVB. Multi-track with on-the-fly switching. Per-source delay/offset (`Z` / `X` to nudge ±100ms), full transcript browser with search + click-to-seek, customizable size/color/background/edge (persisted), karaoke-aligned VTT.
 
 **HDR** -- BT.2020/PQ/HLG detection + Display-P3 rendering on supported browsers.
+
+**Immersive / VR** -- 360° equirectangular, 180° (VR180), fisheye, side-by-side stereo (3D), and stereographic "little planet" video via a WebGL2 raycast with a spring-animated look-around camera. Auto-enters from the source's spherical metadata (no toggle UI) or force a projection with the `vr` attribute (`vr="180 fisheye sbs"`, `vr="littleplanet"`); opt-in on-screen joystick via `vrpad`.
 
 **UI** -- Controls, context menu, keyboard shortcuts (`?` to view all), themes (dark/light), gestures, ambient mode.
 
@@ -292,6 +294,9 @@ Use cases: video validators, asset management, HDR detection pipelines, search i
   renderer="canvas"         <!-- canvas (HLS/DASH/DRM auto-pick their own pipeline) -->
   headers='{"k":"v"}'       <!-- Custom request headers (JSON) for all media requests -->
   audioonly                 <!-- Data-saver: play audio only, skip video decode -->
+  audiooutput="Headphones"  <!-- Route audio to a device (id or label substring; "" = default) -->
+  vr="180 fisheye sbs"      <!-- Immersive: 360 / 180 / fisheye / sbs(3d) / littleplanet -->
+  vrpad                     <!-- On-screen look-around joystick for vr mode -->
   lcevc                     <!-- Enable MPEG-5 LCEVC enhancement decoding (adaptive streams) -->
   lcevcurl="https://..."    <!-- URL to lazy-load the lcevc_dec.js decoder library -->
   sw                        <!-- Force software decoding -->

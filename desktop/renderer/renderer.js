@@ -432,7 +432,11 @@ function patchPlayerShadow(attempt = 0) {
   if (window.movi.platform === "darwin" && !sr.querySelector("#movi-desktop-patches")) {
     const style = document.createElement("style");
     style.id = "movi-desktop-patches";
-    style.textContent = ":host(:not(:fullscreen)) .movi-title-bar { padding-top: 46px; }";
+    // Exclude audio-strip mode — there the player is a thin 56–78px bar, not a
+    // full-bleed window, so there are no traffic lights to clear and the 46px
+    // would shove the title down past the control row.
+    style.textContent =
+      ":host(:not(:fullscreen):not(.movi-audio-strip)) .movi-title-bar { padding-top: 46px; }";
     sr.appendChild(style);
   }
 

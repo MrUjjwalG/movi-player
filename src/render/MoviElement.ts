@@ -245,6 +245,12 @@ export class MoviElement extends HTMLElement {
   private _showTitle: boolean = false; // Show title at top if true
   private _resume: boolean = false; // Resume playback from last position (opt-in)
   private _stableVolume: boolean = false; // Stable volume / loudness normalization (opt-in)
+  // Audio output device routing (AudioContext.setSinkId). _audioOutputDeviceId
+  // is the chosen target ("" = system default; may start as a label substring
+  // from the `audiooutput` attribute, resolved against the live device list).
+  private _audioOutputDeviceId: string = "";
+  private _audioOutputs: Array<{ deviceId: string; label: string }> = [];
+  private _audioOutputsBound: boolean = false; // devicechange listener attached
   // 360° VR (equirectangular). Opt-in via the `vr` attribute, or surfaced as a
   // control-bar button when the source carries equirectangular spherical
   // metadata (track.projection from the WASM demuxer).
@@ -407,6 +413,7 @@ export class MoviElement extends HTMLElement {
       "postertime",
       "vr",
       "vrpad",
+      "audiooutput",
     ];
   }
 
@@ -736,6 +743,17 @@ export class MoviElement extends HTMLElement {
         <span class="movi-context-menu-arrow">▶</span>
       </div>
       <div class="movi-context-menu-submenu movi-context-menu-submenu-audio" data-submenu="audio-track" style="display: none;"></div>
+      <div class="movi-context-menu-divider movi-context-menu-divider-audiodevice" style="display: none;"></div>
+      <div class="movi-context-menu-item movi-context-menu-item-audiodevice" data-action="audio-output" style="display: none;">
+        <svg class="movi-context-menu-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+          <rect x="4" y="2" width="16" height="20" rx="2"></rect>
+          <circle cx="12" cy="14" r="4"></circle>
+          <line x1="12" y1="6" x2="12.01" y2="6"></line>
+        </svg>
+        <span class="movi-context-menu-label">Audio Output</span>
+        <span class="movi-context-menu-arrow">▶</span>
+      </div>
+      <div class="movi-context-menu-submenu movi-context-menu-submenu-audiodevice" data-submenu="audio-output" style="display: none;"></div>
       <div class="movi-context-menu-divider movi-context-menu-divider-subtitle" style="display: none;"></div>
       <div class="movi-context-menu-item movi-context-menu-item-subtitle" data-action="subtitle-track" style="display: none;">
         <svg class="movi-context-menu-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
@@ -3920,6 +3938,9 @@ export class MoviElement extends HTMLElement {
 
       // Update context menu content before showing
       this.updateContextMenuContent(contextMenu, shadowRoot);
+      // Re-enumerate output devices each open (cheap) so a just-plugged
+      // headset shows up; the async result re-renders the submenu in place.
+      this.refreshAudioOutputs();
 
       // Show custom context menu
       const rect = this.getBoundingClientRect();
@@ -4079,7 +4100,12 @@ export class MoviElement extends HTMLElement {
       const isTouchDevice = window.matchMedia("(pointer: coarse)").matches;
       if (isTouchDevice) {
         setTimeout(() => {
-          if (!this._contextMenuVisible) contextMenu.style.display = "none";
+          if (!this._contextMenuVisible) {
+            contextMenu.style.display = "none";
+            // Re-arm auto-hide once the menu is truly gone (display drives the
+            // isAnyMenuOpen gate, which only clears now on touch).
+            this.showControls();
+          }
         }, 400);
       } else {
         contextMenu.style.display = "none";
@@ -4093,6 +4119,13 @@ export class MoviElement extends HTMLElement {
         .forEach((sm) =>
           sm.classList.remove("movi-context-menu-submenu-visible"),
         );
+
+      // Re-arm the auto-hide timer now the menu is gone. While it was open
+      // showControls() refused to set the timer (the isAnyMenuOpen gate), so
+      // without this nudge the bar would stay up until the next mouse move.
+      // (Desktop: display is already "none" above; touch re-arms in its own
+      // deferred block once the slide-out finishes.)
+      if (!isTouchDevice) this.showControls();
     };
 
     // Add event listeners with capture phase and passive: false to allow preventDefault
@@ -4266,6 +4299,8 @@ export class MoviElement extends HTMLElement {
       const speed = item.dataset.speed;
       const audioTrackId = item.dataset.audioTrackId;
       const audioLang = item.dataset.audioLang;
+      const audioOutputId = item.dataset.audioOutputId;
+      const audioOutputUnlock = item.dataset.audioOutputUnlock;
       const subtitleTrackId = item.dataset.subtitleTrackId;
       const subtitleLang = item.dataset.subtitleLang;
 
@@ -4330,6 +4365,29 @@ export class MoviElement extends HTMLElement {
             trk?.label || trk?.language || `Audio ${trackId}`,
           );
         }
+        hideContextMenu();
+      } else if (action === "audio-output") {
+        // Show the audio output device submenu
+        const submenu = shadowRoot.querySelector(
+          ".movi-context-menu-submenu-audiodevice",
+        ) as HTMLElement;
+        if (submenu) {
+          contextMenu.scrollTop = 0;
+          submenu.classList.add("movi-context-menu-submenu-visible");
+        }
+      } else if (audioOutputUnlock !== undefined) {
+        // "Show output devices…" — this click is the gesture getUserMedia
+        // needs to surface the permission prompt; keep the menu open so the
+        // populated list re-shows in place.
+        this.unlockAudioOutputs();
+      } else if (audioOutputId !== undefined) {
+        // Select an audio output device ("" = system default)
+        this.setAudioOutput(audioOutputId);
+        const label = audioOutputId
+          ? this._audioOutputs.find((d) => d.deviceId === audioOutputId)
+              ?.label || "Audio Output"
+          : "System Default";
+        this.showOSD(OSD.audio, label);
         hideContextMenu();
       } else if (action === "subtitle-track") {
         // Show subtitle track submenu (changed from toggle to add)
@@ -4617,6 +4675,10 @@ export class MoviElement extends HTMLElement {
       if (audioItem) audioItem.style.display = "none";
       if (audioSubmenu) audioSubmenu.style.display = "none";
     }
+
+    // Audio output device submenu (renders from the cached device list;
+    // refreshAudioOutputs() on menu-open re-renders it once enumeration lands).
+    this.updateAudioOutputMenu();
 
     // Update subtitle tracks
     const subtitleTracks = this.player.getSubtitleTracks();
@@ -7377,7 +7439,8 @@ export class MoviElement extends HTMLElement {
       !this.isDragging &&
       !this.isTouchDragging &&
       !this._vrPadDragging &&
-      !this.isAnyMenuOpen()
+      !this.isAnyMenuOpen() &&
+      !this.isTimelineOpen()
     ) {
       this.controlsTimeout = window.setTimeout(() => {
         // Re-check gating conditions before hiding — a menu may have
@@ -7388,7 +7451,8 @@ export class MoviElement extends HTMLElement {
           !this.isDragging &&
           !this.isTouchDragging &&
           !this._vrPadDragging &&
-          !this.isAnyMenuOpen()
+          !this.isAnyMenuOpen() &&
+          !this.isTimelineOpen()
         ) {
           this.hideControls();
         }
@@ -7645,6 +7709,241 @@ export class MoviElement extends HTMLElement {
     const label = `${direction === "left" ? "-" : "+"} ${rounded}s`;
     const icon = direction === "left" ? OSD.seekBackward : OSD.seekForward;
     this.showOSD(icon, label);
+  }
+
+  /**
+   * The Timeline panel (opened with "T") sits just above the controls bar but
+   * is a shadow-root sibling of the controls container, so hovering it never
+   * sets isOverControls — without this the 3s inactivity auto-hide fires while
+   * the user scrubs the storyboard. Gates ONLY the inactivity timer (in
+   * showControls) so the bar stays put while the timeline is open; the
+   * cursor-left-the-controls / cursor-left-the-player hides keep their normal
+   * behavior. Kept out of isAnyMenuOpen(), which also drives click-to-close.
+   */
+  private isTimelineOpen(): boolean {
+    const panel = this.shadowRoot?.querySelector(
+      ".movi-timeline-panel",
+    ) as HTMLElement | null;
+    return !!panel && panel.style.display !== "none";
+  }
+
+  // ===================== Audio output device =====================
+  // Public API + context-menu wiring for AudioContext.setSinkId routing.
+
+  /** True when the engine can route output to a chosen device. */
+  private static audioSinkSupported(): boolean {
+    return (
+      typeof AudioContext !== "undefined" &&
+      typeof (AudioContext.prototype as unknown as { setSinkId?: unknown })
+        .setSinkId === "function"
+    );
+  }
+
+  /**
+   * List the available audio output devices. Labels may be empty until the
+   * page has been granted audio-device access (the desktop app has it; a bare
+   * web embed may show blank labels until a getUserMedia prompt is accepted).
+   */
+  async getAudioOutputs(): Promise<Array<{ deviceId: string; label: string }>> {
+    if (!navigator.mediaDevices?.enumerateDevices) return [];
+    try {
+      const devices = await navigator.mediaDevices.enumerateDevices();
+      return devices
+        .filter((d) => d.kind === "audiooutput")
+        .map((d) => ({ deviceId: d.deviceId, label: d.label }));
+    } catch {
+      return [];
+    }
+  }
+
+  /** Current audio output device id ("" = system default). */
+  getAudioOutput(): string {
+    return this.player?.getAudioOutputDevice?.() ?? this._audioOutputDeviceId;
+  }
+
+  /**
+   * Route audio to a device. Accepts a concrete deviceId, or — for
+   * convenience — a label substring (case-insensitive); "" / "default" →
+   * the system default. Returns false when unsupported or the device is gone.
+   */
+  async setAudioOutput(deviceId: string): Promise<boolean> {
+    const resolved = await this.resolveAudioOutputId(deviceId || "");
+    this._audioOutputDeviceId = resolved;
+    let ok = false;
+    if (this.player) ok = await this.player.setAudioOutputDevice(resolved);
+    this.dispatchEvent(
+      new CustomEvent("audiooutputchange", { detail: { deviceId: resolved } }),
+    );
+    this.updateAudioOutputMenu();
+    return ok;
+  }
+
+  /** Resolve a deviceId or a label substring to a concrete deviceId. */
+  private async resolveAudioOutputId(value: string): Promise<string> {
+    if (!value || value === "default") return "";
+    const outs = await this.getAudioOutputs();
+    if (outs.some((d) => d.deviceId === value)) return value;
+    const byLabel = outs.find(
+      (d) => d.label && d.label.toLowerCase().includes(value.toLowerCase()),
+    );
+    return byLabel ? byLabel.deviceId : value;
+  }
+
+  /** Apply the `audiooutput` attribute once the player exists. */
+  private async applyAudioOutput(): Promise<void> {
+    if (!this.player) return; // re-applied from setupAudioOutputs() when ready
+    const resolved = await this.resolveAudioOutputId(this._audioOutputDeviceId);
+    this._audioOutputDeviceId = resolved;
+    await this.player.setAudioOutputDevice(resolved);
+    this.updateAudioOutputMenu();
+  }
+
+  /**
+   * Cache the device list, re-applying any pending attribute selection and
+   * re-rendering the menu. Bound once to `devicechange` so hot-plugging a
+   * headset updates the list live.
+   */
+  private async setupAudioOutputs(): Promise<void> {
+    if (!MoviElement.audioSinkSupported()) return;
+    if (!this._audioOutputsBound && navigator.mediaDevices?.addEventListener) {
+      this._audioOutputsBound = true;
+      navigator.mediaDevices.addEventListener("devicechange", () => {
+        this.refreshAudioOutputs();
+      });
+    }
+    await this.refreshAudioOutputs();
+    // The attribute may have been set before the player existed.
+    if (this._audioOutputDeviceId) this.applyAudioOutput();
+  }
+
+  /** Refresh the cached device list and re-render the menu if it's open. */
+  private async refreshAudioOutputs(): Promise<void> {
+    this._audioOutputs = await this.getAudioOutputs();
+    this.updateAudioOutputMenu();
+  }
+
+  /**
+   * Browsers only expose output device ids/labels after the page holds audio
+   * permission. When the user clicks "Show output devices…" in the (otherwise
+   * locked) submenu, request mic permission — the universal unlock, same as
+   * Google Meet — then re-render with the now-visible devices and re-open the
+   * submenu. Triggered from an explicit click so the prompt has a user
+   * gesture. No-op in the desktop app (devices already visible).
+   */
+  private async unlockAudioOutputs(): Promise<void> {
+    const real = this._audioOutputs.filter(
+      (d) =>
+        d.deviceId &&
+        d.deviceId !== "default" &&
+        d.deviceId !== "communications",
+    );
+    if (real.length >= 1) return; // already have the real list
+    if (!navigator.mediaDevices?.getUserMedia) return;
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      // Release the mic immediately — we only needed the permission grant so
+      // enumerateDevices() returns labelled output devices.
+      stream.getTracks().forEach((t) => t.stop());
+    } catch {
+      return; // denied / unavailable
+    }
+    await this.refreshAudioOutputs();
+    // Re-open the submenu so the freshly populated list is visible.
+    const submenu = this.shadowRoot?.querySelector(
+      ".movi-context-menu-submenu-audiodevice",
+    ) as HTMLElement | null;
+    submenu?.classList.add("movi-context-menu-submenu-visible");
+  }
+
+  /** (Re)build the Audio Output submenu from the cached device list. */
+  private updateAudioOutputMenu(): void {
+    const sr = this.shadowRoot;
+    if (!sr) return;
+    const divider = sr.querySelector(
+      ".movi-context-menu-divider-audiodevice",
+    ) as HTMLElement | null;
+    const item = sr.querySelector(
+      ".movi-context-menu-item-audiodevice",
+    ) as HTMLElement | null;
+    const submenu = sr.querySelector(
+      ".movi-context-menu-submenu-audiodevice",
+    ) as HTMLElement | null;
+    if (!divider || !item || !submenu) return;
+
+    // Drop Chromium's "default"/"communications" aliases — the synthetic
+    // "System Default" entry below already routes to the OS default. Only
+    // surface the menu when there's a real alternative device to pick.
+    const real = this._audioOutputs.filter(
+      (d) =>
+        d.deviceId &&
+        d.deviceId !== "default" &&
+        d.deviceId !== "communications",
+    );
+    // Browsers hide output deviceIds/labels until the page has audio-device
+    // permission, so `real` is empty in a bare web embed. Still surface the
+    // menu when we can prompt for that permission on demand (getUserMedia) —
+    // opening the submenu triggers the Meet-style prompt and the list fills
+    // in. The desktop app already has permission, so `real` is populated and
+    // no prompt is needed.
+    const canUnlock = !!navigator.mediaDevices?.getUserMedia;
+    if (!MoviElement.audioSinkSupported() || (real.length < 1 && !canUnlock)) {
+      divider.style.display = "none";
+      item.style.display = "none";
+      submenu.style.display = "none";
+      return;
+    }
+
+    divider.style.display = "block";
+    item.style.display = "flex";
+    submenu.style.removeProperty("display");
+
+    const current = this.getAudioOutput();
+    const isDefault = !current || current === "default";
+    const esc = (s: string) =>
+      s.replace(
+        /[<>&]/g,
+        (c) => ({ "<": "&lt;", ">": "&gt;", "&": "&amp;" })[c] as string,
+      );
+
+    let html = "";
+    if (
+      window.innerWidth <= 1024 ||
+      window.matchMedia("(pointer: coarse)").matches
+    ) {
+      html += `<div class="movi-context-menu-item movi-context-menu-back" data-action="back">
+        <svg class="movi-context-menu-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M15 18l-6-6 6-6"/></svg>
+        <span class="movi-context-menu-label">Back</span>
+      </div>`;
+    }
+    html += `<div class="movi-context-menu-item${
+      isDefault ? " movi-context-menu-active" : ""
+    }" data-audio-output-id="">System Default</div>`;
+    html += real
+      .map((d, i) => {
+        const active =
+          !isDefault && d.deviceId === current
+            ? " movi-context-menu-active"
+            : "";
+        const label = esc(d.label || `Output ${i + 1}`);
+        return `<div class="movi-context-menu-item${active}" data-audio-output-id="${esc(
+          d.deviceId,
+        )}">${label}</div>`;
+      })
+      .join("");
+
+    // Locked (browser, no permission yet): the only real entry is System
+    // Default. Offer an explicit click to unlock the device list — a click
+    // gives getUserMedia the user gesture it needs to show the prompt (hover
+    // opening the submenu does not).
+    if (real.length < 1 && canUnlock) {
+      html += `<div class="movi-context-menu-item movi-context-menu-audiodevice-unlock" data-audio-output-unlock="1">
+        <svg class="movi-context-menu-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><line x1="12" y1="16" x2="12" y2="12"/><line x1="12" y1="8" x2="12.01" y2="8"/></svg>
+        <span class="movi-context-menu-label">Show output devices…</span>
+      </div>`;
+    }
+
+    submenu.innerHTML = html;
+    this.setupSubmenuHover(item, submenu);
   }
 
   private isAnyMenuOpen(): boolean {
@@ -12369,15 +12668,92 @@ export class MoviElement extends HTMLElement {
       :host(.movi-audio-strip) .movi-poster-overlay,
       :host(.movi-audio-strip) .movi-cover-art-overlay,
       :host(.movi-audio-strip) .movi-subtitle-overlay,
-      :host(.movi-audio-strip) .movi-osd-container,
       :host(.movi-audio-strip) .movi-loading-indicator,
       :host(.movi-audio-strip) .movi-loader-container,
       :host(.movi-audio-strip) .movi-center-play-pause,
-      :host(.movi-audio-strip) .movi-title-bar,
       :host(.movi-audio-strip) .movi-unmute-overlay,
       :host(.movi-audio-strip) .movi-broken-indicator,
       :host(.movi-audio-strip) .movi-empty-state {
         display: none !important;
+      }
+      /* Title + OSD in strip mode.
+         Floating the title ABOVE the host collided with whatever sits above
+         the player (the demo's URL bar, etc.), so when a title is present the
+         strip grows into a 2-row layout: a slim title band INSIDE the host on
+         top, the control row below it. The .movi-has-title class is toggled by
+         updateTitle() so the height only grows when there's actually a title —
+         an untitled audio strip stays the thin 56px bar.
+         The OSD pill lands in that same top band (centred); since the title
+         fades while the OSD is up (sibling combinator — osdContainer precedes
+         titleBar in the shadow root) the two share the row without colliding.
+         An untitled strip has no band, so its OSD floats just above the bar
+         (transient, so a brief overlap with page content above is acceptable). */
+      :host(.movi-audio-strip.movi-has-title) {
+        min-height: 78px !important;
+        height: 78px !important;
+        max-height: 78px !important;
+      }
+      :host(.movi-audio-strip) .movi-title-bar {
+        position: absolute;
+        top: 9px !important;
+        bottom: auto !important;
+        left: 14px;
+        right: 14px;
+        /* !important: a desktop host may inject a ":host(:not(:fullscreen))
+           .movi-title-bar { padding-top: 46px }" rule (macOS traffic-light
+           clearance for the full-bleed video title) at equal specificity.
+           In strip mode the player is a 56–78px bar, not a full window, so
+           that clearance is wrong — it pushed the title down past the control
+           row. Force the strip's own zero padding to win. */
+        padding: 0 !important;
+        background: none !important;
+        opacity: 1 !important;
+        transform: none !important;
+        pointer-events: none;
+        z-index: 6;
+        transition: opacity 0.2s ease;
+      }
+      :host(.movi-audio-strip) .movi-title-text {
+        font-size: 13px;
+        font-weight: 600;
+        color: rgba(255, 255, 255, 0.92);
+        text-shadow: 0 1px 2px rgba(0, 0, 0, 0.55);
+        line-height: 1.2;
+      }
+      :host(.movi-audio-strip[theme="light"]) .movi-title-text {
+        color: #11142d;
+        text-shadow: none;
+      }
+      /* Push the control row below the title band — only when titled. */
+      :host(.movi-audio-strip.movi-has-title) .movi-controls-container,
+      :host(.movi-audio-strip.movi-has-title) .movi-controls-container.movi-controls-hidden {
+        top: 28px !important;
+      }
+      /* OSD: in the title band when titled; floats just above the bar when
+         untitled. Inline display from showOSD() still toggles it on/off. */
+      :host(.movi-audio-strip) .movi-osd-container {
+        top: auto !important;
+        bottom: calc(100% + 5px);
+        padding: 7px 14px;
+        gap: 8px;
+        max-width: calc(100% - 24px);
+      }
+      :host(.movi-audio-strip.movi-has-title) .movi-osd-container {
+        top: 4px !important;
+        bottom: auto !important;
+      }
+      :host(.movi-audio-strip) .movi-osd-icon svg {
+        width: 18px;
+        height: 18px;
+      }
+      :host(.movi-audio-strip) .movi-osd-text {
+        font-size: 13px;
+      }
+      /* While the OSD pill is up, fade the title so the two don't overlap.
+         Sibling combinator works because osdContainer is appended to the
+         shadow root before titleBar. */
+      :host(.movi-audio-strip) .movi-osd-container.visible ~ .movi-title-bar {
+        opacity: 0 !important;
       }
       /* !important here is unavoidable — the host's height is usually
          driven by the consumer's <movi-player width="..." height="...">
@@ -13401,6 +13777,11 @@ export class MoviElement extends HTMLElement {
           this.updateStableAudioUI();
         }
         break;
+      case "audiooutput":
+        // Accepts a concrete deviceId OR a label substring (resolved live).
+        this._audioOutputDeviceId = newValue || "";
+        this.applyAudioOutput();
+        break;
       case "encrypted":
         this._encrypted = newValue !== null;
         break;
@@ -14355,6 +14736,10 @@ export class MoviElement extends HTMLElement {
       Logger.info(TAG, `Initializing MoviPlayer (${mode} Mode)`);
       this.player = new MoviPlayer(playerConfig);
 
+      // Bind device enumeration + apply any pending `audiooutput` selection
+      // now that the audio engine exists.
+      this.setupAudioOutputs();
+
       // Hand off any audio element preserved across a quality switch BEFORE
       // init() so setupNativeAudio reuses it instead of allocating a fresh
       // (and autoplay-blocked) Audio element.
@@ -14781,6 +15166,10 @@ export class MoviElement extends HTMLElement {
             !this.isDragging &&
             !this.isTouchDragging &&
             !this.isAnyMenuOpen() &&
+            // Timeline open: clicking a storyboard thumbnail seeks, which
+            // flips state back to "playing" and would otherwise hide the
+            // bar right under the user while they're still picking frames.
+            !this.isTimelineOpen() &&
             // Skip the auto-hide if the user just touched the player —
             // covers the scrub-then-release path where the seek flips
             // state back to "playing" and would otherwise yank the bar
@@ -16672,6 +17061,9 @@ export class MoviElement extends HTMLElement {
         ...(this._headers && { headers: this._headers }),
       });
 
+      // Bind device enumeration + apply any pending `audiooutput` selection.
+      this.setupAudioOutputs();
+
       this.setupEventHandlers();
       await this.player.load();
       if (this._bufferSize > 0) {
@@ -18175,6 +18567,11 @@ export class MoviElement extends HTMLElement {
       titleBar.style.display = "none";
       titleBar.classList.remove("movi-title-visible");
     }
+
+    // Strip mode reads this to grow into a 2-row layout (title band + control
+    // row) only when a title is actually present — keeps the untitled audio
+    // strip at its thin 56px height.
+    this.classList.toggle("movi-has-title", !!(this._showTitle && this._title));
   }
 
   /**
@@ -18190,8 +18587,28 @@ export class MoviElement extends HTMLElement {
    * localStorage key (`movi-resume:<cleanVideoTitle(name)>`).
    */
   static cleanVideoTitle(filename: string): string {
+    // Decode HTML entities a scraper / download-site baked into the name or
+    // metadata title (e.g. `From &Quot;X&Quot;` → `From "X"`). `&quot;` is
+    // matched case-insensitively — some sources emit the non-standard
+    // `&Quot;`. `&amp;` is decoded last so `&amp;gt;` lands at `&gt;`, not `>`.
+    let title = filename
+      .replace(/&lt;/gi, "<")
+      .replace(/&gt;/gi, ">")
+      .replace(/&quot;/gi, '"')
+      .replace(/&apos;/gi, "'")
+      .replace(/&nbsp;/gi, " ")
+      .replace(/&#(\d+);/g, (m, n) => {
+        const c = parseInt(n, 10);
+        return c > 0 && c <= 0x10ffff ? String.fromCodePoint(c) : m;
+      })
+      .replace(/&#x([0-9a-f]+);/gi, (m, n) => {
+        const c = parseInt(n, 16);
+        return c > 0 && c <= 0x10ffff ? String.fromCodePoint(c) : m;
+      })
+      .replace(/&amp;/gi, "&");
+
     // Replace dots and underscores with spaces
-    let title = filename.replace(/[._]/g, " ");
+    title = title.replace(/[._]/g, " ");
 
     // Remove common release group / site suffixes (e.g., "-4kHdHub Com", "-YIFY", "-HDHub4u Ms")
     // Only strip if the part after dash looks like a release group (contains digits, dots, or known groups)

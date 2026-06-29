@@ -6,7 +6,7 @@
  * wires up file opening from three sources: the in-app dialog, drag & drop
  * (handled in the renderer), and OS "open with" / double-click (here).
  */
-const { app, BrowserWindow, dialog, ipcMain, shell, Menu, clipboard } = require("electron");
+const { app, BrowserWindow, dialog, ipcMain, shell, Menu, clipboard, session } = require("electron");
 const fs = require("fs");
 const path = require("path");
 const { createLocalServer } = require("./local-server");
@@ -349,6 +349,17 @@ if (!gotLock) {
   });
 
   app.whenReady().then(async () => {
+    // The renderer only ever loads our own bundled content from 127.0.0.1, so
+    // grant its permission checks/requests. The key one is "media": without it
+    // Chromium hides audio output device ids/labels (enumerateDevices returns
+    // blanks), so the Audio Output menu would only ever show "System Default".
+    // Granting the CHECK is enough to expose labelled devices — we never call
+    // getUserMedia, so the macOS microphone (TCC) prompt never appears.
+    session.defaultSession.setPermissionCheckHandler(() => true);
+    session.defaultSession.setPermissionRequestHandler((_wc, _permission, cb) =>
+      cb(true),
+    );
+
     const server = createLocalServer({ rendererDir: RENDERER_DIR, isLocalAllowed });
     await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
     serverPort = server.address().port;

@@ -7,6 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.3.3] - 2026-06-29
+
+### Added
+- **Immersive / VR video (`vr` attribute)**: 360° equirectangular, 180° (VR180), fisheye, side-by-side **stereo (3D)**, and stereographic **"little planet"** projections, rendered with a WebGL2 fullscreen-quad raycast and a spring-animated look-around camera (drag / arrow keys / pinch-zoom). Auto-enters the right projection from the source's spherical metadata — no toggle UI — or force it with tokens (`vr="180"`, `vr="fisheye sbs"`, `vr="littleplanet"`). Opt-in on-screen joystick via `vrpad`.
+- **Audio output device selection (`audiooutput` attribute / `setAudioOutput()` API)**: route playback to any system output device (speakers, Bluetooth, virtual). `getAudioOutputs()` lists devices, `setAudioOutput(deviceId)` switches — it also accepts a **label substring** (e.g. `"Headphones"`) since device ids are session-salted — `getAudioOutput()` reads the current sink, and an `audiooutputchange` event fires on change. Surfaced as an **"Audio Output"** submenu in the right-click menu (the browser asks for device permission on first use; granted hosts list devices directly). Routed through `AudioContext.setSinkId`.
+
+### Fixed
+- **FLAC audio playback**: FLAC now always uses the software (FFmpeg-WASM) decoder — WebCodecs' FLAC decoder throws `EncodingError` on these streams and the error→software fallback didn't recover in every browser, leaving FLAC silent.
+- **Title HTML-entity decoding**: titles from scraped / download-site sources that carry entities like `&quot;` (and the non-standard `&Quot;`), `&amp;`, `&#39;` now render as the real characters (`"`, `&`, `'`).
+- **Audio-strip title placement**: when an audio file *with a title* collapses to the thin control strip, the title now sits in its own row above the controls instead of overlapping the control row.
+- **Controls auto-hide vs. the timeline & menus**: the control bar no longer auto-hides while the **storyboard timeline** (`T`) is open or when clicking a thumbnail in it, and it correctly re-arms its inactivity auto-hide after the right-click menu closes.
+
 ## [0.3.2] - 2026-06-17
 
 ### Added

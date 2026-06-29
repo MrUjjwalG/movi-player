@@ -76,6 +76,25 @@ movi-player {
   background: #000;
 }
 
+/* Audio-strip mode: when the player has no video + no cover art it adds its own
+   .movi-audio-strip class and shrinks its host to ~56px, but the stage stays
+   full-height so the strip pins to the top of a tall black slab. Centre it in
+   the stage and cap the width, matching the VS Code / chrome extensions, so an
+   audio file reads as a tidy centred bar instead. */
+.stage:has(movi-player.movi-audio-strip) {
+  align-items: center;
+  justify-content: center;
+  padding: 24px;
+}
+movi-player.movi-audio-strip {
+  flex: 0 0 auto;
+  width: 100%;
+  max-width: 880px;
+  /* Explicit 56px — in the full-height flex stage `height:auto`/`100%`
+     stretches the host instead of collapsing to the strip, so pin it. */
+  height: 56px;
+}
+
 /* ---------- Playlist ---------- */
 .playlist-panel {
   display: none;

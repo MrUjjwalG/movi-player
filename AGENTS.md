@@ -145,6 +145,8 @@ All observed attributes are listed in `MoviElement.observedAttributes` (around [
 - `fps` — override frame rate for unusual sources.
 - `hdr` — force HDR pipeline on (auto-detected from primaries normally).
 - `buffersize` (MB) — LRU cache size override.
+- `vr` / `vrpad` — immersive projection (360 / 180 / fisheye / `sbs`(3d) / `littleplanet`), WebGL2 raycast in `CanvasRenderer` with a spring-animated camera. Auto-enters from the source's spherical metadata (`StreamInfo.projection` from the WASM demuxer); the attribute only forces/overrides it. `vrpad` adds an on-screen joystick.
+- `audiooutput` — route audio to an output device via `AudioContext.setSinkId` in `AudioRenderer`. Accepts a `deviceId` or a label substring (ids are session-salted). `""`/`"default"` = system default.
 
 **Authoritative list:** `MoviElement.observedAttributes` ([src/render/MoviElement.ts:257](src/render/MoviElement.ts#L257)) is the source of truth — if it's not in there, the element ignores it.
 
@@ -168,6 +170,8 @@ el.player.setSubtitleTrack(subs[0].id);
 
 Subscribe to `trackschange` / `audiotrackchange` / `subtitletrackchange` events to react to changes (e.g. when a new media file finishes loading and tracks become available).
 
+Audio **output device** routing has a fuller surface on the element: `getAudioOutputs()` (enumerate), `setAudioOutput(deviceId | labelSubstring)`, `getAudioOutput()` — these resolve labels and update the right-click "Audio Output" menu, then forward to `player.setAudioOutputDevice()` → `AudioRenderer.setSinkId()`. The core (`MoviPlayer`) only has the raw `setAudioOutputDevice()` / `getAudioOutputDevice()`.
+
 ### 4.3 Events
 
 Dispatched on the `<movi-player>` element. Names follow `HTMLMediaElement` conventions where there's a sensible match; the rest are custom.
@@ -189,6 +193,7 @@ Dispatched on the `<movi-player>` element. Names follow `HTMLMediaElement` conve
 - `pipchange` (`detail: { pip }`) — picture-in-picture entered/exited
 - `fullscreenchange` (`detail: { fullscreen }`)
 - `titlechange` (`detail: { title }`)
+- `audiooutputchange` (`detail: { deviceId }`) — output device switched (`""` = system default)
 - `filerevoked` (`detail: <info>`) — local File handle was revoked by the browser
 
 **Important:** `playing`, `waiting`, `seeking`, `seeked` (which `<video>` dispatches) are **not** emitted as DOM events on `<movi-player>`. Subscribe to `statechange` instead — it carries the same information with explicit state names. `MoviPlayer` (the programmatic core) does emit `seeking`/`seeked` via its `EventEmitter`, but those don't bubble through to the custom element.
