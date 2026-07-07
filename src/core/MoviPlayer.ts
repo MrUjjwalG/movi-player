@@ -1644,14 +1644,21 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
         this.audioDecoder.usesSoftware;
       if (!this._coldAudioPrimed && hasAudioTrack) {
         this._coldAudioPrimed = true; // one-shot; warm re-seeks skip this
-        this.audioRenderer.play(); // isPlaying=true → render() accepts decoded audio
+        // Prime WITHOUT resuming the context. On a replay the context is left
+        // suspended by pause() at `ended`; the old play()+suspendForBuffering
+        // pair raced there — play()'s fire-and-forget resume() completed AFTER
+        // suspendForBuffering()'s state check, so the context stayed running
+        // for the whole prime and the primed audio drained into underrun
+        // gap-fills. primeForBuffering() sets isPlaying=true and holds the
+        // context suspended without ever issuing a resume(), so buffers fill
+        // silently until the resume gate below (same as a clean first play).
+        this.audioRenderer.primeForBuffering(); // isPlaying=true, context held suspended
         if (this.pendingAudioPackets.length > 0) {
           for (const pkt of this.pendingAudioPackets) {
             this.audioDecoder.decode(pkt.data, pkt.timestamp, pkt.keyframe);
           }
           this.pendingAudioPackets = [];
         }
-        this.audioRenderer.suspendForBuffering(); // context suspended → buffers fill
         this._primingAudio = true; // gate resume on a solid cushion, not 0.1s
         this.wasPlayingBeforeRebuffer = true; // resume intent for buffering→play
         this._bufferingEntryTime = performance.now();

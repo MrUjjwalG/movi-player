@@ -833,6 +833,46 @@ export class AudioRenderer {
   }
 
   /**
+   * Prepare for the first-play / replay audio prime: mark the renderer playing
+   * so render() accepts decoded audio and the buffer fills, but hold the
+   * AudioContext suspended so nothing drains until resumeFromBuffering().
+   *
+   * Unlike play() + suspendForBuffering(), this NEVER issues an async resume().
+   * That pair raced on replay: after `ended`, pause() leaves the context
+   * suspended; the prime's fire-and-forget play() then kicks off an async
+   * resume(), and the immediately-following suspendForBuffering() sees the
+   * context still "suspended" (resume in flight) so its state===running guard
+   * skips the suspend — the late resume then wins and the context stays
+   * running for the whole prime, draining the primed audio and underrunning
+   * the sub-realtime software decoder into a flood of gap-fills. Priming
+   * without ever resuming removes the race entirely.
+   */
+  primeForBuffering(): void {
+    this.isPlaying = true;
+    this.intentionalSuspend = true;
+    if (!this.audioContext && !this._muted) {
+      // Context deferred (never created yet) — bring it up, then hold it
+      // suspended. Any audio decoded before init resolves has nowhere to
+      // schedule, but by the prime path the context already exists in every
+      // observed flow (first play created it during the poster seek); this is
+      // just a safety net.
+      this.init()
+        .then(() => {
+          if (this.intentionalSuspend && this.audioContext?.state === "running") {
+            this.audioContext.suspend().catch(() => {});
+          }
+        })
+        .catch(() => {});
+    } else if (this.audioContext && this.audioContext.state === "running") {
+      this.audioContext.suspend().catch((err) => {
+        Logger.error(TAG, "Failed to suspend audio context for prime", err);
+      });
+    }
+    this.lastDecodeTime = performance.now();
+    Logger.debug(TAG, "Primed for buffering (context held suspended)");
+  }
+
+  /**
    * Resume audio after buffering. Clears the intentional suspend flag.
    */
   resumeFromBuffering(): void {
