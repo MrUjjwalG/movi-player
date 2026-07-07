@@ -75,8 +75,14 @@ function parseStreamInfo(module: MoviWasmModule, ptr: number): StreamInfo {
     ptr + STREAM_INFO_OFFSETS.codecName,
     ptr + STREAM_INFO_OFFSETS.codecName + 32,
   );
+  // .slice() (a copy), not .subarray() (a view): module.HEAPU8 is backed by a
+  // resizable ArrayBuffer under -sALLOW_MEMORY_GROWTH, and TextDecoder.decode()
+  // throws "The provided ArrayBuffer value must not be resizable" on a view of
+  // one. Copying into a fresh, fixed-size buffer sidesteps it. Applies to every
+  // TextDecoder.decode() of a heap view below. (Newer Emscripten toolchains hit
+  // this; reported as issue #11.)
   const codecName = new TextDecoder().decode(
-    codecNameBytes.subarray(0, codecNameBytes.indexOf(0)),
+    codecNameBytes.slice(0, codecNameBytes.indexOf(0)),
   );
 
   // Read language (8 bytes starting at offset 100)
@@ -85,7 +91,7 @@ function parseStreamInfo(module: MoviWasmModule, ptr: number): StreamInfo {
     ptr + STREAM_INFO_OFFSETS.language + 8,
   );
   const language = new TextDecoder().decode(
-    languageBytes.subarray(0, languageBytes.indexOf(0)),
+    languageBytes.slice(0, languageBytes.indexOf(0)),
   );
 
   // Read label (64 bytes starting at offset 112)
@@ -94,7 +100,7 @@ function parseStreamInfo(module: MoviWasmModule, ptr: number): StreamInfo {
     ptr + STREAM_INFO_OFFSETS.label + 64,
   );
   const label = new TextDecoder().decode(
-    labelBytes.subarray(0, labelBytes.indexOf(0)),
+    labelBytes.slice(0, labelBytes.indexOf(0)),
   );
 
   return {
@@ -144,8 +150,10 @@ function readString(
 ): string {
   const bytes = module.HEAPU8.subarray(ptr, ptr + maxLength);
   const nullIndex = bytes.indexOf(0);
+  // .slice() copies out of the resizable HEAP buffer — TextDecoder rejects a
+  // view of a resizable ArrayBuffer (see parseStreamInfo note).
   return new TextDecoder().decode(
-    bytes.subarray(0, nullIndex >= 0 ? nullIndex : maxLength),
+    bytes.slice(0, nullIndex >= 0 ? nullIndex : maxLength),
   );
 }
 
@@ -676,7 +684,7 @@ export class WasmBindings {
         this.module._movi_get_chapter_title(this.contextPtr, i, titleBufPtr, 256);
         const titleBytes = this.module.HEAPU8.subarray(titleBufPtr, titleBufPtr + 256);
         const nullIdx = titleBytes.indexOf(0);
-        const title = new TextDecoder().decode(titleBytes.subarray(0, nullIdx > 0 ? nullIdx : 256));
+        const title = new TextDecoder().decode(titleBytes.slice(0, nullIdx > 0 ? nullIdx : 256));
 
         chapters.push({
           title: title || `Chapter ${i + 1}`,
@@ -951,7 +959,8 @@ export class WasmBindings {
         bufferPtr,
         bufferPtr + result,
       );
-      const text = new TextDecoder().decode(textBytes);
+      // .slice() — TextDecoder rejects a view of the resizable HEAP buffer.
+      const text = new TextDecoder().decode(textBytes.slice());
 
       // Trim whitespace and check if empty
       const trimmedText = text?.trim();
@@ -1063,7 +1072,7 @@ export class WasmBindings {
         const start = new DataView(this.module.HEAPU8.buffer, startPtr, 8).getFloat64(0, true);
         const end = new DataView(this.module.HEAPU8.buffer, endPtr, 8).getFloat64(0, true);
         const textBytes = this.module.HEAPU8.subarray(textPtr, textPtr + len);
-        const text = new TextDecoder().decode(textBytes).trim();
+        const text = new TextDecoder().decode(textBytes.slice()).trim();
         if (text) cues.push({ start, end, text });
       }
     } finally {
