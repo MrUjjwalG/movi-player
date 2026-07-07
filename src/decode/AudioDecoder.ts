@@ -48,6 +48,13 @@ export class MoviAudioDecoder {
     this.bindings = bindings;
   }
 
+  /** True when audio runs through the WASM software decoder (TrueHD/DTS/AC-3/
+   *  Opus/FLAC/…) rather than WebCodecs. The software path decodes sub-realtime
+   *  on a cold start, so callers can gate cold-start mitigations on this. */
+  get usesSoftware(): boolean {
+    return this.useSoftware;
+  }
+
   /**
    * Configure the decoder for a specific track
    */

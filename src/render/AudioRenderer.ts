@@ -461,16 +461,7 @@ export class AudioRenderer {
     source.playbackRate.value = usedStretcher ? 1.0 : this._playbackRate;
 
     const now = this.audioContext.currentTime;
-    // The very first buffer of a fresh start gets a larger lead so early buffers
-    // accumulate into a cushion before playback consumes them. Software decoders
-    // (TrueHD/DTS via WASM) run slower than realtime for the first ~1-2s while
-    // the decode path warms up; without the cushion the renderer underruns and
-    // gap-fills ("atak-atak") on first play until it catches up (replay is fine
-    // because the decoder is already warm). The media clock syncs to audio, so
-    // this just shifts the audio (and synced video) start by the cushion — it's
-    // a one-time startup delay, not an A/V desync. Only the first buffer after a
-    // fresh start/reset is affected; steady-state scheduling is unchanged.
-    const minTime = now + (this.hasFirstBuffer ? 0.005 : 0.5);
+    const minTime = now + 0.005; // Small buffer to prevent glitches
 
     // Detect buffer underrun
     if (this.scheduledTime < now) {

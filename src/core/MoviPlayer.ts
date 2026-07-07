@@ -1616,8 +1616,20 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
       // and let the buffering→resume gate below start both together once a real
       // audio cushion exists. Reached at media 0 (not mid-stream), so the resume
       // has no drift. One-shot — warm mid-playback seeks skip it.
+      // Only the heavy lossless/complex software codecs — TrueHD/MLP and
+      // DTS/DCA — decode sub-realtime on a cold start and actually need the
+      // prime. WebCodecs hardware audio (AAC) and the *lightweight* software
+      // codecs (Opus, FLAC, AC-3, E-AC-3) all decode faster than realtime even
+      // cold, so priming them would just add a needless ~2s startup buffer.
+      // Gate on the codec so only TrueHD/DTS pay the startup cushion.
+      const activeAudioCodec = (
+        this.trackManager.getActiveAudioTrack()?.codec ?? ""
+      ).toLowerCase();
+      const needsColdPrime = /truehd|mlp|dts|dca/.test(activeAudioCodec);
       const hasAudioTrack =
-        !this.disableAudio && !!this.trackManager.getActiveAudioTrack();
+        !this.disableAudio &&
+        needsColdPrime &&
+        this.audioDecoder.usesSoftware;
       if (!this._coldAudioPrimed && hasAudioTrack) {
         this._coldAudioPrimed = true; // one-shot; warm re-seeks skip this
         this.audioRenderer.play(); // isPlaying=true → render() accepts decoded audio
