@@ -182,6 +182,8 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
   private _stallStartTime: number = 0; // When stall was first detected
   private _bufferingEntryTime: number = 0; // When we entered buffering state
   private _playStartTime: number = 0; // When play() was called — grace period for stall detection
+  private _coldAudioPrimed = false; // one-shot: has the first-play audio-prime run for this media?
+  private _primingAudio = false; // true while the first-play buffer is filling its startup cushion
   private _decoderStuckSince: number = 0; // When video decoder was first detected stuck
   private _lastDesyncSeekTime: number = 0; // performance.now() of last desync-triggered resync
 
@@ -1594,13 +1596,49 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
         this._playStartTime = performance.now();
       }
     } else if (this.wasPlayingBeforeSeek || this.wasPlayingBeforeRebuffer) {
-      Logger.info(TAG, "Resuming playback after seek");
       // Consume the resume intent so it doesn't leak into the next seek. It's
       // never reset elsewhere, so a stale `true` would make a later paused
       // user-seek wrongly auto-resume (and would defeat seek()'s re-derivation
       // guard that now skips re-deriving when this is already true).
       this.wasPlayingBeforeSeek = false;
       this.wasPlayingBeforeRebuffer = false;
+      if (this._playStartTime === 0) {
+        this._playStartTime = performance.now();
+      }
+
+      // First-play cold-start audio prime. Software audio (TrueHD/DTS via WASM)
+      // decodes sub-realtime for ~1-2s while the decode path warms up. If we
+      // start now, the fast HW video races ahead while audio underruns —
+      // gap-fills ("atak-atak") then a ~2s A/V resync once the buffer empties.
+      // Instead, route the FIRST play through the same buffering machinery the
+      // stall path uses: keep the AudioContext suspended (isPlaying=true so
+      // decoded audio still accumulates), hold the clock and video presentation,
+      // and let the buffering→resume gate below start both together once a real
+      // audio cushion exists. Reached at media 0 (not mid-stream), so the resume
+      // has no drift. One-shot — warm mid-playback seeks skip it.
+      const hasAudioTrack =
+        !this.disableAudio && !!this.trackManager.getActiveAudioTrack();
+      if (!this._coldAudioPrimed && hasAudioTrack) {
+        this._coldAudioPrimed = true; // one-shot; warm re-seeks skip this
+        this.audioRenderer.play(); // isPlaying=true → render() accepts decoded audio
+        if (this.pendingAudioPackets.length > 0) {
+          for (const pkt of this.pendingAudioPackets) {
+            this.audioDecoder.decode(pkt.data, pkt.timestamp, pkt.keyframe);
+          }
+          this.pendingAudioPackets = [];
+        }
+        this.audioRenderer.suspendForBuffering(); // context suspended → buffers fill
+        this._primingAudio = true; // gate resume on a solid cushion, not 0.1s
+        this.wasPlayingBeforeRebuffer = true; // resume intent for buffering→play
+        this._bufferingEntryTime = performance.now();
+        this.stateManager.setState("buffering");
+        this.clock.pause();
+        if (this.videoRenderer) this.videoRenderer.stopPresentationLoop();
+        Logger.info(TAG, "First-play audio prime: buffering until cushion");
+        return;
+      }
+
+      Logger.info(TAG, "Resuming playback after seek");
       this.stateManager.setState("playing");
       // Mark that playback has actually started. When play() is pressed during
       // the initial poster-seek it early-returns before reaching the body that
@@ -1691,17 +1729,34 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
     } else if (this.stateManager.getState() === "buffering" && this.wasPlayingBeforeRebuffer) {
       // Resume after minimum dwell time to accumulate enough data
       const hasAudioTrack = !!this.trackManager.getActiveAudioTrack();
-      const audioReady = this.disableAudio || !hasAudioTrack || this.audioRenderer.getBufferedDuration() > 0.1;
+      // The first-play cold prime needs a REAL cushion before it starts: the
+      // software decode is still sub-realtime (and gets even slower once video
+      // decode/render competes for CPU), so resuming on a thin 0.1s buffer just
+      // underruns again → a second stall + a ~2s A/V resync. Require ~1.5s
+      // buffered for the prime (with a generous max-dwell fallback so a very
+      // slow decoder still eventually starts). A normal mid-playback rebuffer
+      // keeps the lighter 0.1s threshold for responsiveness.
+      const audioTargetS = this._primingAudio ? 2.0 : 0.1;
+      const audioReady =
+        this.disableAudio ||
+        !hasAudioTrack ||
+        this.audioRenderer.getBufferedDuration() > audioTargetS;
       const videoReady = !this.videoRenderer || this.videoRenderer.getQueueSize() > 0;
       const dwellMs = performance.now() - this._bufferingEntryTime;
       const minDwell = 1500; // Wait at least 1.5s to accumulate buffer
-      // Resume if: (1) both ready after minDwell, or (2) audio ready after longer wait
-      // Video decoder output is async — don't block forever if frames are delayed
+      // Cap the prime startup so a very CPU-bound decoder doesn't spin forever;
+      // it starts with whatever cushion it built (a residual stall is possible
+      // on such machines — the real fix is off-thread audio decode).
+      const maxDwell = this._primingAudio ? 4000 : 3000;
+      // Resume if: (1) both ready after minDwell, (2) audio ready after longer
+      // wait, or (3) the max-dwell fallback (don't wait forever).
       const canResume = dwellMs >= minDwell && (
         (audioReady && videoReady) ||
-        (audioReady && dwellMs >= 3000)
+        (audioReady && dwellMs >= 3000) ||
+        dwellMs >= maxDwell
       );
       if (canResume) {
+        this._primingAudio = false;
         this.stateManager.setState("paused");
         this.wasPlayingBeforeRebuffer = false;
         // Resume AudioContext before play() so audio picks up from where it was
@@ -2299,8 +2354,21 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
               // keyframes for long stretches (seeking deep into a DoVi P8 .ts),
               // where waiting for an IDR never resumes and the video stays black.
               const idrWaitElapsed = elapsed > MoviPlayer.SEEK_IDR_WAIT_MS;
+              // A CRA at/before the seek target IS the demuxer's restart point —
+              // decode straight from it (pre-target frames are dropped by the
+              // onFrame filter). The IDR-preference below only helps when a true
+              // IDR sits within a few frames of the target; a CRA-only stream
+              // has none, and skipping the target CRA then lets the demux loop
+              // (which outruns the 400ms wall-clock IDR wait) race through the
+              // whole file, skipping every CRA to EOF with no frame decoded →
+              // permanent "buffering". So accept the target CRA outright rather
+              // than hunt for an IDR that never arrives.
+              const isTargetCra =
+                packet.keyframe &&
+                this.seekTargetTime !== -1 &&
+                packet.timestamp <= this.seekTargetTime + 0.05;
               const acceptThisKeyframe =
-                packet.keyframe && (packet.isIdr || idrWaitElapsed);
+                packet.keyframe && (packet.isIdr || idrWaitElapsed || isTargetCra);
               if (elapsed > MoviPlayer.KEYFRAME_SEEK_TIMEOUT) {
                 Logger.warn(
                   TAG,
@@ -3646,6 +3714,8 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
     this.seekTargetTime = -1; // clear any lingering pre-target frame-drop filter
     this.waitingForVideoSync = false; // no stale seek-completion armed
     this._playStartTime = 0; // keep first-play branch eligible
+    this._coldAudioPrimed = false; // re-arm the first-play audio prime for this source
+    this._primingAudio = false;
     this.pendingAudioPackets = []; // poster-era audio is stale; play() re-seeks
     this.pendingPrebufferPackets = [];
     // The poster seek advanced HttpSource's monotonic buffered-end to ~poster

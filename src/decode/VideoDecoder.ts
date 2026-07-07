@@ -549,6 +549,14 @@ export class MoviVideoDecoder {
       this.decoder.configure(this.lastConfig);
       this.isConfigured = true;
 
+      // A recreated decoder holds no reference frames, so the keyframe it resumes
+      // on must be sent as `key`. For an open-GOP CRA (isIdr=false) that means NOT
+      // down-grading it to `delta` (craAsDelta = isOpenGopKey && !justFlushed) —
+      // a fresh decoder rejects a CRA-as-delta ("key frame required after
+      // configure") but accepts a CRA-as-key as the random-access restart it is.
+      // Without this, a CRA-opening / CRA-only stream can never resume on hardware.
+      this.justFlushed = true;
+
       // Wait for next keyframe to resync — don't re-feed cached keyframe
       // as subsequent non-keyframes may fail on certain content (DoVi P8 etc.)
       // causing a recreate→re-feed→fail loop that triggers software fallback.

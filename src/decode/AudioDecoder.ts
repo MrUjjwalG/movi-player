@@ -428,6 +428,14 @@ export class MoviAudioDecoder {
    * Flush the decoder
    */
   async flush(): Promise<void> {
+    // Software path (TrueHD/DTS/Opus/FLAC/…): the WebCodecs `decoder` is null,
+    // so flush the WASM decoder instead. Skipping this leaves stale decoder
+    // state across a seek/replay — TrueHD then rejects packets (sendPacket →
+    // AVERROR_INVALIDDATA) until the next major-sync, an audible buzz/dropout.
+    if (this.useSoftware && this.swDecoder) {
+      await this.swDecoder.flush();
+      return;
+    }
     if (!this.decoder) return;
 
     try {

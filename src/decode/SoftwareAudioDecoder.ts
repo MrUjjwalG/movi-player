@@ -39,6 +39,19 @@ export class SoftwareAudioDecoder {
   private isBroken = false;
   private static readonly MAX_CONSECUTIVE_FAILURES = 50;
 
+  // TrueHD/MLP and DTS decode to tiny frames — one access unit per packet, e.g.
+  // 40 samples (~0.83ms) at 48kHz — ~1200 per second. The AudioRenderer
+  // schedules one AudioBufferSourceNode per frame, and at that granularity
+  // (especially when the AudioContext sample rate differs from the source, so
+  // every buffer is resampled in isolation) the buffer boundaries click —
+  // audible "pit-pit". AC-3/E-AC-3 avoid it with ~1536-sample (~32ms) frames.
+  // Coalesce consecutive small frames into ~30ms buffers so every software
+  // codec reaches the renderer at AC-3-like granularity. Dropped on flush/seek
+  // (stale post-seek), so at most ~30ms is lost at a seek/EOF.
+  private coalesceTarget = 0; // samples; derived from the frame sample rate
+  private pending: PCMFrame[] = [];
+  private pendingSamples = 0;
+
   constructor(bindings: WasmBindings) {
     this.bindings = bindings;
   }
@@ -86,15 +99,31 @@ export class SoftwareAudioDecoder {
   }
 
   async flush(): Promise<void> {
-    // No-op
+    // Reset the WASM decoder (avcodec_flush_buffers) so it restarts cleanly on
+    // the next major-sync after a seek/replay. Without this, TrueHD/DTS carry
+    // stale state across the seek and reject every packet (sendPacket →
+    // AVERROR_INVALIDDATA) until the next major-sync arrives — an audible buzz
+    // on replay and after every seek. Also clear the failure circuit-breaker so
+    // a fresh run isn't muted by pre-seek failures.
+    if (this.isConfigured) {
+      this.bindings.flushDecoder(this.trackIndex);
+    }
+    this.consecutiveFailures = 0;
+    this.isBroken = false;
+    this.pending = [];
+    this.pendingSamples = 0;
   }
 
   reset(): void {
     this.consecutiveFailures = 0;
+    this.pending = [];
+    this.pendingSamples = 0;
   }
 
   close(): void {
     this.isConfigured = false;
+    this.pending = [];
+    this.pendingSamples = 0;
   }
 
   decode(data: Uint8Array, timestamp: number, keyframe: boolean): void {
@@ -171,11 +200,79 @@ export class SoftwareAudioDecoder {
         );
       }
 
-      this.onData(frame);
+      this.enqueueFrame(frame);
     } catch (e) {
       Logger.error(TAG, "PCM frame extraction failed", e);
       if (this.onError) this.onError(e as Error);
     }
+  }
+
+  /**
+   * Coalesce tiny decoded frames (TrueHD/DTS emit ~40 samples each) into ~30ms
+   * buffers before handing them to the renderer, so its per-frame scheduler
+   * doesn't click on every boundary. Frames already at/above the target (AC-3,
+   * E-AC-3, AAC in software) pass straight through with no added latency.
+   */
+  private enqueueFrame(frame: PCMFrame): void {
+    if (this.coalesceTarget === 0) {
+      this.coalesceTarget = Math.max(1024, Math.round(frame.sampleRate * 0.03));
+    }
+
+    // Big enough on its own — flush anything buffered, then emit as-is.
+    if (
+      frame.numberOfFrames >= this.coalesceTarget &&
+      this.pendingSamples === 0
+    ) {
+      if (this.onData) this.onData(frame);
+      return;
+    }
+
+    // A channel-count / sample-rate change can't be merged into the current
+    // run — emit what we have first so the two formats stay separate.
+    const head = this.pending[0];
+    if (
+      head &&
+      (head.numberOfChannels !== frame.numberOfChannels ||
+        head.sampleRate !== frame.sampleRate)
+    ) {
+      this.flushPending();
+    }
+
+    this.pending.push(frame);
+    this.pendingSamples += frame.numberOfFrames;
+    if (this.pendingSamples >= this.coalesceTarget) this.flushPending();
+  }
+
+  private flushPending(): void {
+    if (this.pending.length === 0) return;
+    const merged =
+      this.pending.length === 1 ? this.pending[0] : this.mergePending();
+    this.pending = [];
+    this.pendingSamples = 0;
+    if (this.onData) this.onData(merged);
+  }
+
+  private mergePending(): PCMFrame {
+    const first = this.pending[0];
+    const channels = first.numberOfChannels;
+    const total = this.pendingSamples;
+    const planes: Float32Array[] = new Array(channels);
+    for (let c = 0; c < channels; c++) {
+      const out = new Float32Array(total);
+      let offset = 0;
+      for (const f of this.pending) {
+        out.set(f.planes[c], offset);
+        offset += f.numberOfFrames;
+      }
+      planes[c] = out;
+    }
+    return {
+      planes,
+      numberOfFrames: total,
+      numberOfChannels: channels,
+      sampleRate: first.sampleRate,
+      timestamp: first.timestamp, // start of the first accumulated frame
+    };
   }
 
   get configured(): boolean {
