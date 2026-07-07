@@ -1120,6 +1120,11 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
       // a ~full-duration "behind" and kicks off a spurious resync seek (an
       // audible trip at the start of every replay).
       this._playStartTime = performance.now();
+      // Re-arm the first-play audio prime so a replay of a heavy software codec
+      // (TrueHD/DTS) rebuilds its startup cushion just like the first play —
+      // otherwise the one-shot prime is spent and the cold-ish decode can trip.
+      // No effect on hardware/lightweight audio (the prime is codec-gated).
+      this._coldAudioPrimed = false;
       try {
         await this.seek(0, { suppressSpinner: true });
         // The separate native <audio> track ended with the video; seek(0)
