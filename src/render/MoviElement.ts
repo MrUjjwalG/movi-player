@@ -4442,12 +4442,12 @@ export class MoviElement extends HTMLElement {
           this.setAttribute("playbackrate", playbackSpeed.toString());
         }
 
-        // Update active state
-        contextMenu
-          .querySelectorAll(".movi-context-menu-item[data-speed]")
-          .forEach((el) => {
-            el.classList.remove("movi-context-menu-active");
-          });
+        // Update active state (query the item's own submenu — the speed submenu
+        // is a moved-out sibling of contextMenu, so contextMenu wouldn't find
+        // these items and the active class would accumulate; see the fit case).
+        item.parentElement
+          ?.querySelectorAll(".movi-context-menu-item[data-speed]")
+          .forEach((el) => el.classList.remove("movi-context-menu-active"));
         item.classList.add("movi-context-menu-active");
 
         this.showOSD(
@@ -4464,9 +4464,14 @@ export class MoviElement extends HTMLElement {
         }
         this.updateFitMode();
         this.updateAspectRatioIcon();
-        contextMenu.querySelectorAll(".movi-context-menu-item[data-fit]").forEach((el) => {
-          el.classList.remove("movi-context-menu-active");
-        });
+        // Query within the item's own submenu, NOT contextMenu: the fit submenu
+        // is moved out to be a sibling of contextMenu (so it escapes the menu's
+        // overflow), so contextMenu.querySelectorAll finds none of these items —
+        // the active class was never cleared and every tapped option stayed
+        // highlighted (most visible on touch, where the submenu lingers open).
+        item.parentElement
+          ?.querySelectorAll(".movi-context-menu-item[data-fit]")
+          .forEach((el) => el.classList.remove("movi-context-menu-active"));
         item.classList.add("movi-context-menu-active");
         // Update the new context menu status too
         const aspectStatus = shadowRoot.querySelector(".movi-aspect-status");
@@ -4781,12 +4786,16 @@ export class MoviElement extends HTMLElement {
     // Update HDR visibility/state in context menu
     this.updateHDRVisibility();
 
-    // Update active state for Fit mode
+    // Update active state for Fit mode. Query shadowRoot, not contextMenu: the
+    // fit submenu was moved out to be a sibling of contextMenu (above), so
+    // contextMenu.querySelectorAll would find none of these items — the current
+    // fit was never highlighted on open and stale active classes never cleared.
     const currentActiveFit =
       this._objectFit === "control" ? this._currentFit : this._objectFit;
-    const fitItems = contextMenu.querySelectorAll(
-      ".movi-context-menu-item[data-fit]",
-    );
+    const fitItems =
+      this.shadowRoot?.querySelectorAll(
+        ".movi-context-menu-item[data-fit]",
+      ) ?? [];
     fitItems.forEach((item) => {
       const fit = (item as HTMLElement).dataset.fit;
       if (fit === currentActiveFit) {
