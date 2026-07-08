@@ -11,10 +11,25 @@ try {
 // Detect media (video + audio) URLs on page and add a play button overlay.
 // Kept in sync with MEDIA_EXT_RE in player.js so anything the player can open
 // gets a button here too.
-const MEDIA_EXTENSIONS = /\.(mp4|mkv|webm|mov|avi|ts|m3u8|mpd|flv|m4v|ogv|wmv|m2ts|mts|evo|3gp|mpg|mpeg|mp3|m4a|m4b|aac|flac|wav|wave|ogg|oga|opus|ac3|ec3|eac3|mka|dts)(\?|$)/i;
+const MEDIA_EXT_GROUP =
+  "mp4|mkv|webm|mov|avi|ts|m3u8|mpd|flv|m4v|ogv|wmv|m2ts|mts|evo|3gp|mpg|mpeg|mp3|m4a|m4b|aac|flac|wav|wave|ogg|oga|opus|ac3|ec3|eac3|mka|dts";
+const MEDIA_EXTENSIONS = new RegExp(`\\.(${MEDIA_EXT_GROUP})(\\?|$)`, "i");
+// Presigned download URLs (S3, Cloudflare R2, GCS) carry no file extension in
+// the path — the real filename lives in a response-content-disposition /
+// filename= query param, URL-encoded (e.g. `...filename%3D%22Movie.mkv%22...`).
+// After decoding that reads `filename="Movie.mkv"`, so match the extension when
+// it's terminated by a quote, `&`, `;`, or end-of-string.
+const DISPOSITION_MEDIA_RE = new RegExp(
+  `filename[^=]*=\\s*"?[^"&;]*\\.(${MEDIA_EXT_GROUP})("|&|;|$)`,
+  "i"
+);
 
 function isMediaUrl(url) {
-  return MEDIA_EXTENSIONS.test(url);
+  if (MEDIA_EXTENSIONS.test(url)) return true;
+  try {
+    if (DISPOSITION_MEDIA_RE.test(decodeURIComponent(url))) return true;
+  } catch {}
+  return false;
 }
 
 function createPlayButton(link) {

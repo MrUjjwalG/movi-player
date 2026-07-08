@@ -85,8 +85,10 @@ async function runProbe(url) {
     } finally {
       clearTimeout(timer);
     }
-    // Some servers reject HEAD with 405/501; fall back to a tiny ranged GET.
-    if (!res.ok && (res.status === 405 || res.status === 501)) {
+    // Some servers reject HEAD with 405/501; SigV4 presigned-GET URLs (S3, R2,
+    // GCS) reject it with 403/401 because the signature is bound to the method.
+    // In all these cases fall back to a tiny ranged GET, which is allowed.
+    if (!res.ok && (res.status === 405 || res.status === 501 || res.status === 403 || res.status === 401)) {
       const ctrl2 = new AbortController();
       const timer2 = setTimeout(() => ctrl2.abort(), 6000);
       try {

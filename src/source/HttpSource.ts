@@ -353,9 +353,24 @@ export class HttpSource implements SourceAdapter {
         });
 
         if (!response.ok) {
-          if (response.status === 403) throw new Error("Access denied. Check video permissions.");
-          if (response.status === 401) throw new Error("Authentication required.");
           if (response.status === 404) throw new Error("Video not found.");
+          // 401/403 on a HEAD isn't necessarily an auth failure: SigV4
+          // presigned URLs (S3, Cloudflare R2, GCS) bind the signature to the
+          // HTTP method, so a URL signed for GET returns 403 on HEAD even
+          // though ranged GETs work perfectly. Fall back to the GET-based size
+          // probes before declaring it fatal — a genuinely bad/expired
+          // signature fails those too and still throws below.
+          if (response.status === 403 || response.status === 401) {
+            const sizeViaRange = await this.resolveSizeViaRange();
+            if (sizeViaRange !== null) return sizeViaRange;
+            const sizeViaGet = await this.resolveSizeViaPlainGet();
+            if (sizeViaGet !== null) return sizeViaGet;
+            throw new Error(
+              response.status === 403
+                ? "Access denied. Check video permissions."
+                : "Authentication required.",
+            );
+          }
           // 5xx / 429 etc. — retryable.
           lastError = new Error(`HTTP ${response.status}`);
         } else {
@@ -414,6 +429,10 @@ export class HttpSource implements SourceAdapter {
     }
     res.body?.cancel().catch(() => {});
     if (!res.ok && res.status !== 206) return null;
+
+    // When HEAD is method-blocked (presigned-GET URLs), this ranged GET is our
+    // first successful response — grab the download filename off it too.
+    this.setFilenameFromDisposition(res.headers.get("Content-Disposition"));
 
     const contentRange = res.headers.get("Content-Range");
     if (contentRange) {
