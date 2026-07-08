@@ -5274,7 +5274,7 @@ export class MoviElement extends HTMLElement {
         }
         .pip-progress-bar:hover { height: 5px; }
         .pip-progress-fill {
-          height: 100%; background: #8B5CF6; border-radius: 2px;
+          height: 100%; background: var(--movi-primary, #8B5CF6); border-radius: 2px;
           width: 0%; pointer-events: none;
         }
         .pip-time { font: 500 10px/1 -apple-system, sans-serif; color: rgba(255,255,255,0.7); white-space: nowrap; }
@@ -5282,7 +5282,7 @@ export class MoviElement extends HTMLElement {
         .pip-btn-row { display: flex; align-items: center; justify-content: center; gap: 16px; position: relative; }
         .pip-btn {
           background: none; border: none; cursor: pointer; padding: 4px;
-          color: #fff; opacity: 0.85; display: flex; align-items: center; justify-content: center;
+          color: var(--movi-chrome-fg, #fff); opacity: 0.85; display: flex; align-items: center; justify-content: center;
         }
         .pip-btn:hover { opacity: 1; }
         .pip-btn svg { width: 20px; height: 20px; }
@@ -8534,6 +8534,10 @@ export class MoviElement extends HTMLElement {
         
         /* Text Colors */
         --movi-controls-color: #FFFFFF;
+        /* Foreground for chrome that is ALWAYS dark (bottom bar, OSD capsule,
+           dark pills) — stays white in both themes, unlike --movi-controls-color
+           which flips to dark for menus on light surfaces. Public theming hook. */
+        --movi-chrome-fg: #ffffff;
         --movi-text-secondary: rgba(255, 255, 255, 0.7);
         --movi-text-tertiary: rgba(255, 255, 255, 0.5);
         
@@ -8956,7 +8960,7 @@ export class MoviElement extends HTMLElement {
         gap: 8px;
         padding: 8px 14px;
         background: rgba(0, 0, 0, 0.75);
-        color: #fff;
+        color: var(--movi-chrome-fg, #fff);
         font-size: 13px;
         font-weight: 600;
         border: 1px solid rgba(255, 255, 255, 0.15);
@@ -9022,7 +9026,7 @@ export class MoviElement extends HTMLElement {
         justify-content: center;
         border: none;
         cursor: pointer;
-        color: #fff;
+        color: var(--movi-chrome-fg, #fff);
         background: rgba(0, 0, 0, 0.35);
         border-radius: 50%;
         opacity: 0;
@@ -9057,7 +9061,7 @@ export class MoviElement extends HTMLElement {
         gap: 6px;
         padding: 6px 14px;
         background: rgba(0, 0, 0, 0.6);
-        color: #fff;
+        color: var(--movi-chrome-fg, #fff);
         border-radius: 999px;
         font-size: 14px;
         font-weight: 700;
@@ -9589,7 +9593,7 @@ export class MoviElement extends HTMLElement {
         appearance: none;
         width: 14px;
         height: 14px;
-        background: #fff;
+        background: var(--movi-chrome-fg, #fff);
         border-radius: 50%;
         cursor: pointer;
         margin-top: -5px;
@@ -9614,7 +9618,7 @@ export class MoviElement extends HTMLElement {
       .movi-volume-slider::-moz-range-thumb {
         width: 14px;
         height: 14px;
-        background: #fff;
+        background: var(--movi-chrome-fg, #fff);
         border-radius: 50%;
         cursor: pointer;
         border: none !important;
@@ -10002,7 +10006,7 @@ export class MoviElement extends HTMLElement {
             rgba(255,255,255,0.04) 0% 25%,
             rgba(255,255,255,0.02) 0% 50%
           ),
-          #1a1a1a;
+          var(--movi-surface, #1a1a1a);
         background-size: auto, 16px 16px, auto;
         border: 1px solid rgba(255, 255, 255, 0.08);
       }
@@ -10087,7 +10091,7 @@ export class MoviElement extends HTMLElement {
         height: 18px;
         border-radius: 50%;
         background: var(--movi-primary);
-        border: 3px solid #FFFFFF;
+        border: 3px solid var(--movi-chrome-fg, #FFFFFF);
         margin-top: -6px;
         box-shadow: 0 1px 4px rgba(0, 0, 0, 0.4);
         cursor: pointer;
@@ -10111,7 +10115,7 @@ export class MoviElement extends HTMLElement {
         height: 18px;
         border-radius: 50%;
         background: var(--movi-primary);
-        border: 3px solid #FFFFFF;
+        border: 3px solid var(--movi-chrome-fg, #FFFFFF);
         box-shadow: 0 1px 4px rgba(0, 0, 0, 0.4);
         cursor: pointer;
       }
@@ -10469,7 +10473,7 @@ export class MoviElement extends HTMLElement {
         font-size: 11px;
         font-weight: 800;
         letter-spacing: 0.08em;
-        color: #fff;
+        color: var(--movi-chrome-fg, #fff);
         line-height: 1;
         text-transform: uppercase;
       }
@@ -10639,7 +10643,7 @@ export class MoviElement extends HTMLElement {
       }
 
       .movi-nerd-stats-close:hover {
-        color: #fff;
+        color: var(--movi-chrome-fg, #fff);
       }
 
       .movi-nerd-stats-body {
@@ -10826,7 +10830,7 @@ export class MoviElement extends HTMLElement {
       .movi-timeline-generate-btn {
         background: var(--movi-primary);
         border: none;
-        color: #fff;
+        color: var(--movi-chrome-fg, #fff);
         font-size: 11px;
         font-weight: 600;
         padding: 5px 12px;
@@ -10857,7 +10861,7 @@ export class MoviElement extends HTMLElement {
       }
 
       .movi-timeline-close:hover {
-        color: #fff;
+        color: var(--movi-chrome-fg, #fff);
       }
 
       .movi-timeline-strip {
@@ -10923,7 +10927,7 @@ export class MoviElement extends HTMLElement {
         text-align: center;
         font-size: 10px;
         font-weight: 600;
-        color: #fff;
+        color: var(--movi-chrome-fg, #fff);
         background: linear-gradient(transparent, rgba(0, 0, 0, 0.8));
         padding: 12px 4px 4px;
         font-variant-numeric: tabular-nums;
@@ -10948,7 +10952,7 @@ export class MoviElement extends HTMLElement {
       .movi-timeline-chapter-title {
         font-size: 10px;
         font-weight: 600;
-        color: #fff;
+        color: var(--movi-chrome-fg, #fff);
         white-space: nowrap;
         overflow: hidden;
         text-overflow: ellipsis;
@@ -11030,7 +11034,7 @@ export class MoviElement extends HTMLElement {
       }
 
       .movi-shortcuts-close:hover {
-        color: #fff;
+        color: var(--movi-chrome-fg, #fff);
       }
 
       .movi-shortcuts-body {
@@ -11120,7 +11124,7 @@ export class MoviElement extends HTMLElement {
         all: unset;
         flex: 1;
         font-size: 13px;
-        color: #fff;
+        color: var(--movi-chrome-fg, #fff);
         font-family: inherit;
       }
       .movi-cues-search::placeholder { color: rgba(255, 255, 255, 0.4); }
@@ -11135,7 +11139,7 @@ export class MoviElement extends HTMLElement {
         padding: 0 6px;
         transition: color 0.15s;
       }
-      .movi-cues-close:hover { color: #fff; }
+      .movi-cues-close:hover { color: var(--movi-chrome-fg, #fff); }
       .movi-cues-meta {
         padding: 6px 18px;
         font-size: 11px;
@@ -11311,7 +11315,7 @@ export class MoviElement extends HTMLElement {
 
       .movi-resume-yes {
         background: var(--movi-primary);
-        color: #fff;
+        color: var(--movi-chrome-fg, #fff);
       }
 
       .movi-resume-no {
@@ -12431,7 +12435,7 @@ export class MoviElement extends HTMLElement {
         letter-spacing: 0.4px;
         text-transform: uppercase;
         background: var(--movi-primary);
-        color: #fff;
+        color: var(--movi-chrome-fg, #fff);
         pointer-events: none;
       }
 
@@ -12517,7 +12521,7 @@ export class MoviElement extends HTMLElement {
         max-height: 200px;
         object-fit: contain;
         margin-bottom: 4px;
-        border: 1px solid #333;
+        border: 1px solid var(--movi-border-color, #333);
         border-radius: 2px;
         pointer-events: none;
       }
@@ -12529,7 +12533,7 @@ export class MoviElement extends HTMLElement {
         display: none;
         font-size: 11px;
         font-weight: 600;
-        color: #fff;
+        color: var(--movi-chrome-fg, #fff);
         text-align: center;
         max-width: 180px;
         overflow: hidden;
@@ -12618,7 +12622,7 @@ export class MoviElement extends HTMLElement {
         display: flex;
         align-items: center;
         justify-content: center;
-        color: #FFFFFF;
+        color: var(--movi-chrome-fg, #FFFFFF);
         /* Subtle primary halo around the icon — keeps the OSD
            visually anchored to the brand without painting the bg. */
         filter: drop-shadow(0 0 6px color-mix(in srgb, var(--movi-primary) 45%, transparent));
@@ -12632,7 +12636,7 @@ export class MoviElement extends HTMLElement {
       .movi-osd-text {
         font-size: 14px;
         font-weight: 600;
-        color: #FFFFFF;
+        color: var(--movi-chrome-fg, #FFFFFF);
         font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
         letter-spacing: 0.01em;
         line-height: 1.2;
@@ -12705,7 +12709,7 @@ export class MoviElement extends HTMLElement {
         font-weight: 700;
         margin: 0 0 10px 0;
         letter-spacing: -0.02em;
-        background: linear-gradient(to bottom, #fff, #bbb);
+        background: linear-gradient(to bottom, var(--movi-chrome-fg, #fff), #bbb);
         -webkit-background-clip: text;
         -webkit-text-fill-color: transparent;
         text-align: center;
@@ -12736,7 +12740,7 @@ export class MoviElement extends HTMLElement {
         background: rgba(255, 255, 255, 0.15);
         border: 1px solid rgba(255, 255, 255, 0.2);
         border-radius: 8px;
-        color: #fff;
+        color: var(--movi-chrome-fg, #fff);
         font-size: 14px;
         font-weight: 500;
         cursor: pointer;
@@ -13157,7 +13161,7 @@ export class MoviElement extends HTMLElement {
         min-height: 56px !important;
         height: 56px !important;
         max-height: 56px !important;
-        background: #0f0f0f;
+        background: var(--movi-surface, #0f0f0f);
         border-radius: 6px;
         /* "overflow: visible" is intentional — popups (speed menu,
            audio-track menu, right-click context menu) anchor inside the
