@@ -5531,6 +5531,10 @@ export class MoviElement extends HTMLElement {
               ".movi-audio-track-menu",
             ) as HTMLElement;
             if (menu) menu.style.display = "none";
+            // Menu just closed — restart the controls auto-hide timer, which
+            // showControls() suppresses while any menu is open (isAnyMenuOpen).
+            // Without this the bar stays up forever after a track switch.
+            this.showControls();
           }
         });
       });
@@ -8468,6 +8472,14 @@ export class MoviElement extends HTMLElement {
       :host([theme="light"]) .movi-subtitle-track-item.movi-subtitle-track-active,
       :host([theme="light"]) .movi-speed-item.movi-speed-active {
         background: color-mix(in srgb, var(--movi-primary) 0.15) !important;
+      }
+
+      /* The active item's info badge hard-codes color:var(--movi-controls-color)
+         (white) for the dark theme; in light theme that leaves the selected
+         track's codec text white-on-light (unreadable). Match the item text. */
+      :host([theme="light"]) .movi-audio-track-item.movi-audio-track-active .movi-audio-track-info,
+      :host([theme="light"]) .movi-subtitle-track-item.movi-subtitle-track-active .movi-subtitle-track-info {
+        color: #11142d !important;
       }
 
       :host([theme="light"]) .movi-quality-item:hover {
