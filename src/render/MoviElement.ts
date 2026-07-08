@@ -109,6 +109,31 @@ export class MoviElement extends HTMLElement {
   private _contextMenuVisible: boolean = false;
   private _contextMenuJustClosed: boolean = false;
   private lastTouchTime: number = 0;
+  // Press-and-hold-to-2x (touch): a long-press on the video speeds playback to
+  // 2x while held and reverts on release (YouTube-style). Since long-press now
+  // drives this gesture, the context menu opens from the gear button instead —
+  // _openMenuViaGear lets the gear's synthetic contextmenu through the
+  // touch-long-press gate in preventDefaultContextMenu.
+  private _holdSpeedTimer: number | null = null;
+  private _holdSpeedActive: boolean = false;
+  private _rateBeforeHold: number = 1;
+  private _openMenuViaGear: boolean = false;
+
+  // Media Session (OS lock-screen / notification / hardware-key controls).
+  // Action handlers are registered once per element (idempotent overwrite is
+  // cheap but the flag avoids re-binding on every source load); metadata,
+  // playbackState and positionState are refreshed as the player changes.
+  private _mediaSessionReady: boolean = false;
+  // Last position pushed to the OS scrubber, to throttle setPositionState to
+  // ~1s granularity (timeUpdate can fire far more often). A jump > 1s (seek)
+  // also trips the update so the lock-screen scrubber snaps immediately.
+  private _mediaSessionLastPos: number = -1;
+  // Data-URL snapshot of the decoded poster/first frame, captured off the
+  // canvas for a source with NO explicit `poster` attribute — the still frame
+  // such a source paints on canvas (via the postertime / frame-0 seek) never
+  // becomes a URL otherwise, so the OS lock screen would have no thumbnail.
+  // Reset on dispose.
+  private _mediaSessionArtworkUrl: string | null = null;
 
   // Nerd Stats
   private _nerdStatsVisible: boolean = false;
@@ -643,6 +668,13 @@ export class MoviElement extends HTMLElement {
       <div class="movi-osd-text"></div>
     `;
     shadowRoot.appendChild(osdContainer);
+
+    // Persistent "2×" pill shown while a press-and-hold speeds playback up.
+    const holdSpeed = document.createElement("div");
+    holdSpeed.className = "movi-hold-speed";
+    holdSpeed.style.display = "none";
+    holdSpeed.innerHTML = `<span>2×</span><svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M4 5l8 7-8 7V5zm9 0l8 7-8 7V5z"/></svg>`;
+    shadowRoot.appendChild(holdSpeed);
 
     // Create context menu FIRST (before setupContextMenu is called)
     this.createContextMenu(shadowRoot);
@@ -1238,6 +1270,32 @@ export class MoviElement extends HTMLElement {
     titleBar.style.display = "none";
     titleBar.innerHTML = `<span class="movi-title-text"></span>`;
     shadowRoot.appendChild(titleBar);
+
+    // Gear button (top-right) → opens the context menu. This is how touch users
+    // reach it now that long-press drives hold-to-2x; on desktop it's a
+    // discoverable alternative to right-click. Shown with the chrome (its
+    // movi-gear-visible class is toggled in show/hideControls).
+    const gearBtn = document.createElement("button");
+    gearBtn.className = "movi-btn movi-gear-btn";
+    gearBtn.setAttribute("aria-label", "Settings");
+    gearBtn.innerHTML = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12.22 2h-.44a2 2 0 0 0-2 2v.18a2 2 0 0 1-1 1.73l-.43.25a2 2 0 0 1-2 0l-.15-.08a2 2 0 0 0-2.73.73l-.22.38a2 2 0 0 0 .73 2.73l.15.1a2 2 0 0 1 1 1.72v.51a2 2 0 0 1-1 1.74l-.15.09a2 2 0 0 0-.73 2.73l.22.38a2 2 0 0 0 2.73.73l.15-.08a2 2 0 0 1 2 0l.43.25a2 2 0 0 1 1 1.73V20a2 2 0 0 0 2 2h.44a2 2 0 0 0 2-2v-.18a2 2 0 0 1 1-1.73l.43-.25a2 2 0 0 1 2 0l.15.08a2 2 0 0 0 2.73-.73l.22-.39a2 2 0 0 0-.73-2.73l-.15-.08a2 2 0 0 1-1-1.74v-.5a2 2 0 0 1 1-1.74l.15-.09a2 2 0 0 0 .73-2.73l-.22-.38a2 2 0 0 0-2.73-.73l-.15.08a2 2 0 0 1-2 0l-.43-.25a2 2 0 0 1-1-1.73V4a2 2 0 0 0-2-2z"/><circle cx="12" cy="12" r="3"/></svg>`;
+    gearBtn.addEventListener("click", (e) => {
+      e.stopPropagation();
+      // Open the context menu via a synthetic contextmenu event; the flag lets
+      // it through the touch-long-press gate in preventDefaultContextMenu.
+      this._openMenuViaGear = true;
+      const rect = this.getBoundingClientRect();
+      this.dispatchEvent(
+        new MouseEvent("contextmenu", {
+          bubbles: true,
+          composed: true,
+          cancelable: true,
+          clientX: rect.right - 44,
+          clientY: rect.top + 44,
+        }),
+      );
+    });
+    shadowRoot.appendChild(gearBtn);
 
     // Create Nerd Stats overlay
     const nerdStats = document.createElement("div");
@@ -2391,6 +2449,7 @@ export class MoviElement extends HTMLElement {
     document.addEventListener("fullscreenchange", () => {
       const isFullscreen = !!document.fullscreenElement;
       this.applyFullscreenUiState(isFullscreen);
+      this.applyFullscreenOrientation(isFullscreen);
       requestAnimationFrame(() => {
         requestAnimationFrame(() => {
           this.updateCanvasSize();
@@ -2620,6 +2679,41 @@ export class MoviElement extends HTMLElement {
     }
   }
 
+  /** Begin press-and-hold fast playback (2x). No-op unless actively playing, so
+   * a long-press while paused doesn't silently change the saved rate. */
+  private startHoldSpeed(): void {
+    this._holdSpeedTimer = null;
+    if (this._holdSpeedActive || !this.player) return;
+    if (this.player.getState() !== "playing") return;
+    this._holdSpeedActive = true;
+    this.gesturePerformed = true; // suppress the touchend tap (show/hide chrome)
+    this._rateBeforeHold = this._playbackRate || 1;
+    this.player.setPlaybackRate(2);
+    this._playbackRate = 2;
+    this.updateMediaSessionPosition();
+    const pill = this.shadowRoot?.querySelector(
+      ".movi-hold-speed",
+    ) as HTMLElement | null;
+    if (pill) pill.style.display = "flex";
+  }
+
+  /** End press-and-hold fast playback, restoring the pre-hold rate. */
+  private stopHoldSpeed(): void {
+    if (this._holdSpeedTimer !== null) {
+      clearTimeout(this._holdSpeedTimer);
+      this._holdSpeedTimer = null;
+    }
+    if (!this._holdSpeedActive) return;
+    this._holdSpeedActive = false;
+    this.player?.setPlaybackRate(this._rateBeforeHold);
+    this._playbackRate = this._rateBeforeHold;
+    this.updateMediaSessionPosition();
+    const pill = this.shadowRoot?.querySelector(
+      ".movi-hold-speed",
+    ) as HTMLElement | null;
+    if (pill) pill.style.display = "none";
+  }
+
   private setupGestures(shadowRoot: ShadowRoot): void {
     const overlay = shadowRoot.querySelector(
       ".movi-controls-overlay",
@@ -2784,6 +2878,20 @@ export class MoviElement extends HTMLElement {
             initialSeekTime = this.currentTime;
             isVerticalGesture = false;
             isHorizontalGesture = false;
+
+            // Arm press-and-hold-to-2x. A move (scrub/swipe/pan) or a release
+            // before the threshold cancels it (touchmove/touchend below). VR
+            // owns its own touch, so skip there.
+            if (this._holdSpeedTimer !== null) {
+              clearTimeout(this._holdSpeedTimer);
+              this._holdSpeedTimer = null;
+            }
+            if (!this._vr360 && !isEdgeStart) {
+              this._holdSpeedTimer = window.setTimeout(
+                () => this.startHoldSpeed(),
+                400,
+              );
+            }
           }
         },
         { passive: true },
@@ -2842,6 +2950,12 @@ export class MoviElement extends HTMLElement {
                 isHorizontalGesture = true;
                 this.gesturePerformed = true;
               }
+              // A real move means this isn't a stationary press — cancel the
+              // pending hold-to-2x so scrub/swipe/volume gestures win.
+              if (this.gesturePerformed && this._holdSpeedTimer !== null) {
+                clearTimeout(this._holdSpeedTimer);
+                this._holdSpeedTimer = null;
+              }
             }
 
             if (isVerticalGesture) {
@@ -2896,6 +3010,12 @@ export class MoviElement extends HTMLElement {
       target.addEventListener(
         "touchend",
         (e: TouchEvent) => {
+          // Release ends press-and-hold-to-2x (and cancels a pending arm). When
+          // it was active this restores the pre-hold rate; gesturePerformed was
+          // set on activation so the tap show/hide-chrome branch below is skipped.
+          const wasHolding = this._holdSpeedActive;
+          this.stopHoldSpeed();
+          if (wasHolding) return;
           if (e.changedTouches.length === 1) {
             const touch = e.changedTouches[0];
             const endTime = Date.now();
@@ -3895,6 +4015,16 @@ export class MoviElement extends HTMLElement {
       e.stopPropagation();
       e.stopImmediatePropagation();
 
+      // On touch, a long-press now drives hold-to-2x, so it must NOT open the
+      // context menu — that opens from the gear button, which sets
+      // _openMenuViaGear before dispatching this event. (Desktop right-click is
+      // unaffected: pointer is fine, so this gate is skipped.)
+      const isCoarse = window.matchMedia("(pointer: coarse)").matches;
+      if (isCoarse && !this._openMenuViaGear) {
+        return false;
+      }
+      this._openMenuViaGear = false;
+
       // Don't show on controls
       const target = e.target as Element;
       const shadowTarget = e.composedPath
@@ -4326,6 +4456,7 @@ export class MoviElement extends HTMLElement {
       } else if (action === "fit") {
         const submenu = shadowRoot.querySelector('.movi-context-menu-submenu[data-submenu="fit"]') as HTMLElement;
         if (submenu) {
+          this.syncFitSubmenuActive(submenu); // touch: reflect current fit
           contextMenu.scrollTop = 0;
           submenu.classList.add("movi-context-menu-submenu-visible");
         }
@@ -4786,16 +4917,12 @@ export class MoviElement extends HTMLElement {
     // Update HDR visibility/state in context menu
     this.updateHDRVisibility();
 
-    // Update active state for Fit mode. Query shadowRoot, not contextMenu: the
-    // fit submenu was moved out to be a sibling of contextMenu (above), so
-    // contextMenu.querySelectorAll would find none of these items — the current
-    // fit was never highlighted on open and stale active classes never cleared.
+    // Update active state for Fit mode.
     const currentActiveFit =
       this._objectFit === "control" ? this._currentFit : this._objectFit;
-    const fitItems =
-      this.shadowRoot?.querySelectorAll(
-        ".movi-context-menu-item[data-fit]",
-      ) ?? [];
+    const fitItems = contextMenu.querySelectorAll(
+      ".movi-context-menu-item[data-fit]",
+    );
     fitItems.forEach((item) => {
       const fit = (item as HTMLElement).dataset.fit;
       if (fit === currentActiveFit) {
@@ -4810,6 +4937,27 @@ export class MoviElement extends HTMLElement {
     if (rotateItem) {
       rotateItem.classList.toggle("movi-context-menu-disabled", !!this._pipWindow);
     }
+  }
+
+  /**
+   * Highlight the current fit as the active row in the aspect-ratio submenu, so
+   * it reflects the live fit however it was last changed — context menu, the
+   * bottom-controls aspect button, or the keyboard shortcut. Called each time
+   * the fit submenu is shown: on hover (desktop, via showSubmenu) and on tap
+   * (touch, via the action==="fit" branch). Kept OUT of updateContextMenuContent
+   * (which runs on the main menu's open) to avoid touch-open side effects.
+   */
+  private syncFitSubmenuActive(submenu: HTMLElement): void {
+    const currentFit =
+      this._objectFit === "control" ? this._currentFit : this._objectFit;
+    submenu
+      .querySelectorAll(".movi-context-menu-item[data-fit]")
+      .forEach((el) =>
+        el.classList.toggle(
+          "movi-context-menu-active",
+          (el as HTMLElement).dataset.fit === currentFit,
+        ),
+      );
   }
 
   private setupSubmenuHover(item: HTMLElement, submenu: HTMLElement): void {
@@ -4889,6 +5037,9 @@ export class MoviElement extends HTMLElement {
           submenu.style.top = `${topPx}px`;
         }
       }
+
+      // Desktop hover-open of the aspect submenu: reflect the current fit.
+      if (submenu.dataset.submenu === "fit") this.syncFitSubmenuActive(submenu);
 
       submenu.classList.add("movi-context-menu-submenu-visible");
     };
@@ -5330,6 +5481,43 @@ export class MoviElement extends HTMLElement {
     if (label) label.textContent = isFullscreen ? "Exit Fullscreen" : "Fullscreen";
   }
 
+  /**
+   * On phones/tablets, rotate to match the video when entering fullscreen and
+   * release the lock on exit. Wide clips lock landscape, tall clips portrait;
+   * defaults to landscape (the common case) if dimensions aren't known. No-op on
+   * desktop, audio-only, or where the Screen Orientation lock API is missing
+   * (e.g. iOS Safari, which rejects programmatic lock — caught and ignored).
+   */
+  private applyFullscreenOrientation(isFullscreen: boolean): void {
+    const so = (
+      screen as unknown as {
+        orientation?: {
+          lock?: (o: string) => Promise<void>;
+          unlock?: () => void;
+        };
+      }
+    ).orientation;
+    if (!so || typeof so.lock !== "function") return;
+    if (!window.matchMedia("(pointer: coarse)").matches) return;
+    if (this.classList.contains("movi-audio-mode")) return;
+
+    if (isFullscreen) {
+      const track = this.player?.trackManager?.getActiveVideoTrack?.();
+      const w = track?.width ?? 0;
+      const h = track?.height ?? 0;
+      const target = h > w && h > 0 ? "portrait" : "landscape";
+      Promise.resolve(so.lock(target)).catch(() => {
+        /* unsupported / user-denied — leave orientation as-is */
+      });
+    } else {
+      try {
+        so.unlock?.();
+      } catch {
+        /* ignore */
+      }
+    }
+  }
+
   private applyFullscreenUiState(isFullscreen: boolean): void {
     this.updateFullscreenIcon(isFullscreen);
     this.updateFullscreenContextMenu(isFullscreen);
@@ -5539,11 +5727,14 @@ export class MoviElement extends HTMLElement {
             const menu = this.shadowRoot?.querySelector(
               ".movi-audio-track-menu",
             ) as HTMLElement;
-            if (menu) menu.style.display = "none";
-            // Menu just closed — restart the controls auto-hide timer, which
-            // showControls() suppresses while any menu is open (isAnyMenuOpen).
-            // Without this the bar stays up forever after a track switch.
-            this.showControls();
+            // Close via setBottomMenuOpen, NOT display:none directly. Setting
+            // display:none leaves the `is-open` class on the menu, so
+            // isBottomMenuOpen()/isAnyMenuOpen() stay true FOREVER — every later
+            // showControls() then no-ops and the controls auto-hide never
+            // re-arms again (not just for audio, but for any subsequent menu or
+            // playback). setBottomMenuOpen(false) removes is-open and re-arms
+            // the auto-hide once the exit transition finishes.
+            this.setBottomMenuOpen(menu, false);
           }
         });
       });
@@ -7425,6 +7616,13 @@ export class MoviElement extends HTMLElement {
       }
     }
 
+    // Reveal the settings gear with the rest of the chrome — but only once a
+    // source is set (nothing to configure in the empty "No Video" state).
+    const gearEl = this.shadowRoot?.querySelector(".movi-gear-btn");
+    if (gearEl) {
+      gearEl.classList.toggle("movi-gear-visible", this.hasMediaSource());
+    }
+
     // Clear existing timeout
     if (this.controlsTimeout) {
       clearTimeout(this.controlsTimeout);
@@ -8061,6 +8259,11 @@ export class MoviElement extends HTMLElement {
         titleBar.classList.remove("movi-title-visible");
       }
     }
+
+    // Hide the settings gear with the rest of the chrome.
+    this.shadowRoot
+      ?.querySelector(".movi-gear-btn")
+      ?.classList.remove("movi-gear-visible");
   }
 
   private updateControlsVisibility(): void {
@@ -8683,7 +8886,9 @@ export class MoviElement extends HTMLElement {
         top: 0;
         left: 0;
         right: 0;
-        padding: 16px 20px;
+        /* Extra right padding keeps the title text from running under the
+           settings gear pinned in the top-right corner. */
+        padding: 16px 62px 16px 20px;
         background: linear-gradient(to bottom, rgba(0, 0, 0, 0.7) 0%, transparent 100%);
         z-index: 5;
         opacity: 0;
@@ -8695,6 +8900,70 @@ export class MoviElement extends HTMLElement {
       .movi-title-bar.movi-title-visible {
         opacity: 1;
         transform: translateY(0);
+      }
+
+      /* Settings gear (top-right) — opens the context menu. Vertically centred
+         on the title text (title padding-top 16px + ~half the ~20px line) and
+         inset to match; the title bar reserves right padding so the title
+         doesn't run under it. */
+      .movi-gear-btn {
+        position: absolute;
+        top: 9px;
+        right: 14px;
+        z-index: 30;
+        width: 38px;
+        height: 38px;
+        padding: 8px;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        border: none;
+        cursor: pointer;
+        color: #fff;
+        background: rgba(0, 0, 0, 0.35);
+        border-radius: 50%;
+        opacity: 0;
+        visibility: hidden;
+        transform: translateY(-4px);
+        transition: opacity 0.2s ease, transform 0.2s ease, background 0.2s ease;
+        pointer-events: none;
+      }
+      .movi-gear-btn.movi-gear-visible {
+        opacity: 1;
+        visibility: visible;
+        transform: translateY(0);
+        pointer-events: auto;
+      }
+      .movi-gear-btn:hover {
+        background: rgba(0, 0, 0, 0.55);
+      }
+      .movi-gear-btn svg {
+        width: 22px;
+        height: 22px;
+      }
+
+      /* Press-and-hold-to-2x pill (top-centre, shown only while held). */
+      .movi-hold-speed {
+        position: absolute;
+        top: 16px;
+        left: 50%;
+        transform: translateX(-50%);
+        z-index: 40;
+        display: flex;
+        align-items: center;
+        gap: 6px;
+        padding: 6px 14px;
+        background: rgba(0, 0, 0, 0.6);
+        color: #fff;
+        border-radius: 999px;
+        font-size: 14px;
+        font-weight: 700;
+        letter-spacing: 0.02em;
+        pointer-events: none;
+      }
+      .movi-hold-speed svg {
+        width: 14px;
+        height: 14px;
       }
 
       .movi-title-text {
@@ -14937,6 +15206,8 @@ export class MoviElement extends HTMLElement {
           this.player.once("seeked", () => {
             this.player?.resetClockToStartForPoster();
             this._posterSeekActive = false;
+            // Poster frame is now on the canvas — snapshot it for lock-screen art.
+            this.captureMediaSessionArtwork();
           });
           this.player
             .seek(posterTime, { suppressSpinner: true })
@@ -14944,6 +15215,9 @@ export class MoviElement extends HTMLElement {
               this._posterSeekActive = false;
             });
         } else {
+          // Frame 0 lands on the canvas when "seeked" fires (the seek promise
+          // resolves earlier, before paint) — snapshot it there for artwork.
+          this.player.once("seeked", () => this.captureMediaSessionArtwork());
           this.player.seek(0, { suppressSpinner: true }).catch(() => {});
         }
       }
@@ -15164,11 +15438,9 @@ export class MoviElement extends HTMLElement {
           this.hideControls();
           this.updatePlayPauseIcon();
           if (this._ambientMode) this._ambientSampleInterval = 200;
-          if ("mediaSession" in navigator && this._title) {
-            navigator.mediaSession.metadata = new MediaMetadata({
-              title: this._title,
-            });
-          }
+          this.updateMediaSession();
+          this.updateMediaSessionPosition();
+          this.captureMediaSessionArtwork();
           return;
         }
 
@@ -15208,14 +15480,13 @@ export class MoviElement extends HTMLElement {
         if (this._ambientMode) {
           this._ambientSampleInterval = 200;
         }
-        // Update Media Session metadata with clean title
-        if ("mediaSession" in navigator && this._title) {
-          navigator.mediaSession.metadata = new MediaMetadata({
-            title: this._title,
-          });
-        }
+        // Update Media Session metadata + playing state + scrubber
+        this.updateMediaSession();
+        this.updateMediaSessionPosition();
+        this.captureMediaSessionArtwork();
       } else if (state === "paused") {
         this.dispatchEvent(new Event("pause"));
+        this.updateMediaSession();
         // Don't auto-surface the bar on pause anymore — the centre
         // play button already comes back (via updatePlayPauseIcon's
         // paused branch) and tells the user playback is paused. The
@@ -15233,6 +15504,7 @@ export class MoviElement extends HTMLElement {
         if (!this._loop) this.showControls();
         // Clear resume position when video ends (start fresh next time)
         if (this._resume) this.clearResumePosition();
+        this.updateMediaSession();
       }
     };
     this.player.on("stateChange", stateChangeHandler);
@@ -15256,6 +15528,10 @@ export class MoviElement extends HTMLElement {
       // Backstop for the "linearmode" event in case it fired before this
       // listener was wired (detection happens during the demux open).
       if (this.player?.isLinearPlayback?.()) this.enterLinearMode();
+      // Wire OS lock-screen / hardware-key controls and seed metadata now that
+      // tracks (and thus title/duration) are finalised.
+      this.updateMediaSession();
+      this.updateMediaSessionPosition();
       this.dispatchEvent(new Event("loadeddata"));
     };
     this.player.on("loadEnd", loadEndHandler);
@@ -15297,6 +15573,12 @@ export class MoviElement extends HTMLElement {
     const timeUpdateHandler = (time: number) => {
       this.dispatchEvent(new CustomEvent("timeupdate", { detail: time }));
       this.updateLiveState();
+      // Refresh the OS scrubber at ~1s granularity, or immediately on a jump
+      // (seek) so the lock-screen position doesn't lag.
+      if (Math.abs(time - this._mediaSessionLastPos) >= 1) {
+        this._mediaSessionLastPos = time;
+        this.updateMediaSessionPosition();
+      }
     };
     this.player.on("timeUpdate", timeUpdateHandler);
     this.eventHandlers.set("timeUpdate", () =>
@@ -15385,6 +15667,9 @@ export class MoviElement extends HTMLElement {
       // not close() it. bubbles/composed so it escapes the shadow root.
       // Only forward real bitmaps; the null signal is internal.
       if (bitmap) {
+        // Refresh the OS lock-screen artwork with the real album art now that
+        // it's decoded (metadata was seeded earlier with no / a fallback image).
+        this.setMediaSessionArtworkFromBitmap(bitmap);
         this.dispatchEvent(
           new CustomEvent("coverart", {
             detail: { bitmap, width: bitmap.width, height: bitmap.height },
@@ -15494,6 +15779,221 @@ export class MoviElement extends HTMLElement {
   }
 
   /**
+   * Register OS Media Session action handlers once. These surface play/pause,
+   * skip-back/forward and scrub controls on the lock screen, notification
+   * shade, media-key hardware (headset / keyboard) and Bluetooth remotes, and
+   * route them back into the player. Registered once (guarded); the handlers
+   * close over `this` and read `this.player` lazily, so they keep working
+   * across source swaps that recreate the internal player.
+   */
+  private setupMediaSession(): void {
+    if (this._mediaSessionReady) return;
+    if (!("mediaSession" in navigator)) return;
+    const ms = navigator.mediaSession;
+    const set = (
+      action: MediaSessionAction,
+      handler: MediaSessionActionHandler | null,
+    ) => {
+      try {
+        ms.setActionHandler(action, handler);
+      } catch {
+        // Chromium throws for actions it doesn't support (e.g. older builds);
+        // ignore so the supported handlers still register.
+      }
+    };
+    set("play", () => {
+      this.play().catch(() => {});
+    });
+    set("pause", () => {
+      this.pause();
+    });
+    set("stop", () => {
+      this.pause();
+    });
+    set("seekbackward", (details) => {
+      this.performRelativeSeek("left", details?.seekOffset || 10);
+    });
+    set("seekforward", (details) => {
+      this.performRelativeSeek("right", details?.seekOffset || 10);
+    });
+    set("seekto", (details) => {
+      if (!this.player || typeof details?.seekTime !== "number") return;
+      this.player.seek(details.seekTime).catch(() => {});
+    });
+    this._mediaSessionReady = true;
+  }
+
+  /**
+   * Refresh the lock-screen metadata (title + poster artwork) and the
+   * playing/paused indicator. Cheap to call on every state/load change.
+   */
+  private updateMediaSession(): void {
+    if (!("mediaSession" in navigator)) return;
+    const ms = navigator.mediaSession;
+    this.setupMediaSession();
+    if (this._title) {
+      const art =
+        this._poster ||
+        this._posterCoverUrl ||
+        this._generatedPosterUrl ||
+        this._mediaSessionArtworkUrl;
+      const artwork = art
+        ? [{ src: art, sizes: "512x512", type: this.artworkMime(art) }]
+        : undefined;
+      try {
+        ms.metadata = new MediaMetadata({ title: this._title, artwork });
+      } catch {
+        // Some engines reject artwork with an unfetchable src; fall back to
+        // a title-only metadata so the OS chrome still shows something.
+        ms.metadata = new MediaMetadata({ title: this._title });
+      }
+    }
+    const state = this.player?.getState();
+    ms.playbackState =
+      state === "playing" ? "playing" : state === "paused" ? "paused" : "none";
+  }
+
+  /**
+   * Capture the current decoded frame off the WebGL canvas as a data: URL for
+   * use as OS lock-screen artwork. A source with no explicit `poster` paints
+   * its poster/first frame straight onto the canvas (via the postertime /
+   * frame-0 seek) and never turns it into a URL — this is how that same still
+   * becomes the lock-screen thumbnail. Skipped when an explicit poster/cover
+   * URL already wins the artwork chain, or once a snapshot is already stored.
+   * The canvas uses preserveDrawingBuffer, so toDataURL returns the real frame.
+   * Cheap one-shot (mirrors the proven _lastFrameSnapshot capture) and only
+   * runs at moments a real frame is guaranteed on-canvas (poster seek / play).
+   */
+  private captureMediaSessionArtwork(attempt = 0): void {
+    if (!("mediaSession" in navigator)) return;
+    if (this._poster || this._posterCoverUrl) return; // explicit art wins
+    if (this._mediaSessionArtworkUrl) return; // already captured
+    // The poster/first frame is decoded by the time "seeked" fires, but the
+    // renderer paints it on a later rAF — capturing synchronously grabs the
+    // still-blank GL buffer (a black thumbnail). Wait, on rAF, until a real
+    // (non-uniform) frame has actually landed, then snapshot it. Bounded so a
+    // genuinely dark/audio-only canvas can't spin forever; "playing" re-arms it.
+    if (this.isCanvasBlank()) {
+      if (attempt < 30) {
+        requestAnimationFrame(() => this.captureMediaSessionArtwork(attempt + 1));
+      }
+      return;
+    }
+    try {
+      const dataUrl = this.canvas?.toDataURL("image/jpeg", 0.85);
+      if (dataUrl && dataUrl.length > 512) {
+        this._mediaSessionArtworkUrl = dataUrl;
+        this.updateMediaSession();
+      }
+    } catch {
+      // Tainted / lost GL context — leave artwork empty rather than throw.
+    }
+  }
+
+  /**
+   * Cheap synchronous test for whether the display canvas is still blank/black
+   * (renderer hasn't painted a real frame yet). Downscales the WebGL canvas to
+   * 16×16 on a throwaway 2D context and checks luminance spread — a near-flat
+   * result means no frame content. Used to defer artwork capture until a real
+   * frame lands. Returns true (treat as blank) on any failure, so capture just
+   * retries rather than storing garbage.
+   */
+  private isCanvasBlank(): boolean {
+    const c = this.canvas;
+    if (!c || !c.width || !c.height) return true;
+    try {
+      const small = document.createElement("canvas");
+      small.width = 16;
+      small.height = 16;
+      const ctx = small.getContext("2d", { willReadFrequently: true });
+      if (!ctx) return false; // can't test — assume drawable, let capture proceed
+      ctx.drawImage(c, 0, 0, 16, 16);
+      const { data } = ctx.getImageData(0, 0, 16, 16);
+      let min = 255;
+      let max = 0;
+      for (let i = 0; i < data.length; i += 4) {
+        const lum = (data[i] + data[i + 1] + data[i + 2]) / 3;
+        if (lum < min) min = lum;
+        if (lum > max) max = lum;
+      }
+      return max - min < 6; // near-uniform => blank / not yet painted
+    } catch {
+      return true; // treat failures as blank → capture retries, never throws
+    }
+  }
+
+  /**
+   * Use an extracted cover-art / thumbnail bitmap as the OS lock-screen artwork.
+   * The player surfaces embedded album art (and other thumbnails) asynchronously
+   * — after the initial metadata is seeded — so this refreshes the Media Session
+   * once it lands, instead of the lock screen being stuck with no image. The
+   * bitmap is rasterised to a bounded (≤512px) data: URL. Real art is
+   * authoritative, so it overwrites any earlier canvas-snapshot fallback; an
+   * explicit `poster`/cover URL still wins the chain in updateMediaSession().
+   */
+  private setMediaSessionArtworkFromBitmap(bitmap: ImageBitmap): void {
+    if (!("mediaSession" in navigator)) return;
+    if (!bitmap || !bitmap.width || !bitmap.height) return;
+    try {
+      const scale = Math.min(1, 512 / Math.max(bitmap.width, bitmap.height));
+      const canvas = document.createElement("canvas");
+      canvas.width = Math.max(1, Math.round(bitmap.width * scale));
+      canvas.height = Math.max(1, Math.round(bitmap.height * scale));
+      const ctx = canvas.getContext("2d");
+      if (!ctx) return;
+      ctx.drawImage(bitmap, 0, 0, canvas.width, canvas.height);
+      const dataUrl = canvas.toDataURL("image/jpeg", 0.85);
+      if (dataUrl && dataUrl.length > 512) {
+        this._mediaSessionArtworkUrl = dataUrl;
+        this.updateMediaSession();
+      }
+    } catch {
+      // Tainted / decode failure — leave any existing artwork untouched.
+    }
+  }
+
+  /** Best-effort MIME guess for poster artwork from its URL/extension. */
+  private artworkMime(url: string): string {
+    if (url.startsWith("data:")) {
+      const m = url.slice(5, url.indexOf(";"));
+      return m || "image/png";
+    }
+    const ext = url.split("?")[0].split(".").pop()?.toLowerCase();
+    if (ext === "jpg" || ext === "jpeg") return "image/jpeg";
+    if (ext === "webp") return "image/webp";
+    if (ext === "gif") return "image/gif";
+    return "image/png";
+  }
+
+  /**
+   * Push the current playhead / duration / rate into the OS scrubber. Guarded
+   * against live streams (Infinity), un-loaded state (NaN/0) and out-of-range
+   * positions, which would otherwise make setPositionState throw.
+   */
+  private updateMediaSessionPosition(): void {
+    if (!("mediaSession" in navigator)) return;
+    const ms = navigator.mediaSession;
+    if (typeof ms.setPositionState !== "function") return;
+    const duration = this.duration;
+    const rate = this.player?.getPlaybackRate?.() || 1;
+    try {
+      if (Number.isFinite(duration) && duration > 0) {
+        const position = Math.min(Math.max(this.currentTime || 0, 0), duration);
+        ms.setPositionState({
+          duration,
+          playbackRate: rate > 0 ? rate : 1,
+          position,
+        });
+      } else {
+        // Live / not-yet-loaded: clear any stale scrubber state.
+        ms.setPositionState();
+      }
+    } catch {
+      // Ignore — a transient position > duration during a seek shouldn't spam.
+    }
+  }
+
+  /**
    * Tear down the internal player and reset transient UI (time, title,
    * subtitles, timeline) back to the initial, no-source state. Called
    * internally on every src change so the next source starts clean. Safe to
@@ -15509,6 +16009,21 @@ export class MoviElement extends HTMLElement {
     this._preloadGateActive = false;
     this._resumeDialogPending = false;
     this._autoplayPendingVisible = false;
+
+    // Reset OS lock-screen chrome to a no-source state. Keep the action
+    // handlers registered (setupMediaSession is guarded) — they read
+    // this.player lazily and will drive the next source once it loads.
+    if ("mediaSession" in navigator) {
+      navigator.mediaSession.playbackState = "none";
+      navigator.mediaSession.metadata = null;
+      try {
+        navigator.mediaSession.setPositionState?.();
+      } catch {
+        /* noop */
+      }
+    }
+    this._mediaSessionLastPos = -1;
+    this._mediaSessionArtworkUrl = null;
 
     // Tear down internal player
     if (this.player) {
@@ -18055,6 +18570,8 @@ export class MoviElement extends HTMLElement {
     this.updatePlaybackRate();
     SettingsStorage.getInstance().save({ playbackRate: this._playbackRate });
     this.dispatchEvent(new CustomEvent("ratechange", { detail: { playbackRate: this._playbackRate } }));
+    // Keep the OS lock-screen scrubber's speed indicator in sync.
+    this.updateMediaSessionPosition();
   }
 
   get subtitleDelay(): number {

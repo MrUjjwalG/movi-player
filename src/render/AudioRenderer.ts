@@ -652,8 +652,14 @@ export class AudioRenderer {
       }
     }
 
-    // Stop the BT keepalive — main context is taking the audio session back.
-    this.stopKeepalive();
+    // Play the silent anchor <audio> for the duration of playback. WebCodecs +
+    // Web Audio never request Android Audio Focus on their own, so without a
+    // real playing media element the OS Media Session notification never
+    // appears / can't be controlled. This element is the anchor; it is PAUSED
+    // again in pause() so the notification's play/pause state mirrors the real
+    // player (Chrome derives that state from the element, not from
+    // navigator.mediaSession.playbackState, on many platforms).
+    this.startKeepalive();
 
     // Warmup context (Safari fix) - only if not muted
     if (!this._muted && this.audioContext) {
@@ -794,16 +800,22 @@ export class AudioRenderer {
   pause(): void {
     this.isPlaying = false;
 
+    // Pause the silent media-session anchor <audio> so the OS notification's
+    // play/pause state mirrors the real player. On many platforms Chrome drives
+    // the lock-screen state from the media element's own play/paused state, NOT
+    // from navigator.mediaSession.playbackState — so a continuously-playing
+    // anchor leaves the notification frozen on "playing". Mirroring it (play on
+    // play, pause on pause) is what makes the OS UI actually update on each
+    // action. Trade-off: A2DP Bluetooth may re-negotiate on resume; a correct
+    // lock-screen state is worth more than avoiding that.
+    this.stopKeepalive();
+
     // Don't stop sources or clear buffers!
     // Just suspend the context to pause time.
     // This preserves the audio buffer (scheduled nodes) so we resume exactly where we left off.
     // If we clear sources, we lose the buffered audio (e.g. 2 seconds worth), causing the
     // player to jump forward by that amount on resume.
     if (this.audioContext && this.audioContext.state === "running") {
-      // Start silent <audio> keepalive BEFORE suspending so the OS audio
-      // session never goes idle — without this, A2DP Bluetooth devices drop
-      // the connection on every pause/resume cycle.
-      this.startKeepalive();
       this.intentionalSuspend = true;
       this.audioContext.suspend().catch((err) => {
         Logger.error(TAG, "Failed to suspend audio context", err);
