@@ -1350,6 +1350,31 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
       cancelAnimationFrame(this.animationFrameId);
       this.animationFrameId = null;
     }
+
+    // Resuming while the tab is hidden (e.g. a Media Session / lock-screen play,
+    // or a media-key press with the tab in the background): the rAF-driven
+    // processLoop is throttled to ~1fps in background tabs, so decode falls
+    // behind and audio starves and stops within seconds. Drive decode off the
+    // un-throttled background Worker timer instead — pause() tore it down, and
+    // if the tab was hidden while already paused it was never started. Mirror
+    // the hide path's setup (drop video presentation; frames are discarded while
+    // hidden anyway). Gated on audio, matching handleVisibilityChange — a
+    // no-audio hidden source would just race the demuxer to EOF.
+    const resumingHidden =
+      typeof document !== "undefined" &&
+      document.visibilityState === "hidden" &&
+      !this.isPiPActive;
+    if (resumingHidden) {
+      this.isBackgrounded = true;
+      if (this.videoRenderer) {
+        this.videoRenderer.stopPresentationLoop();
+        this.videoRenderer.clearQueue();
+      }
+      const hasAudio =
+        !!this.trackManager.getActiveAudioTrack() && !this.disableAudio;
+      if (hasAudio) this.startBackgroundTimer();
+    }
+
     this.processLoop();
 
     Logger.info(TAG, "Playing");
