@@ -144,6 +144,16 @@ export class MoviElement extends HTMLElement {
   private _timelineNextIndex: number = 0;
   private nerdStatsInterval: number | null = null;
   private networkSpeedHistory: number[] = []; // speed samples for graph
+
+  // Stutter hint: on a heavy source the decoder can't keep up above 1x, so the
+  // video drops frames (audio stays smooth). Detect a sustained low presented-
+  // fps while playing >1x and nudge the user toward 1x once, with a long
+  // cooldown so it never nags.
+  private _stutterInterval: number | null = null;
+  private _stutterLastPresented: number = 0;
+  private _stutterSeconds: number = 0;
+  private _stutterCooldown: boolean = false;
+  private _stutterCooldownTimer: number | null = null;
   private static readonly GRAPH_MAX_SAMPLES = 60; // 30 seconds of data (500ms interval)
 
   // Internal state
@@ -2702,6 +2712,7 @@ export class MoviElement extends HTMLElement {
     this.player.setPlaybackRate(2);
     this._playbackRate = 2;
     this.updateMediaSessionPosition();
+    this.resetStutterHint();
     const pill = this.shadowRoot?.querySelector(
       ".movi-hold-speed",
     ) as HTMLElement | null;
@@ -6196,6 +6207,87 @@ export class MoviElement extends HTMLElement {
    */
   private getMaxAllowedRate(): number {
     return 2;
+  }
+
+  /**
+   * Start sampling render health once per second to detect sustained stutter
+   * (decoder can't keep up above 1x on a heavy source → dropped video frames,
+   * smooth audio). Runs only during active playback; cheap (reads a couple of
+   * numbers). Idempotent.
+   */
+  private startStutterMonitor(): void {
+    if (this._stutterInterval !== null) return;
+    const h = this.player?.getRenderHealth?.();
+    this._stutterLastPresented = h ? h.framesPresented : 0;
+    this._stutterSeconds = 0;
+    this._stutterInterval = window.setInterval(() => this.sampleStutter(), 1000);
+  }
+
+  private stopStutterMonitor(): void {
+    if (this._stutterInterval !== null) {
+      clearInterval(this._stutterInterval);
+      this._stutterInterval = null;
+    }
+    this._stutterSeconds = 0;
+  }
+
+  /**
+   * Clear the stutter-hint cooldown so the "play at 1x" warning can fire again.
+   * Called on every playback-rate change — each new speed the user picks gets a
+   * fresh chance to warn if it stutters (instead of showing only once per
+   * source). The 3-second sustained requirement still prevents instant spam.
+   */
+  private resetStutterHint(): void {
+    this._stutterSeconds = 0;
+    this._stutterCooldown = false;
+    if (this._stutterCooldownTimer !== null) {
+      clearTimeout(this._stutterCooldownTimer);
+      this._stutterCooldownTimer = null;
+    }
+  }
+
+  /** One stutter sample: compare presented FPS to the smooth-playback baseline. */
+  private sampleStutter(): void {
+    // Only judge during genuine playback — buffering/seeking legitimately
+    // present few/no frames and would false-positive.
+    if (this.player?.getState?.() !== "playing") {
+      this._stutterSeconds = 0;
+      return;
+    }
+    const h = this.player?.getRenderHealth?.();
+    if (!h) return;
+    const presented = h.framesPresented - this._stutterLastPresented;
+    this._stutterLastPresented = h.framesPresented;
+    // framesPresented resets to 0 on seek → negative delta; skip that sample.
+    if (presented < 0) {
+      this._stutterSeconds = 0;
+      return;
+    }
+    // Only meaningful above 1x — at ≤1x there's nothing slower to suggest.
+    // Smooth playback presents ~min(60, sourceFps × rate) distinct frames/s
+    // (display-capped); sustained < 60% of that means the decoder is dropping a
+    // lot of frames. Profile-agnostic: works for any heavy source (4K/8K,
+    // high-bitrate, software decode) that can't keep up above 1x.
+    const expected = Math.min(60, h.sourceFps * this._playbackRate);
+    if (this._playbackRate > 1 && presented < expected * 0.6) {
+      this._stutterSeconds++;
+    } else {
+      this._stutterSeconds = 0;
+    }
+    if (this._stutterSeconds >= 3 && !this._stutterCooldown) {
+      this._stutterSeconds = 0;
+      this._stutterCooldown = true;
+      // Cooldown so it doesn't nag while stuttering at the SAME rate; a rate
+      // change (resetStutterHint) lifts it early so each new speed can warn.
+      if (this._stutterCooldownTimer !== null) {
+        clearTimeout(this._stutterCooldownTimer);
+      }
+      this._stutterCooldownTimer = window.setTimeout(() => {
+        this._stutterCooldown = false;
+        this._stutterCooldownTimer = null;
+      }, 45000);
+      this.showOSD(OSD.speed, "Play at 1x for smoother playback");
+    }
   }
 
   /**
@@ -15452,6 +15544,7 @@ export class MoviElement extends HTMLElement {
           this.updateMediaSession();
           this.updateMediaSessionPosition();
           this.captureMediaSessionArtwork();
+          this.startStutterMonitor();
           return;
         }
 
@@ -15495,9 +15588,12 @@ export class MoviElement extends HTMLElement {
         this.updateMediaSession();
         this.updateMediaSessionPosition();
         this.captureMediaSessionArtwork();
+        // Watch for decode-can't-keep-up stutter to hint "play at 1x".
+        this.startStutterMonitor();
       } else if (state === "paused") {
         this.dispatchEvent(new Event("pause"));
         this.updateMediaSession();
+        this.stopStutterMonitor();
         // Don't auto-surface the bar on pause anymore — the centre
         // play button already comes back (via updatePlayPauseIcon's
         // paused branch) and tells the user playback is paused. The
@@ -15516,6 +15612,7 @@ export class MoviElement extends HTMLElement {
         // Clear resume position when video ends (start fresh next time)
         if (this._resume) this.clearResumePosition();
         this.updateMediaSession();
+        this.stopStutterMonitor();
       }
     };
     this.player.on("stateChange", stateChangeHandler);
@@ -16035,6 +16132,8 @@ export class MoviElement extends HTMLElement {
     }
     this._mediaSessionLastPos = -1;
     this._mediaSessionArtworkUrl = null;
+    this.stopStutterMonitor();
+    this.resetStutterHint();
 
     // Tear down internal player
     if (this.player) {
@@ -18583,6 +18682,8 @@ export class MoviElement extends HTMLElement {
     this.dispatchEvent(new CustomEvent("ratechange", { detail: { playbackRate: this._playbackRate } }));
     // Keep the OS lock-screen scrubber's speed indicator in sync.
     this.updateMediaSessionPosition();
+    // Each new speed gets a fresh stutter warning if it can't keep up.
+    this.resetStutterHint();
   }
 
   get subtitleDelay(): number {
