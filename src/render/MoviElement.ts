@@ -3489,6 +3489,21 @@ export class MoviElement extends HTMLElement {
   }
 
   private setupKeyboardShortcuts(): void {
+    // Keyboard shortcuts require the host to hold focus. handleVideoClick grabs
+    // it on a canvas/video click, but in audio-strip mode the whole surface is
+    // the control bar, so that click never fires and the hotkeys look dead.
+    // Take focus on any pointerdown on the player (except real form fields) so
+    // shortcuts work regardless of what part of the chrome was clicked.
+    this.addEventListener(
+      "pointerdown",
+      (e) => {
+        const t = e.composedPath()[0] as HTMLElement | undefined;
+        if (t && /^(INPUT|TEXTAREA|SELECT)$/.test(t.tagName)) return;
+        if (document.activeElement !== this) this.focus({ preventScroll: true });
+      },
+      true,
+    );
+
     this.addEventListener("keydown", (e) => {
       // Check if keyboard controls are disabled
       if (this._noHotkeys) return;
@@ -12987,6 +13002,13 @@ export class MoviElement extends HTMLElement {
          right-click menu, look-around drag). */
       :host(.movi-no-controls) {
         pointer-events: none !important;
+      }
+
+      /* An audio strip with no controls is a chrome-less bar with nothing to
+         show or operate — hide it entirely. Audio keeps playing (Web Audio is
+         independent of the host's display). */
+      :host(.movi-audio-strip.movi-no-controls) {
+        display: none !important;
       }
 
       /* Opt-out: the noerrorscreen attribute suppresses the built-in error
