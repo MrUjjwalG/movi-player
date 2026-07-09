@@ -40,7 +40,7 @@
     "release": "node scripts/release.mjs",
     "build:wasm": "mkdir -p dist/wasm && docker compose run --rm build",
     "build:wasm:force": "mkdir -p dist/wasm && docker compose run --rm -e FORCE_FFMPEG=true -e FORCE_DAV1D=true build",
-    "dev": "vite",
+    "dev": "vite --open /dev/",
     "test": "vitest",
     "clean": "rm -rf dist",
     "typecheck": "tsc --noEmit",
