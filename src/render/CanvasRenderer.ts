@@ -1046,6 +1046,17 @@ export class CanvasRenderer {
   }
 
   /**
+   * The currently-displayed decoded VideoFrame (or null). Used as a fallback
+   * capture source when reading the WebGL canvas back via toDataURL comes out
+   * blank — some GPUs return an all-black buffer for hardware-decoded frames
+   * even with preserveDrawingBuffer. The frame is owned by the renderer and may
+   * be closed on the next present, so consume it synchronously.
+   */
+  getCurrentFrame(): VideoFrame | null {
+    return this.lastRenderedFrame;
+  }
+
+  /**
    * Snapshot the live 360° camera + projection so a thumbnail/preview can be
    * reprojected to exactly what the user currently sees. Returns the CURRENT
    * (rendered, post-spring) yaw/pitch/fov — i.e. the on-screen view, not the

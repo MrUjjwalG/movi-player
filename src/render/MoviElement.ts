@@ -19684,7 +19684,7 @@ export class MoviElement extends HTMLElement {
   /*
    * Take a snapshot of the current frame and download it
    */
-  private takeSnapshot(): void {
+  private async takeSnapshot(): Promise<void> {
     if (!this.player) return;
 
     try {
@@ -19693,6 +19693,31 @@ export class MoviElement extends HTMLElement {
       // If we are in canvas mode, it's easy
       if (this.canvas && this.canvas.style.display !== "none") {
         dataUrl = this.canvas.toDataURL("image/png");
+        // Some GPUs return an all-black buffer when a WebGL canvas that
+        // displayed a HARDWARE-decoded frame (4K AV1/HEVC etc.) is read back
+        // via toDataURL — even with preserveDrawingBuffer — so the snapshot
+        // saves empty. Detect that and fall back to the raw decoded VideoFrame
+        // drawn onto a plain 2D canvas (GPU-readback-independent). Trade-off:
+        // this frame has no burned-in subtitles, but a real frame beats a
+        // black one.
+        if (await this.isDataUrlBlank(dataUrl)) {
+          const frame = this.player.getCurrentVideoFrame?.();
+          if (frame) {
+            try {
+              const c = document.createElement("canvas");
+              c.width = frame.displayWidth;
+              c.height = frame.displayHeight;
+              const ctx = c.getContext("2d");
+              if (ctx) {
+                ctx.drawImage(frame, 0, 0);
+                dataUrl = c.toDataURL("image/png");
+                Logger.info(TAG, "Snapshot: WebGL readback was blank, used decoded VideoFrame");
+              }
+            } catch (e) {
+              Logger.warn(TAG, "VideoFrame snapshot fallback failed", e);
+            }
+          }
+        }
       } else if (this.video && this.video.style.display !== "none") {
         // If in video mode, draw video to a temporary canvas
         const canvas = document.createElement("canvas");
@@ -19726,6 +19751,39 @@ export class MoviElement extends HTMLElement {
     } catch (e) {
       Logger.error(TAG, "Error taking snapshot", e);
     }
+  }
+
+  /**
+   * Decode a data-URL into a small sampling canvas and report whether every
+   * pixel is (near-)black — i.e. the capture came out empty. Used to detect a
+   * failed WebGL readback so takeSnapshot can fall back to the raw VideoFrame.
+   */
+  private isDataUrlBlank(dataUrl: string | null): Promise<boolean> {
+    return new Promise((resolve) => {
+      if (!dataUrl || dataUrl.length < 32) return resolve(true);
+      const img = new Image();
+      img.onload = () => {
+        try {
+          const w = 32;
+          const h = 18;
+          const c = document.createElement("canvas");
+          c.width = w;
+          c.height = h;
+          const ctx = c.getContext("2d", { willReadFrequently: true });
+          if (!ctx) return resolve(false); // can't sample — trust the capture
+          ctx.drawImage(img, 0, 0, w, h);
+          const d = ctx.getImageData(0, 0, w, h).data;
+          for (let i = 0; i < d.length; i += 4) {
+            if (d[i] > 8 || d[i + 1] > 8 || d[i + 2] > 8) return resolve(false);
+          }
+          resolve(true); // every sampled pixel is essentially black
+        } catch {
+          resolve(false); // decode/read failed — don't force the fallback
+        }
+      };
+      img.onerror = () => resolve(true);
+      img.src = dataUrl;
+    });
   }
 
   private updateHDRVisibility(): void {

@@ -4069,6 +4069,14 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
   }
 
   /**
+   * The currently-displayed decoded VideoFrame, or null. Fallback capture
+   * source for snapshots when the WebGL canvas reads back blank.
+   */
+  getCurrentVideoFrame(): VideoFrame | null {
+    return this.videoRenderer?.getCurrentFrame() ?? null;
+  }
+
+  /**
    * Get current video rotation
    */
   getVideoRotation(): number {
