@@ -11405,17 +11405,23 @@ export class MoviElement extends HTMLElement {
         transform: scale(0.97);
       }
 
-      .movi-resume-btn.movi-resume-focused {
-        /* This stylesheet globally nukes outline (the universal reset at
-           line ~8515 sets outline none with !important) and box-shadow on
-           :focus, so the selection ring MUST be a box-shadow WITH !important
-           to survive — a plain outline never renders. White ring (NOT
-           --movi-primary — that's the Resume button's own fill) + dark halo
-           reads on both the primary and grey buttons. The two-class selector
-           out-specifies the reset among !important rules. */
-        box-shadow: 0 0 0 3px #fff, 0 0 0 6px rgba(0, 0, 0, 0.5) !important;
-        transform: scale(1.06);
-        transition: transform 0.1s, box-shadow 0.1s;
+      /* The selection ring is a KEYBOARD affordance — the arrow keys move it
+         between Resume/Cancel. Touch has no arrow-key nav (you just tap), so
+         the auto-focused ring is meaningless noise there; only draw it on
+         mouse/hover devices. */
+      @media (hover: hover) and (pointer: fine) {
+        .movi-resume-btn.movi-resume-focused {
+          /* This stylesheet globally nukes outline (the universal reset at
+             line ~8515 sets outline none with !important) and box-shadow on
+             :focus, so the selection ring MUST be a box-shadow WITH !important
+             to survive — a plain outline never renders. White ring (NOT
+             --movi-primary — that's the Resume button's own fill) + dark halo
+             reads on both the primary and grey buttons. The two-class selector
+             out-specifies the reset among !important rules. */
+          box-shadow: 0 0 0 3px #fff, 0 0 0 6px rgba(0, 0, 0, 0.5) !important;
+          transform: scale(1.06);
+          transition: transform 0.1s, box-shadow 0.1s;
+        }
       }
 
       .movi-resume-yes {
