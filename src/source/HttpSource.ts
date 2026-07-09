@@ -67,6 +67,12 @@ export class HttpSource implements SourceAdapter {
   private fallbackBuffer: Uint8Array | null = null;
   private fallbackStart: number = 0;
   private fallbackWritePos: number = 0;
+  // Mirrors STREAM_ACTIVE for the non-SAB path. Without it, atomicSetStreaming
+  // was a no-op and atomicIsStreaming fell back to `reader !== null` — which is
+  // still false in the window between startStream() setting the flag and the
+  // fetch resolving the reader, so read()'s waitForData bailed and every load
+  // failed with "Timeout at 0" when cross-origin isolation was absent.
+  private fallbackStreaming: boolean = false;
 
   // Stream state
   private reader: ReadableStreamDefaultReader<Uint8Array> | null = null;
@@ -292,12 +298,14 @@ export class HttpSource implements SourceAdapter {
     if (this.useSharedBuffer && this.headerView) {
       return Atomics.load(this.headerView, HEADER.STREAM_ACTIVE) === 1;
     }
-    return this.reader !== null;
+    return this.fallbackStreaming;
   }
 
   private atomicSetStreaming(active: boolean): void {
     if (this.useSharedBuffer && this.headerView) {
       Atomics.store(this.headerView, HEADER.STREAM_ACTIVE, active ? 1 : 0);
+    } else {
+      this.fallbackStreaming = active;
     }
   }
 
