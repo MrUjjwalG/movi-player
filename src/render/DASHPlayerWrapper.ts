@@ -361,7 +361,9 @@ export class DASHPlayerWrapper extends EventEmitter<PlayerEventMap> {
   }
 
   setVolume(volume: number): void {
-    this.videoElement.volume = volume;
+    // HTMLMediaElement.volume only accepts [0,1]; boost (>1) is applied via the
+    // AudioContext gain path, not the native element, so clamp here.
+    this.videoElement.volume = Math.min(1, Math.max(0, volume));
   }
 
   setMuted(muted: boolean): void {

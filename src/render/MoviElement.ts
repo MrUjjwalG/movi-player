@@ -3027,7 +3027,7 @@ export class MoviElement extends HTMLElement {
                 const volumeChange = -deltaY / 200;
                 const newVolume = Math.max(
                   0,
-                  Math.min(2, initialVolume + volumeChange),
+                  Math.min(this.getMaxVolume(), initialVolume + volumeChange),
                 );
                 this.volume = newVolume;
               }
@@ -3643,7 +3643,7 @@ export class MoviElement extends HTMLElement {
           // Up Arrow: Increase volume
           e.preventDefault();
           if (this.player && this.player.hasAudibleSource()) {
-            this.volume = Math.min(2, this.volume + 0.1);
+            this.volume = Math.min(this.getMaxVolume(), this.volume + 0.1);
           }
           break;
         case "ArrowDown":
@@ -6243,6 +6243,29 @@ export class MoviElement extends HTMLElement {
    */
   private getMaxAllowedRate(): number {
     return 2;
+  }
+
+  /** Volume ceiling: 200% normally (boost via AudioContext gain), but 100% when
+   *  audio plays through a native element (adaptive stream / native split-source)
+   *  which can't boost — so the UI doesn't promise a boost that won't happen. */
+  private getMaxVolume(): number {
+    return this.player?.usesNativeAudio?.() ? 1 : 2;
+  }
+
+  /** Re-apply the volume ceiling to the slider + current volume when the audio
+   *  path changes (source load, audio-track switch between muxed and native). */
+  private updateVolumeCap(): void {
+    const max = this.getMaxVolume();
+    const slider = this.shadowRoot?.querySelector(
+      ".movi-volume-slider",
+    ) as HTMLInputElement | null;
+    if (slider) {
+      slider.max = String(max);
+      slider.setAttribute("aria-valuemax", String(max * 100));
+    }
+    // Clamp a boosted volume back down when switching to a native (no-boost) path.
+    if (this._volume > max) this.volume = max;
+    else this.updateVolume();
   }
 
   /**
@@ -15489,6 +15512,9 @@ export class MoviElement extends HTMLElement {
     const audioTrackChangeHandler = () => {
       this.updateAudioTrackMenu();
       this.updateSubtitleTrackMenu();
+      // Switching between muxed (AudioContext, boostable) and native audio
+      // changes the volume ceiling — re-cap the slider.
+      this.updateVolumeCap();
       this.dispatchEvent(new Event("audiotrackchange"));
     };
     this.player.trackManager.on("audioTrackChange", audioTrackChangeHandler);
@@ -15708,6 +15734,9 @@ export class MoviElement extends HTMLElement {
       this.updateLoadingIndicator(this.player?.getState() || "idle");
       this.updateControlsState();
       this.updatePlayPauseIcon();
+      // Cap the volume slider at 100% for native-audio sources (streams /
+      // native split-source), 200% otherwise, now that the audio path is known.
+      this.updateVolumeCap();
       // Tracks are now finalised; pick the right visual mode (video
       // surface / cover-art overlay / audio strip). Cover-art extraction
       // is async, so the strip may flip OFF later when the coverart
@@ -16812,10 +16841,11 @@ export class MoviElement extends HTMLElement {
       // type=range> doesn't expose a separate filled portion across
       // browsers, so the CSS gradient below reads this custom prop
       // to draw a coloured segment from 0 to thumb and a muted one
-      // beyond. Track max is 2 (200%), so the thumb sits at v/2 of the width.
+      // beyond. Track max is getMaxVolume() (2 normally, 1 on native audio), so
+      // the thumb sits at v/max of the width.
       volumeSlider.style.setProperty(
         "--movi-volume-pct",
-        `${Math.round((v / 2) * 100)}%`,
+        `${Math.round((v / this.getMaxVolume()) * 100)}%`,
       );
       // Above 100% we're boosting — tint the fill so the boost zone is obvious.
       volumeSlider.classList.toggle("movi-volume-boosted", v > 1);
@@ -18825,7 +18855,7 @@ export class MoviElement extends HTMLElement {
 
   set volume(value: number) {
     // 0–2: values above 1 boost audio up to 200% (VLC-style).
-    this._volume = Math.max(0, Math.min(2, value));
+    this._volume = Math.max(0, Math.min(this.getMaxVolume(), value));
     this.setAttribute("volume", this._volume.toString());
 
     // If user increases volume while muted, automatically unmute (like YouTube)

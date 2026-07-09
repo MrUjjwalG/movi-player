@@ -4263,7 +4263,9 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
       this.wireNativeAudioEvents(this.nativeAudioEl);
     }
     this.nativeAudioEl.preload = "auto";
-    this.nativeAudioEl.volume = this.muted ? 0 : this.audioRenderer.getVolume();
+    // HTMLMediaElement.volume caps at [0,1]; getVolume() can be up to 2 (boost),
+    // which the AudioContext gain handles — the native element just clamps.
+    this.nativeAudioEl.volume = this.muted ? 0 : Math.min(1, this.audioRenderer.getVolume());
     this.nativeAudioEl.muted = this.muted;
     this.disableAudio = true;
 
@@ -4482,6 +4484,16 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
       this.hasNativeAudio() ||
       this.streamWrapper !== null
     );
+  }
+
+  /**
+   * True when audio plays through a native HTMLMediaElement — an adaptive
+   * stream (HLS/DASH via the stream wrapper's <video>) or native split-source
+   * audio — rather than the AudioContext. Such audio can't be boosted above
+   * 100% (HTMLMediaElement.volume caps at [0,1]), so the volume UI caps at 100%.
+   */
+  usesNativeAudio(): boolean {
+    return this.streamWrapper !== null || this.isNativeAudioActive();
   }
 
   /** True for a live (dynamic) adaptive stream — drives the LIVE indicator. */
@@ -4819,7 +4831,8 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
     }
     this.audioRenderer.setVolume(volume);
     if (this.nativeAudioEl) {
-      this.nativeAudioEl.volume = volume;
+      // Native element caps at [0,1]; >1 boost lives in the AudioContext gain.
+      this.nativeAudioEl.volume = Math.min(1, Math.max(0, volume));
     }
   }
 
