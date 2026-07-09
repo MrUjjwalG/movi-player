@@ -3947,6 +3947,24 @@ export class MoviElement extends HTMLElement {
           this.currentTime = 0;
           this.showControls();
           break;
+        case "1":
+        case "2":
+        case "3":
+        case "4":
+        case "5":
+        case "6":
+        case "7":
+        case "8":
+        case "9": {
+          // 1-9: Seek to 10%–90% of the video (YouTube-style).
+          e.preventDefault();
+          const d = this.duration;
+          if (Number.isFinite(d) && d > 0) {
+            this.currentTime = d * (parseInt(e.key, 10) / 10);
+            this.showControls();
+          }
+          break;
+        }
         case "Home":
           // Home: Seek to start
           e.preventDefault();
