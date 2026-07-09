@@ -93,9 +93,14 @@ export class AudioRenderer {
   private ensureKeepalive(): HTMLAudioElement | null {
     if (this.keepaliveEl) return this.keepaliveEl;
     try {
-      // 0.5s of 8kHz mono 8-bit silence (4044 bytes including 44-byte WAV header)
+      // 5s of 8kHz mono 8-bit silence (~40KB including 44-byte WAV header).
+      // Duration matters: Chrome grants FULL audio focus — the state that
+      // actually surfaces the OS media session (macOS Now Playing, Windows
+      // SMTC, Linux MPRIS) — only for media ≥5s. A shorter anchor gets merely
+      // transient focus, so the OS controls may never appear even though the
+      // navigator.mediaSession metadata/handlers are all set correctly.
       const sampleRate = 8000;
-      const numSamples = sampleRate / 2;
+      const numSamples = sampleRate * 5;
       const buf = new ArrayBuffer(44 + numSamples);
       const view = new DataView(buf);
       const writeStr = (off: number, s: string) => {
