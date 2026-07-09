@@ -9123,6 +9123,16 @@ export class MoviElement extends HTMLElement {
         width: 22px;
         height: 22px;
       }
+      /* The gear is a TOUCH affordance — it only exists because touch has no
+         right-click and the long-press context menu is gated. On non-touch
+         (mouse/hover) devices, right-clicking the video opens the same menu,
+         so the gear is redundant chrome; hide it there. (Mirrors the VR pad,
+         which does the inverse — hidden on touch, shown on desktop.) */
+      @media (hover: hover) and (pointer: fine) {
+        .movi-gear-btn {
+          display: none !important;
+        }
+      }
 
       /* Press-and-hold-to-2x pill (top-centre, shown only while held). */
       .movi-hold-speed {
