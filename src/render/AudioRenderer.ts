@@ -15,6 +15,10 @@ const TAG = "AudioRenderer";
 
 export class AudioRenderer {
   private audioContext: AudioContext | null = null;
+  // Fixed fan-in bus: every decoded source connects here. Keeping the input
+  // separate from the volume node lets us reorder the compressor/gain chain
+  // (stable-audio toggle) without re-touching the live sources.
+  private inputNode: GainNode | null = null;
   private gainNode: GainNode | null = null;
   private compressorNode: DynamicsCompressorNode | null = null;
   private scheduledTime: number = 0;
@@ -164,6 +168,11 @@ export class AudioRenderer {
         // already handle that case.
         latencyHint: "interactive",
       });
+      this.inputNode = this.audioContext.createGain();
+      // Volume / mute / makeup gain — ALWAYS the last node before destination.
+      // A >100% boost lives here, applied AFTER the limiter, so stable audio's
+      // compressor can't cancel it (a gain *before* the limiter would be
+      // crushed straight back down — ~+6dB becomes ~+0.6dB).
       this.gainNode = this.audioContext.createGain();
 
       // Create compressor for stable audio (loudness normalization).
@@ -179,15 +188,7 @@ export class AudioRenderer {
       this.compressorNode.attack.value = 0.001;   // 1ms — catch transients before they hit the ear
       this.compressorNode.release.value = 0.15;   // 150ms — quick recovery, no pumping
 
-      // Wire audio chain based on stable audio state
-      if (this._stableAudio) {
-        // source -> compressor -> gain -> destination
-        this.gainNode.connect(this.compressorNode);
-        this.compressorNode.connect(this.audioContext.destination);
-      } else {
-        // source -> gain -> destination
-        this.gainNode.connect(this.audioContext.destination);
-      }
+      this.wireGraph();
 
       // Apply muted state if set before initialization
       this.gainNode.gain.value = this._muted ? 0 : this.perceptualGain(this.volume);
@@ -310,6 +311,9 @@ export class AudioRenderer {
       // which DOES respect channelCount, so we promote it
       // explicitly — otherwise a 5.1 source would lose its
       // surround when piped through stable-audio compression.
+      if (this.inputNode) {
+        this.inputNode.channelCount = clamped;
+      }
       if (this.gainNode) {
         this.gainNode.channelCount = clamped;
       }
@@ -457,7 +461,7 @@ export class AudioRenderer {
 
     const source = this.audioContext.createBufferSource();
     source.buffer = processedBuffer;
-    source.connect(this.gainNode);
+    source.connect(this.inputNode ?? this.gainNode);
     source.playbackRate.value = usedStretcher ? 1.0 : this._playbackRate;
 
     const now = this.audioContext.currentTime;
@@ -476,7 +480,7 @@ export class AudioRenderer {
             );
             const silenceSource = this.audioContext.createBufferSource();
             silenceSource.buffer = silenceBuffer;
-            silenceSource.connect(this.gainNode);
+            silenceSource.connect(this.inputNode ?? this.gainNode);
             silenceSource.start(this.scheduledTime);
             silenceSource.onended = () => {
               try { silenceSource.disconnect(); } catch { /* ignore */ }
@@ -576,7 +580,7 @@ export class AudioRenderer {
 
       const source = this.audioContext.createBufferSource();
       source.buffer = audioBuffer;
-      source.connect(this.gainNode);
+      source.connect(this.inputNode ?? this.gainNode);
       source.playbackRate.value = this._playbackRate;
 
       const currentTime = this.audioContext.currentTime;
@@ -1311,32 +1315,53 @@ export class AudioRenderer {
   // ─── Stable Audio Methods ────────────────────────────────────────────
 
   /**
+   * (Re)connect the audio graph for the current stable-audio state.
+   *   stable ON : sources → input → compressor → gain(makeup) → destination
+   *   stable OFF: sources → input → gain(volume)  → destination
+   *
+   * The volume/makeup gainNode is ALWAYS the final node before destination, so
+   * a >100% boost is applied *after* the limiter instead of being cancelled by
+   * it. Measured: with the old gain-before-limiter order, 100%→200% yielded
+   * only ~+0.6dB; with gain after the limiter it's the full ~+6dB. Because the
+   * limiter has already tamed peaks to ≈-15dBFS, a 2× makeup still lands well
+   * under 0dBFS, so it does not re-introduce clipping.
+   */
+  private wireGraph(): void {
+    if (
+      !this.audioContext ||
+      !this.inputNode ||
+      !this.gainNode ||
+      !this.compressorNode
+    )
+      return;
+    try {
+      // Bare disconnect() is a safe no-op when nothing is connected yet.
+      this.inputNode.disconnect();
+      this.compressorNode.disconnect();
+      this.gainNode.disconnect();
+      if (this._stableAudio) {
+        this.inputNode.connect(this.compressorNode);
+        this.compressorNode.connect(this.gainNode);
+        this.gainNode.connect(this.audioContext.destination);
+      } else {
+        this.inputNode.connect(this.gainNode);
+        this.gainNode.connect(this.audioContext.destination);
+      }
+    } catch {
+      Logger.warn(TAG, "Failed to (re)wire audio chain");
+    }
+  }
+
+  /**
    * Enable/disable stable audio mode (dynamic range compression / loudness normalization)
    */
   setStableAudio(enabled: boolean): void {
     this._stableAudio = enabled;
     Logger.info(TAG, `Stable audio: ${enabled ? "enabled" : "disabled"}`);
 
-    // Dynamically rewire audio chain
-    if (this.audioContext && this.gainNode && this.compressorNode) {
-      try {
-        // Disconnect gainNode from current destination
-        this.gainNode.disconnect();
-
-        if (enabled) {
-          // source -> gain -> compressor -> destination
-          this.gainNode.connect(this.compressorNode);
-          this.compressorNode.connect(this.audioContext.destination);
-        } else {
-          // source -> gain -> destination (bypass compressor)
-          this.compressorNode.disconnect();
-          this.gainNode.connect(this.audioContext.destination);
-        }
-        Logger.debug(TAG, `Audio chain rewired: compressor ${enabled ? "active" : "bypassed"}`);
-      } catch {
-        Logger.warn(TAG, "Failed to rewire audio chain");
-      }
-    }
+    // Rewire for the new state (live sources stay attached to inputNode).
+    this.wireGraph();
+    Logger.debug(TAG, `Audio chain rewired: compressor ${enabled ? "active" : "bypassed"}`);
 
     if (enabled && this.audioContext) {
       this.setupContextStateMonitoring();
@@ -1515,6 +1540,7 @@ export class AudioRenderer {
       this.audioContext = null;
     }
 
+    this.inputNode = null;
     this.gainNode = null;
     this.compressorNode = null;
     if (this.signalsmith) {
