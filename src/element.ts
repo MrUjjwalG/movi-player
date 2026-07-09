@@ -86,3 +86,56 @@ export { MoviPlayer } from './core/MoviPlayer';
 
 // Main export: MoviElement (custom HTML element)
 export { MoviElement } from './render/MoviElement';
+import type { MoviElement as MoviElementType } from './render/MoviElement';
+
+// QoE analytics — versioned event stream + pluggable sinks.
+export {
+  QoECollector,
+  beaconSink,
+  QOE_SCHEMA_VERSION,
+} from './utils/QoE';
+export type { QoEEvent, QoESink, QoESession } from './utils/QoE';
+
+/**
+ * The documented `<movi-player>` attribute surface. Kept as a flat string/
+ * boolean map so it can back both the HTMLElementTagNameMap typing and the
+ * framework wrappers. Any attribute may also be set as a property on the
+ * element instance (see MoviElement).
+ */
+export interface MoviPlayerAttributes {
+  src?: string;
+  poster?: string;
+  postertime?: string;
+  controls?: boolean | "";
+  autoplay?: boolean | "";
+  loop?: boolean | "";
+  muted?: boolean | "";
+  playsinline?: boolean | "";
+  preload?: "none" | "metadata" | "auto";
+  volume?: number | string;
+  playbackrate?: number | string;
+  theme?: "dark" | "light";
+  themecolor?: string;
+  title?: string;
+  headers?: string;
+  crossorigin?: "anonymous" | "use-credentials";
+  vr?: string;
+  vrpad?: boolean | "";
+  audioonly?: boolean | "";
+  audiooutput?: string;
+  stablevolume?: boolean | "";
+  ambientmode?: boolean | "";
+  resume?: boolean | "";
+  drm?: string;
+  licenseurl?: string;
+  encrypted?: boolean | "";
+  lcevc?: boolean | "";
+  lcevcurl?: string;
+}
+
+declare global {
+  interface HTMLElementTagNameMap {
+    // `document.querySelector('movi-player')` is now typed as the element.
+    "movi-player": MoviElementType;
+  }
+}
