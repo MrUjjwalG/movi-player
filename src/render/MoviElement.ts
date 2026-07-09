@@ -2945,9 +2945,12 @@ export class MoviElement extends HTMLElement {
               this._holdSpeedTimer = null;
             }
             if (!this._vr360 && !isEdgeStart) {
+              // 600ms, not 400 — a shorter threshold fired 2x on ordinary
+              // taps/brief holds. This matches the ~500-600ms long-press feel
+              // users expect on iOS/Android.
               this._holdSpeedTimer = window.setTimeout(
                 () => this.startHoldSpeed(),
-                400,
+                600,
               );
             }
           }
@@ -2989,6 +2992,19 @@ export class MoviElement extends HTMLElement {
             const touch = e.touches[0];
             const deltaX = touch.clientX - this.touchStartX;
             const deltaY = touch.clientY - this.touchStartY;
+
+            // Any real finger travel means the press wasn't a stationary hold —
+            // cancel the pending hold-to-2x so a page scroll / swipe / pan
+            // doesn't trip it. Done here (before the gesturefs gate and the
+            // gesture-type classification) so it fires regardless of side,
+            // fullscreen, or gesture config — a scroll must always win.
+            if (
+              this._holdSpeedTimer !== null &&
+              Math.hypot(deltaX, deltaY) > 10
+            ) {
+              clearTimeout(this._holdSpeedTimer);
+              this._holdSpeedTimer = null;
+            }
 
             // Determine gesture type early
             // If gesturefs is enabled, ONLY allow gestures if in fullscreen
