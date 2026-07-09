@@ -5626,8 +5626,16 @@ export class MoviElement extends HTMLElement {
 
     if (isFullscreen) {
       const track = this.player?.trackManager?.getActiveVideoTrack?.();
-      const w = track?.width ?? 0;
-      const h = track?.height ?? 0;
+      const rawW = track?.width ?? 0;
+      const rawH = track?.height ?? 0;
+      // Portrait clips shot on phones are usually stored as landscape frames
+      // plus a 90°/270° rotation flag, so the raw width/height read landscape.
+      // Use the effective display rotation (metadata + manual) to swap them,
+      // otherwise a tall video would wrongly lock landscape on entry.
+      const rot = this.player?.getVideoRotation?.() ?? track?.rotation ?? 0;
+      const rotated = Math.abs(rot) % 180 !== 0;
+      const w = rotated ? rawH : rawW;
+      const h = rotated ? rawW : rawH;
       const target = h > w && h > 0 ? "portrait" : "landscape";
       Promise.resolve(so.lock(target)).catch(() => {
         /* unsupported / user-denied — leave orientation as-is */
