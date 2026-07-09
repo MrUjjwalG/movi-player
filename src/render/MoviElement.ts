@@ -94,6 +94,10 @@ export class MoviElement extends HTMLElement {
   // arrived OR extraction failed). Until then, if the source has an art track,
   // we hold the audio-strip layout off so the player doesn't flash strip→cover.
   private _coverArtResolved: boolean = false;
+  // The last audio-strip value we dispatched to the embedding page. Survives
+  // load() (unlike the movi-audio-strip class) so a strip↔non-strip switch is
+  // detected even across a source change. null = never told the page yet.
+  private _lastStripDispatched: boolean | null = null;
   private controlsTimeout: number | null = null;
   private isOverControls: boolean = false;
   private isSeeking: boolean = false;
@@ -8466,10 +8470,14 @@ export class MoviElement extends HTMLElement {
       }
     }
 
-    // Hide the settings gear with the rest of the chrome.
-    this.shadowRoot
-      ?.querySelector(".movi-gear-btn")
-      ?.classList.remove("movi-gear-visible");
+    // Hide the settings gear with the rest of the chrome — EXCEPT in audio
+    // strip mode, where the bar is the whole (always-visible) player, so its
+    // gear must stay put rather than auto-hiding with the transient controls.
+    if (!this.classList.contains("movi-audio-strip")) {
+      this.shadowRoot
+        ?.querySelector(".movi-gear-btn")
+        ?.classList.remove("movi-gear-visible");
+    }
   }
 
   private updateControlsVisibility(): void {
@@ -13062,6 +13070,30 @@ export class MoviElement extends HTMLElement {
           transform: translateX(0) !important;
         }
 
+        /* STRIP MODE ONLY: the host is a ~78px bar with overflow:visible, so the
+           default translateX drawer slides OUT past the player's right edge and
+           the closed drawer visibly escapes the boundary. Here we pin it inside
+           the player and FADE in place (no horizontal slide) + truly hide when
+           closed. Non-strip (full-size) players keep the normal slide drawer. */
+        :host(.movi-audio-strip) .movi-context-menu.movi-context-menu-mobile {
+          bottom: 0 !important;
+          height: auto !important;
+          max-width: min(350px, 100%) !important;
+          margin: 0 !important;
+          transform: none !important;
+          opacity: 0 !important;
+          visibility: hidden !important;
+          pointer-events: none !important;
+          transition: opacity 0.2s ease, visibility 0s linear 0.2s !important;
+        }
+        :host(.movi-audio-strip) .movi-context-menu.movi-context-menu-mobile.visible {
+          transform: none !important;
+          opacity: 1 !important;
+          visibility: visible !important;
+          pointer-events: auto !important;
+          transition: opacity 0.2s ease, visibility 0s linear 0s !important;
+        }
+
         .movi-context-menu-item {
           padding: 10px 14px !important;
           margin: 2px 4px !important;
@@ -13288,6 +13320,20 @@ export class MoviElement extends HTMLElement {
       :host(.movi-audio-strip[theme="light"]) .movi-title-text {
         color: #11142d;
         text-shadow: none;
+      }
+      /* Strip mode zeroes the title bar's padding, but on touch the settings
+         gear is shown pinned top-right (38px @ right:14px). Reserve room so the
+         title truncates before it instead of running underneath. Only on
+         coarse pointers — the gear is hidden on mouse/hover devices. */
+      @media (pointer: coarse) {
+        :host(.movi-audio-strip) .movi-title-bar {
+          padding-right: 48px !important;
+        }
+      }
+      /* The gear button otherwise centres a few px BELOW the small strip title
+         text — nudge it up so their icon/text vertical centres line up. */
+      :host(.movi-audio-strip) .movi-gear-btn {
+        top: 1px !important;
       }
       /* Push the control row below the title band — only when titled. */
       :host(.movi-audio-strip.movi-has-title) .movi-controls-container,
@@ -14823,14 +14869,28 @@ export class MoviElement extends HTMLElement {
     const stripMode =
       audioMode && !bitmap && !coverArtPending && !posterCoverPending;
     this.classList.toggle("movi-audio-mode", audioMode);
-    const wasStrip = this.classList.contains("movi-audio-strip");
     this.classList.toggle("movi-audio-strip", stripMode);
-    if (stripMode !== wasStrip) {
-      // Tell the embedding page so it can collapse its own wrapper. The
-      // host shrinks to 56px via :host CSS, but a parent .player-stage
-      // with aspect-ratio: 16/9 (or any fixed height) would still reserve
-      // its old box and leave a black gap underneath. Consumers listen on
-      // this event and adjust their layout — see index.html.
+    // In strip mode the gear is part of the always-visible bar, so reveal it the
+    // moment the layout is applied (on load) rather than waiting for the first
+    // touch/showControls. hideControls already keeps it visible in strip mode.
+    if (stripMode && this.hasMediaSource()) {
+      this.shadowRoot
+        ?.querySelector(".movi-gear-btn")
+        ?.classList.add("movi-gear-visible");
+    }
+    // Notify the embedding page when the strip state changes vs what we LAST
+    // TOLD it — not vs the current class. load() clears movi-audio-strip on
+    // every source change, so comparing to the class made a strip→non-strip
+    // switch (e.g. a no-cover track followed by an album-art track) look
+    // unchanged: the event never fired and the page's wrapper stayed collapsed
+    // at 56/78px, squashing the album art into a black bar. _lastStripDispatched
+    // survives load(), so the transition is detected and the wrapper reflows.
+    if (stripMode !== this._lastStripDispatched) {
+      this._lastStripDispatched = stripMode;
+      // Tell the embedding page so it can collapse/restore its own wrapper. The
+      // host shrinks to 56px via :host CSS, but a parent .player-stage with
+      // aspect-ratio: 16/9 (or any fixed height) would still reserve its old
+      // box and leave a black gap. Consumers listen on this — see index.html.
       this.dispatchEvent(
         new CustomEvent("audiostripchange", {
           detail: { strip: stripMode },
