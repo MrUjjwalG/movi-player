@@ -17039,37 +17039,42 @@ export class MoviElement extends HTMLElement {
    * These headers are required for SharedArrayBuffer support (needed by FFmpeg)
    */
   private checkSecurityHeaders(): void {
-    // Check if Cross-Origin-Isolated context is available
+    // The WASM engine is single-threaded (USE_PTHREADS=0), so it does NOT need
+    // SharedArrayBuffer — SAB is only a zero-copy optimisation in HttpSource,
+    // which transparently falls back to a plain buffer when it's unavailable.
+    // So cross-origin isolation is NOT required to play; a missing COOP/COEP
+    // just costs one extra copy on HTTP streaming. Blocking on it used to lock
+    // out perfectly capable browsers whose embedder couldn't set the headers,
+    // and lite/mobile browsers (Opera Mini "high" mode, UC, etc.) that never
+    // report crossOriginIsolated even when the server does send the headers.
     if (!window.crossOriginIsolated) {
       Logger.warn(
         TAG,
-        "Security headers missing: Cross-Origin-Opener-Policy and Cross-Origin-Embedder-Policy are required",
+        "Not cross-origin isolated (no COOP/COEP) — running without SharedArrayBuffer; single-threaded WASM is unaffected, HTTP streaming pays one extra copy.",
       );
+    }
 
-      // Show error message
+    // The one thing genuinely required is WebAssembly. Proxy/lite browsers that
+    // render server-side (Opera Mini's extreme/proxy mode and similar) don't
+    // provide it — surface a clear "unsupported browser" message rather than a
+    // cryptic decode failure, and skip player init.
+    if (typeof WebAssembly === "undefined") {
+      Logger.warn(TAG, "WebAssembly unavailable — this browser can't run the player");
       if (this.brokenIndicator) {
         this.brokenIndicator.style.display = "flex";
-
-        // Hide the empty-state placeholder so it doesn't render behind the
-        // error overlay — both default to visible with no src, which stacks
-        // the "No Video" text under "Security Headers Missing".
         if (this.emptyStateIndicator) {
           this.emptyStateIndicator.style.display = "none";
         }
-
         const titleEl =
           this.brokenIndicator.querySelector(".movi-broken-title");
-        if (titleEl) titleEl.textContent = "Security Headers Missing";
-
+        if (titleEl) titleEl.textContent = "Browser not supported";
         const messageEl = this.brokenIndicator.querySelector(
           ".movi-broken-message",
         );
         if (messageEl) {
           messageEl.textContent =
-            "This player requires Cross-Origin-Opener-Policy: same-origin and Cross-Origin-Embedder-Policy: require-corp headers to be set on the server.";
+            "This player needs WebAssembly, which lite / proxy browsers (like Opera Mini) don't provide. Please open it in Chrome, Firefox, Safari, Edge, or full Opera.";
         }
-
-        // Hide the software fallback button (not applicable for header issues)
         const swFallbackBtn = this.brokenIndicator.querySelector(
           ".movi-sw-fallback-btn",
         ) as HTMLElement;
@@ -17077,8 +17082,6 @@ export class MoviElement extends HTMLElement {
           swFallbackBtn.style.display = "none";
         }
       }
-
-      // Prevent player initialization
       this._isUnsupported = true;
     }
   }
