@@ -2381,6 +2381,9 @@ export class MoviElement extends HTMLElement {
     // Click on video to play/pause (only on canvas/video area, not controls)
     // Handle clicks on both overlay and canvas
     const handleVideoClick = (e: MouseEvent) => {
+      // A bare player (no controls attr) is a non-interactive display surface —
+      // a click on it must not toggle play/pause.
+      if (!this._controls) return;
       // A 360° look-around drag ends with a synthetic click — swallow it so the
       // drag doesn't also toggle play/pause. A pure click (no drag) still does.
       if (this._vrSuppressClick) {
@@ -3158,6 +3161,10 @@ export class MoviElement extends HTMLElement {
 
     // Mouse double click for fullscreen / fast seek
     const handleDoubleClick = (e: MouseEvent) => {
+      // Bare player (no controls attr): no double-click-to-fullscreen. The
+      // host's pointer-events:none is defeated by the many explicit
+      // pointer-events:auto layers, so guard the handler directly.
+      if (!this._controls) return;
       // Cancel any pending single click
       if (this.clickTimer) {
         clearTimeout(this.clickTimer);
@@ -12966,6 +12973,30 @@ export class MoviElement extends HTMLElement {
         padding-bottom: 40px;
       }
 
+      /* A bare player (no controls attribute) is a headless, chrome-less
+         surface — don't show the "No Video / Add a source" placeholder or the
+         loading spinner there. !important beats the inline display:flex the JS
+         sets on these indicators. */
+      :host(.movi-no-controls) .movi-empty-state,
+      :host(.movi-no-controls) .movi-loading-indicator {
+        display: none !important;
+      }
+
+      /* Bare player (no controls attribute): a display-only surface — disable
+         ALL mouse interaction (click-to-play, double-click fullscreen, the
+         right-click menu, look-around drag). */
+      :host(.movi-no-controls) {
+        pointer-events: none !important;
+      }
+
+      /* Opt-out: the noerrorscreen attribute suppresses the built-in error
+         overlays ("Format Unsupported", "Browser not supported", codec/network
+         errors) so an embedding app can render its own error UI. The error
+         event + state still fire — only the default screen is hidden. */
+      :host([noerrorscreen]) .movi-broken-indicator {
+        display: none !important;
+      }
+
       /* Short / narrow players: shrink the placeholder so it fits above
          the controls bar without clipping into it. */
       @container movi-host (max-width: 720px) {
@@ -13889,6 +13920,10 @@ export class MoviElement extends HTMLElement {
     this._src = srcAttr || null;
     this._autoplay = this.hasAttribute("autoplay");
     this._controls = this.hasAttribute("controls");
+    // Mirror the controls attr as a host class so CSS can suppress chrome (e.g.
+    // the "No Video" placeholder) on a bare, controls-less player — done with a
+    // class rather than :host(:not([controls])), which is flaky in Safari/FF.
+    this.classList.toggle("movi-no-controls", !this._controls);
     this._loop = this.hasAttribute("loop");
     this._muted = this.hasAttribute("muted");
     this._playsinline = this.hasAttribute("playsinline");
@@ -14482,6 +14517,7 @@ export class MoviElement extends HTMLElement {
         break;
       case "controls":
         this._controls = newValue !== null;
+        this.classList.toggle("movi-no-controls", !this._controls);
         this.updateControlsVisibility();
         this.updateUnmuteOverlay();
         break;
@@ -18583,7 +18619,16 @@ export class MoviElement extends HTMLElement {
   private maybeShowResumeDialog(): void {
     // Resume means seeking to the saved position — impossible in linear
     // (non-seekable) playback, so don't offer it.
-    if (!this._resume || !this.player || this._contextLostTime !== 0 || this._linearMode) return;
+    // The dialog is interactive chrome, so it has no business appearing on a
+    // bare player with no `controls` attribute — skip it there.
+    if (
+      !this._resume ||
+      !this.player ||
+      this._contextLostTime !== 0 ||
+      this._linearMode ||
+      !this._controls
+    )
+      return;
     const savedTime = this.getResumePosition();
     if (savedTime > 2 && savedTime < this.duration - 5) {
       this.showResumeDialog(savedTime);
