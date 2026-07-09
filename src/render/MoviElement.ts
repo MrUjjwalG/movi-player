@@ -8501,15 +8501,31 @@ export class MoviElement extends HTMLElement {
   }
 
   private addStyles(shadowRoot: ShadowRoot): void {
+    // Load the webfont in its OWN sheet, appended a frame AFTER the main styles.
+    // WebKit/Safari treats a shadow-DOM <style> whose first rule is a remote
+    // @import as "pending" until that font finishes downloading — so on the
+    // first (uncached) load the ENTIRE stylesheet is withheld and the shadow
+    // content paints UNSTYLED for ~1s: the VR pad, gear, etc. flash in at their
+    // default (static, opacity 1) positions before snapping to their real
+    // hidden state. Isolating the @import — and adding it only after the first
+    // paint — guarantees the layout/visibility rules below apply immediately;
+    // Inter just swaps in late (font-display: swap). Chromium never had this
+    // bug (it applies the other rules right away regardless of the @import).
+    requestAnimationFrame(() => {
+      if (shadowRoot.querySelector("style[data-movi-font]")) return;
+      const fontStyle = document.createElement("style");
+      fontStyle.setAttribute("data-movi-font", "");
+      fontStyle.textContent =
+        "@import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap');";
+      shadowRoot.appendChild(fontStyle);
+    });
+
     const style = document.createElement("style");
     style.textContent = `
       /* ========================================
          MOVI PLAYER - PREMIUM UI STYLES
          Rich, Elegant & Responsive Design
       ======================================== */
-      
-      /* Import premium fonts */
-      @import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap');
       
       /* Global rules to remove all outlines and focus rings */
       * {
