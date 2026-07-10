@@ -318,6 +318,7 @@ export class MoviElement extends HTMLElement {
   private _vrLastX: number = 0; // Last pointer/touch X for incremental pan
   private _vrLastY: number = 0;
   private _vrPinchDist: number = 0; // Two-finger pinch baseline (touch zoom)
+  private _aspectPinchDist: number = 0; // Two-finger pinch baseline (fullscreen aspect-fit)
   private _vrSuppressClick: boolean = false; // Swallow the click that ends a drag
   private _vrPadDragging: boolean = false; // On-screen joystick is being dragged
   private _encrypted: boolean = false;   // Encrypted source mode
@@ -3027,6 +3028,55 @@ export class MoviElement extends HTMLElement {
       target.addEventListener(
         "touchmove",
         (e: TouchEvent) => {
+          // Two-finger pinch in fullscreen → switch aspect fit, YouTube-style:
+          // spread out zooms to fill (cover / crop to edges), pinch in returns
+          // to fit (contain). Handled before the edge-swipe guard so a pinch
+          // that happens to begin near a screen edge still registers, and gated
+          // to fullscreen so it never fights the page's own pinch-zoom inline.
+          // (360° mode has its own two-finger pinch below, so exclude it here.)
+          if (
+            !this._vr360 &&
+            e.touches.length === 2 &&
+            this.isFullscreenActive()
+          ) {
+            const dist = Math.hypot(
+              e.touches[0].clientX - e.touches[1].clientX,
+              e.touches[0].clientY - e.touches[1].clientY,
+            );
+            if (this._aspectPinchDist === 0) {
+              this._aspectPinchDist = dist;
+            } else {
+              const ratio = dist / this._aspectPinchDist;
+              const current =
+                this._objectFit === "control"
+                  ? this._currentFit
+                  : this._objectFit;
+              let next: "contain" | "cover" | null = null;
+              if (ratio > 1.2 && current !== "cover") next = "cover";
+              else if (ratio < 0.83 && current !== "contain") next = "contain";
+              if (next) {
+                if (this._objectFit === "control") this._currentFit = next;
+                else this._objectFit = next;
+                this.updateFitMode();
+                const labels: Record<string, string> = {
+                  contain: "Fit",
+                  cover: "Fill",
+                };
+                const osdSvg =
+                  MoviElement.ASPECT_ICONS[next] ||
+                  MoviElement.ASPECT_ICONS.contain;
+                this.showOSD(
+                  `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">${osdSvg}</svg>`,
+                  labels[next],
+                );
+                // Re-baseline so the opposite pinch can toggle straight back.
+                this._aspectPinchDist = dist;
+              }
+            }
+            this.gesturePerformed = true;
+            if (e.cancelable) e.preventDefault();
+            return;
+          }
           if (isEdgeStart) return;
           // 360° mode owns touch: one finger looks around, two fingers pinch
           // to zoom. Bypasses the volume/seek gestures entirely.
@@ -3156,6 +3206,9 @@ export class MoviElement extends HTMLElement {
       target.addEventListener(
         "touchend",
         (e: TouchEvent) => {
+          // A lifted finger ends any pinch — clear the aspect-fit baseline so
+          // the next two-finger gesture re-measures from scratch.
+          this._aspectPinchDist = 0;
           // Release ends press-and-hold-to-2x (and cancels a pending arm). When
           // it was active this restores the pre-hold rate; gesturePerformed was
           // set on activation so the tap show/hide-chrome branch below is skipped.
