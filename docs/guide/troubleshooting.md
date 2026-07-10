@@ -44,27 +44,29 @@ Check your `tsconfig.json`:
 
 ## Cross-Origin Isolation
 
-### "Security Headers Missing" Screen
+### Do I need COOP/COEP headers?
 
-**Symptom:** The player refuses to initialize and shows a "Security Headers Missing" diagnostic.
+**No — cross-origin isolation is optional.** The WASM engine is single-threaded with Asyncify I/O, so it plays fine **without** `SharedArrayBuffer`. The player no longer hard-blocks or shows a "Security Headers Missing" screen when the headers are absent.
 
-**Cause:** Movi Player needs `SharedArrayBuffer` for FFmpeg WASM threading, which is gated behind cross-origin isolation. Without these two headers, the API is unavailable and the player hard-blocks instead of crashing later with a cryptic decode error.
-
-**Solution:** Send these on every HTML response (and worker/wasm responses) from your origin:
+Setting these two headers only enables an **optional zero-copy `SharedArrayBuffer` fast-path** for HTTP streaming — without them, `HttpSource` falls back to a plain-buffer path and streams normally:
 
 ```
 Cross-Origin-Opener-Policy: same-origin
 Cross-Origin-Embedder-Policy: require-corp
 ```
 
-Verify with:
+Check whether the fast-path is active with:
 
 ```javascript
-console.log(crossOriginIsolated); // must be true
+console.log(crossOriginIsolated); // true = SharedArrayBuffer fast-path on
 ```
 
+::: tip `Failed to open media: Timeout at 0`
+Older builds could time out on the very first HTTP read when **not** cross-origin isolated. That was a fallback bug (fixed) — update to a current build and HTTP sources stream without any headers.
+:::
+
 ::: tip Static hosts (GitHub Pages, Netlify free tier, etc.)
-If you can't set response headers on your host, drop in [`coi-serviceworker`](https://github.com/gzuidhof/coi-serviceworker) — it injects the headers client-side via a service worker on the *second* page load (the first load registers the SW and reloads). The Movi docs site itself uses this approach.
+You don't need any headers to play. If you *want* the fast-path and can't set response headers, [`coi-serviceworker`](https://github.com/gzuidhof/coi-serviceworker) injects them client-side via a service worker on the *second* page load (the first registers the SW and reloads).
 :::
 
 ::: warning Cross-origin assets

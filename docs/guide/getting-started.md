@@ -103,19 +103,19 @@ Perfect for quick prototypes or testing.
 
 ---
 
-## ⚠️ Important: CORS & Headers
+## CORS & Headers
 
-Because Movi-Player uses **WebAssembly** and **SharedArrayBuffer** for high-performance streaming, your server needs to support:
+Movi-Player runs on a **single-threaded** WebAssembly engine with Asyncify I/O, so it does **not** require `SharedArrayBuffer` or cross-origin isolation to play. For videos served over HTTP your server needs:
 
 1.  **Range Requests:** Required for seeking in large files.
 2.  **CORS Headers:** If your video is on a different domain.
-3.  **COI Headers (Required):** Movi-Player **hard-blocks** without cross-origin isolation — you'll see a "Security Headers Missing" diagnostic on load. Set on every HTML response:
+3.  **COI Headers (_optional_):** Cross-origin isolation is **not required** — the player no longer hard-blocks or shows a "Security Headers Missing" screen without it. Setting these two headers only enables an **optional zero-copy `SharedArrayBuffer` fast-path** for HTTP streaming; without them `HttpSource` uses a plain-buffer path and streams normally.
     - `Cross-Origin-Opener-Policy: same-origin`
     - `Cross-Origin-Embedder-Policy: require-corp`
 
-Verify with `console.log(crossOriginIsolated)` — it must be `true`.
+Check whether the fast-path is active with `console.log(crossOriginIsolated)`.
 
-**Can't modify server headers?** Use a **Service Worker** to inject COI headers client-side:
+**Want the fast-path but can't modify server headers?** A **Service Worker** can inject the COI headers client-side (optional — playback works without it):
 
 ```javascript
 // sw.js
@@ -143,7 +143,7 @@ if ('serviceWorker' in navigator) {
 Or drop in [`coi-serviceworker`](https://github.com/gzuidhof/coi-serviceworker) which does this for you (one extra page reload on first visit).
 
 ::: tip Local Files
-If you are playing local files using `FileSource` (drag & drop), you do **not** need to worry about CORS — but you still need COOP/COEP set on the host page.
+If you are playing local files using `FileSource` (drag & drop), you do **not** need to worry about CORS or COOP/COEP at all — local playback never touches the network.
 :::
 
 ## 🚀 Next Steps

@@ -493,6 +493,22 @@ Disables all keyboard shortcuts for playback control.
 
 ---
 
+#### `noerrorscreen`
+
+Suppresses the built-in error overlays (the "unsupported source", decode-failure, and network-error screens), so an embedder can render its own error UI instead. Errors are still emitted on the [`error`](#events) event.
+
+```html
+<movi-player src="video.mp4" controls noerrorscreen></movi-player>
+```
+
+**Use Case:** Custom-branded players and headless embeds that surface failures through their own host UI rather than the player's default screens.
+
+::: tip Headless / bare player
+A `<movi-player>` with **no `controls` attribute** is a pure display surface — it shows no resume dialog, no "No Video" empty state, no loading spinner, and ignores all mouse interaction (click, double-click, right-click, drag). Combine with `noerrorscreen` for a fully host-driven render canvas (background/hero video, custom chrome).
+:::
+
+---
+
 #### `startat`
 
 Specifies the time (in seconds) where playback should start.
@@ -1701,6 +1717,7 @@ Press `?` during playback to view the shortcuts panel.
 | `U` | Toggle stable volume | `G` | Toggle ambient mode |
 | `H` | Toggle HDR | `P` | Picture-in-Picture |
 | `+` / `-` | Speed up / down | `Z` / `X` | Subtitle delay -/+ 100ms |
+| `1` – `9` | Seek to 10%–90% | | |
 
 ---
 

@@ -303,6 +303,7 @@ Use cases: video validators, asset management, HDR detection pipelines, search i
   fps="60"                  <!-- Override frame rate -->
   gesturefs                 <!-- Gestures only in fullscreen -->
   nohotkeys                 <!-- Disable keyboard shortcuts -->
+  noerrorscreen             <!-- Suppress the built-in error overlays (host renders its own) -->
   encrypted                 <!-- Encrypted playback mode -->
   tokenurl="/api/token"     <!-- Token endpoint (encrypted) -->
   videourl="/api/video"     <!-- Video endpoint (encrypted) -->
@@ -369,6 +370,7 @@ Press `?` during playback to toggle the shortcuts panel (also available from the
 | `S` | Snapshot | `0` / `Home` | Seek to start |
 | `P` | Picture-in-Picture | Arrows | Seek / Volume |
 | `V` | Cycle subtitle track | `Z` / `X` | Subtitle delay -/+ 100ms |
+| `1` – `9` | Seek to 10%–90% | | |
 
 ## Server Requirements
 
@@ -376,12 +378,15 @@ Videos served over HTTP need:
 
 1. **Range requests** -- for seeking
 2. **CORS headers** -- if cross-origin
-3. **COOP/COEP headers** -- required for `SharedArrayBuffer` (FFmpeg WASM threading). Without these the player shows a "Security Headers Missing" screen and refuses to initialize:
-   ```
-   Cross-Origin-Opener-Policy: same-origin
-   Cross-Origin-Embedder-Policy: require-corp
-   ```
-   On static hosts where you can't set response headers (GitHub Pages, Netlify free tier, etc.), use [coi-serviceworker](https://github.com/gzuidhof/coi-serviceworker) to inject these headers client-side via a service worker.
+
+**COOP/COEP headers are _optional_.** The WASM engine is single-threaded with Asyncify I/O, so it plays fine **without** `SharedArrayBuffer` — no isolation headers, no service worker, no "Security Headers Missing" screen. Setting them only enables an optional **zero-copy `SharedArrayBuffer` fast-path** for HTTP streaming; without them `HttpSource` uses a plain-buffer path and streams normally.
+
+```
+Cross-Origin-Opener-Policy: same-origin
+Cross-Origin-Embedder-Policy: require-corp
+```
+
+On static hosts where you can't set response headers (GitHub Pages, Netlify free tier, etc.), [coi-serviceworker](https://github.com/gzuidhof/coi-serviceworker) can inject these client-side if you want the fast-path — but it's no longer required to play.
 
 ## Browser Support
 

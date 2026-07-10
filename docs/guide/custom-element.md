@@ -52,6 +52,7 @@ The `<movi-player>` custom element is a drop-in replacement for the native `<vid
 | `startat`     | `number`            | -                                  | Start at time (seconds)                           |
 | `gesturefs`   | `boolean`           | -                                  | Gestures only in fullscreen                       |
 | `nohotkeys`   | `boolean`           | -                                  | Disable keyboard shortcuts                        |
+| `noerrorscreen` | `boolean`         | -                                  | Suppress the built-in error overlays              |
 | `encrypted`   | `boolean`           | -                                  | Encrypted playback mode                           |
 | `tokenurl`    | `string`            | -                                  | Token endpoint (encrypted mode)                   |
 | `videourl`    | `string`            | -                                  | Video endpoint (encrypted mode)                   |

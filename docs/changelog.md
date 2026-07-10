@@ -18,8 +18,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Screen-reader accessibility**: an off-screen `aria-live` region announces captions, and the seek/volume controls are now real `role="slider"` widgets with spoken position text.
 - **QoE analytics (`movi-qoe`)**: a versioned QoE event stream (startup, rebuffering, bitrate switches, decode-fallback, errors, heartbeats) via a DOM event, `addQoeSink()` / `getQoeSession()`, and a built-in `beaconSink(url)`.
 - **Framework wrappers + typed element**: official typed `@movi-player/react` / `vue` / `svelte` wrappers, plus `HTMLElementTagNameMap` typing for `<movi-player>`.
+- **Embed / headless bare player + `noerrorscreen`**: no `controls` attribute makes `<movi-player>` a pure display surface (no resume dialog, empty state, spinner, or mouse interaction); `noerrorscreen` also suppresses the built-in error overlays.
+- **Number-key seeking (`1`–`9`)**: `1`–`9` jump to 10%–90% of the timeline (YouTube-style), alongside `0` / `Home`.
 
 ### Fixed
+- **HTTP streaming without cross-origin isolation**: HTTP(S) sources no longer need COOP/COEP (`SharedArrayBuffer`) — single-threaded Asyncify WASM falls back to a plain-buffer path; fixes a `Timeout at 0` on pages without the headers. The headers now only enable an optional zero-copy fast-path.
+- **Fullscreen forced landscape for portrait video (Android)**: the orientation lock now reads the effective display rotation, so a portrait clip stored as landscape-frames-plus-rotation stays portrait in fullscreen.
+- **Audio-strip (collapsed) mode**: shortcuts work while collapsed; the gear aligns with the title, stays visible and appears on load; the touch menu no longer overflows; the strip reflows on late cover art; a strip with no `controls` hides itself.
+- **Picture-in-Picture cursor**: the cursor stays visible above the controls in document PiP.
+- **Touch hold-to-2x too eager**: threshold raised to 600ms and the gesture cancels when it becomes a scroll.
+- **Resume-dialog selection ring**: visible on pointer devices (a global `outline` reset was hiding it), hidden on touch.
+- **Blank snapshot on hardware AV1**: falls back to the decoded `VideoFrame` when WebGL read-back is blank.
+- **Settings gear on non-touch**: hidden where right-click already opens the menu.
+- **Safari first-load flash**: no flash of unstyled overlays on first load.
+- **OS Media Session focus**: the silent audio anchor is now ≥5s so the OS grants full media-key focus.
+- **Volume clamping**: native-element volume clamped to `[0,1]`; the slider caps at 100% unless boost is on.
+- **Context menu clamped on-screen**: the menu repositions after opening so it never spills off-viewport.
+- **Lite / proxy browsers without cross-origin isolation**: the player runs on reduced browsers with no `SharedArrayBuffer`.
 - **Open-GOP CRA-opening HEVC stuck buffering**: a seek now accepts a CRA at or before the target instead of waiting indefinitely for an IDR.
 - **TrueHD/DTS buzzy/jittery audio around seeks and replays**: software decoder now flushes on seek, a cold-start cushion applies on every seek/replay (not just first play), and replay no longer trips a spurious desync resync.
 - **Multi-audio-track files stalling repeatedly**: unused audio streams are now discarded at the demuxer level so the active track isn't starved by interleaved packets from a track nobody's listening to.

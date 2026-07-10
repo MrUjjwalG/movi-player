@@ -493,11 +493,13 @@ class HttpSource {
 }
 ```
 
-**Requirements:**
+**Requirements (for this optional fast-path only):**
 
 - HTTPS (cross-origin isolation)
 - Headers: `Cross-Origin-Opener-Policy: same-origin`
 - Headers: `Cross-Origin-Embedder-Policy: require-corp`
+
+> These headers are **not** required to play. The WASM engine is single-threaded with Asyncify I/O, so without `SharedArrayBuffer` the `else` branch above (a plain-buffer copy) is used and HTTP streaming works normally — the shared buffer is purely a zero-copy optimisation.
 
 ---
 
