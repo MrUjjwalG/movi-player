@@ -284,7 +284,9 @@ export class MoviElement extends HTMLElement {
   private _suppressSwReload: boolean = false;
 
   private _fps: number = 0; // Custom frame rate (0 = auto from video)
-  private _gesturefs: boolean = false; // Gestures only in fullscreen if true
+  // @deprecated alias for `playsinline` — gestures-only-in-fullscreen is now
+  // driven by playsinline; kept so existing `gesturefs` markup keeps working.
+  private _gesturefs: boolean = false;
   private _noHotkeys: boolean = false; // Disable keyboard shortcuts if true
   private _startAt: number = 0; // Start time in seconds
   private _fastSeek: boolean = false; // Enable skip controls (buttons, keys, gestures) if true
@@ -3014,9 +3016,15 @@ export class MoviElement extends HTMLElement {
               this._holdSpeedTimer = null;
             }
 
-            // Determine gesture type early
-            // If gesturefs is enabled, ONLY allow gestures if in fullscreen
-            if (this._gesturefs && !document.fullscreenElement) {
+            // Determine gesture type early.
+            // An inline player (`playsinline`) shares the page's scroll, so its
+            // touch gestures (swipe-seek / volume) must not fight it — restrict
+            // them to fullscreen. `gesturefs` is the deprecated alias for the
+            // same behaviour, still honoured.
+            if (
+              (this._playsinline || this._gesturefs) &&
+              !document.fullscreenElement
+            ) {
               return;
             }
 
@@ -19577,10 +19585,13 @@ export class MoviElement extends HTMLElement {
     }
   }
 
+  /** @deprecated Use `playsInline` instead — an inline player now restricts
+   *  touch gestures to fullscreen on its own. Kept for backward compatibility. */
   get gesturefs(): boolean {
     return this._gesturefs;
   }
 
+  /** @deprecated Use `playsInline` instead. */
   set gesturefs(value: boolean) {
     if (this._gesturefs !== value) {
       this._gesturefs = value;

@@ -110,6 +110,10 @@ export interface MoviPlayerAttributes {
   autoplay?: boolean | "";
   loop?: boolean | "";
   muted?: boolean | "";
+  /** Play inline (don't auto-fullscreen on iOS). On any touch device, touch
+   *  gestures (swipe-seek / volume) are suppressed while inline so they don't
+   *  fight the page's scroll; fullscreen gestures are unaffected. Replaces
+   *  `gesturefs`. */
   playsinline?: boolean | "";
   preload?: "none" | "metadata" | "auto";
   volume?: number | string;

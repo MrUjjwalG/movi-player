@@ -50,7 +50,8 @@ The `<movi-player>` custom element is a drop-in replacement for the native `<vid
 | `resume`      | `boolean`           | -                                  | Resume from last position                         |
 | `stablevolume`| `boolean`           | -                                  | Loudness normalization                            |
 | `startat`     | `number`            | -                                  | Start at time (seconds)                           |
-| `gesturefs`   | `boolean`           | -                                  | Gestures only in fullscreen                       |
+| `playsinline` | `boolean`           | -                                  | Play inline (no iOS auto-fullscreen); on any touch device, suppress swipe/volume gestures while inline so they don't fight page scroll (fullscreen unaffected) |
+| `gesturefs`   | `boolean`           | -                                  | **Deprecated** — use `playsinline` |
 | `nohotkeys`   | `boolean`           | -                                  | Disable keyboard shortcuts                        |
 | `noerrorscreen` | `boolean`         | -                                  | Suppress the built-in error overlays              |
 | `encrypted`   | `boolean`           | -                                  | Encrypted playback mode                           |

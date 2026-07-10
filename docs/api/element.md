@@ -236,7 +236,11 @@ Sets the initial playback speed. Persists across reloads like `volume`.
 
 #### `playsinline`
 
-Prevents fullscreen on iOS (plays inline instead).
+Prevents auto-fullscreen on iOS (plays inline instead). It also — on **any touch
+device** — **suppresses touch gestures (swipe-seek / volume) while the player is
+inline** so they don't interfere with the page's scroll. Fullscreen gestures are
+unaffected — they keep working as normal. (This replaces the deprecated
+[`gesturefs`](#gesturefs-deprecated).)
 
 ```html
 <movi-player src="video.mp4" playsinline></movi-player>
@@ -462,7 +466,11 @@ Overrides the video frame rate with a custom value.
 
 ---
 
-#### `gesturefs`
+#### `gesturefs` (deprecated)
+
+> **Deprecated — use [`playsinline`](#playsinline) instead.** An inline player now
+> restricts touch gestures to fullscreen on its own. `gesturefs` is still honoured
+> for backward compatibility.
 
 Restricts touch gestures to fullscreen mode only. When enabled, tap/swipe/pinch gestures will only work when the player is in fullscreen.
 
@@ -1025,7 +1033,10 @@ player.fps = 0; // Auto (from metadata)
 
 ---
 
-#### `gesturefs: boolean`
+#### `gesturefs: boolean` (deprecated)
+
+> **Deprecated — use `playsInline` instead**, which now restricts gestures to
+> fullscreen on its own. Kept for backward compatibility.
 
 Gets/sets whether touch gestures are restricted to fullscreen mode only.
 

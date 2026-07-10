@@ -301,7 +301,8 @@ Use cases: video validators, asset management, HDR detection pipelines, search i
   lcevcurl="https://..."    <!-- URL to lazy-load the lcevc_dec.js decoder library -->
   sw                        <!-- Force software decoding -->
   fps="60"                  <!-- Override frame rate -->
-  gesturefs                 <!-- Gestures only in fullscreen -->
+  playsinline               <!-- Play inline; on any touch device, suppress swipe/volume gestures while inline so they don't fight page scroll (fullscreen unaffected) -->
+  gesturefs                 <!-- DEPRECATED: use playsinline -->
   nohotkeys                 <!-- Disable keyboard shortcuts -->
   noerrorscreen             <!-- Suppress the built-in error overlays (host renders its own) -->
   encrypted                 <!-- Encrypted playback mode -->
