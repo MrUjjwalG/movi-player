@@ -4902,10 +4902,16 @@ export class MoviElement extends HTMLElement {
         item.classList.add("movi-context-menu-active");
         // Update the new context menu status too
         const aspectStatus = shadowRoot.querySelector(".movi-aspect-status");
+        const fitLabels: Record<string, string> = { contain: "Fit", cover: "Fill", fill: "Stretch", zoom: "Zoom" };
         if (aspectStatus) {
-          const labels: Record<string, string> = { contain: "Fit", cover: "Fill", fill: "Stretch", zoom: "Zoom" };
-          aspectStatus.textContent = labels[fitMode] || fitMode;
+          aspectStatus.textContent = fitLabels[fitMode] || fitMode;
         }
+        // Surface the same Fit/Fill/… OSD the aspect button and keyboard show —
+        // changing the fit from the menu was silently skipping it.
+        this.showOSD(
+          `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">${MoviElement.ASPECT_ICONS[fitMode] || MoviElement.ASPECT_ICONS.contain}</svg>`,
+          fitLabels[fitMode] || fitMode,
+        );
         hideContextMenu();
       } else if (action === "hdr-toggle") {
         this.hdr = !this.hdr;
