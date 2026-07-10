@@ -3150,20 +3150,19 @@ export class MoviElement extends HTMLElement {
               startXPercent <= 0.5
             ) {
               if (deltaY < -60) {
-                // Swipe UP -> Enter Fullscreen (skip for any audio source)
-                if (!document.fullscreenElement && !this.classList.contains("movi-audio-mode")) {
-                  this.requestFullscreen().catch((err) =>
-                    Logger.error(TAG, "Error entering fullscreen", err),
-                  );
+                // Swipe UP -> Enter Fullscreen (skip for any audio source).
+                // Route through toggleFullscreen so the iOS pseudo-fullscreen
+                // fallback and the host-fullscreen event apply here too.
+                if (
+                  !this.isFullscreenActive() &&
+                  !this.classList.contains("movi-audio-mode")
+                ) {
+                  this.toggleFullscreen();
                 }
               } else if (deltaY > 60) {
                 // Swipe DOWN -> Exit Fullscreen
-                if (document.fullscreenElement) {
-                  document
-                    .exitFullscreen()
-                    .catch((err) =>
-                      Logger.error(TAG, "Error exiting fullscreen", err),
-                    );
+                if (this.isFullscreenActive()) {
+                  this.toggleFullscreen();
                 }
               }
             }
@@ -5324,7 +5323,7 @@ export class MoviElement extends HTMLElement {
     // requestFullscreen is blocked, or embedded apps that drive their own
     // fullscreen layout). Hosts call event.preventDefault() and then drive
     // setHostFullscreen() themselves to keep the UI in sync.
-    const currentlyActive = !!document.fullscreenElement || this._hostFullscreen;
+    const currentlyActive = this.isFullscreenActive();
     const requestEvent = new CustomEvent("movi-fullscreen-request", {
       cancelable: true,
       bubbles: true,
@@ -5333,6 +5332,14 @@ export class MoviElement extends HTMLElement {
     });
     this.dispatchEvent(requestEvent);
     if (requestEvent.defaultPrevented) {
+      return;
+    }
+
+    // iOS Safari (and any engine without element-fullscreen): the Fullscreen
+    // API only works on <video>, and we render to a canvas — so fall back to a
+    // CSS viewport-fill "pseudo fullscreen" instead of throwing on requestFullscreen.
+    if (!this.nativeFullscreenSupported()) {
+      this.setPseudoFullscreen(!this._pseudoFullscreen);
       return;
     }
 
@@ -5688,6 +5695,88 @@ export class MoviElement extends HTMLElement {
    *  movi-fullscreen-request event can reflect it correctly even when
    *  document.fullscreenElement is null. */
   private _hostFullscreen = false;
+
+  /** CSS "fill the viewport" fallback used where the element Fullscreen API
+   *  isn't available (iOS Safari only exposes it for <video>, and we render to
+   *  a canvas). Not real fullscreen — no chrome hiding — but the player takes
+   *  over the visible viewport. */
+  private _pseudoFullscreen = false;
+  private _prevBodyOverflow = "";
+
+  /** True when the player is fullscreen by any route: native element FS, a
+   *  host-driven FS, or the iOS pseudo-fullscreen fallback. */
+  private isFullscreenActive(): boolean {
+    return (
+      document.fullscreenElement === this ||
+      this._hostFullscreen ||
+      this._pseudoFullscreen
+    );
+  }
+
+  /** Whether the browser exposes the element Fullscreen API for this element
+   *  (false on iOS Safari, which only fullscreens <video>). */
+  private nativeFullscreenSupported(): boolean {
+    return (
+      typeof this.requestFullscreen === "function" && !!document.fullscreenEnabled
+    );
+  }
+
+  /** Re-evaluate on device rotation / viewport change while pseudo-fullscreen. */
+  private _onPseudoFsResize = () => {
+    this.updatePseudoFsRotation();
+    this.updateCanvasSize();
+  };
+
+  /**
+   * Forced-landscape for the pseudo-fullscreen fallback: iOS won't rotate the
+   * screen for us, so a landscape video on a portrait screen is turned 90° via
+   * CSS (the .movi-pseudo-fs-rotate class) to fill it — matching what Chrome /
+   * Android do with an orientation lock. Once the device itself is landscape
+   * (window wider than tall) the rotation is dropped.
+   */
+  private updatePseudoFsRotation(): void {
+    if (!this._pseudoFullscreen) {
+      this.classList.remove("movi-pseudo-fs-rotate");
+      return;
+    }
+    const track = this.player?.trackManager?.getActiveVideoTrack?.();
+    const rawW = track?.width ?? 0;
+    const rawH = track?.height ?? 0;
+    const rot = this.player?.getVideoRotation?.() ?? track?.rotation ?? 0;
+    const swap = Math.abs(rot) % 180 !== 0;
+    const vidW = swap ? rawH : rawW;
+    const vidH = swap ? rawW : rawH;
+    const videoLandscape = vidW > vidH && vidW > 0;
+    const windowPortrait = window.innerHeight > window.innerWidth;
+    this.classList.toggle(
+      "movi-pseudo-fs-rotate",
+      videoLandscape && windowPortrait,
+    );
+  }
+
+  /** Enter/leave the CSS viewport-fill fallback. */
+  private setPseudoFullscreen(on: boolean): void {
+    if (this._pseudoFullscreen === on) return;
+    this._pseudoFullscreen = on;
+    this.classList.toggle("movi-pseudo-fullscreen", on);
+    if (on) {
+      // Lock the page scroll behind the overlay while active.
+      this._prevBodyOverflow = document.body.style.overflow;
+      document.body.style.overflow = "hidden";
+      this.updatePseudoFsRotation();
+      window.addEventListener("resize", this._onPseudoFsResize);
+      window.addEventListener("orientationchange", this._onPseudoFsResize);
+    } else {
+      this.classList.remove("movi-pseudo-fs-rotate");
+      window.removeEventListener("resize", this._onPseudoFsResize);
+      window.removeEventListener("orientationchange", this._onPseudoFsResize);
+      document.body.style.overflow = this._prevBodyOverflow;
+    }
+    this.applyFullscreenUiState(on);
+    this.applyFullscreenOrientation(on);
+    // Repaint the canvas at the new (viewport) size.
+    this.updateCanvasSize();
+  }
 
   private updateFullscreenIcon(isFullscreen: boolean): void {
     const fullscreenIcon = this.shadowRoot?.querySelector(
@@ -8962,6 +9051,45 @@ export class MoviElement extends HTMLElement {
       :host(.movi-menu-overflow) {
         overflow: visible !important;
         contain: layout style !important;
+      }
+
+      /* iOS pseudo-fullscreen: iOS Safari only fullscreens <video>, and we
+         render to a canvas, so the element Fullscreen API is unavailable. Fill
+         the whole screen via CSS instead. Sized in LARGE viewport units
+         (100lvw/100lvh, 100vw/100vh fallback) so the box spans the entire
+         screen — behind Safari's toolbars — instead of just the shrunken
+         visible area (dvh/inset left page content peeking at the edges). */
+      :host(.movi-pseudo-fullscreen) {
+        position: fixed !important;
+        top: 0 !important;
+        left: 0 !important;
+        right: auto !important;
+        bottom: auto !important;
+        width: 100vw !important;
+        width: 100lvw !important;
+        height: 100vh !important;
+        height: 100lvh !important;
+        max-width: none !important;
+        max-height: none !important;
+        margin: 0 !important;
+        border-radius: 0 !important;
+        z-index: 2147483647 !important;
+        background: #000 !important;
+      }
+      /* Forced-landscape: a landscape video on a portrait screen (where iOS
+         won't rotate for us) is turned 90° via CSS so it fills the screen the
+         way Chrome/Android's orientation lock does. Swapped large-viewport
+         dimensions so, after the rotate, the box maps onto the full screen;
+         centred so the rotate pivots about the middle. */
+      :host(.movi-pseudo-fs-rotate) {
+        width: 100vh !important;
+        width: 100lvh !important;
+        height: 100vw !important;
+        height: 100lvw !important;
+        top: 50% !important;
+        left: 50% !important;
+        transform: translate(-50%, -50%) rotate(90deg) !important;
+        transform-origin: center center !important;
       }
 
       /* The :host{display:block} above is an author rule, so it beats the
@@ -14697,6 +14825,15 @@ export class MoviElement extends HTMLElement {
   }
 
   disconnectedCallback() {
+    // If removed while in the iOS pseudo-fullscreen fallback, restore the page
+    // scroll we locked and drop the resize listeners (setPseudoFullscreen(false)
+    // won't run otherwise).
+    if (this._pseudoFullscreen) {
+      document.body.style.overflow = this._prevBodyOverflow;
+      window.removeEventListener("resize", this._onPseudoFsResize);
+      window.removeEventListener("orientationchange", this._onPseudoFsResize);
+      this._pseudoFullscreen = false;
+    }
     // Remove WebGL context listeners
     this.canvas.removeEventListener("webglcontextlost", this.handleContextLost);
     this.canvas.removeEventListener(
@@ -15121,6 +15258,13 @@ export class MoviElement extends HTMLElement {
     if (document.fullscreenElement === this) {
       width = window.innerWidth;
       height = window.innerHeight;
+    } else if (this._pseudoFullscreen) {
+      // The host is CSS-sized (and, when forced-landscape, rotated) to fill the
+      // viewport. Use its LAYOUT box (clientWidth/Height) — unlike
+      // getBoundingClientRect it isn't affected by the rotate transform, so the
+      // canvas buffer matches the un-rotated element the transform then turns.
+      width = this.clientWidth;
+      height = this.clientHeight;
     } else {
       const rect = this.getBoundingClientRect();
       width = widthAttr ? parseInt(widthAttr, 10) : rect.width;
