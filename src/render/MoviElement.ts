@@ -9166,6 +9166,25 @@ export class MoviElement extends HTMLElement {
         display: none !important;
       }
 
+      /* Compact players: when the storyboard timeline (T) is open, hide the
+         controls bar so the thumbnail strip gets the whole area, and drop the
+         panel into the freed space. Keyed off the panel's inline display:flex
+         (same signal as the seek-thumbnail rule above), so every close path
+         restores the bar automatically. Desktop keeps the bar visible. */
+      @container movi-host (max-width: 720px) {
+        :host:has(.movi-timeline-panel[style*="flex"]) .movi-controls-container {
+          opacity: 0 !important;
+          pointer-events: none !important;
+          transform: translateY(10px) !important;
+        }
+        :host:has(.movi-timeline-panel[style*="flex"]) .movi-controls-bar {
+          pointer-events: none !important;
+        }
+        :host:has(.movi-timeline-panel[style*="flex"]) .movi-timeline-panel {
+          bottom: 12px !important;
+        }
+      }
+
       /* Force enable pointer events on all interactive controls */
       .movi-controls-container.movi-controls-visible .movi-controls-bar,
       .movi-controls-container.movi-controls-visible .movi-controls-bar *,
@@ -9299,9 +9318,11 @@ export class MoviElement extends HTMLElement {
         transform: translateY(0);
         pointer-events: auto;
       }
-      /* Hide the gear while a bottom dropdown is open — it lives in a higher
-         stacking context than the menu and would otherwise paint over it. */
-      :host(.movi-bottom-menu-open) .movi-gear-btn {
+      /* Hide the gear while a bottom dropdown OR the storyboard timeline is
+         open — it lives in a higher stacking context than either and would
+         otherwise paint over them. */
+      :host(.movi-bottom-menu-open) .movi-gear-btn,
+      :host:has(.movi-timeline-panel[style*="flex"]) .movi-gear-btn {
         opacity: 0 !important;
         visibility: hidden !important;
         pointer-events: none !important;
@@ -11812,9 +11833,11 @@ export class MoviElement extends HTMLElement {
         }
 
         .movi-progress-container {
-          padding: 6px 0 2px;
+          /* Nudge the seek bar down a little on compact players so it isn't
+             hugging the video edge. */
+          padding: 14px 0 2px;
         }
-        
+
         .movi-progress-bar {
           height: 6px;
         }
@@ -12125,7 +12148,47 @@ export class MoviElement extends HTMLElement {
           font-size: 11px;
         }
         .movi-progress-container {
-          padding: 6px 0 10px;
+          padding: 14px 0 6px;
+        }
+      }
+
+      /* Below ~290px the dropdown / context menus need a smaller type scale so
+         rows aren't cramped or clipped on a tiny player. */
+      @container movi-host (max-width: 289px) {
+        .movi-speed-item {
+          font-size: 10px;
+          padding: 6px 10px;
+        }
+        .movi-audio-track-item,
+        .movi-subtitle-track-item {
+          font-size: 10px;
+          padding: 5px 8px;
+          gap: 6px;
+        }
+        .movi-track-item-icon {
+          width: 13px;
+          height: 13px;
+        }
+        .movi-audio-track-info,
+        .movi-subtitle-track-info {
+          font-size: 8px;
+          padding: 1px 5px;
+        }
+        .movi-track-menu-header {
+          font-size: 9px;
+          padding: 7px 10px 6px;
+        }
+        .movi-track-menu-footer {
+          font-size: 8px;
+        }
+        .movi-context-menu-item {
+          font-size: 10px;
+          padding: 7px 10px;
+        }
+        .movi-context-menu-icon svg,
+        .movi-context-menu-item svg {
+          width: 15px;
+          height: 15px;
         }
       }
 
@@ -13485,6 +13548,13 @@ export class MoviElement extends HTMLElement {
         }
         .movi-seek-thumbnail {
             transform: translateX(-50%) scale(0.85);
+            /* Scale from the bottom edge, not the centre: the box is bottom-
+               anchored (bottom:40px) and grows upward when the thumbnail image
+               appears above the time. With the default centre origin a taller
+               box shrinks toward its middle, lifting its bottom edge — so the
+               time text jumps up the moment the thumb arrives. Anchoring the
+               scale origin at the bottom keeps the time fixed either way. */
+            transform-origin: bottom center;
             bottom: 40px;
         }
         
