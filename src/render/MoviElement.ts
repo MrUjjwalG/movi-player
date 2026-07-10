@@ -4378,6 +4378,86 @@ export class MoviElement extends HTMLElement {
       if (!isTouchDevice) this.showControls();
     };
 
+    // Touch: drag the mobile menu drawer to the right to dismiss it. The drawer
+    // slides in from the right edge (translateX(100%) -> 0), so dragging it back
+    // toward the right is the natural close gesture. Only the full-height drawer
+    // participates (the audio-strip variant is an opacity-fade, not a slide),
+    // and vertical/leftward moves are handed back to native scrolling / taps so
+    // menu buttons and scrolling still work. The drawer's CSS transform/
+    // transition carry `!important`, so inline overrides must use setProperty
+    // with the "important" priority to win.
+    const SWIPE_SLOP = 8; // px of travel before we lock an axis
+    const SWIPE_CLOSE_RATIO = 0.35; // fraction of drawer width that dismisses
+    let swStartX = 0;
+    let swStartY = 0;
+    let swDecided = false; // axis for this gesture chosen
+    let swDragging = false; // horizontal drag-to-close has taken over
+    const drawerActive = () =>
+      contextMenu.classList.contains("movi-context-menu-mobile") &&
+      contextMenu.classList.contains("visible") &&
+      !this.classList.contains("movi-audio-strip");
+
+    contextMenu.addEventListener(
+      "touchstart",
+      (e: TouchEvent) => {
+        if (!drawerActive() || e.touches.length !== 1) return;
+        swStartX = e.touches[0].clientX;
+        swStartY = e.touches[0].clientY;
+        swDecided = false;
+        swDragging = false;
+      },
+      { passive: true },
+    );
+
+    contextMenu.addEventListener(
+      "touchmove",
+      (e: TouchEvent) => {
+        if (!drawerActive() || e.touches.length !== 1) return;
+        const dx = e.touches[0].clientX - swStartX;
+        const dy = e.touches[0].clientY - swStartY;
+        if (!swDecided) {
+          if (Math.abs(dx) < SWIPE_SLOP && Math.abs(dy) < SWIPE_SLOP) return;
+          swDecided = true;
+          // Own the gesture only when it's a clear rightward horizontal swipe;
+          // otherwise leave it to the menu's own vertical scroll.
+          swDragging = Math.abs(dx) > Math.abs(dy) && dx > 0;
+          if (swDragging)
+            contextMenu.style.setProperty("transition", "none", "important");
+        }
+        if (!swDragging) return;
+        e.preventDefault(); // we own this gesture now — no scroll/tap
+        const offset = Math.max(0, dx); // rightward only
+        contextMenu.style.setProperty(
+          "transform",
+          `translateX(${offset}px)`,
+          "important",
+        );
+      },
+      { passive: false },
+    );
+
+    const endSwipe = (e: TouchEvent) => {
+      if (!swDragging) {
+        swDecided = false;
+        return;
+      }
+      swDragging = false;
+      swDecided = false;
+      const dx = (e.changedTouches[0]?.clientX ?? swStartX) - swStartX;
+      const width = contextMenu.offsetWidth || 1;
+      // Restore the CSS 0.4s slide and commit the dragged position as its
+      // start, then hand the transform back to CSS so it animates to the
+      // resting/closed state instead of jumping.
+      contextMenu.style.removeProperty("transition");
+      void contextMenu.offsetWidth; // reflow: lock in the current translateX
+      if (dx > width * SWIPE_CLOSE_RATIO) {
+        hideContextMenu(); // drops .visible -> CSS target translateX(100%)
+      }
+      contextMenu.style.removeProperty("transform");
+    };
+    contextMenu.addEventListener("touchend", endSwipe, { passive: true });
+    contextMenu.addEventListener("touchcancel", endSwipe, { passive: true });
+
     // Add event listeners with capture phase and passive: false to allow preventDefault
     // Use capture phase to intercept before it reaches other handlers
     // Add to multiple elements to ensure we catch it everywhere

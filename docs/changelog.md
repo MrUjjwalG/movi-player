@@ -20,6 +20,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Framework wrappers + typed element**: official typed `@movi-player/react` / `vue` / `svelte` wrappers, plus `HTMLElementTagNameMap` typing for `<movi-player>`.
 - **Embed / headless bare player + `noerrorscreen`**: no `controls` attribute makes `<movi-player>` a pure display surface (no resume dialog, empty state, spinner, or mouse interaction); `noerrorscreen` also suppresses the built-in error overlays.
 - **Number-key seeking (`1`–`9`)**: `1`–`9` jump to 10%–90% of the timeline (YouTube-style), alongside `0` / `Home`.
+- **Swipe-to-dismiss touch menu**: the gear-opened context menu is a right-side drawer on touch — drag it toward the right edge to close it. Vertical scrolling and taps inside the menu are unaffected.
 
 ### Fixed
 - **HTTP streaming without cross-origin isolation**: HTTP(S) sources no longer need COOP/COEP (`SharedArrayBuffer`) — single-threaded Asyncify WASM falls back to a plain-buffer path; fixes a `Timeout at 0` on pages without the headers. The headers now only enable an optional zero-copy fast-path.
