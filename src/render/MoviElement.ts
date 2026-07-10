@@ -1434,6 +1434,22 @@ export class MoviElement extends HTMLElement {
       this.focus();
     });
 
+    // Move the selection ring to whichever button the pointer is over, so it
+    // tracks the mouse the same way arrow keys move it — hovering Cancel puts
+    // the ring on Cancel instead of leaving it stuck on Resume.
+    const resumeYes = resumeDialog.querySelector(
+      ".movi-resume-yes",
+    ) as HTMLElement | null;
+    const resumeNo = resumeDialog.querySelector(
+      ".movi-resume-no",
+    ) as HTMLElement | null;
+    const focusResumeBtn = (btn: HTMLElement | null) => {
+      resumeYes?.classList.toggle("movi-resume-focused", btn === resumeYes);
+      resumeNo?.classList.toggle("movi-resume-focused", btn === resumeNo);
+    };
+    resumeYes?.addEventListener("pointerenter", () => focusResumeBtn(resumeYes));
+    resumeNo?.addEventListener("pointerenter", () => focusResumeBtn(resumeNo));
+
     // Create Keyboard Shortcuts Panel
     const shortcutsPanel = document.createElement("div");
     shortcutsPanel.className = "movi-shortcuts-panel";
