@@ -1227,8 +1227,14 @@ export class MoviElement extends HTMLElement {
                   <path d="M17 2l4 4-4 4"></path><path d="M3 11v-1a4 4 0 0 1 4-4h14"></path><path d="M7 22l-4-4 4-4"></path><path d="M21 13v1a4 4 0 0 1-4 4H3"></path>
                 </svg>
               </button>
+
+              <button class="movi-btn movi-pip-btn" aria-label="Picture in Picture" style="display:none">
+                <svg class="movi-icon-pip" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                  <rect x="2" y="3" width="20" height="14" rx="2"/><rect x="12" y="9" width="8" height="6" rx="1" fill="currentColor" opacity="0.3"/>
+                </svg>
+              </button>
             </div>
-            
+
             <button class="movi-btn movi-more-btn" aria-label="More Settings">
               <svg class="movi-icon-more" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
                 <polyline points="15 18 9 12 15 6"></polyline>
@@ -1237,12 +1243,7 @@ export class MoviElement extends HTMLElement {
                 <polyline points="9 18 15 12 9 6"></polyline>
               </svg>
             </button>
-            
-            <button class="movi-btn movi-pip-btn" aria-label="Picture in Picture" style="display:none">
-              <svg class="movi-icon-pip" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-                <rect x="2" y="3" width="20" height="14" rx="2"/><rect x="12" y="9" width="8" height="6" rx="1" fill="currentColor" opacity="0.3"/>
-              </svg>
-            </button>
+
             <button class="movi-btn movi-fullscreen-btn" aria-label="Fullscreen">
               <svg class="movi-icon-fullscreen" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
                 <path d="M8 3H5a2 2 0 0 0-2 2v3m18 0V5a2 2 0 0 0-2-2h-3m0 18h3a2 2 0 0 0 2-2v-3M3 16v3a2 2 0 0 0 2 2h3"></path>
@@ -4256,54 +4257,31 @@ export class MoviElement extends HTMLElement {
         // mode invocation (track switch from audio to video).
         contextMenu.style.position = "";
 
+        // Lift the host's paint/overflow clip so the menu can spill past the
+        // player's own bounds (into the surrounding page) like strip mode —
+        // small/embedded players no longer chop the menu at their edges. The
+        // menu stays positioned relative to the host (container-type keeps the
+        // host a containing block); we clamp it to the viewport, not the player.
+        this.classList.add("movi-menu-overflow");
+
         let x = e.clientX - rect.left;
         let y = e.clientY - rect.top;
 
-        Logger.debug(TAG, "[ContextMenu] Initial position", {
-          x,
-          y,
-          rectWidth: rect.width,
-          rectHeight: rect.height,
-        });
-
-        // Clamp menu height to the player so it scrolls when too tall
-        const maxMenuHeight = Math.max(120, rect.height - 20);
-        contextMenu.style.maxHeight = `${maxMenuHeight}px`;
+        // Cap height to the VIEWPORT (not the player) so a tall menu on a short
+        // player can extend downward instead of scrolling inside a tiny box.
+        contextMenu.style.maxHeight = `${Math.max(180, window.innerHeight - 40)}px`;
 
         // Temporarily show menu to get its dimensions
         contextMenu.style.display = "block";
         contextMenu.style.visibility = "hidden";
         const menuWidth = contextMenu.offsetWidth;
         const menuHeight = contextMenu.offsetHeight;
-        Logger.debug(TAG, "[ContextMenu] Menu dimensions", {
-          menuWidth,
-          menuHeight,
-        });
         contextMenu.style.visibility = "visible";
 
-        // Adjust horizontal position if menu would overflow
-        if (x + menuWidth > rect.width) {
-          x = rect.width - menuWidth - 10;
-          Logger.debug(TAG, "[ContextMenu] Adjusted x to prevent overflow", {
-            x,
-          });
-        }
-        if (x < 10) {
-          x = 10;
-          Logger.debug(TAG, "[ContextMenu] Adjusted x to minimum", { x });
-        }
-
-        // Adjust vertical position if menu would overflow
-        if (y + menuHeight > rect.height) {
-          y = rect.height - menuHeight - 10;
-          Logger.debug(TAG, "[ContextMenu] Adjusted y to prevent overflow", {
-            y,
-          });
-        }
-        if (y < 10) {
-          y = 10;
-          Logger.debug(TAG, "[ContextMenu] Adjusted y to minimum", { y });
-        }
+        // Flip to the left of / above the cursor only when it would run off the
+        // VIEWPORT edge — the player edge no longer constrains it.
+        if (e.clientX + menuWidth > window.innerWidth - 10) x -= menuWidth;
+        if (e.clientY + menuHeight > window.innerHeight - 10) y -= menuHeight;
 
         contextMenu.style.left = `${x}px`;
         contextMenu.style.top = `${y}px`;
@@ -4332,6 +4310,9 @@ export class MoviElement extends HTMLElement {
     // Helper to hide context menu
     const hideContextMenu = () => {
       contextMenu.classList.remove("visible");
+      // Restore the host's paint/overflow clip (lifted while the desktop menu
+      // was open so it could spill outside the player).
+      this.classList.remove("movi-menu-overflow");
       this._contextMenuVisible = false;
 
       // Set just-closed flag to prevent play/pause toggle
@@ -8048,6 +8029,30 @@ export class MoviElement extends HTMLElement {
       // fixed with the button's bounding rect — viewport coordinates
       // can't be clipped by ancestor overflow.
       this.applyStripFixedMenuPosition(el);
+      // Non-strip: keep the upward-opening dropdown INSIDE the player and scroll
+      // it internally, rather than letting it spill into the page above — on a
+      // short embedded player that overlapped unrelated page content and hid the
+      // first rows. The menu's bottom edge is anchored just above its button;
+      // cap its height to the room between the player's OWN top and that bottom.
+      // This is player-relative (subtract the host's top), NOT viewport-relative,
+      // so it stays contained wherever the player sits on a scrolled page.
+      // scrollTop 0 keeps the first row (0.25x / Audio 1 / first subtitle)
+      // visible; the rest is reachable by scrolling. The mobile menu CSS sets
+      // max-height with !important, so the inline override must also carry it.
+      if (!this.classList.contains("movi-audio-strip")) {
+        const hostTop = this.getBoundingClientRect().top;
+        const menuBottom = el.getBoundingClientRect().bottom;
+        el.style.setProperty(
+          "max-height",
+          `${Math.max(96, menuBottom - hostTop - 8)}px`,
+          "important",
+        );
+        el.scrollTop = 0;
+      }
+      // The dropdowns live inside the controls container's stacking context
+      // (z-index 10), so the top-right gear (z-index 30) would paint on top of a
+      // menu that opens up over it. Hide the gear while any dropdown is open.
+      this.classList.add("movi-bottom-menu-open");
       void el.getBoundingClientRect(); // flush layout so transition starts
       el.classList.add("is-open");
       return;
@@ -8063,18 +8068,23 @@ export class MoviElement extends HTMLElement {
       // If the menu was reopened during the exit transition, leave it.
       if (el.classList.contains("is-open")) return;
       el.style.display = "none";
-      // Reset the strip-mode fixed positioning so a subsequent open in
-      // non-strip mode doesn't inherit stale inline coords.
+      // Reset the strip-mode fixed positioning + the viewport max-height cap so
+      // a subsequent open (in a different mode / at a different scroll spot)
+      // doesn't inherit stale inline values.
       el.style.position = "";
       el.style.top = "";
       el.style.left = "";
       el.style.right = "";
       el.style.bottom = "";
+      el.style.removeProperty("max-height");
       // Menu fully closed — if nothing else is open, re-arm the auto-hide
       // timer. Covers toggling a popup shut from its own button (no
       // closeAllBottomMenus / mouseleave fires on touch), which otherwise
       // left the bar pinned open on touch devices.
       if (!this.isAnyMenuOpen()) {
+        // Restore the host clip + gear once every dropdown is closed.
+        this.classList.remove("movi-menu-overflow");
+        this.classList.remove("movi-bottom-menu-open");
         this.showControls();
       }
     };
@@ -8833,6 +8843,17 @@ export class MoviElement extends HTMLElement {
         -moz-osx-font-smoothing: grayscale;
       }
 
+      /* While a desktop context menu is open, let it spill past the player's
+         own box the way strip mode does: lift the host's paint containment and
+         overflow clip. container-type stays, so the responsive @container
+         queries keep firing and the menu is still positioned relative to the
+         host — it just isn't clipped to the player edges anymore. Transient:
+         the class is removed the moment the menu closes. */
+      :host(.movi-menu-overflow) {
+        overflow: visible !important;
+        contain: layout style !important;
+      }
+
       /* The :host{display:block} above is an author rule, so it beats the
          UA stylesheet's [hidden]{display:none}. Without this, the standard
          hidden attribute does nothing and the player stays visible. Honour
@@ -9277,6 +9298,13 @@ export class MoviElement extends HTMLElement {
         visibility: visible;
         transform: translateY(0);
         pointer-events: auto;
+      }
+      /* Hide the gear while a bottom dropdown is open — it lives in a higher
+         stacking context than the menu and would otherwise paint over it. */
+      :host(.movi-bottom-menu-open) .movi-gear-btn {
+        opacity: 0 !important;
+        visibility: hidden !important;
+        pointer-events: none !important;
       }
       .movi-gear-btn:hover {
         background: rgba(0, 0, 0, 0.55);
@@ -10770,7 +10798,10 @@ export class MoviElement extends HTMLElement {
         border: 1px solid var(--movi-glass-border);
         border-radius: 12px;
         min-width: 140px;
-        max-height: 280px;
+        /* Tall enough for all 8 speeds (0.25x…2x) without scrolling on a normal
+           player; capped to 70vh so a short player still fits — its top rows no
+           longer clip because opening lifts the host clip (movi-menu-overflow). */
+        max-height: min(70vh, 380px);
         overflow-y: auto;
         box-shadow: var(--movi-shadow-lg);
         z-index: 1000;
@@ -11613,6 +11644,31 @@ export class MoviElement extends HTMLElement {
         }
       }
 
+      /* Very small players (≤400px): the horizontal pill (text + two buttons)
+         is wider than the player and, being right-anchored + nowrap, clipped
+         its left edge ("...ume from"). Span the player instead and stack the
+         buttons under the text. left/right (not transform) so the slide-up
+         animation's translateY isn't overridden. */
+      @container movi-host (max-width: 400px) {
+        .movi-resume-dialog {
+          left: 16px;
+          right: 16px;
+          flex-direction: column;
+          align-items: stretch;
+          gap: 10px;
+          text-align: center;
+        }
+        .movi-resume-text {
+          white-space: normal;
+        }
+        .movi-resume-buttons {
+          justify-content: center;
+        }
+        .movi-resume-btn {
+          flex: 1;
+        }
+      }
+
       /* ========================================
          RESPONSIVE STYLES - Mobile First
       ======================================== */
@@ -11803,21 +11859,45 @@ export class MoviElement extends HTMLElement {
         }
 
         .movi-controls-right.expanded .movi-mobile-expandable {
-          width: auto;
           opacity: 1;
           pointer-events: auto;
           gap: 4px;
           margin-right: 4px;
-          overflow: visible; /* Prevent clipping of hover backgrounds */
-          flex: 1;
-          justify-content: flex-end;
+          /* When expanded on a narrow player the row can hold more buttons than
+             fit — let them scroll horizontally instead of clipping or wrapping.
+             overflow-y stays hidden (only the in-flow buttons are clipped
+             vertically; the pop-up menus are positioned against the controls
+             bar, an ancestor, so they're not clipped by this scroll box).
+             flex:0 1 auto + justify-content:flex-start is deliberate: when the
+             buttons fit, the box is content-sized and the PARENT's flex-end
+             packs it right against the more (>) button (no gap); when they
+             overflow, min-width:0 lets it shrink and scroll, and flex-start
+             keeps the LEADING icons reachable — flex-end would strand the
+             overflowed left-side icons off-screen with no way to scroll to them.
+             width:auto is REQUIRED: flex-basis:auto reads the width, and the
+             collapsed base rule sets width:0 — without this the expandable stays
+             0-wide and no icons show when expanded. */
+          width: auto;
+          flex: 0 1 auto;
+          min-width: 0;
+          flex-wrap: nowrap;
+          justify-content: flex-start;
+          overflow-x: auto;
+          overflow-y: hidden;
+          scrollbar-width: none; /* Firefox */
+          -webkit-overflow-scrolling: touch;
+        }
+        .movi-controls-right.expanded .movi-mobile-expandable::-webkit-scrollbar {
+          display: none; /* WebKit */
         }
 
-        /* Reset margins and restore dimensions */
+        /* Reset margins and restore dimensions; keep buttons from shrinking so
+           the icons don't squash — they scroll instead. */
         .movi-controls-right.expanded .movi-mobile-expandable > * {
           margin: 0 !important;
           width: auto;
           height: auto;
+          flex: 0 0 auto;
         }
 
         /* Hide individual buttons by default on mobile */
@@ -11857,6 +11937,11 @@ export class MoviElement extends HTMLElement {
         /* Alternative for older browsers: shrink left instead of hiding if :has not supported */
         .movi-controls-right.expanded {
            flex: 1;
+           /* min-width:0 lets this shrink below its content so the constraint
+              reaches the expandable, which then scrolls. Without it the default
+              min-width:auto keeps the whole cluster at content width and it
+              overflows the player's left edge instead of scrolling. */
+           min-width: 0;
            justify-content: flex-end;
         }
         
@@ -11887,17 +11972,13 @@ export class MoviElement extends HTMLElement {
           transform-origin: bottom center !important;
           width: 90% !important;
           max-width: 300px !important;
-          /* Cap against the PLAYER's own height (set by JS on connect/
-             resize), not the viewport — an embedded small player on a
-             1400px desktop window had 30vw=420px max-height but only
-             ~380px of player height, so the menu opened above the
-             controls bar and got chopped off the top by :host's
-             contain:paint. The reserve (controls bar ~60px + top
-             breathing room ~60px) keeps the menu visually inside the
-             player instead of butting against its top edge. The 70vh
-             fallback matches the variable's default elsewhere;
-             max(120px,…) keeps one visible row on tiny players. */
-          max-height: max(120px, calc(var(--movi-player-height, 70vh) - 120px)) !important;
+          /* Cap to the viewport, not the player. Opening a dropdown now lifts
+             the host's paint/overflow clip (movi-menu-overflow), so a tall menu
+             on a SHORT player extends past the player's top edge into the page
+             instead of being chopped there — which used to hide the first rows
+             (e.g. the 0.25x speed option). 70vh keeps it within the screen and
+             lets it scroll only when the list itself is genuinely huge. */
+          max-height: min(70vh, calc(100vh - 80px)) !important;
           overflow-y: auto !important;
           z-index: 2000 !important;
           -webkit-overflow-scrolling: touch !important;
@@ -12012,6 +12093,39 @@ export class MoviElement extends HTMLElement {
         }
         .movi-controls-left {
           gap: 4px;
+        }
+      }
+
+      /* Very small / compact players (≤400px). Tighten every gap, shrink the
+         buttons and pull in the bar padding so the always-visible collapsed
+         row (play · volume · time · more · fullscreen) fits without clipping —
+         the rest of the icons live in the horizontally-scrollable expandable. */
+      @container movi-host (max-width: 400px) {
+        :host {
+          --movi-btn-size: 36px;
+        }
+        .movi-controls-bar {
+          padding: 2px 8px 8px;
+        }
+        .movi-buttons-row {
+          gap: 4px;
+        }
+        .movi-controls-left,
+        .movi-controls-right {
+          gap: 2px;
+        }
+        .movi-btn {
+          padding: 7px;
+        }
+        .movi-btn svg {
+          width: 20px;
+          height: 20px;
+        }
+        .movi-time {
+          font-size: 11px;
+        }
+        .movi-progress-container {
+          padding: 6px 0 10px;
         }
       }
 
@@ -14174,6 +14288,7 @@ export class MoviElement extends HTMLElement {
     if (typeof ResizeObserver !== "undefined") {
       const resizeObserver = new ResizeObserver(() => {
         publishPlayerWidth();
+        this.syncTinyLayout();
         this.updateCanvasSize();
       });
       resizeObserver.observe(this);
@@ -14181,9 +14296,12 @@ export class MoviElement extends HTMLElement {
       // Fallback for browsers without ResizeObserver
       window.addEventListener("resize", () => {
         publishPlayerWidth();
+        this.syncTinyLayout();
         this.updateCanvasSize();
       });
     }
+    // Run once now so an already-tiny player folds fullscreen away on load.
+    this.syncTinyLayout();
 
     // Initial visibility check
     this.updateControlsVisibility();
@@ -20062,6 +20180,30 @@ export class MoviElement extends HTMLElement {
    * block, so this works regardless. The mobile drawer is a deliberate
    * right-edge panel — skip it.
    */
+  /**
+   * Below ~290px even the always-visible right cluster (more · fullscreen)
+   * crowds the bar, so fold the fullscreen button into the collapsible
+   * expandable too — leaving only the "more" (>) toggle outside, with
+   * fullscreen reachable (and horizontally scrollable) once expanded. Restored
+   * to its normal slot (last child of the right cluster, after the more button)
+   * once there's room again. Idempotent: only moves when out of place, so it
+   * survives repeated resize ticks without thrashing the DOM.
+   */
+  private syncTinyLayout(): void {
+    const root = this.shadowRoot;
+    if (!root) return;
+    const fsBtn = root.querySelector(".movi-fullscreen-btn");
+    const expandable = root.querySelector(".movi-mobile-expandable");
+    const right = root.querySelector(".movi-controls-right");
+    if (!fsBtn || !expandable || !right) return;
+    const tiny = this.clientWidth > 0 && this.clientWidth < 290;
+    if (tiny) {
+      if (expandable.lastElementChild !== fsBtn) expandable.appendChild(fsBtn);
+    } else if (right.lastElementChild !== fsBtn) {
+      right.appendChild(fsBtn);
+    }
+  }
+
   private clampMenuToViewport(menu: HTMLElement): void {
     if (menu.classList.contains("movi-context-menu-mobile")) return;
     const m = 8;
