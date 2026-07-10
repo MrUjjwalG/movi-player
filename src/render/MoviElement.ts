@@ -2323,18 +2323,45 @@ export class MoviElement extends HTMLElement {
       this.toggleFullscreen();
     });
 
-    // Picture-in-Picture
+    // In an iframe, fullscreen / Document PiP need to be delegated via the
+    // iframe's `allow` attribute. Without it the Permissions Policy blocks them
+    // and the buttons would be dead controls — so hide them. Scoped to the
+    // iframe case only: at top level `fullscreenEnabled` can legitimately be
+    // false (e.g. iOS Safari, which has no element-fullscreen) yet still has a
+    // working fallback, so we must not hide there.
+    const inIframe = this.isEmbeddedIframe();
+
+    // Picture-in-Picture — needs the Document PiP API and, in an iframe,
+    // allow="picture-in-picture" (which `pictureInPictureEnabled` reflects, since
+    // Document PiP shares that policy).
     const pipBtn = shadowRoot.querySelector(".movi-pip-btn") as HTMLElement;
-    // Show PiP button + context menu item only if Document PiP API is available
-    if ("documentPictureInPicture" in window) {
-      if (pipBtn) pipBtn.style.display = "";
-      const pipCtxItem = shadowRoot.querySelector(".movi-context-menu-pip") as HTMLElement;
-      if (pipCtxItem) pipCtxItem.style.display = "";
-    }
+    const pipCtxItem = shadowRoot.querySelector(
+      ".movi-context-menu-pip",
+    ) as HTMLElement;
+    const pipAvailable =
+      "documentPictureInPicture" in window &&
+      (!inIframe || (document as Document).pictureInPictureEnabled !== false);
+    if (pipBtn) pipBtn.style.display = pipAvailable ? "" : "none";
+    if (pipCtxItem) pipCtxItem.style.display = pipAvailable ? "" : "none";
     pipBtn?.addEventListener("click", (e) => {
       e.stopPropagation();
       this.togglePiP();
     });
+
+    // Fullscreen — hide the button + menu item inside an iframe that wasn't
+    // granted allow="fullscreen" (document.fullscreenEnabled is false there). A
+    // host that drives its own fullscreen via the `movi-fullscreen-request`
+    // event can still trigger it through the F shortcut / its own chrome.
+    if (inIframe && !document.fullscreenEnabled) {
+      const fsBtn = shadowRoot.querySelector(
+        ".movi-fullscreen-btn",
+      ) as HTMLElement;
+      if (fsBtn) fsBtn.style.display = "none";
+      const fsCtxItem = shadowRoot.querySelector(
+        '.movi-context-menu-item[data-action="fullscreen"]',
+      ) as HTMLElement;
+      if (fsCtxItem) fsCtxItem.style.display = "none";
+    }
 
     // More Settings (Mobile Horizontal Expansion)
     const moreBtn = shadowRoot.querySelector(".movi-more-btn") as HTMLElement;
@@ -5641,6 +5668,19 @@ export class MoviElement extends HTMLElement {
     } catch (error) {
       Logger.error(TAG, "Failed to open PiP", error);
       this._pipWindow = null;
+      // The Document PiP API exists but requestWindow was blocked — e.g. a
+      // sandboxed iframe without allow-popups, or a Permissions-Policy the
+      // upfront check couldn't see. That's a static property of the embedding
+      // context, not a one-off, so retire the (dead) control rather than let it
+      // fail again on every click.
+      const pipBtn = this.shadowRoot?.querySelector(
+        ".movi-pip-btn",
+      ) as HTMLElement | null;
+      if (pipBtn) pipBtn.style.display = "none";
+      const pipCtxItem = this.shadowRoot?.querySelector(
+        ".movi-context-menu-pip",
+      ) as HTMLElement | null;
+      if (pipCtxItem) pipCtxItem.style.display = "none";
     }
   }
 
@@ -8048,11 +8088,29 @@ export class MoviElement extends HTMLElement {
       // visible; the rest is reachable by scrolling. The mobile menu CSS sets
       // max-height with !important, so the inline override must also carry it.
       if (!this.classList.contains("movi-audio-strip")) {
+        // Cap the upward-opening menu to the room between the player's top and
+        // the controls bar, measured from STABLE elements — the bar and the
+        // host — NOT the menu's own rect, which on a very short player is
+        // unreliable before .is-open (it sits at natural height, so the cap
+        // wouldn't bite and the first rows would clip above the player instead
+        // of scrolling). The menu's containing block is the bar and it anchors
+        // ~15px above the bar's top; leave ~8px breathing room -> subtract ~23.
+        // scrollTop 0 keeps the first row (0.25x / Audio 1 / first subtitle)
+        // reachable at the top. The mobile menu CSS sets max-height !important,
+        // so the inline override must carry it too.
         const hostTop = this.getBoundingClientRect().top;
-        const menuBottom = el.getBoundingClientRect().bottom;
+        const bar = this.shadowRoot?.querySelector(
+          ".movi-controls-bar",
+        ) as HTMLElement | null;
+        const barTop = bar
+          ? bar.getBoundingClientRect().top
+          : el.getBoundingClientRect().bottom;
+        // Floor kept low (not ~96) on purpose: on a very short player the room
+        // above the bar can be < 96px, and a floor larger than the room would
+        // push the menu's top back out above the player and clip the first row.
         el.style.setProperty(
           "max-height",
-          `${Math.max(96, menuBottom - hostTop - 8)}px`,
+          `${Math.max(32, barTop - hostTop - 23)}px`,
           "important",
         );
         el.scrollTop = 0;
@@ -8283,6 +8341,40 @@ export class MoviElement extends HTMLElement {
     );
   }
 
+  /** Running inside a (possibly cross-origin) iframe. */
+  private isEmbeddedIframe(): boolean {
+    try {
+      return window.self !== window.top;
+    } catch {
+      // Cross-origin access to window.top can throw in some sandboxes — if we
+      // can't even read it, we're definitely framed.
+      return true;
+    }
+  }
+
+  /**
+   * Whether a Permissions-Policy feature (e.g. "fullscreen",
+   * "picture-in-picture", "speaker-selection") is allowed in this document.
+   * At the top level features are allowed by default; inside an iframe they
+   * must be delegated via the `allow` attribute. Uses the (Chromium) feature
+   * policy API when present and defaults to allowed when it isn't — the
+   * features we gate this way are all Chromium-only, so a missing API means a
+   * browser that wouldn't expose the capability regardless.
+   */
+  private featureAllowed(feature: string): boolean {
+    const fp = (document as unknown as {
+      featurePolicy?: { allowsFeature?: (f: string) => boolean };
+    }).featurePolicy;
+    if (fp && typeof fp.allowsFeature === "function") {
+      try {
+        return fp.allowsFeature(feature);
+      } catch {
+        return true;
+      }
+    }
+    return true;
+  }
+
   /**
    * List the available audio output devices. Labels may be empty until the
    * page has been granted audio-device access (the desktop app has it; a bare
@@ -8429,8 +8521,18 @@ export class MoviElement extends HTMLElement {
     // opening the submenu triggers the Meet-style prompt and the list fills
     // in. The desktop app already has permission, so `real` is populated and
     // no prompt is needed.
-    const canUnlock = !!navigator.mediaDevices?.getUserMedia;
-    if (!MoviElement.audioSinkSupported() || (real.length < 1 && !canUnlock)) {
+    // In an iframe, routing to a device needs allow="speaker-selection", and
+    // the getUserMedia unlock needs allow="microphone". Without those the menu
+    // would be a dead control (setSinkId / getUserMedia throw NotAllowedError),
+    // so gate on the Permissions Policy.
+    const speakerAllowed = this.featureAllowed("speaker-selection");
+    const canUnlock =
+      !!navigator.mediaDevices?.getUserMedia && this.featureAllowed("microphone");
+    if (
+      !MoviElement.audioSinkSupported() ||
+      !speakerAllowed ||
+      (real.length < 1 && !canUnlock)
+    ) {
       divider.style.display = "none";
       item.style.display = "none";
       submenu.style.display = "none";
