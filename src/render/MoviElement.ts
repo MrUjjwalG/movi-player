@@ -3020,6 +3020,15 @@ export class MoviElement extends HTMLElement {
                 600,
               );
             }
+          } else if (e.touches.length >= 2) {
+            // A second finger down means a pinch (aspect-fit / 360° zoom), never
+            // a press-and-hold-to-2x — cancel the arm the first finger set, and
+            // drop out of 2x if it already engaged, so the two don't conflict.
+            if (this._holdSpeedTimer !== null) {
+              clearTimeout(this._holdSpeedTimer);
+              this._holdSpeedTimer = null;
+            }
+            if (this._holdSpeedActive) this.stopHoldSpeed();
           }
         },
         { passive: true },
