@@ -112,6 +112,19 @@
         value: true, configurable: true, writable: false,
       });
     } catch (e) { /* noop */ }
+    // The webview iframe reports document.fullscreenEnabled=false (VS Code
+    // doesn't delegate the fullscreen Permissions Policy), which now makes the
+    // player hide its fullscreen button as a "dead control". But fullscreen
+    // DOES work here — driven by the movi-fullscreen-request event + a
+    // postMessage to the extension host (VS Code window fullscreen). Grant the
+    // capability so the button stays; the host intercepts the request before
+    // any requestFullscreen() is attempted, so nothing actually calls the
+    // (blocked) DOM API.
+    try {
+      Object.defineProperty(document, "fullscreenEnabled", {
+        value: true, configurable: true,
+      });
+    } catch (e) { /* noop */ }
   </script>
 
   <!-- Early-capture: patch console.* + create __movilog (used by bundled

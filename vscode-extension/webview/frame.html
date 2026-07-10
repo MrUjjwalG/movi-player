@@ -53,6 +53,15 @@
         value: true, configurable: true, writable: false,
       });
     } catch (e) { /* noop */ }
+    // Grant fullscreen capability: the webview iframe reports
+    // fullscreenEnabled=false, which now makes the player hide its fullscreen
+    // button, but fullscreen works via the movi-fullscreen-request event +
+    // postMessage to the extension host (VS Code window fullscreen).
+    try {
+      Object.defineProperty(document, "fullscreenEnabled", {
+        value: true, configurable: true,
+      });
+    } catch (e) { /* noop */ }
   </script>
 </head>
 <body>
