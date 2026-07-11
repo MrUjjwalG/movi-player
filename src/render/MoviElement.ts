@@ -15605,6 +15605,10 @@ export class MoviElement extends HTMLElement {
       audioMode && !bitmap && !coverArtPending && !posterCoverPending;
     this.classList.toggle("movi-audio-mode", audioMode);
     this.classList.toggle("movi-audio-strip", stripMode);
+    // Keep a portaled menu's host classes in sync so a video→audio switch made
+    // while the menu is open updates it live (the cloned :host(.movi-audio-mode)
+    // rules hide the video-only items).
+    this.syncMenuPortalAudioClasses();
     // In strip mode the gear is part of the always-visible bar, so reveal it the
     // moment the layout is applied (on load) rather than waiting for the first
     // touch/showControls. hideControls already keeps it visible in strip mode.
@@ -20802,17 +20806,24 @@ export class MoviElement extends HTMLElement {
     // audio-mode / strip classes onto it — otherwise those rules never match
     // and the hidden items (e.g. Aspect Ratio on a cover-art audio source)
     // reappear in the portaled menu.
-    const portalHost = this._menuPortalHost;
-    if (portalHost) {
-      portalHost.classList.toggle(
-        "movi-audio-mode",
-        this.classList.contains("movi-audio-mode"),
-      );
-      portalHost.classList.toggle(
-        "movi-audio-strip",
-        this.classList.contains("movi-audio-strip"),
-      );
-    }
+    this.syncMenuPortalAudioClasses();
+  }
+
+  /** Mirror the player's audio-mode / strip classes onto the menu-portal host so
+   *  the cloned `:host(.movi-audio-mode)` rules (which hide the video-only menu
+   *  items) keep matching while the menu lives in the body portal — including
+   *  when the audio mode flips while the menu is already open. */
+  private syncMenuPortalAudioClasses(): void {
+    const host = this._menuPortalHost;
+    if (!host) return;
+    host.classList.toggle(
+      "movi-audio-mode",
+      this.classList.contains("movi-audio-mode"),
+    );
+    host.classList.toggle(
+      "movi-audio-strip",
+      this.classList.contains("movi-audio-strip"),
+    );
   }
 
   /** Return the context menu (+ submenus) from the portal to the shadow root. */
