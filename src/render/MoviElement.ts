@@ -20795,6 +20795,24 @@ export class MoviElement extends HTMLElement {
         }
       }
     }
+    // The cloned styles carry `:host(.movi-audio-mode) .movi-context-menu-item…`
+    // rules that hide the video-only items (Aspect Ratio, PiP, Fullscreen,
+    // Rotate, Snapshot, Timeline, Ambient) for audio sources. In the portal
+    // `:host` is THIS portal host, not the player, so mirror the player's
+    // audio-mode / strip classes onto it — otherwise those rules never match
+    // and the hidden items (e.g. Aspect Ratio on a cover-art audio source)
+    // reappear in the portaled menu.
+    const portalHost = this._menuPortalHost;
+    if (portalHost) {
+      portalHost.classList.toggle(
+        "movi-audio-mode",
+        this.classList.contains("movi-audio-mode"),
+      );
+      portalHost.classList.toggle(
+        "movi-audio-strip",
+        this.classList.contains("movi-audio-strip"),
+      );
+    }
   }
 
   /** Return the context menu (+ submenus) from the portal to the shadow root. */
