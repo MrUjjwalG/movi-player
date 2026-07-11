@@ -4514,7 +4514,13 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
    * 100% (HTMLMediaElement.volume caps at [0,1]), so the volume UI caps at 100%.
    */
   usesNativeAudio(): boolean {
-    return this.streamWrapper !== null || this.isNativeAudioActive();
+    // Any live native <audio> element means audio bypasses the WebAudio gain
+    // node, so the >100% boost can't apply — regardless of whether a language
+    // is set. (isNativeAudioActive() additionally requires a selected lang,
+    // which a single external audio source never has, so it would wrongly leave
+    // the boost enabled here.) useMuxedAudio() nulls nativeAudioEl when it hands
+    // playback back to the boostable WASM path, so this stays correct.
+    return this.streamWrapper !== null || this.nativeAudioEl !== null;
   }
 
   /** True for a live (dynamic) adaptive stream — drives the LIVE indicator. */
