@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "Movi Player",
-  "version": "0.3.3",
+  "version": "0.3.4",
   "description": "A modern video player that handles formats and codecs your browser can't play natively — right in your browser.",
   "icons": {
     "16": "icons/icon16.png",

@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.3.4] - 2026-07-11
+
 ### Added
 - **OS Media Session — lock-screen & hardware-key controls**: title metadata, artwork, and play/pause/stop/seek controls on the OS lock screen and notification shade via `navigator.mediaSession`, with a synced position scrubber.
 - **Press-and-hold to 2x (touch)**: YouTube-style long-press speeds playback to 2x while held, reverts on release.
@@ -21,6 +23,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Embed / headless bare player + `noerrorscreen`**: no `controls` attribute makes `<movi-player>` a pure display surface (no resume dialog, empty state, spinner, or mouse interaction); `noerrorscreen` also suppresses the built-in error overlays.
 - **Number-key seeking (`1`–`9`)**: `1`–`9` jump to 10%–90% of the timeline (YouTube-style), alongside `0` / `Home`.
 - **Swipe-to-dismiss touch menu**: the gear-opened context menu is a right-side drawer on touch — drag it toward the right edge to close it. Vertical scrolling and taps inside the menu are unaffected.
+- **Pinch to change aspect fit in fullscreen (touch)**: a two-finger pinch switches the fit YouTube-style — spread to zoom-to-fill (crop), pinch in to fit — with the same Fit/Fill OSD. Fullscreen-only (won't fight inline page pinch-zoom); excluded from 360° mode.
+- **iOS Safari pseudo-fullscreen fallback**: iOS Safari only allows element-fullscreen on `<video>` and the player renders to canvas — fullscreen falls back to a CSS viewport-fill mode (behind Safari's toolbars) with forced-landscape rotation for landscape video. iPad / real element-fullscreen browsers unaffected.
+- **Small-player control bar & menu overhaul**: usable down to ~100px wide — tighter padding/buttons below 400px, PiP folds behind the "more" toggle, the expanded cluster scrolls horizontally, fullscreen folds in below 290px, the resume dialog stacks instead of clipping, dropdown menus cap to the room inside the player, and the gear hides while a bottom dropdown or the timeline is open.
 
 ### Fixed
 - **HTTP streaming without cross-origin isolation**: HTTP(S) sources no longer need COOP/COEP (`SharedArrayBuffer`) — single-threaded Asyncify WASM falls back to a plain-buffer path; fixes a `Timeout at 0` on pages without the headers. The headers now only enable an optional zero-copy fast-path.
@@ -45,6 +50,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Context-menu submenu options all showing "active" (touch)**: Fit and Speed submenus no longer accumulate a stale highlight.
 - **Selected-track text unreadable in light theme + auto-hide stuck open**: readable codec/language text in light theme; switching audio tracks restarts the auto-hide timer.
 - **VS Code extension bundle out of date**: republished with the current player build (was missing the 0.3.3 audio-output/VR/FLAC fixes).
+- **VS Code: fullscreen button hidden despite fullscreen working**: the webview iframe reports `fullscreenEnabled=false` (so the button auto-hid), but fullscreen works via the extension host — the webview now grants the capability so the button stays.
+- **Embed: dead fullscreen/PiP/audio-output controls no longer shown**: hidden (instead of silently failing) when the embedding iframe's Permissions Policy disallows them; PiP also retires itself if opening its window throws.
+- **`playsinline` now also gates touch gestures**: an inline touch player suppresses swipe-seek/volume gestures so they don't fight page scroll (resumes in fullscreen). The separate `gesturefs` attribute is now deprecated (still honored).
+- **Right-click context menu clipped by page layout**: the menu portals to a body-level layer so it escapes clipping ancestors (a wrapper's `overflow:hidden`) instead of being chopped at the player edge; submenus are viewport-aware in this mode.
+- **Resume-dialog selection ring didn't follow the pointer**: the ring now moves to whichever button the pointer is over, matching arrow-key behavior.
+- **Scrub thumbnail previews depended on attribute order**: `<movi-player src=… thumb>` no longer silently builds with previews disabled; order doesn't matter, and the timeline key (`T`) generates thumbnails regardless of the `thumb` attribute.
+- **Timeline panel: thumbnails touching + controls-bar flash on close**: bigger thumbnail-strip gap and a smaller hover/active pop so thumbnails don't overlap on small players; closing no longer flashes the auto-hidden controls bar.
+- **360° mode: scroll-wheel accidentally zoomed the view**: removed the wheel-zoom listener so page scrolling behaves normally; drag-to-look and pinch-to-zoom remain.
+- **Aspect-fit menu item didn't show the Fit/Fill OSD**: changing aspect from the context menu now flashes the same OSD as the button and keyboard shortcut.
+- **Pinch-to-fit and press-and-hold-to-2x could fire together**: a second finger landing cancels hold-to-2x so a pinch can't trigger 2x mid-gesture.
+- **HTTP streaming: large remote files restarted mid-playback on small out-of-window reads**: served with a one-off range fetch while the main stream keeps running (fixes the request "cancelling" on large torbox-style files), with a cap on consecutive one-off fetches so a real seek still restarts the stream. (Thanks @anilabhadatta.)
 
 ## [0.3.3] - 2026-06-29
 
