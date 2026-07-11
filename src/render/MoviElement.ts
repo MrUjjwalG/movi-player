@@ -4031,7 +4031,7 @@ export class MoviElement extends HTMLElement {
           // H: Toggle HDR mode (only if content is HDR)
           e.preventDefault();
           {
-            const hdrItem = this.shadowRoot?.querySelector('.movi-context-menu-item[data-action="hdr-toggle"]') as HTMLElement;
+            const hdrItem = this.contextMenuRoot().querySelector('.movi-context-menu-item[data-action="hdr-toggle"]') as HTMLElement;
             if (hdrItem && hdrItem.style.display !== "none") {
               this.hdr = !this.hdr;
               this.showOSD(
@@ -4305,7 +4305,7 @@ export class MoviElement extends HTMLElement {
       Logger.debug(TAG, "[ContextMenu] Showing custom context menu");
 
       // Update context menu content before showing
-      this.updateContextMenuContent(contextMenu, shadowRoot);
+      this.updateContextMenuContent(contextMenu);
       // Re-enumerate output devices each open (cheap) so a just-plugged
       // headset shows up; the async result re-renders the submenu in place.
       this.refreshAudioOutputs();
@@ -4762,7 +4762,7 @@ export class MoviElement extends HTMLElement {
           submenu.classList.add("movi-context-menu-submenu-visible");
         }
       } else if (action === "fit") {
-        const submenu = shadowRoot.querySelector('.movi-context-menu-submenu[data-submenu="fit"]') as HTMLElement;
+        const submenu = this.contextMenuRoot().querySelector('.movi-context-menu-submenu[data-submenu="fit"]') as HTMLElement;
         if (submenu) {
           this.syncFitSubmenuActive(submenu); // touch: reflect current fit
           contextMenu.scrollTop = 0;
@@ -5032,10 +5032,7 @@ export class MoviElement extends HTMLElement {
     }
   }
 
-  private updateContextMenuContent(
-    contextMenu: HTMLElement,
-    shadowRoot: ShadowRoot,
-  ): void {
+  private updateContextMenuContent(contextMenu: HTMLElement): void {
     if (!this.player) return;
 
     // Update Play/Pause text based on current state
@@ -5059,7 +5056,7 @@ export class MoviElement extends HTMLElement {
     const audioItem = contextMenu.querySelector(
       ".movi-context-menu-item-audio",
     ) as HTMLElement;
-    const audioSubmenu = shadowRoot.querySelector(
+    const audioSubmenu = this.contextMenuRoot().querySelector(
       ".movi-context-menu-submenu-audio",
     ) as HTMLElement;
 
@@ -5142,7 +5139,7 @@ export class MoviElement extends HTMLElement {
     const subtitleItem = contextMenu.querySelector(
       ".movi-context-menu-item-subtitle",
     ) as HTMLElement;
-    const subtitleSubmenu = shadowRoot.querySelector(
+    const subtitleSubmenu = this.contextMenuRoot().querySelector(
       ".movi-context-menu-submenu-subtitle",
     ) as HTMLElement;
 
@@ -8692,8 +8689,10 @@ export class MoviElement extends HTMLElement {
       return; // denied / unavailable
     }
     await this.refreshAudioOutputs();
-    // Re-open the submenu so the freshly populated list is visible.
-    const submenu = this.shadowRoot?.querySelector(
+    // Re-open the submenu so the freshly populated list is visible. Query via
+    // contextMenuRoot() so we target the portaled submenu (desktop) rather than
+    // the empty one still parked in the shadow root.
+    const submenu = this.contextMenuRoot().querySelector(
       ".movi-context-menu-submenu-audiodevice",
     ) as HTMLElement | null;
     submenu?.classList.add("movi-context-menu-submenu-visible");
@@ -8701,7 +8700,11 @@ export class MoviElement extends HTMLElement {
 
   /** (Re)build the Audio Output submenu from the cached device list. */
   private updateAudioOutputMenu(): void {
-    const sr = this.shadowRoot;
+    // Query through contextMenuRoot(): the audio-output item + submenu travel
+    // into the body portal with the desktop menu, so this.shadowRoot wouldn't
+    // find them there and the visible (portaled) submenu would never refresh —
+    // e.g. after the permission-grant re-enumeration fills in the device list.
+    const sr = this.contextMenuRoot();
     if (!sr) return;
     const divider = sr.querySelector(
       ".movi-context-menu-divider-audiodevice",
@@ -8807,7 +8810,10 @@ export class MoviElement extends HTMLElement {
     const audioMenu = this.shadowRoot.querySelector(".movi-audio-track-menu") as HTMLElement;
     const subtitleMenu = this.shadowRoot.querySelector(".movi-subtitle-track-menu") as HTMLElement;
     const qualityMenu = this.shadowRoot.querySelector(".movi-quality-menu") as HTMLElement;
-    const contextMenu = this.shadowRoot.querySelector(".movi-context-menu") as HTMLElement;
+    // contextMenuRoot(): the desktop context menu moves to the body portal while
+    // open, so this.shadowRoot wouldn't find it and auto-hide would think no menu
+    // is open (hiding the controls out from under an open menu).
+    const contextMenu = this.contextMenuRoot().querySelector(".movi-context-menu") as HTMLElement;
 
     return (
       this.isBottomMenuOpen(speedMenu) ||
