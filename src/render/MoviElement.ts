@@ -2365,16 +2365,20 @@ export class MoviElement extends HTMLElement {
     // working fallback, so we must not hide there.
     const inIframe = this.isEmbeddedIframe();
 
-    // Picture-in-Picture — needs the Document PiP API and, in an iframe,
-    // allow="picture-in-picture" (which `pictureInPictureEnabled` reflects, since
-    // Document PiP shares that policy).
+    // Picture-in-Picture — the player renders to canvas, so it uses the Document
+    // Picture-in-Picture API (documentPictureInPicture.requestWindow), not video
+    // PiP. Per spec that API is allowed ONLY from a top-level browsing context —
+    // requestWindow() throws "Opening a PiP window is only allowed from a
+    // top-level browsing context" inside ANY iframe, and there's no Permissions
+    // Policy / allow-attribute that grants it (WICG issue #97 is still open).
+    // The `picture-in-picture` policy / `pictureInPictureEnabled` only governs
+    // *video* PiP, which we don't use — so it can't rescue us here. Hide the
+    // control in every embedded iframe so it isn't a dead button.
     const pipBtn = shadowRoot.querySelector(".movi-pip-btn") as HTMLElement;
     const pipCtxItem = shadowRoot.querySelector(
       ".movi-context-menu-pip",
     ) as HTMLElement;
-    const pipAvailable =
-      "documentPictureInPicture" in window &&
-      (!inIframe || (document as Document).pictureInPictureEnabled !== false);
+    const pipAvailable = "documentPictureInPicture" in window && !inIframe;
     if (pipBtn) pipBtn.style.display = pipAvailable ? "" : "none";
     if (pipCtxItem) pipCtxItem.style.display = pipAvailable ? "" : "none";
     pipBtn?.addEventListener("click", (e) => {
