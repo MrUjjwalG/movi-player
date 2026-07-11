@@ -5502,6 +5502,13 @@ export class MoviElement extends HTMLElement {
       Logger.info(TAG, "restorePiPCanvas: canvas already in shadowRoot");
     }
 
+    // The caption overlay followed the canvas into the PiP window — bring it
+    // home. The next subtitle render re-lays it out for the main surface, so
+    // no explicit style cleanup is needed here.
+    if (this.subtitleOverlay && this.subtitleOverlay.parentNode !== sr) {
+      sr.appendChild(this.subtitleOverlay);
+    }
+
     Logger.info(TAG, `restorePiPCanvas: canvas isConnected=${canvas.isConnected}`);
 
     // Invalidate the cached host dimensions so updateCanvasSize() actually
@@ -5521,6 +5528,30 @@ export class MoviElement extends HTMLElement {
     });
     Logger.info(TAG, "PiP closed, canvas restored");
   }
+
+  /** Caption styling injected into the Document-PiP window (the shadow-root CSS
+   *  doesn't reach it). Mirrors the `.movi-subtitle-*` rules; keep in sync. The
+   *  var() fallbacks let it render even before the --movi-sub-* props are set. */
+  private static readonly PIP_SUBTITLE_CSS = `
+    .movi-subtitle-overlay { position: absolute; z-index: 5; pointer-events: none; text-align: center; box-sizing: border-box; }
+    .movi-subtitle-anchor { display: block; width: 100%; text-align: left; box-sizing: border-box; }
+    .movi-subtitle-block { display: inline-block; max-width: 100%; border-radius: 4px; padding: 4px 12px; text-align: left; box-sizing: border-box; }
+    .movi-subtitle-overlay.movi-subtitle-format-vtt .movi-subtitle-block { background: rgba(var(--movi-sub-bg-rgb, 8, 8, 8), var(--movi-sub-bg-alpha, 0.75)); }
+    .movi-subtitle-line {
+      display: block;
+      color: var(--movi-sub-color, #FFFFFF);
+      font-family: 'YouTube Sans', 'Roboto', -apple-system, BlinkMacSystemFont, 'Segoe UI', Arial, sans-serif;
+      font-size: calc(clamp(20px, calc(var(--movi-player-width, 100vw) * 0.032), 40px) * var(--movi-sub-size-mult, 1));
+      font-weight: 500; line-height: 1.35; letter-spacing: 0.01em;
+      text-shadow: var(--movi-sub-edge, 0 0 4px rgba(0, 0, 0, 0.85));
+      text-align: center; white-space: pre-wrap; word-wrap: break-word;
+      -webkit-font-smoothing: antialiased;
+    }
+    .movi-subtitle-overlay.movi-subtitle-format-vtt .movi-subtitle-line { text-align: left; }
+    .movi-subtitle-static { opacity: 1; }
+    .movi-subtitle-new { animation: movi-subtitle-word-in 320ms ease-out forwards; }
+    @keyframes movi-subtitle-word-in { from { opacity: 0; } to { opacity: 1; } }
+  `;
 
   private async togglePiP(): Promise<void> {
     if (!this.player || !this.canvas) return;
@@ -5621,6 +5652,34 @@ export class MoviElement extends HTMLElement {
       // entering PiP) so the pointer is visible in the PiP window immediately.
       this.canvas.style.cursor = "default";
       Logger.info(TAG, `PiP: canvas moved to PiP window, isConnected=${this.canvas.isConnected}`);
+
+      // Bring the caption overlay along so subtitles still render in the PiP
+      // window. Its styling lives in the shadow-root CSS + --movi-sub-* custom
+      // properties, neither of which reach a separate document — so inject the
+      // caption rules and carry the custom props onto the PiP window. The
+      // renderer keeps positioning the overlay off the canvas' bounding rect,
+      // which now resolves against the PiP window.
+      if (this.subtitleOverlay) {
+        const subStyle = pipWindow.document.createElement("style");
+        subStyle.textContent = MoviElement.PIP_SUBTITLE_CSS;
+        pipWindow.document.head.appendChild(subStyle);
+        const cs = getComputedStyle(this);
+        for (const prop of [
+          "--movi-sub-color",
+          "--movi-sub-size-mult",
+          "--movi-sub-edge",
+          "--movi-sub-bg-rgb",
+          "--movi-sub-bg-alpha",
+        ]) {
+          const v = cs.getPropertyValue(prop).trim();
+          if (v) pipWindow.document.body.style.setProperty(prop, v);
+        }
+        pipWindow.document.body.style.setProperty(
+          "--movi-player-width",
+          `${Math.round(pipWidth)}px`,
+        );
+        pipWindow.document.body.appendChild(this.subtitleOverlay);
+      }
 
       // Build PiP controls
       const controls = pipWindow.document.createElement("div");
