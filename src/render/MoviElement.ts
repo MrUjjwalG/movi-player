@@ -191,6 +191,21 @@ export class MoviElement extends HTMLElement {
   // segments for streams, progressive downloads too). Set declaratively via the
   // `headers` attribute (JSON) or programmatically via the `headers` property.
   private _headers: Record<string, string> | null = null;
+  // Coalesce attribute-driven (re)loads to a microtask. When an element is
+  // written declaratively (<movi-player src="..." headers="...">) or several
+  // source-affecting attributes are set in one tick, each attributeChangedCallback
+  // would otherwise fire its own load() in markup/set order — so `src` before
+  // `headers` kicks off the first fetch with NO auth header (→ 403 on
+  // header-gated sources like Google Drive), then reloads. Deferring to a
+  // microtask lets all attributes in the same tick land first, then loads ONCE
+  // with the full config.
+  private _attrLoadScheduled: boolean = false;
+  // Set once connectedCallback has run. Attribute-driven loads only fire AFTER
+  // this — during the initial upgrade, attributeChangedCallback runs (with
+  // isConnected already true) before connectedCallback, which does the first
+  // load itself with every attribute in place. Without this gate the upgrade
+  // would additionally schedule a redundant second init.
+  private _hasConnected: boolean = false;
   // Audio-only (data-saver) mode: skip video decode (CPU) and, for adaptive
   // streams, fetch only audio (bandwidth). Toggleable via the `audioonly`
   // attribute or the `audioOnly` property. The UI shows the album-art / strip.
@@ -1583,7 +1598,16 @@ export class MoviElement extends HTMLElement {
         if (state === "playing" || state === "buffering") {
           this.pause();
         } else {
-          // Play if in ready, paused, ended, or any other non-playing state
+          // Play if in ready, paused, ended, or any other non-playing state.
+          // If the browser blocked autoplay-with-sound and we fell back to
+          // muted playback, this button press is a genuine user gesture —
+          // treat it as the unmute affordance too so audio actually starts
+          // (otherwise the player rolls silent forever until the separate
+          // "Tap to unmute" pill is found). Mirrors the pill's own handler.
+          if (this._autoMutedForAutoplay && !this._userHasUnmuted) {
+            this._userHasUnmuted = true;
+            this.muted = false;
+          }
           this.play();
         }
       }
@@ -1667,6 +1691,12 @@ export class MoviElement extends HTMLElement {
           ) as HTMLElement | null;
           centerPlayIcon?.style.setProperty("display", "none");
           centerPauseIcon?.style.setProperty("display", "block");
+          // A blocked autoplay-with-sound fell back to muted playback; this
+          // gesture is the unmute affordance too, so audio actually starts.
+          if (this._autoMutedForAutoplay && !this._userHasUnmuted) {
+            this._userHasUnmuted = true;
+            this.muted = false;
+          }
           this.play();
         }
       }
@@ -6550,6 +6580,10 @@ export class MoviElement extends HTMLElement {
   // Pre-switch playback position. Used as a fallback while the new player
   // is initialising so the time-display doesn't flash 00:00.
   private _switchResumeTime: number = 0;
+  // Saved `_startAt` around a quality switch: the switch seeds `_startAt` with
+  // the resume position so the new player starts there deterministically, then
+  // restores this once the switch settles so a later reload doesn't re-seek.
+  private _startAtBeforeSwitch: number = 0;
   // Pre-switch total duration. Cached for the same reason — duration is
   // identical across quality variants, but the new player's mediaInfo
   // isn't populated until the demuxer opens.
@@ -6582,6 +6616,13 @@ export class MoviElement extends HTMLElement {
     // overlay (which would flash the thumbnail in over the last video frame).
     this._qualitySwitchInProgress = true;
     this._switchResumeTime = resumeTime;
+    // Seed the new instance's deterministic initial-seek so it starts at the
+    // current playhead as part of load() — BEFORE autoplay's first-play seek —
+    // instead of relying on the event-driven restore() below, which races the
+    // new player's own load-seek(0). That race got worse once the split-audio
+    // WASM demuxer lengthened load, intermittently starting switches from 0.
+    this._startAtBeforeSwitch = this._startAt;
+    if (resumeTime > 0) this._startAt = resumeTime;
     try {
       this._switchResumeDuration = this.player ? (this.player as any).getDuration?.() || 0 : 0;
     } catch {
@@ -6611,6 +6652,7 @@ export class MoviElement extends HTMLElement {
         this._qualitySwitchInProgress = false;
         this._switchResumeTime = 0;
         this._switchResumeDuration = 0;
+        this._startAt = this._startAtBeforeSwitch;
         this._hideSnapshotPoster();
         this.updatePoster();
       }
@@ -10271,6 +10313,7 @@ export class MoviElement extends HTMLElement {
           rgba(255, 255, 255, 0.2) 100%
         );
         border-radius: 100px;
+        cursor: pointer;
       }
       /* Boosting above 100% (VLC-style): amber fill flags the boost zone, and
          a tick at the 50%-of-track unity point marks where "normal" sits. */
@@ -14633,6 +14676,12 @@ export class MoviElement extends HTMLElement {
   };
 
   connectedCallback() {
+    // Attribute-driven loads are gated on this: the initial-upgrade
+    // attributeChangedCallbacks (which run before this, with isConnected already
+    // true) must NOT trigger their own load — the initializePlayer() below does
+    // the first load with every attribute already applied.
+    this._hasConnected = true;
+
     // Enable keyboard focus. Set here (not in the constructor) because
     // assigning tabIndex reflects to a `tabindex` attribute, which a custom
     // element constructor is not allowed to do. (issue #9)
@@ -15213,9 +15262,12 @@ export class MoviElement extends HTMLElement {
           // having an actual source so it doesn't paint in the empty state).
           this.updatePoster();
 
-          // If src changed and element is connected, reload
+          // If src changed and element is connected, reload — coalesced to a
+          // microtask so a same-tick `headers` (or other) attribute is applied
+          // before the fetch starts (declarative src-before-headers otherwise
+          // fires the first request with no auth header → 403).
           if (this.isConnected && this._src && this._src !== oldSrc) {
-            this.load();
+            this.scheduleAttrLoad();
           }
         }
         break;
@@ -15237,8 +15289,11 @@ export class MoviElement extends HTMLElement {
             this._headers = null;
           }
         }
+        // Coalesced with the src trigger so `src` + `headers` set in the same
+        // tick reload ONCE, with headers applied, instead of a header-less first
+        // load followed by a reload.
         if (this.isConnected && (this._src || this._sourceAdapter)) {
-          this.load();
+          this.scheduleAttrLoad();
         }
         break;
       }
@@ -15579,7 +15634,14 @@ export class MoviElement extends HTMLElement {
     img.onerror = () => {
       if (this._posterCoverUrl !== url) return;
       this._posterCoverLoading = false;
-      this._posterCoverUrl = ""; // allow a retry if the URL is set again
+      // Keep _posterCoverUrl === url (do NOT reset to "") so the guard above
+      // treats this URL as done. Resetting it made updateCoverArtOverlay →
+      // ensurePosterCoverArt re-load the SAME failing URL every call — an
+      // infinite retry that also kept _posterCoverLoading flipping true, which
+      // held posterCoverPending true and blocked the strip fallback, leaving the
+      // bare video frame on screen for a CORS-blocked / 404 poster (e.g.
+      // YouTube /vi_webp/*.webp). Now a failed poster settles into the strip
+      // view. A genuinely new poster URL still loads (its URL differs).
       this.updateCoverArtOverlay();
     };
     img.src = url;
@@ -16549,6 +16611,7 @@ export class MoviElement extends HTMLElement {
           this._qualitySwitchInProgress = false;
           this._switchResumeTime = 0;
           this._switchResumeDuration = 0;
+          this._startAt = this._startAtBeforeSwitch;
         }
         this.posterElement.style.display = "none";
       }
@@ -16880,6 +16943,25 @@ export class MoviElement extends HTMLElement {
   /**
    * Load the video source (automatic when src is set)
    */
+  /**
+   * Coalesce a source-affecting attribute change into a single microtask load
+   * so `src` + `headers` (+ any other in the same tick) all land before the
+   * fetch starts. See _attrLoadScheduled. Callers pass the same guards load()'s
+   * own trigger sites use (connected + has a source).
+   */
+  private scheduleAttrLoad(): void {
+    // Before the first connectedCallback, that callback owns the initial load —
+    // don't schedule a duplicate from the upgrade's attribute reactions.
+    if (!this._hasConnected || this._attrLoadScheduled) return;
+    this._attrLoadScheduled = true;
+    queueMicrotask(() => {
+      this._attrLoadScheduled = false;
+      if (this.isConnected && (this._src || this._sourceAdapter)) {
+        this.load();
+      }
+    });
+  }
+
   async load(): Promise<void> {
     // Reset auto-loaded title flag and duration tracker for new video
     this._titleAutoLoaded = false;
@@ -19980,12 +20062,14 @@ export class MoviElement extends HTMLElement {
     // the UI flashes "00:00". Return the captured pre-switch time until the
     // restore step seeks the new clock back to the right position.
     if (this._qualitySwitchInProgress && this._switchResumeTime > 0) {
+      // The new player's clock ramps 0 → resumeTime as its load-seek lands; a
+      // bare "trust liveTime once >0.05" check would surface those transient
+      // sub-resume values (a visible dip toward 00:00 mid-switch). The playhead
+      // can't legitimately move BACKWARDS across a quality switch, so never
+      // report below the resume position — follow the live clock only once it
+      // has actually reached/passed it.
       const liveTime = this.player?.getCurrentTime() || 0;
-      // Once the new clock has actually advanced past 0 (post-seek), trust
-      // it again — guards against permanently masking the real time if the
-      // safety-timeout fires before "playing".
-      if (liveTime > 0.05) return liveTime;
-      return this._switchResumeTime;
+      return Math.max(liveTime, this._switchResumeTime);
     }
     return this.player?.getCurrentTime() || 0;
   }

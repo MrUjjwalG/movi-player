@@ -301,6 +301,25 @@ export class HttpSource implements SourceAdapter {
     }
   }
 
+  // Prefetch throttle. When a separate native <audio> track is bandwidth-starved
+  // (its readyState is too low to play because the video stream is saturating the
+  // connection), MoviPlayer flips this on so the video read loop stops pulling
+  // bytes — HTTP backpressure then frees the pipe for the <audio> element to
+  // buffer. The video already runs a large lead buffer, so briefly pausing
+  // prefetch is safe. MoviPlayer auto-releases it (on audio-ready or a timeout),
+  // so a permanently stuck audio element can never freeze video prefetch.
+  private _prefetchThrottled = false;
+
+  setPrefetchThrottle(throttled: boolean): void {
+    this._prefetchThrottled = throttled;
+  }
+
+  private async awaitPrefetchGate(): Promise<void> {
+    while (this._prefetchThrottled && this.atomicIsStreaming()) {
+      await new Promise((r) => setTimeout(r, 100));
+    }
+  }
+
   private atomicIsStreaming(): boolean {
     if (this.useSharedBuffer && this.headerView) {
       return Atomics.load(this.headerView, HEADER.STREAM_ACTIVE) === 1;
@@ -902,6 +921,9 @@ export class HttpSource implements SourceAdapter {
 
         // Read Loop
         while (this.atomicIsStreaming()) {
+          // Yield the network to a bandwidth-starved native <audio> track.
+          await this.awaitPrefetchGate();
+          if (!this.atomicIsStreaming()) break;
           const { done, value } = await this.reader.read();
           if (done) {
             this.atomicSetStreaming(false);
@@ -1248,6 +1270,9 @@ export class HttpSource implements SourceAdapter {
 
     try {
       while (this.atomicIsStreaming()) {
+        // Yield the network to a bandwidth-starved native <audio> track.
+        await this.awaitPrefetchGate();
+        if (!this.atomicIsStreaming()) break;
         const { done, value } = await reader.read();
         if (done) break;
         if (!value || value.length === 0) continue;

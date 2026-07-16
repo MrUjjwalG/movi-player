@@ -13,6 +13,25 @@ import type { PCMFrame } from "../decode/SoftwareAudioDecoder";
 
 const TAG = "AudioRenderer";
 
+// Session-wide AudioContext, shared across every AudioRenderer instance (i.e.
+// across source/quality/video switches). Safari grants autoplay-with-sound per
+// AudioContext via a user gesture; a brand-new context per video lands its
+// resume() outside the click's activation window and gets blocked, so the
+// "tap to unmute" pill reappears on every switch. Reusing ONE context means
+// that once the user unmutes, it stays "running" and later videos start audible
+// with no gesture — matching how native <audio> inherited media engagement.
+// Created lazily on first init(); never closed (a renderer destroy() only
+// disconnects its own nodes), so it survives player teardown.
+let sharedAudioContext: AudioContext | null = null;
+// True once the shared context has been resumed to "running" via a user gesture
+// (unmute/play). A player's pause() (e.g. when a video ends) suspends the shared
+// context, so the next auto-advanced / switched video would inherit a suspended
+// context and re-show the "tap to unmute" pill. Once activated, a suspended
+// shared context can be resumed WITHOUT a fresh gesture — so a new renderer
+// wakes it during init(), before autoplay's block-check runs. Stays false until
+// the first real gesture so a brand-new page's poster-seek can't leak audio.
+let sharedContextActivated = false;
+
 export class AudioRenderer {
   private audioContext: AudioContext | null = null;
   // Fixed fan-in bus: every decoded source connects here. Keeping the input
@@ -163,16 +182,31 @@ export class AudioRenderer {
    */
   async init(): Promise<boolean> {
     try {
-      this.audioContext = new AudioContext({
-        // "interactive" gives Chromium's audio thread a shorter read-ahead
-        // (~30–50ms vs ~150ms with "playback"). Without this, Chromium starves
-        // when setPlaybackRate stops active sources and resets scheduledTime
-        // to `now` — Safari/Firefox tolerate it because their read-ahead is
-        // already short. Trade-off is a smaller output buffer cushion against
-        // main-thread spikes; the audio decoder + Stable Audio gap-fill
-        // already handle that case.
-        latencyHint: "interactive",
-      });
+      // Reuse the session-wide context so a resumed (unmuted) state survives
+      // source/video switches — see sharedAudioContext above. Only mint a new
+      // one on first use or if a prior one somehow ended up closed.
+      if (!sharedAudioContext || sharedAudioContext.state === "closed") {
+        sharedAudioContext = new AudioContext({
+          // "interactive" gives Chromium's audio thread a shorter read-ahead
+          // (~30–50ms vs ~150ms with "playback"). Without this, Chromium starves
+          // when setPlaybackRate stops active sources and resets scheduledTime
+          // to `now` — Safari/Firefox tolerate it because their read-ahead is
+          // already short. Trade-off is a smaller output buffer cushion against
+          // main-thread spikes; the audio decoder + Stable Audio gap-fill
+          // already handle that case.
+          latencyHint: "interactive",
+        });
+      }
+      this.audioContext = sharedAudioContext;
+      // If the user already unlocked audio this session but a prior player's
+      // pause()/end left the shared context suspended, wake it here — early in
+      // load, well before autoplay's suspended-context check — so an
+      // auto-advanced or switched video starts audible with no "tap to unmute"
+      // pill. Skipped on the very first load (not yet activated) so the poster
+      // seek stays silent.
+      if (sharedContextActivated && this.audioContext.state === "suspended") {
+        this.audioContext.resume().catch(() => {});
+      }
       this.inputNode = this.audioContext.createGain();
       // Volume / mute / makeup gain — ALWAYS the last node before destination.
       // A >100% boost lives here, applied AFTER the limiter, so stable audio's
@@ -652,6 +686,11 @@ export class AudioRenderer {
     ) {
       try {
         await this.audioContext.resume();
+        // Remember that this session's shared context is unlocked, so future
+        // auto-advanced / switched videos can wake it without a fresh gesture.
+        if ((this.audioContext.state as string) === "running") {
+          sharedContextActivated = true;
+        }
       } catch (err) {
         Logger.warn(
           TAG,
@@ -1540,10 +1579,19 @@ export class AudioRenderer {
       this.contextStateHandler = null;
     }
 
-    if (this.audioContext) {
-      await this.audioContext.close();
-      this.audioContext = null;
+    // The AudioContext is shared session-wide (see sharedAudioContext) — do NOT
+    // close it, or the next video would start from a fresh, suspended context
+    // and re-trigger Safari's autoplay block. Just disconnect THIS instance's
+    // nodes from it so they don't linger on the shared destination, then drop
+    // our reference (the singleton stays alive for the next renderer).
+    for (const node of [this.inputNode, this.compressorNode, this.gainNode]) {
+      try {
+        node?.disconnect();
+      } catch {
+        /* already disconnected */
+      }
     }
+    this.audioContext = null;
 
     this.inputNode = null;
     this.gainNode = null;

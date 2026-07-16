@@ -88,8 +88,39 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
   // element shows the "Tap to unmute" pill (mirrors the WebAudio path). Cleared
   // on a successful unmuted play or when the user unmutes.
   private _nativeAudioAutoplayBlocked: boolean = false;
+  // Safety timer for the video-prefetch throttle used to un-starve a native
+  // <audio> track (see setSourcePrefetchThrottle). Auto-releases the throttle so
+  // a genuinely dead audio element (e.g. unsupported codec) can never freeze
+  // video prefetch permanently.
+  private _prefetchThrottleTimer: ReturnType<typeof setTimeout> | null = null;
+  // True while playback is held in a loading state waiting for a native <audio>
+  // track to buffer enough to start in sync (see gateOnNativeAudioReady).
+  private _nativeAudioGateActive: boolean = false;
   private _audioTracks: AudioSourceEntry[] = [];
   private _activeAudioLang: string = "";
+
+  // Split (separate-URL) audio, WASM-decoded. A separate audio track (e.g. a
+  // YouTube itag-140 fMP4 that Safari's native <audio> can't play) is demuxed by
+  // its OWN isolated-WASM Demuxer and decoded through the shared audioDecoder →
+  // audioRenderer, exactly like muxed in-file audio. The AudioRenderer is already
+  // the clock master, so A/V sync, volume, mute and playbackRate come for free.
+  private audioDemuxer: Demuxer | null = null;
+  private audioSource: SourceAdapter | null = null;
+  private audioAnimationFrameId: number | null = null;
+  private audioDemuxInFlight: boolean = false;
+  private _splitAudioTrackId: number = -1;
+  private _splitAudioEof: boolean = false;
+  // Set once destroy() runs. load() awaits (WASM loads, the split-audio second
+  // demuxer) can outlive a rapid source switch that destroys this instance; the
+  // continuation must bail instead of configuring/rendering onto the now-shared
+  // canvas of the successor player (which showed as a black frame).
+  private _destroyed: boolean = false;
+  // PTS (media time) of the last split-audio packet handed to the decoder. The
+  // audio loop bounds its lead against the CLOCK using this — not the
+  // AudioRenderer buffer, which mis-reports while the AudioContext is suspended
+  // (Safari muted-autoplay), which otherwise let audio race far ahead of the
+  // wall-clock-rolling video and land seconds/minutes out of sync on unmute.
+  private _lastSplitAudioPts: number = 0;
 
   // External subtitle tracks (VTT/SRT)
   private _subtitleTracks: SubtitleSourceEntry[] = [];
@@ -698,6 +729,9 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
 
       // Open and get media info
       this.mediaInfo = await this.demuxer.open();
+      // Destroyed by a rapid source switch during the (WASM + network) open —
+      // bail before standing up the split-audio demuxer and decoders.
+      if (this._destroyed) return;
 
       // Cache file size for buffer calculations (getSize was called in bindings.open())
       this.fileSize = await this.source.getSize();
@@ -727,8 +761,12 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
       }
 
       if (audioUrl) {
-        this.setupNativeAudio(audioUrl);
+        await this.setupSplitAudio(audioUrl);
       }
+      // A rapid source switch may have destroyed this instance while the second
+      // (split-audio) WASM demuxer was loading — bail so we don't configure
+      // decoders / render onto the successor's canvas (black-frame flash).
+      if (this._destroyed) return;
 
       // Store external subtitle tracks
       if (this.config.subtitleTracks && this.config.subtitleTracks.length > 0) {
@@ -875,7 +913,9 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
     // Configure audio decoder (skip if disabled for debugging)
     // Configure audio decoder (skip if disabled for debugging or native audio)
     const audioTrack = this.trackManager.getActiveAudioTrack();
-    if (audioTrack && !this.disableAudio) {
+    // Skip the main-demuxer audio track when a split (separate-URL) audio demuxer
+    // owns the audio — the audioDecoder is bound to the split demuxer instead.
+    if (audioTrack && !this.disableAudio && !this.audioDemuxer) {
       const extradata = this.demuxer.getExtradata(audioTrack.id) ?? undefined;
       const configured = await this.audioDecoder.configure(
         audioTrack,
@@ -1303,30 +1343,43 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
       this.videoRenderer.startPresentationLoop();
     }
 
-    // Start native audio BEFORE clock so it becomes master immediately.
-    // If autoplay is blocked, abort the play() and stay paused so the user
-    // can resume with a gesture — otherwise video would advance without
-    // audio and the clock would never sync.
+    // Start native audio so it becomes clock-master once it's rolling. This is
+    // fire-and-forget on PURPOSE: a separate <audio> streaming a large/slow
+    // source can leave play() pending for seconds while it buffers, and awaiting
+    // it here would stall clock.start() and the ready→playing transition — the
+    // VIDEO (on the canvas, needing no autoplay permission) would freeze on the
+    // play button until the audio caught up. Instead we kick off play() and let
+    // the video roll immediately on the wall clock (while the <audio> is paused
+    // the clock's audio provider returns -1, so it falls back automatically); the
+    // audio resolves and re-assumes clock-master duty a moment later.
     if (this.nativeAudioEl) {
-      this.nativeAudioEl.playbackRate = this.clock.getPlaybackRate();
-      try {
-        await this.nativeAudioEl.play();
-        this._nativeAudioAutoplayBlocked = false;
-      } catch {
-        // Autoplay-with-sound was blocked (no user gesture yet). A bare <audio>
-        // element won't autoplay even when muted (Chrome's muted-autoplay
-        // allowance is really for <video>), so we can't start its audio yet —
-        // but the VIDEO lives on the canvas and needs no autoplay permission.
-        // Roll the video on the wall clock (while the element is paused the
-        // clock's audio provider returns -1, so it falls back automatically),
-        // flag the block, and let the element surface the "Tap to unmute" pill.
-        // The unmute gesture (setMuted(false)) then seeks + plays the audio,
-        // which re-assumes clock-master duty. Mirrors the WebAudio/in-file path,
-        // where video rolls while the AudioContext stays suspended.
-        Logger.warn(TAG, "Native audio autoplay blocked — rolling video muted (tap to unmute)");
-        this._nativeAudioAutoplayBlocked = true;
-        // Fall through — do NOT pause or stop the presentation loop.
+      const audioEl = this.nativeAudioEl;
+      audioEl.playbackRate = this.clock.getPlaybackRate();
+      // Re-anchor the <audio> to the clock playhead before (re)starting it.
+      // Without this, resuming after a muted-autoplay block plays the audio from
+      // 0 while the video has rolled ahead on the wall clock: a muted
+      // <audio>.play() succeeds (muted playback is always allowed), clears the
+      // blocked flag, and starts at currentTime 0 — so a later unmute finds the
+      // flag already false, skips its own re-sync, and the audio ends up seconds
+      // behind the video (large A/V drift + a clock snap-back judder). Seeking
+      // here keeps native audio locked to the playhead on every start path.
+      const target = Math.max(0, this.clock.getTime() - this.startTime);
+      if (Math.abs(audioEl.currentTime - target) > 0.3) {
+        try { audioEl.currentTime = target; } catch {}
       }
+      audioEl.play().then(
+        () => {
+          this._nativeAudioAutoplayBlocked = false;
+        },
+        () => {
+          // Autoplay-with-sound was blocked (no user gesture yet). The video
+          // keeps rolling muted; flag the block so the element surfaces the
+          // "Tap to unmute" pill. The unmute gesture (setMuted(false)) then
+          // seeks + plays the audio, which re-assumes clock-master duty.
+          Logger.warn(TAG, "Native audio autoplay blocked — rolling video muted (tap to unmute)");
+          this._nativeAudioAutoplayBlocked = true;
+        },
+      );
     }
 
     this.clock.start();
@@ -1388,7 +1441,16 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
       if (hasAudio) this.startBackgroundTimer();
     }
 
-    this.processLoop();
+    // In WASM split audio-only mode the main (video) demux loop stays parked —
+    // resuming it would re-download + decode the video body we're saving. Only
+    // the audio loop runs. (Native audio-only never reaches here; it returns via
+    // playNativeAudioOnly above. Muxed audio-only DOES run processLoop, whose
+    // own _audioOnly check skips just the video decode while decoding in-file
+    // audio.)
+    if (!(this._audioOnly && this.audioDemuxer)) {
+      this.processLoop();
+    }
+    this.startAudioLoop();
 
     Logger.info(TAG, "Playing");
   }
@@ -1925,7 +1987,14 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
       !!this.videoDecoder && this.videoDecoder.isRecentlyRecovering();
     if (this.stateManager.getState() === "playing" && !this.eofReached && !this.waitingForVideoSync && !nearEnd && !this.isBackgrounded && !inPlayGrace && !decoderRecovering) {
       const videoEmpty = this.videoRenderer ? this.videoRenderer.getQueueSize() === 0 : false;
-      const hasAudio = !!this.trackManager.getActiveAudioTrack() && !this.disableAudio;
+      // Split (separate-URL) audio has no track in the MAIN demuxer's
+      // trackManager — it's decoded from its own demuxer into audioRenderer. So
+      // count audioDemuxer too, else hasAudio is false, audioLow is always true,
+      // and the detector false-stalls on any momentary video-queue blip while the
+      // (independent) audio buffer is perfectly healthy.
+      const hasAudio =
+        (!!this.trackManager.getActiveAudioTrack() || !!this.audioDemuxer) &&
+        !this.disableAudio;
       const audioLow = !hasAudio || this.audioRenderer.getBufferedDuration() < 0.05;
       if (videoEmpty && audioLow) {
         if (!this._stallStartTime) {
@@ -2228,10 +2297,17 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
     const videoBufferFull = !skipVideoBackpressure && videoBuffered > maxVideoBuffered;
     const skipVideoDecodeForAudio = isNon1xRate && !this.muted && (videoBufferFull || videoDecoderFull) && audioStarving;
 
+    // Split (separate-URL) audio is decoded by its OWN loop (audioProcessLoop),
+    // not this one. Its buffer intentionally runs a several-second lead, which is
+    // far above maxAudioBuffered — so gating THIS (video) loop on the audio
+    // buffer/queue would wrongly stop video decode the moment split audio is
+    // full, draining the video renderer and freezing the picture (audio keeps
+    // playing). Exclude the audio conditions when split audio owns the audio.
+    const gateOnAudio = !this.disableAudio && !this.audioDemuxer;
     if (
       (!skipVideoBackpressure && !skipVideoDecodeForAudio && this.videoDecoder.queueSize > maxVideoQueue) ||
-      (!this.disableAudio && this.audioDecoder.queueSize > maxAudioQueue) ||
-      (!this.disableAudio && audioBuffered > maxAudioBuffered) ||
+      (gateOnAudio && this.audioDecoder.queueSize > maxAudioQueue) ||
+      (gateOnAudio && audioBuffered > maxAudioBuffered) ||
       (!skipVideoBackpressure && !skipVideoDecodeForAudio && videoBuffered > maxVideoBuffered)
     ) {
       if (
@@ -2774,6 +2850,44 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
       return;
     }
 
+    // WASM split audio-only: seek ONLY the separate audio demuxer + clock; never
+    // touch the main (video) demuxer whose body we're skipping, and never wait
+    // for a video-sync that will never come. Mirrors the native <audio> path
+    // above but drives the WASM audio pipeline (flush decoder, reset renderer,
+    // re-seek the audio demuxer, restart the audio loop).
+    if (this._audioOnly && this.audioDemuxer && !this.nativeAudioEl) {
+      const t = Math.max(0, Math.min(seconds, this.getDuration() || seconds));
+      this.stopAudioLoop();
+      let guard = 0;
+      while (this.audioDemuxInFlight && guard++ < 200) {
+        await new Promise((r) => setTimeout(r, 5));
+      }
+      this.audioDecoder.flush();
+      this.audioRenderer.reset();
+      try {
+        await this.audioDemuxer.seek(t + this.startTime);
+      } catch (e) {
+        Logger.warn(TAG, `Split audio-only seek failed: ${(e as any)?.message ?? e}`);
+      }
+      this._splitAudioEof = false;
+      this._lastSplitAudioPts = t;
+      this.seekTargetTime = -1;
+      this.clock.seek(t + this.startTime);
+      this.seekKeyframeOffset = 0;
+      this.eofReached = false;
+      this.eofSince = 0;
+      if (
+        this.stateManager.is("playing") ||
+        this.stateManager.is("buffering")
+      ) {
+        this.startAudioLoop();
+      }
+      this.emit("seeking", t);
+      this.emit("timeUpdate", t);
+      this.emit("seeked", t);
+      return;
+    }
+
     // A genuine user seek (no opt) clears any leftover suppression so its
     // spinner shows; play()-initiated seeks pass suppressSpinner to hide it.
     this.suppressSeekSpinner = opts?.suppressSpinner ?? false;
@@ -2871,9 +2985,24 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
       // Seek relative to start time (time 0 in UI = startTime in media)
       Logger.info(TAG, `seek: demuxer.seek(${(seconds + this.startTime).toFixed(2)}) starting...`);
       await this.demuxer.seek(seconds + this.startTime);
-      // Seek native audio element (separate audio source)
-      if (this.nativeAudioEl) {
-        this.nativeAudioEl.currentTime = seconds;
+      // Seek the split (separate-URL) audio demuxer to the same target. Stop the
+      // audio loop and let any in-flight read settle first — a concurrent
+      // readFrame + seek on the (separate) audio WASM module would corrupt it.
+      if (this.audioDemuxer) {
+        this.stopAudioLoop();
+        let guard = 0;
+        while (this.audioDemuxInFlight && guard++ < 200) {
+          await new Promise((r) => setTimeout(r, 5));
+        }
+        try {
+          await this.audioDemuxer.seek(seconds + this.startTime);
+        } catch (e) {
+          Logger.warn(TAG, `Split audio seek failed: ${(e as any)?.message ?? e}`);
+        }
+        this._splitAudioEof = false;
+        // Re-baseline the decode-lead gate to the seek target so it doesn't
+        // think audio is already seconds ahead (or behind) the new playhead.
+        this._lastSplitAudioPts = seconds;
       }
       Logger.info(TAG, `seek: demuxer.seek done`);
       this.clock.seek(seconds + this.startTime);
@@ -2930,6 +3059,7 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
       // notifySeekCompletion will be called once the first valid frame is received.
       Logger.info(TAG, `seek: starting processLoop, waitingForVideoSync=${this.waitingForVideoSync}, state=${this.stateManager.getState()}`);
       this.processLoop();
+      this.startAudioLoop();
 
       // Ensure the video renderer loop is running to actually draw frames as they arrive
       if (this.videoRenderer) {
@@ -4266,9 +4396,373 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
       this.emit("ended", undefined);
       this.releaseWakeLock();
     });
+    // Diagnostics for external-audio failures. A separate <audio> has no visible
+    // surface, so a codec the browser can't decode (e.g. Opus/WebM on Safari) or
+    // a range/seek the audio host won't serve fails SILENTLY — playback rolls on
+    // muted forever with nothing in the log. Surface the real MediaError plus the
+    // network/ready state so the failure mode is identifiable instead of guessed.
+    el.addEventListener("error", () => {
+      const err = el.error;
+      Logger.error(
+        TAG,
+        `Native audio element error: code=${err?.code ?? "?"} message="${err?.message ?? ""}" ` +
+          `networkState=${el.networkState} readyState=${el.readyState} src=${this._nativeAudioLogicalUrl ?? el.currentSrc}`,
+      );
+      // Dead element — stop starving video prefetch on its behalf.
+      this.setSourcePrefetchThrottle(false);
+    });
+    // A separate <audio> track that can't buffer (readyState too low to play)
+    // means the video stream is saturating the connection. Throttle video
+    // prefetch so HTTP backpressure frees bandwidth for the audio to fill; the
+    // audio has a large lead of buffered video to coast on. Release the moment
+    // the audio has enough to play (canplay/playing at readyState >= 3).
+    el.addEventListener("stalled", () => {
+      Logger.warn(
+        TAG,
+        `Native audio stalled: networkState=${el.networkState} readyState=${el.readyState} currentTime=${el.currentTime.toFixed(2)}`,
+      );
+      if (el.readyState < 3 && !el.paused) this.setSourcePrefetchThrottle(true);
+    });
+    el.addEventListener("waiting", () => {
+      Logger.debug(
+        TAG,
+        `Native audio waiting (buffering): readyState=${el.readyState} currentTime=${el.currentTime.toFixed(2)}`,
+      );
+      if (el.readyState < 3 && !el.paused) this.setSourcePrefetchThrottle(true);
+    });
+    el.addEventListener("canplay", () => {
+      this.setSourcePrefetchThrottle(false);
+    });
+    el.addEventListener("pause", () => {
+      // No audio to feed while paused — let video prefetch run full speed.
+      this.setSourcePrefetchThrottle(false);
+    });
+    el.addEventListener("playing", () => {
+      Logger.info(
+        TAG,
+        `Native audio playing: currentTime=${el.currentTime.toFixed(2)} readyState=${el.readyState}`,
+      );
+      if (el.readyState >= 3) this.setSourcePrefetchThrottle(false);
+    });
+  }
+
+  /**
+   * Throttle (pause) video-stream prefetch so a bandwidth-starved native <audio>
+   * track can buffer. HTTP backpressure on the video read loop frees the pipe for
+   * the <audio> element's own fetch. Safe because the video runs a large lead
+   * buffer. A watchdog auto-releases after a few seconds so a permanently stuck
+   * audio element (unsupported codec, dead URL) can't freeze video prefetch.
+   */
+  private setSourcePrefetchThrottle(throttled: boolean): void {
+    const src = this.source as unknown as {
+      setPrefetchThrottle?: (v: boolean) => void;
+    } | null;
+    if (!src || typeof src.setPrefetchThrottle !== "function") return;
+
+    if (this._prefetchThrottleTimer) {
+      clearTimeout(this._prefetchThrottleTimer);
+      this._prefetchThrottleTimer = null;
+    }
+    src.setPrefetchThrottle(throttled);
+    if (throttled) {
+      // Watchdog: never starve video prefetch for more than this long, even if
+      // the audio never becomes ready.
+      this._prefetchThrottleTimer = setTimeout(() => {
+        this._prefetchThrottleTimer = null;
+        src.setPrefetchThrottle!(false);
+      }, 6000);
+    }
+  }
+
+  /**
+   * Hold playback in a loading state until the native <audio> track has buffered
+   * enough to play, then start video + audio together in sync. Called when we
+   * want audible playback (e.g. the unmute gesture) but the separate audio hasn't
+   * buffered yet. Without this, the video rolls silently for a beat, then stalls
+   * to "loading", then the audio joins and jerks into sync — three visible
+   * states. Instead we freeze the video on its current frame (buffering spinner),
+   * throttle video prefetch so the audio gets bandwidth, and only resume once the
+   * audio is ready — a single clean transition into synced playback. A watchdog
+   * resumes anyway so a never-ready audio element can't hang playback forever.
+   */
+  private gateOnNativeAudioReady(): void {
+    const el = this.nativeAudioEl;
+    if (!el || this._nativeAudioGateActive) return;
+
+    const target = Math.max(0, this.clock.getTime() - this.startTime);
+    try {
+      if (Math.abs(el.currentTime - target) > 0.3) el.currentTime = target;
+    } catch {}
+    el.play().catch(() => {});
+
+    // Already playable — no need to gate; let it join immediately.
+    if (el.readyState >= 3) return;
+
+    this._nativeAudioGateActive = true;
+    // Freeze video → loading spinner; hand the network to the audio fetch.
+    this.clock.pause();
+    if (this.videoRenderer) this.videoRenderer.stopPresentationLoop();
+    this.stateManager.setState("buffering");
+    this.setSourcePrefetchThrottle(true);
+
+    let watchdog: ReturnType<typeof setTimeout>;
+    const finish = (force: boolean = false) => {
+      if (!this._nativeAudioGateActive) return;
+      // Safari fires "playing" the instant play() is honoured — even at
+      // readyState 0 with no data buffered. Don't resume on that; only when the
+      // audio can actually keep playing (readyState >= 3) or the watchdog forces
+      // it. Otherwise we'd resume into the same silent-video-then-resync gap.
+      if (!force && el.readyState < 3) return;
+      this._nativeAudioGateActive = false;
+      el.removeEventListener("canplay", onMaybeReady);
+      el.removeEventListener("canplaythrough", onMaybeReady);
+      el.removeEventListener("playing", onMaybeReady);
+      clearTimeout(watchdog);
+      this.setSourcePrefetchThrottle(false);
+      // Only resume if we're still the one holding playback (user didn't pause
+      // meanwhile). Re-anchor audio to the playhead, then start both together —
+      // the clock's audio provider keeps them locked from here.
+      if (this.stateManager.getState() === "buffering") {
+        const t = Math.max(0, this.clock.getTime() - this.startTime);
+        try {
+          if (Math.abs(el.currentTime - t) > 0.3) el.currentTime = t;
+        } catch {}
+        el.play().catch(() => {});
+        if (this.videoRenderer) this.videoRenderer.startPresentationLoop();
+        this.clock.start();
+        this.stateManager.setState("playing");
+      }
+    };
+    const onMaybeReady = () => finish(false);
+    watchdog = setTimeout(() => finish(true), 8000);
+    el.addEventListener("canplay", onMaybeReady);
+    el.addEventListener("canplaythrough", onMaybeReady);
+    el.addEventListener("playing", onMaybeReady);
+  }
+
+  /**
+   * Stand up a WASM-decoded split (separate-URL) audio track: a SECOND Demuxer
+   * (isolated WASM module) over the audio URL, feeding the shared audioDecoder →
+   * audioRenderer. Mirrors the muxed configure path; the AudioRenderer is already
+   * clock-master so sync/volume/rate need no extra wiring. Best-effort — on
+   * failure it clears the demuxer so playback continues video-only.
+   */
+  private async setupSplitAudio(url: string): Promise<void> {
+    try {
+      Logger.info(TAG, `Split audio (WASM) setup: ${url}`);
+      this.audioSource = await this.createSource({
+        type: "url",
+        url,
+        headers: this.config.headers,
+      });
+      // Isolated WASM instance (3rd arg): a second demuxer MUST NOT share the
+      // main module's global read callback — same isolation the thumbnail/cover
+      // pipelines use.
+      this.audioDemuxer = new Demuxer(
+        this.audioSource,
+        this.config.wasmBinary,
+        true,
+      );
+      await this.audioDemuxer.open();
+      const aTrack = this.audioDemuxer.getAudioTracks()[0];
+      if (!aTrack) {
+        Logger.warn(TAG, "Split audio: no audio track in separate source");
+        this.audioDemuxer = null;
+        this.audioSource = null;
+        return;
+      }
+      this._splitAudioTrackId = aTrack.id;
+      const extradata = this.audioDemuxer.getExtradata(aTrack.id) ?? undefined;
+      const bindings = this.audioDemuxer.getBindings();
+      if (bindings) this.audioDecoder.setBindings(bindings);
+      const configured = await this.audioDecoder.configure(aTrack, extradata);
+      if (!configured) {
+        Logger.warn(TAG, "Split audio: decoder configure failed");
+        this.audioDemuxer = null;
+        this.audioSource = null;
+        return;
+      }
+      await this.audioRenderer.init();
+      const sourceCh = aTrack.channels ?? 2;
+      const maxCh = this.audioRenderer.getMaxChannelCount();
+      if (sourceCh > 2 && maxCh >= sourceCh) {
+        this.audioDecoder.setDownmix(false);
+        this.audioRenderer.setOutputChannelCount(sourceCh);
+      } else {
+        this.audioDecoder.setDownmix(true);
+        this.audioRenderer.setOutputChannelCount(2);
+      }
+      this._splitAudioEof = false;
+      this._lastSplitAudioPts = 0;
+      Logger.info(
+        TAG,
+        `Split audio (WASM) ready: ${aTrack.codec} ${aTrack.sampleRate}Hz ${aTrack.channels}ch`,
+      );
+    } catch (e) {
+      Logger.error(TAG, `Split audio setup failed: ${(e as any)?.message ?? e}`);
+      this.audioDemuxer = null;
+      this.audioSource = null;
+    }
+  }
+
+  /**
+   * Audio demux pump for split audio — sibling to processLoop but reads only the
+   * separate audio demuxer and feeds the shared audioDecoder. Own in-flight guard
+   * (separate WASM module, so independent of the video demuxInFlight critical
+   * section). Bounded lead so it doesn't fetch the whole audio file ahead.
+   */
+  private audioProcessLoop = async () => {
+    if (!this.audioDemuxer || this._splitAudioEof) {
+      this.audioAnimationFrameId = null;
+      return;
+    }
+    const state = this.stateManager.getState();
+    if (
+      state !== "playing" &&
+      state !== "buffering" &&
+      !this.waitingForVideoSync
+    ) {
+      this.audioAnimationFrameId = null;
+      return;
+    }
+    if (this.audioDemuxInFlight) {
+      this.audioAnimationFrameId = requestAnimationFrame(this.audioProcessLoop);
+      return;
+    }
+
+    // Hold audio while the video is still hunting its first keyframe after a
+    // seek/first-play. The AudioRenderer plays buffers the instant they're
+    // decoded (even before the clock starts), so decoding here would let audio
+    // run ahead during the ~2s sync window — the clock then snaps to an audio
+    // position seconds past the video, which never catches up (perpetual
+    // "buffers empty" stall loop). The muxed path holds audio the same way via
+    // pendingAudioPackets. Idle-reschedule until video sync completes.
+    if (this.waitingForVideoSync && this.trackManager.getActiveVideoTrack()) {
+      this.audioAnimationFrameId = requestAnimationFrame(this.audioProcessLoop);
+      return;
+    }
+
+    // Read a SMALL burst of packets per tick — enough to stay ahead of AAC's
+    // ~43 frames/sec (one-per-rAF underran when rAF stuttered under video load),
+    // but NOT so many that the sequential WASM readFrame calls monopolise the
+    // main thread and starve the video decode/present loop (a big burst stalled
+    // heavy 1440p60 AV1). ~24/tick × 60fps ≈ 1440 pkt/s capacity vs 43 needed,
+    // filling the lead over a few ticks instead of one blocking gulp. Hold a
+    // few seconds of lead (scaled with rate); the audio bitrate is tiny so the
+    // time-cushion costs almost no bytes.
+    const rate = Math.max(0.25, this.clock.getPlaybackRate());
+    const bufferedTarget = 5 * (rate < 1 ? 1 / rate : Math.min(2, rate));
+
+    // Bound the audio decode lead against the CLOCK, not the AudioRenderer
+    // buffer. While the AudioContext is suspended (Safari muted-autoplay) the
+    // buffer-duration reading is unreliable, so a buffer-only gate let audio
+    // race far ahead of the wall-clock-rolling video and land wildly out of sync
+    // on unmute. Gating on how far the last decoded PTS is past the playhead
+    // keeps audio close to the video in every state. Crucially, while MUTED
+    // (autoplay-blocked, pre-gesture) keep the lead tiny — the muted renderer
+    // advances its media clock to the lead edge, so a big lead becomes exactly
+    // that much A/V drift the instant the user unmutes. A small lead makes
+    // unmute land on the playhead. Once audible, use the full smooth-buffer lead.
+    const lead = this.muted ? 0.25 : bufferedTarget;
+    const mediaNow = Math.max(0, this.clock.getTime() - this.startTime);
+    if (this._lastSplitAudioPts - mediaNow > lead) {
+      this.audioAnimationFrameId = requestAnimationFrame(this.audioProcessLoop);
+      return;
+    }
+
+    this.audioDemuxInFlight = true;
+    try {
+      let reads = 0;
+      while (
+        reads < 24 &&
+        !this._splitAudioEof &&
+        this.audioDecoder.queueSize <= 40 &&
+        this.audioRenderer.getBufferedDuration() < bufferedTarget &&
+        this._lastSplitAudioPts - mediaNow <= lead
+      ) {
+        const pkt = await this.audioDemuxer.readPacket();
+        reads++;
+        if (!pkt) {
+          this._splitAudioEof = true;
+          break;
+        }
+        if (
+          this._splitAudioTrackId !== -1 &&
+          pkt.streamIndex !== this._splitAudioTrackId
+        ) {
+          continue;
+        }
+        // Skip packets before an in-flight seek target (mirror the video path).
+        if (this.seekTargetTime !== -1 && pkt.timestamp < this.seekTargetTime) {
+          continue;
+        }
+        this.audioDecoder.decode(pkt.data, pkt.timestamp, pkt.keyframe);
+        this._lastSplitAudioPts = pkt.timestamp;
+      }
+    } catch (e) {
+      Logger.warn(TAG, `Split audio demux error: ${(e as any)?.message ?? e}`);
+    } finally {
+      this.audioDemuxInFlight = false;
+    }
+
+    if (this._splitAudioEof) {
+      this.audioAnimationFrameId = null;
+    } else {
+      this.audioAnimationFrameId = requestAnimationFrame(this.audioProcessLoop);
+    }
+  };
+
+  private startAudioLoop(): void {
+    if (!this.audioDemuxer || this.audioAnimationFrameId !== null) return;
+    this.audioAnimationFrameId = requestAnimationFrame(this.audioProcessLoop);
+  }
+
+  private stopAudioLoop(): void {
+    if (this.audioAnimationFrameId !== null) {
+      cancelAnimationFrame(this.audioAnimationFrameId);
+      this.audioAnimationFrameId = null;
+    }
+  }
+
+  /**
+   * One-shot diagnostic: log the external-audio URL and a tiny range request's
+   * response shape (status, content-type, accept-ranges, length). Reveals
+   * whether the source is a progressive native-playable file (AAC/MP4, 206 +
+   * accept-ranges) or something a native <audio> can't load. Best-effort — a
+   * cross-origin host may hide headers; the status/type usually still come
+   * through. Never throws into the caller.
+   */
+  private probeNativeAudioUrl(url: string): void {
+    Logger.info(TAG, `External audio URL: ${url}`);
+    try {
+      fetch(url, {
+        method: "GET",
+        headers: { Range: "bytes=0-1", ...(this.config.headers || {}) },
+      })
+        .then((res) => {
+          Logger.info(
+            TAG,
+            `External audio probe: status=${res.status} type="${res.headers.get("content-type") ?? "?"}" ` +
+              `accept-ranges="${res.headers.get("accept-ranges") ?? "?"}" ` +
+              `content-range="${res.headers.get("content-range") ?? "?"}" ` +
+              `content-length="${res.headers.get("content-length") ?? "?"}"`,
+          );
+        })
+        .catch((e) => {
+          Logger.warn(TAG, `External audio probe failed (CORS/network?): ${e?.message ?? e}`);
+        });
+    } catch (e) {
+      Logger.warn(TAG, `External audio probe threw: ${(e as any)?.message ?? e}`);
+    }
   }
 
   private setupNativeAudio(url: string): void {
+    // Diagnostics: surface the external-audio URL and probe how the server
+    // serves it. A native <audio> stuck at readyState 0 with no error usually
+    // means the response isn't a progressive, native-playable file — a segmented
+    // /DASH URL, a non-AAC/MP4 container, or a host that won't range-serve to the
+    // element. content-type + accept-ranges + status tell us which.
+    this.probeNativeAudioUrl(url);
     const wasPlaying = this.nativeAudioEl && !this.nativeAudioEl.paused;
     const currentTime = this.nativeAudioEl?.currentTime ?? 0;
     // Same-source detection: match the logical URL (the blob path rewrites
@@ -4503,6 +4997,7 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
     return (
       this.trackManager.getAudioTracks().length > 0 ||
       this.hasNativeAudio() ||
+      this.audioDemuxer !== null ||
       this.streamWrapper !== null
     );
   }
@@ -4900,13 +5395,26 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
       // start without a gesture, so the video has been rolling on the wall clock
       // with the audio paused — THIS unmute is the gesture. Sync the audio to
       // the current playhead and start it; it then re-assumes clock-master duty.
-      if (!muted && this._nativeAudioAutoplayBlocked) {
+      if (!muted && this.stateManager.getState() === "playing") {
         this._nativeAudioAutoplayBlocked = false;
-        if (this.nativeAudioEl.paused && this.stateManager.getState() === "playing") {
-          try {
-            this.nativeAudioEl.currentTime = Math.max(0, this.clock.getTime() - this.startTime);
-          } catch {}
-          this.nativeAudioEl.play().catch(() => {});
+        // Unmute is the gesture that lets the separate <audio> start. If it isn't
+        // buffered enough to play in sync yet, hold playback in a loading state
+        // and start both together once it's ready (no silent-video gap). If it's
+        // already playable, just re-anchor to the playhead and go — covers both
+        // the paused-through-autoplay-block case and the muted-rolling-drift case.
+        if (this.nativeAudioEl.readyState < 3) {
+          this.gateOnNativeAudioReady();
+        } else {
+          const target = Math.max(0, this.clock.getTime() - this.startTime);
+          if (
+            this.nativeAudioEl.paused ||
+            Math.abs(this.nativeAudioEl.currentTime - target) > 0.3
+          ) {
+            try {
+              this.nativeAudioEl.currentTime = target;
+            } catch {}
+            if (this.nativeAudioEl.paused) this.nativeAudioEl.play().catch(() => {});
+          }
         }
       }
     }
@@ -5163,15 +5671,21 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
       return;
     }
 
-    const splitSource = !!this.nativeAudioEl; // separate <audio> drives playback
+    // Separate audio drives playback independently of the main (video) demux
+    // loop — either the native <audio> element OR the WASM split-audio demuxer.
+    // Either way, audio-only can stop the main loop entirely (video body stops
+    // downloading + decoding) while audio keeps playing on its own path.
+    const splitSource = !!this.nativeAudioEl || !!this.audioDemuxer;
 
     if (enabled) {
       // Freeze the video surface cleanly — drop queued + on-screen frames so the
       // UI can swap to the album-art / strip view without a stale last frame.
       if (this.videoRenderer) this.videoRenderer.clearQueue();
       if (splitSource) {
-        // Split source: stop the demux loop entirely so the video body stops
-        // downloading + decoding. The native <audio> keeps playing on its own.
+        // Split source: stop the MAIN (video) demux loop so the video body stops
+        // downloading + decoding. Audio keeps playing on its own — the native
+        // <audio> element, or (WASM split) the separate audioProcessLoop, which
+        // is driven by audioAnimationFrameId and is untouched here.
         // (Doing this live — never via a reload — avoids tearing down the WASM
         // context while a read is in flight, which crashes with an OOB.)
         if (this.animationFrameId !== null) {
@@ -5969,6 +6483,7 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
    */
   destroy(): void {
     Logger.info(TAG, "Destroying player");
+    this._destroyed = true;
 
     // Release WakeLock
     this.releaseWakeLock();
@@ -5980,6 +6495,23 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
     }
     this.stopBackgroundTimer();
     this.stopPauseBuffering();
+    if (this._prefetchThrottleTimer) {
+      clearTimeout(this._prefetchThrottleTimer);
+      this._prefetchThrottleTimer = null;
+    }
+
+    // Tear down the split (separate-URL) WASM audio pipeline.
+    this.stopAudioLoop();
+    if (this.audioDemuxer) {
+      this.audioDemuxer.close();
+      this.audioDemuxer = null;
+    }
+    if (this.audioSource) {
+      try {
+        this.audioSource.close();
+      } catch {}
+      this.audioSource = null;
+    }
 
     // Destroy the adaptive-streaming wrapper (HLS or DASH, via Shaka)
     if (this.streamWrapper) {
