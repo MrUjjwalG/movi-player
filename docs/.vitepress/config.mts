@@ -3,6 +3,9 @@ import { defineConfig } from "vitepress";
 // https://vitepress.dev/reference/site-config
 export default defineConfig({
   base: "/movi-player/",
+  // Emit extension-less internal links (GitHub Pages serves foo.html for /foo).
+  // Keeps every URL consistent with the canonical (which never has .html).
+  cleanUrls: true,
   title: "Movi-Player",
   description:
     "Modern, modular video player for the web powered by WebCodecs + FFmpeg WASM",
@@ -28,6 +31,22 @@ export default defineConfig({
       },
     ],
   ],
+
+  // Canonicalize every page to its moviplayer.com/docs URL. The docs are served
+  // at moviplayer.com/docs (apex subdirectory — best for SEO: authority stays on
+  // one domain) via a reverse proxy of this GitHub Pages build. Pointing the
+  // canonical at moviplayer.com/docs makes the github.io copy de-duplicate to
+  // the apex, so search engines index/credit a single URL.
+  transformPageData(pageData) {
+    const rel = pageData.relativePath
+      .replace(/(^|\/)index\.md$/, "$1")
+      .replace(/\.md$/, "");
+    pageData.frontmatter.head ??= [];
+    pageData.frontmatter.head.push([
+      "link",
+      { rel: "canonical", href: `https://moviplayer.com/docs/${rel}` },
+    ]);
+  },
 
   themeConfig: {
     // https://vitepress.dev/reference/default-theme-config
@@ -125,7 +144,7 @@ export default defineConfig({
     ],
 
     footer: {
-      message: 'Released under the Apache-2.0 License. <a href="/movi-player/privacy-policy">Privacy Policy</a>',
+      message: 'Released under the Apache-2.0 License. <a href="/movi-player/privacy-policy">Privacy Policy</a> · <a href="/movi-player/terms-of-service">Terms of Service</a>',
       copyright: "Copyright © 2024-present Ujjwal Kashyap",
     },
 
