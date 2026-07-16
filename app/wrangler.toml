@@ -7,6 +7,19 @@ routes = [
   { pattern = "www.moviplayer.com", custom_domain = true }
 ]
 
+# ─── /drive app (Google Drive video player) ───────────────────────────
+# Public Google identifiers for the "Open with Movi Player" Drive app.
+# These are NOT secret (a client_id and a GCP project number are public),
+# so they live here and are injected into drive.html by buildDriveHtml().
+# The Picker API key is a SECRET, set out-of-band and kept out of git:
+#   echo "AIza..." | wrangler secret put DRIVE_API_KEY
+# (The key is still visible in the served page — Picker runs client-side —
+#  so it MUST be locked down with an HTTP-referrer restriction to
+#  moviplayer.com/* in the Google Cloud console. Secrecy isn't the control.)
+[vars]
+DRIVE_CLIENT_ID = "1051579256106-k6kn9uavacv1g7rjj8805976t25131se.apps.googleusercontent.com"
+DRIVE_APP_ID = "1051579256106"
+
 [[r2_buckets]]
 binding = "ASSETS"
 bucket_name = "movi-assets"

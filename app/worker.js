@@ -1,6 +1,7 @@
 import HTML_RAW from "./index.html";
 import TEST_NATIVE_HTML from "./test-native.html";
 import COMPARE_HTML from "./compare.html";
+import DRIVE_HTML from "./drive.html";
 import SITEMAP from "./sitemap.xml";
 import ROBOTS from "./robots.txt";
 import LLMS from "./llms.txt";
@@ -9,6 +10,7 @@ const BUILD_VERSION = "__BUILD_VERSION__";
 const HTML_WITH_VERSION = HTML_RAW.replace(/__BUILD_VERSION__/g, BUILD_VERSION);
 const TEST_NATIVE_WITH_VERSION = TEST_NATIVE_HTML.replace(/__BUILD_VERSION__/g, BUILD_VERSION);
 const COMPARE_WITH_VERSION = COMPARE_HTML.replace(/__BUILD_VERSION__/g, BUILD_VERSION);
+const DRIVE_WITH_VERSION = DRIVE_HTML.replace(/__BUILD_VERSION__/g, BUILD_VERSION);
 
 // Turnstile site key is injected per-request from env so it can be
 // rotated via wrangler secret without a redeploy. When empty the
@@ -21,11 +23,39 @@ function buildHtml(env) {
   );
 }
 
+// The Drive app's Google credentials are injected per-request from env so they
+// aren't hardcoded in the committed HTML. CLIENT_ID / APP_ID are public
+// identifiers (set as wrangler [vars]); DRIVE_API_KEY is a Cloudflare secret
+// (`wrangler secret put DRIVE_API_KEY`). The Picker developer key is inherently
+// client-visible — it's protected by an HTTP-referrer restriction, not secrecy.
+// Missing values leave the placeholder in place, so the page shows a clear
+// "not configured" message instead of silently half-working.
+function buildDriveHtml(env) {
+  return DRIVE_WITH_VERSION
+    .replace(/__DRIVE_CLIENT_ID__/g, env.DRIVE_CLIENT_ID || "__DRIVE_CLIENT_ID__")
+    .replace(/__DRIVE_API_KEY__/g, env.DRIVE_API_KEY || "__DRIVE_API_KEY__")
+    .replace(/__DRIVE_APP_ID__/g, env.DRIVE_APP_ID || "__DRIVE_APP_ID__");
+}
+
 const SECURITY_HEADERS = {
   "Cross-Origin-Opener-Policy": "same-origin",
   "Cross-Origin-Embedder-Policy": "require-corp",
   "X-Content-Type-Options": "nosniff",
   "Referrer-Policy": "strict-origin-when-cross-origin",
+};
+
+// The Drive app opens a Google OAuth (GIS) popup that must post the token back
+// to this window. COOP 'same-origin' + COEP 'require-corp' (SECURITY_HEADERS)
+// sever that link and GIS falsely reports 'popup_closed', so /drive uses
+// 'same-origin-allow-popups' and NO COEP. The player doesn't need
+// SharedArrayBuffer (single-threaded WASM + Asyncify I/O), so dropping
+// cross-origin isolation costs nothing here.
+const DRIVE_HEADERS = {
+  "Content-Type": "text/html;charset=UTF-8",
+  "Cross-Origin-Opener-Policy": "same-origin-allow-popups",
+  "X-Content-Type-Options": "nosniff",
+  "Referrer-Policy": "strict-origin-when-cross-origin",
+  "Cache-Control": "public, max-age=300",
 };
 
 const CORS_HEADERS = {
@@ -308,6 +338,33 @@ export default {
       });
     }
 
+    // --- "Open with Movi Player" for Google Drive. Also the Drive UI
+    // Integration Open URL: Drive appends ?state={ids,action} and the page
+    // signs in + streams the picked file. Uses DRIVE_HEADERS (popup-safe COOP,
+    // no COEP) so the GIS OAuth popup can return the token — see the note there.
+    if (path === "/drive" || path === "/drive.html" || path === "/drive/") {
+      return new Response(buildDriveHtml(env), { headers: DRIVE_HEADERS });
+    }
+
+    // --- Docs: reverse-proxy the VitePress site (GitHub Pages) under /docs so
+    // it lives on the apex domain (better SEO — one domain, consolidated
+    // authority — than a docs.* subdomain). The GH Pages build uses base
+    // "/movi-player/"; we rewrite that to "/docs/" in text responses so links
+    // and assets resolve under moviplayer.com/docs. Each page's rel=canonical is
+    // already moviplayer.com/docs/... (set in VitePress transformPageData), so
+    // the github.io copy de-duplicates to this one for search engines.
+    // Force the trailing slash: /docs → /docs/. The coi-serviceworker registers
+    // with scope "/docs/", which does NOT control the slash-less "/docs" URL, so
+    // that page can never reach cross-origin isolation and the coi reload retries
+    // forever (a redirect loop). Landing everyone on "/docs/" keeps them inside
+    // the SW scope. (Also the canonical/base is "/docs/".)
+    if (path === "/docs") {
+      return Response.redirect(`${url.origin}/docs/${url.search}`, 301);
+    }
+    if (path.startsWith("/docs/")) {
+      return handleDocs(url);
+    }
+
     // --- Serve dist files from R2 (strip version prefix for key lookup) ---
     if (path.startsWith("/dist/")) {
       const parts = path.slice(6).split("/");
@@ -378,6 +435,60 @@ export default {
     return new Response("Not Found", { status: 404 });
   },
 };
+
+// GitHub Pages origin the docs are built to (VitePress base "/movi-player/").
+const DOCS_ORIGIN = "https://mrujjwalg.github.io/movi-player";
+
+/**
+ * Reverse-proxy the VitePress docs so moviplayer.com/docs serves the same site
+ * that's published to GitHub Pages. Maps /docs/<x> → <DOCS_ORIGIN>/<x>, and
+ * rewrites the baked-in "/movi-player/" base to "/docs/" in text responses so
+ * every link/asset resolves under the apex path. Binary assets stream through
+ * untouched. 404s from GH Pages pass through as 404s.
+ */
+async function handleDocs(url) {
+  // "/docs" → "/", "/docs/guide" → "/guide", "/docs/assets/x.js" → "/assets/x.js"
+  let rest = url.pathname.replace(/^\/docs/, "");
+  if (rest === "") rest = "/";
+  const target = DOCS_ORIGIN + rest + url.search;
+
+  let res;
+  try {
+    res = await fetch(target, {
+      headers: { "User-Agent": "moviplayer-docs-proxy" },
+      redirect: "follow",
+    });
+  } catch {
+    return new Response("Docs upstream unavailable", { status: 502 });
+  }
+
+  const ct = res.headers.get("content-type") || "";
+  const isText = /text\/html|javascript|json|text\/css|application\/xml|svg/i.test(ct);
+
+  // Text (HTML/JS/CSS/JSON/XML): rewrite the base path so /movi-player/ → /docs/.
+  // The rel=canonical is an absolute moviplayer.com/docs URL (set in VitePress),
+  // so it contains no "/movi-player/" and is left intact.
+  if (isText) {
+    const body = (await res.text()).split("/movi-player/").join("/docs/");
+    return new Response(body, {
+      status: res.status,
+      headers: {
+        "Content-Type": ct,
+        "Cache-Control": res.ok ? "public, max-age=600" : "no-store",
+        "X-Robots-Tag": "index, follow",
+      },
+    });
+  }
+
+  // Binary (images, fonts, wasm): stream through with a longer cache.
+  return new Response(res.body, {
+    status: res.status,
+    headers: {
+      "Content-Type": ct,
+      "Cache-Control": res.ok ? "public, max-age=86400" : "no-store",
+    },
+  });
+}
 
 function handleEmbed(url) {
   const videoUrl = url.searchParams.get("url") || "";

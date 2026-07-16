@@ -1,0 +1,537 @@
+<!doctype html>
+<html lang="en">
+
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Movi Player for Google Drive — play your Drive videos in the browser</title>
+  <meta name="description" content="Open and stream your Google Drive videos (MKV, HEVC, AV1, 4K/HDR) directly in the browser with Movi Player. No download, read-only, decoded on your device." />
+  <link rel="canonical" href="https://moviplayer.com/drive" />
+  <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
+  <meta property="og:title" content="Movi Player for Google Drive" />
+  <meta property="og:description" content="Play your Google Drive videos in the browser — MKV, HEVC, AV1, 4K/HDR. Read-only, nothing uploaded." />
+  <meta property="og:type" content="website" />
+  <!-- Debug: open /drive?movilog to route the player bundle's internal logs to
+       the DevTools console. The bundle calls window.__movilog (that name
+       survives minification; plain console.* is stripped by terser's
+       drop_console), so the sink MUST exist before the bundle script runs. -->
+  <script>
+    if (new URLSearchParams(location.search).has("movilog")) {
+      (function () {
+        var f = function (n) {
+          return function () {
+            console[n].apply(console, ["%c[movi]", "color:#6c5dd3"].concat([].slice.call(arguments)));
+          };
+        };
+        var m = f("log");
+        m.log = f("log"); m.info = f("info"); m.warn = f("warn"); m.error = f("error"); m.debug = f("debug");
+        window.__movilog = m;
+      })();
+    }
+  </script>
+  <!-- Google Identity Services (OAuth) + API client (Picker). These are Google's
+       versionless dynamic loaders — SRI is not applicable to them. -->
+  <script src="https://accounts.google.com/gsi/client" async defer></script>
+  <script src="https://apis.google.com/js/api.js" async defer></script>
+  <style>
+    :root {
+      --accent: #6c5dd3;
+      --accent-2: #00d4ff;
+      --accent-grad: linear-gradient(135deg, #6c5dd3 0%, #00d4ff 100%);
+      --font: "Inter", system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+
+      --bg: #0b0b0f;
+      --surface: rgba(255, 255, 255, 0.045);
+      --surface-2: rgba(255, 255, 255, 0.07);
+      --border: rgba(255, 255, 255, 0.09);
+      --border-strong: rgba(255, 255, 255, 0.16);
+      --text: #f4f4f7;
+      --text-dim: #9a9aae;
+      --text-faint: #6a6a7d;
+      --glow-1: rgba(108, 93, 211, 0.18);
+      --glow-2: rgba(0, 212, 255, 0.12);
+      --shadow: 0 24px 60px -20px rgba(0, 0, 0, 0.7);
+      --radius: 20px;
+    }
+    [data-theme="light"] {
+      --bg: #f6f7fb;
+      --surface: rgba(255, 255, 255, 0.75);
+      --surface-2: #ffffff;
+      --border: rgba(17, 20, 45, 0.08);
+      --border-strong: rgba(17, 20, 45, 0.14);
+      --text: #14162e;
+      --text-dim: #5a5f78;
+      --text-faint: #8a8fa6;
+      --glow-1: rgba(108, 93, 211, 0.12);
+      --glow-2: rgba(0, 212, 255, 0.1);
+      --shadow: 0 24px 60px -24px rgba(60, 66, 120, 0.28);
+    }
+
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    html { scroll-behavior: smooth; }
+    body {
+      font-family: var(--font);
+      color: var(--text);
+      background: var(--bg);
+      min-height: 100vh;
+      display: flex;
+      flex-direction: column;
+      overflow-x: hidden;
+      -webkit-font-smoothing: antialiased;
+    }
+    /* Ambient background glow */
+    body::before {
+      content: "";
+      position: fixed; inset: 0; z-index: 0; pointer-events: none;
+      background:
+        radial-gradient(60% 50% at 12% 8%, var(--glow-1) 0%, transparent 60%),
+        radial-gradient(50% 50% at 90% 20%, var(--glow-2) 0%, transparent 55%),
+        radial-gradient(40% 40% at 50% 110%, var(--glow-1) 0%, transparent 60%);
+    }
+    #ambient-wrapper {
+      position: fixed; inset: 0; z-index: 0; pointer-events: none;
+      opacity: .55; filter: blur(90px) saturate(1.3); transition: opacity 1s ease;
+    }
+
+    button { font-family: inherit; cursor: pointer; border: none; background: none; color: inherit; }
+    a { color: var(--accent-2); text-decoration: none; }
+    a:hover { text-decoration: underline; }
+
+    .wrap { position: relative; z-index: 1; width: 100%; max-width: 1240px; margin: 0 auto; padding: 0 clamp(1rem, 4vw, 2.5rem); flex: 1; display: flex; flex-direction: column; }
+
+    /* ---------- Brand (matches the main moviplayer.com webapp) ---------- */
+    .brand { display: inline-flex; align-items: center; gap: .55rem; text-decoration: none; user-select: none; }
+    .brand-logo { width: 30px; height: 30px; flex-shrink: 0; filter: drop-shadow(0 2px 8px rgba(124, 108, 240, .35)); }
+    .brand-text { font-size: 1.3rem; font-weight: 800; letter-spacing: -.3px; line-height: 1; background: linear-gradient(135deg, #fff 0%, #c8c8e0 100%); -webkit-background-clip: text; background-clip: text; -webkit-text-fill-color: transparent; }
+    [data-theme="light"] .brand-text { background: linear-gradient(135deg, #6c5dd3 0%, #4a3bba 100%); -webkit-background-clip: text; background-clip: text; -webkit-text-fill-color: transparent; }
+    .brand-sub { font-size: .74rem; font-weight: 600; color: var(--text-dim); background: var(--surface); border: 1px solid var(--border); padding: .2rem .5rem; border-radius: 7px; letter-spacing: .2px; }
+
+    /* ---------- Buttons ---------- */
+    .btn { display: inline-flex; align-items: center; justify-content: center; gap: .55rem; height: 46px; padding: 0 1.25rem; border-radius: 12px; font-weight: 600; font-size: .92rem; transition: transform .18s cubic-bezier(.2,.8,.2,1), background .18s, box-shadow .18s, opacity .18s; white-space: nowrap; }
+    .btn:disabled { opacity: .45; cursor: default; pointer-events: none; }
+    .btn-primary { color: #fff; background: var(--accent-grad); box-shadow: 0 10px 22px -8px rgba(108, 93, 211, .7); }
+    .btn-primary:hover { transform: translateY(-2px); box-shadow: 0 16px 30px -10px rgba(108, 93, 211, .8); }
+    .btn-ghost { color: var(--text-dim); background: var(--surface); border: 1px solid var(--border); }
+    .btn-ghost:hover { color: var(--text); background: var(--surface-2); border-color: var(--border-strong); }
+    .btn svg { width: 18px; height: 18px; }
+
+    /* Google sign-in button (recognizable branded look) */
+    .btn-google { height: 52px; padding: 0 1.5rem 0 1.1rem; border-radius: 14px; font-size: .98rem; font-weight: 600; color: #1f1f1f; background: #fff; box-shadow: 0 10px 30px -10px rgba(0,0,0,.45), inset 0 0 0 1px rgba(0,0,0,.06); }
+    .btn-google:hover { transform: translateY(-2px); box-shadow: 0 18px 40px -12px rgba(0,0,0,.5), inset 0 0 0 1px rgba(0,0,0,.08); }
+    .btn-google svg { width: 20px; height: 20px; }
+
+    .icon-btn { width: 46px; height: 46px; border-radius: 12px; display: grid; place-items: center; color: var(--text-dim); background: var(--surface); border: 1px solid var(--border); transition: all .18s; }
+    .icon-btn:hover { color: var(--text); background: var(--surface-2); border-color: var(--border-strong); }
+    .icon-btn svg { width: 20px; height: 20px; }
+
+    /* ---------- Signed-out hero ---------- */
+    .hero { flex: 1; display: none; flex-direction: column; align-items: center; justify-content: center; text-align: center; padding: 4rem 0 5rem; gap: 1.6rem; }
+    .hero .eyebrow { display: inline-flex; align-items: center; gap: .5rem; font-size: .8rem; font-weight: 600; color: var(--text-dim); background: var(--surface); border: 1px solid var(--border); padding: .4rem .85rem; border-radius: 100px; }
+    .hero .eyebrow .dot { width: 7px; height: 7px; border-radius: 50%; background: #34d399; box-shadow: 0 0 10px #34d399; }
+    .hero h1 { font-size: clamp(2.1rem, 5.5vw, 3.6rem); line-height: 1.05; font-weight: 800; letter-spacing: -1.5px; max-width: 16ch; }
+    .hero h1 em { font-style: normal; background: var(--accent-grad); -webkit-background-clip: text; background-clip: text; -webkit-text-fill-color: transparent; }
+    .hero p.sub { font-size: clamp(1rem, 2.2vw, 1.18rem); color: var(--text-dim); max-width: 52ch; line-height: 1.55; }
+    .hero .cta-row { display: flex; flex-direction: column; align-items: center; gap: .75rem; margin-top: .4rem; }
+    .hero .trust { font-size: .82rem; color: var(--text-faint); display: inline-flex; align-items: center; gap: .4rem; }
+    .hero .trust svg { width: 15px; height: 15px; }
+    .chips { display: flex; flex-wrap: wrap; gap: .5rem; justify-content: center; max-width: 40rem; margin-top: 1rem; }
+    .chip { font-size: .78rem; font-weight: 600; color: var(--text-dim); background: var(--surface); border: 1px solid var(--border); padding: .38rem .8rem; border-radius: 9px; }
+
+    /* ---------- App view ---------- */
+    .app { flex: 1; display: none; flex-direction: column; padding-bottom: 2rem; }
+    .topbar { position: sticky; top: 0; z-index: 20; display: flex; align-items: center; justify-content: space-between; gap: 1rem; padding: 1rem 0; margin-bottom: .5rem; backdrop-filter: blur(14px); }
+    .topbar .actions { display: flex; align-items: center; gap: .6rem; }
+    .connected { display: inline-flex; align-items: center; gap: .45rem; height: 46px; padding: 0 .95rem; font-size: .82rem; font-weight: 600; color: var(--text-dim); background: var(--surface); border: 1px solid var(--border); border-radius: 12px; }
+    .connected .dot { width: 7px; height: 7px; border-radius: 50%; background: #34d399; box-shadow: 0 0 8px #34d399; }
+
+    .stage-card { position: relative; border-radius: var(--radius); overflow: hidden; background: #000; box-shadow: var(--shadow); border: 1px solid var(--border); }
+    .stage-card.audio { background: var(--surface); aspect-ratio: auto; }
+    .player-stage { position: relative; width: 100%; aspect-ratio: 16 / 9; display: flex; justify-content: center; background: #000; }
+    .player-stage.is-audio-strip { aspect-ratio: auto; height: auto; background: transparent; }
+    movi-player { width: 100%; height: 100%; display: block; --movi-progress-color: var(--accent); --movi-btn-hover-bg: rgba(108,93,211,.25); }
+
+    /* Empty state inside the stage */
+    /* Opaque overlay — sits above and fully covers movi-player's own built-in
+       "No Video" shadow-DOM placeholder so only this one shows. */
+    .empty { position: absolute; inset: 0; z-index: 6; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 1.1rem; text-align: center; padding: 2rem; color: var(--text-dim); background: radial-gradient(70% 70% at 50% 38%, rgba(108,93,211,.16), transparent 72%), #08080c; }
+    .empty .glyph { width: 64px; height: 64px; border-radius: 18px; display: grid; place-items: center; background: var(--surface-2); border: 1px solid var(--border); }
+    .empty .glyph svg { width: 30px; height: 30px; opacity: .8; }
+    .empty h3 { font-size: 1.15rem; font-weight: 700; color: var(--text); }
+    .empty p { font-size: .9rem; max-width: 34ch; line-height: 1.5; }
+
+
+    .meta-row { display: flex; align-items: center; justify-content: space-between; gap: 1rem; margin-top: .9rem; padding: 0 .2rem; min-height: 22px; }
+    .now-playing { font-size: .9rem; color: var(--text-dim); font-weight: 500; display: inline-flex; align-items: center; gap: .5rem; overflow: hidden; }
+    .now-playing .dot { flex: none; width: 7px; height: 7px; border-radius: 50%; background: var(--text-faint); }
+    .now-playing.active .dot { background: #34d399; box-shadow: 0 0 8px #34d399; }
+    .now-playing .txt { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .privacy-note { font-size: .78rem; color: var(--text-faint); white-space: nowrap; }
+
+    /* Toast */
+    .toast { position: fixed; left: 50%; bottom: 24px; transform: translate(-50%, 140%); z-index: 100; max-width: min(90vw, 460px); display: flex; align-items: flex-start; gap: .6rem; padding: .8rem 1rem; border-radius: 12px; font-size: .88rem; font-weight: 500; color: #fff; background: #1c1c24; border: 1px solid var(--border-strong); box-shadow: 0 20px 40px -12px rgba(0,0,0,.6); transition: transform .35s cubic-bezier(.2,.9,.2,1); }
+    .toast.show { transform: translate(-50%, 0); }
+    .toast.error { background: #2a1416; border-color: rgba(248,113,113,.4); }
+    .toast .ico { flex: none; width: 18px; height: 18px; margin-top: 1px; }
+
+    .foot { position: relative; z-index: 1; text-align: center; color: var(--text-faint); font-size: .78rem; padding: 1.5rem 1rem; }
+    .foot a { color: var(--text-faint); }
+
+    @media (max-width: 560px) {
+      .topbar { flex-wrap: wrap; }
+      .connected .label { display: none; }
+      .btn-primary .label { display: none; }
+      .btn-primary { padding: 0 .9rem; }
+      .privacy-note { display: none; }
+    }
+  </style>
+</head>
+
+<body data-state="loading">
+  <div id="ambient-wrapper"></div>
+
+  <div class="wrap">
+
+    <!-- ============ SIGNED-OUT HERO ============ -->
+    <section class="hero" id="hero">
+      <div class="brand">
+        <svg class="brand-logo" viewBox="0 0 100 100" aria-hidden="true">
+          <defs><linearGradient id="brand-grad-h" x1="0%" y1="0%" x2="100%" y2="100%"><stop offset="0%" stop-color="#8a7cf2"/><stop offset="100%" stop-color="#6c5dd3"/></linearGradient></defs>
+          <circle cx="50" cy="50" r="46" fill="url(#brand-grad-h)"/>
+          <polygon points="40,29 40,71 73,50" fill="#ffffff"/>
+        </svg>
+        <span class="brand-text">MoviPlayer</span>
+        <span class="brand-sub">for Drive</span>
+      </div>
+
+      <div class="eyebrow"><span class="dot"></span> Read-only · nothing is uploaded</div>
+
+      <h1>Play your <em>Google Drive</em> videos, right in the browser</h1>
+      <p class="sub">Stream any video from your Drive — MKV, HEVC, AV1, 4K & HDR — decoded on your device. No downloads, no conversion, no third-party server.</p>
+
+      <div class="cta-row">
+        <button class="btn btn-google" id="hero-signin">
+          <svg viewBox="0 0 48 48" aria-hidden="true"><path fill="#EA4335" d="M24 9.5c3.54 0 6.71 1.22 9.21 3.6l6.85-6.85C35.9 2.38 30.47 0 24 0 14.62 0 6.51 5.38 2.56 13.22l7.98 6.19C12.43 13.72 17.74 9.5 24 9.5z"/><path fill="#4285F4" d="M46.98 24.55c0-1.57-.15-3.09-.38-4.55H24v9.02h12.94c-.58 2.96-2.26 5.48-4.78 7.18l7.73 6c4.51-4.18 7.09-10.36 7.09-17.65z"/><path fill="#FBBC05" d="M10.53 28.59c-.48-1.45-.76-2.99-.76-4.59s.28-3.14.76-4.59l-7.98-6.19C.92 16.46 0 20.12 0 24c0 3.88.92 7.54 2.56 10.78l7.97-6.19z"/><path fill="#34A853" d="M24 48c6.48 0 11.93-2.13 15.89-5.81l-7.73-6c-2.15 1.45-4.92 2.3-8.16 2.3-6.26 0-11.57-4.22-13.47-9.91l-7.98 6.19C6.51 42.62 14.62 48 24 48z"/></svg>
+          Sign in with Google
+        </button>
+        <span class="trust">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/></svg>
+          We only access the file you choose to open
+        </span>
+      </div>
+
+      <div class="chips">
+        <span class="chip">MKV</span><span class="chip">HEVC / H.265</span><span class="chip">AV1</span>
+        <span class="chip">4K & HDR</span><span class="chip">Multi-track audio</span><span class="chip">Subtitles</span>
+        <span class="chip">Instant range-streaming</span>
+      </div>
+    </section>
+
+    <!-- ============ APP VIEW ============ -->
+    <div class="app" id="app">
+      <div class="topbar">
+        <div class="brand">
+          <svg class="brand-logo" viewBox="0 0 100 100" aria-hidden="true">
+            <defs><linearGradient id="brand-grad-t" x1="0%" y1="0%" x2="100%" y2="100%"><stop offset="0%" stop-color="#8a7cf2"/><stop offset="100%" stop-color="#6c5dd3"/></linearGradient></defs>
+            <circle cx="50" cy="50" r="46" fill="url(#brand-grad-t)"/>
+            <polygon points="40,29 40,71 73,50" fill="#ffffff"/>
+          </svg>
+          <span class="brand-text">MoviPlayer</span>
+          <span class="brand-sub">for Drive</span>
+        </div>
+        <div class="actions">
+          <span class="connected" id="connected"><span class="dot"></span><span class="label">Connected to Drive</span></span>
+          <button class="btn btn-primary" id="pick-btn">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/></svg>
+            <span class="label">Pick a video</span>
+          </button>
+          <button class="icon-btn" id="signout-btn" title="Sign out" aria-label="Sign out">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/><polyline points="16 17 21 12 16 7"/><line x1="21" y1="12" x2="9" y2="12"/></svg>
+          </button>
+          <button class="icon-btn" id="theme-toggle" title="Theme" aria-label="Switch theme"></button>
+        </div>
+      </div>
+
+      <div class="stage-card" id="stage-card">
+        <div class="player-stage" id="player-stage">
+          <movi-player id="movi-player" renderer="canvas" controls objectfit="contain"
+            playsInline thumb fastseek showtitle ambientmode ambientwrapper="ambient-wrapper" stablevolume></movi-player>
+
+          <div class="empty" id="empty-state">
+            <span class="glyph"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><polygon points="23 7 16 12 23 17 23 7"/><rect x="1" y="5" width="15" height="14" rx="2" ry="2"/></svg></span>
+            <h3>Pick a video to start</h3>
+            <p>Choose any video from your Google Drive and it plays here instantly — streamed, never downloaded.</p>
+            <button class="btn btn-primary" id="empty-pick-btn">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/></svg>
+              Pick a video from Drive
+            </button>
+          </div>
+        </div>
+      </div>
+
+      <div class="meta-row">
+        <span class="now-playing" id="now-playing"><span class="dot"></span><span class="txt">No video selected</span></span>
+        <span class="privacy-note">Streamed read-only · decoded on your device</span>
+      </div>
+    </div>
+
+  </div>
+
+  <div class="foot">
+    Not affiliated with Google. · <a href="/docs/privacy-policy">Privacy</a> · <a href="/docs/terms-of-service">Terms</a> · <a href="/">moviplayer.com</a>
+  </div>
+
+  <div class="toast" id="toast"><svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/></svg><span id="toast-msg"></span></div>
+
+  <script type="module">
+    import * as Movi from "/dist/__BUILD_VERSION__/element.js";
+    // ?movilog → expose the namespace + raise the log level so debug/FFmpeg
+    // lines actually fire (the __movilog console sink is wired up in <head>,
+    // before this bundle loads).
+    if (new URLSearchParams(location.search).has("movilog")) {
+      window.Movi = Movi;
+      try { Movi.MoviPlayer.setLogLevel(Movi.LogLevel.TRACE); }
+      catch (e) { console.warn("[movilog] setLogLevel failed", e); }
+    }
+
+    // Config injected by the Cloudflare Worker from env (see buildDriveHtml).
+    // Nothing sensitive is committed to the repo — these are placeholders here.
+    // The API key is inherently client-visible (Google Picker runs in the
+    // browser); it is protected by an HTTP-referrer restriction, not by hiding.
+    const CLIENT_ID = "__DRIVE_CLIENT_ID__";
+    const API_KEY   = "__DRIVE_API_KEY__";
+    const APP_ID    = "__DRIVE_APP_ID__";
+    const SCOPE     = "https://www.googleapis.com/auth/drive.file";
+
+    const $ = (id) => document.getElementById(id);
+    const player = $("movi-player");
+    const nowPlaying = $("now-playing");
+    const nowTxt = nowPlaying.querySelector(".txt");
+    const emptyState = $("empty-state");
+    const stageCard = $("stage-card");
+    const playerStage = $("player-stage");
+    const toast = $("toast");
+    const toastMsg = $("toast-msg");
+
+    const configOk = !CLIENT_ID.startsWith("__") && !API_KEY.startsWith("__");
+
+    let accessToken = null;
+    let tokenClient = null;
+    let pickerLoaded = false;
+
+    // "Open with" from Drive: ?state={"ids":["FILE_ID"],"action":"open",...}
+    let pendingFileId = null;
+    try {
+      const raw = new URLSearchParams(location.search).get("state");
+      if (raw) pendingFileId = JSON.parse(raw)?.ids?.[0] ?? null;
+    } catch { /* ignore malformed state */ }
+
+    // ---------- UI helpers ----------
+    const setState = (s) => document.body.setAttribute("data-state", s);
+    const setNow = (msg, active = false) => { nowTxt.textContent = msg; nowPlaying.classList.toggle("active", active); };
+    let toastTimer = null;
+    const showToast = (msg, isError = false) => {
+      toastMsg.textContent = msg;
+      toast.classList.toggle("error", isError);
+      toast.classList.add("show");
+      clearTimeout(toastTimer);
+      toastTimer = setTimeout(() => toast.classList.remove("show"), 4200);
+    };
+
+    player.addEventListener("audiostripchange", (e) => {
+      const strip = !!e.detail?.strip;
+      playerStage.classList.toggle("is-audio-strip", strip);
+      stageCard.classList.toggle("audio", strip);
+    });
+
+    // ---------- Google auth (GIS token client) ----------
+    // The token is cached in sessionStorage so a reload doesn't force a fresh
+    // sign-in, and on load we try a SILENT grant (prompt:"none", a hidden
+    // iframe — no popup, no click) so returning users with an active Google
+    // session skip the button entirely.
+    const TOKEN_KEY = "movi-drive-token";
+    let silentAuth = false;
+
+    function applyToken(tok) {
+      accessToken = tok;
+      // Set the auth header ONCE per token, before any src. Re-setting it on
+      // every pick fires a second load() that races the src change and the
+      // player fails to re-init — so each pick then changes only src.
+      player.setAttribute("headers", JSON.stringify({ Authorization: "Bearer " + tok }));
+    }
+    function cacheToken(resp) {
+      const exp = Date.now() + (((+resp.expires_in) || 3600) - 120) * 1000; // 2-min safety
+      try { sessionStorage.setItem(TOKEN_KEY, JSON.stringify({ t: resp.access_token, exp })); } catch {}
+    }
+    function restoreSession() {
+      try {
+        const c = JSON.parse(sessionStorage.getItem(TOKEN_KEY) || "null");
+        if (c && c.t && c.exp > Date.now()) { applyToken(c.t); return true; }
+      } catch {}
+      try { sessionStorage.removeItem(TOKEN_KEY); } catch {}
+      return false;
+    }
+
+    function initTokenClient() {
+      tokenClient = google.accounts.oauth2.initTokenClient({
+        client_id: CLIENT_ID,
+        scope: SCOPE,
+        callback: (resp) => {
+          silentAuth = false;
+          if (resp.error) { showToast("Sign-in failed: " + resp.error, true); return; }
+          applyToken(resp.access_token);
+          cacheToken(resp);
+          setState("app");
+          if (pendingFileId) { const id = pendingFileId; pendingFileId = null; playDriveFile(id); }
+        },
+        error_callback: (err) => {
+          const wasSilent = silentAuth; silentAuth = false;
+          // A silent attempt failing (no active grant) is expected — just stay
+          // on the sign-in screen quietly, no error toast.
+          if (wasSilent) { if (document.body.getAttribute("data-state") !== "app") setState("signed-out"); return; }
+          console.error("[drive] auth error:", err);
+          if (err?.type === "popup_closed") showToast("Sign-in was cancelled.", true);
+          else showToast("Sign-in error: " + (err?.type || err?.message || "unknown"), true);
+          if (document.body.getAttribute("data-state") !== "app") setState("signed-out");
+        },
+      });
+    }
+    function ensureAuth(silent) {
+      if (!configOk) { showToast("This app isn't configured yet (missing Google credentials).", true); return; }
+      if (!tokenClient) initTokenClient();
+      silentAuth = silent === true;
+      tokenClient.requestAccessToken({ prompt: silentAuth ? "none" : (accessToken ? "" : "consent") });
+    }
+    function whenGisReady(cb) {
+      const t = setInterval(() => {
+        if (typeof google !== "undefined" && google.accounts?.oauth2) { clearInterval(t); cb(); }
+      }, 150);
+    }
+    function signOut() {
+      if (accessToken) { try { google.accounts.oauth2.revoke(accessToken, () => {}); } catch {} }
+      accessToken = null;
+      try { sessionStorage.removeItem(TOKEN_KEY); } catch {}
+      // Fully tear the player down — pause, then dispose() (destroys the internal
+      // player, frees the decoder/WASM/network and resets the OS media session).
+      // dispose() leaves the element reusable, so a later sign-in + pick works.
+      try { player.pause(); } catch {}
+      try { player.dispose(); } catch {}
+      player.removeAttribute("src");
+      player.removeAttribute("title");
+      setNow("No video selected");
+      emptyState.style.display = "";
+      setState("signed-out");
+    }
+
+    $("hero-signin").addEventListener("click", () => ensureAuth(false));
+    $("signout-btn").addEventListener("click", signOut);
+
+    // ---------- Google Picker ----------
+    const pk = setInterval(() => {
+      if (typeof gapi !== "undefined") {
+        clearInterval(pk);
+        gapi.load("picker", () => { pickerLoaded = true; });
+      }
+    }, 150);
+
+    function openPicker() {
+      if (!accessToken) return ensureAuth();
+      if (!pickerLoaded) { showToast("Picker is still loading — try again in a moment."); return; }
+      const view = new google.picker.DocsView(google.picker.ViewId.DOCS_VIDEOS)
+        .setIncludeFolders(true)
+        .setSelectFolderEnabled(false);
+      const picker = new google.picker.PickerBuilder()
+        .setOAuthToken(accessToken)
+        .setDeveloperKey(API_KEY)
+        .setAppId(APP_ID)
+        .setTitle("Choose a video")
+        .addView(view)
+        .setCallback((data) => {
+          if (data.action === google.picker.Action.PICKED) {
+            const doc = data.docs[0];
+            playDriveFile(doc.id, doc.name);
+          }
+        })
+        .build();
+      picker.setVisible(true);
+    }
+    $("pick-btn").addEventListener("click", openPicker);
+    $("empty-pick-btn").addEventListener("click", openPicker);
+
+    // ---------- Stream a Drive file into movi-player ----------
+    async function playDriveFile(fileId, name) {
+      if (!accessToken) return ensureAuth();
+      setState("app");
+      emptyState.style.display = "none";
+
+      // Change ONLY the src (headers were set once at sign-in) so the player
+      // does a single clean (re)init per pick. movi-player shows its own
+      // buffering spinner while it opens the stream — no overlay of our own.
+      player.src = `https://www.googleapis.com/drive/v3/files/${fileId}?alt=media`;
+      if (name) player.setAttribute("title", name); // title never triggers a reload
+      setNow(name || "Loading…", true);
+
+      // If the picker didn't give us a name, fetch it in the background.
+      if (!name) {
+        try {
+          const r = await fetch(
+            `https://www.googleapis.com/drive/v3/files/${fileId}?fields=name`,
+            { headers: { Authorization: `Bearer ${accessToken}` } },
+          );
+          if (r.ok) { const t = (await r.json()).name || ""; if (t) { player.setAttribute("title", t); setNow(t, true); } }
+        } catch { /* non-fatal — the player itself surfaces load errors */ }
+      }
+    }
+
+    // movi-player surfaces its own buffering spinner; we only add a toast on error.
+    player.addEventListener("error", () => showToast("Couldn't play this file — it may be an unsupported format or a permissions issue.", true));
+
+    // ---------- Boot ----------
+    if (pendingFileId) {
+      // Launched via Drive "Open with" — reuse a cached token if we have one,
+      // else sign in interactively, then play the file.
+      setState("app");
+      setNow("Opening from Drive…", true);
+      if (restoreSession()) { const id = pendingFileId; pendingFileId = null; playDriveFile(id); }
+      else whenGisReady(() => ensureAuth(false));
+    } else if (restoreSession()) {
+      // Valid cached token from this session → straight into the app.
+      setState("app");
+    } else {
+      // Try a silent grant first so returning users skip the click; fall back
+      // to the sign-in screen if there's no active grant.
+      setState("signed-out");
+      whenGisReady(() => ensureAuth(true));
+    }
+
+    // ---------- Theme (auto → light → dark) ----------
+    const themeToggle = $("theme-toggle");
+    const icons = {
+      auto: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="3" width="20" height="14" rx="2"/><line x1="8" y1="21" x2="16" y2="21"/><line x1="12" y1="17" x2="12" y2="21"/></svg>`,
+      light: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="5"/><line x1="12" y1="1" x2="12" y2="3"/><line x1="12" y1="21" x2="12" y2="23"/><line x1="4.2" y1="4.2" x2="5.6" y2="5.6"/><line x1="18.4" y1="18.4" x2="19.8" y2="19.8"/><line x1="1" y1="12" x2="3" y2="12"/><line x1="21" y1="12" x2="23" y2="12"/><line x1="4.2" y1="19.8" x2="5.6" y2="18.4"/><line x1="18.4" y1="5.6" x2="19.8" y2="4.2"/></svg>`,
+      dark: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12.8A9 9 0 1 1 11.2 3 7 7 0 0 0 21 12.8z"/></svg>`,
+    };
+    const modes = ["auto", "light", "dark"];
+    let mode = localStorage.getItem("movi-drive-theme") || "auto";
+    const applyTheme = (m) => {
+      const eff = m === "auto" ? (matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light") : m;
+      if (eff === "light") document.documentElement.setAttribute("data-theme", "light");
+      else document.documentElement.removeAttribute("data-theme");
+      themeToggle.innerHTML = icons[m];
+      player.setAttribute("theme", eff);
+    };
+    matchMedia("(prefers-color-scheme: dark)").addEventListener("change", () => { if (mode === "auto") applyTheme("auto"); });
+    themeToggle.addEventListener("click", () => {
+      mode = modes[(modes.indexOf(mode) + 1) % modes.length];
+      localStorage.setItem("movi-drive-theme", mode);
+      applyTheme(mode);
+    });
+    applyTheme(mode);
+  </script>
+
+  <style>
+    body[data-state="signed-out"] .hero { display: flex; }
+    body[data-state="app"] .app { display: flex; }
+  </style>
+</body>
+
+</html>

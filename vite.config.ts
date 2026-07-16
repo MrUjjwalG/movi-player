@@ -17,9 +17,16 @@ export default defineConfig({
   server: {
     allowedHosts: true,
     headers: {
-      // Required for SharedArrayBuffer
-      'Cross-Origin-Opener-Policy': 'same-origin',
-      'Cross-Origin-Embedder-Policy': 'require-corp',
+      // 'same-origin-allow-popups' (not 'same-origin') so Google Identity
+      // Services OAuth popups can post the token back to the opener — plain
+      // 'same-origin' severs that link and GIS falsely reports 'popup_closed'.
+      // COEP is intentionally NOT set: it's only useful together with
+      // COOP 'same-origin' to earn crossOriginIsolated (SharedArrayBuffer),
+      // which we've given up here — and 'require-corp' both blocks cross-origin
+      // subresources and further breaks the OAuth popup. The player does NOT
+      // need SAB: single-threaded WASM + Asyncify I/O, HttpSource plain-buffer
+      // fallback. SAB was only a zero-copy optimisation.
+      'Cross-Origin-Opener-Policy': 'same-origin-allow-popups',
     },
   },
 });
