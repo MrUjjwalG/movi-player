@@ -10189,7 +10189,12 @@ export class MoviElement extends HTMLElement {
         left: 0;
         height: 100%;
         background: var(--movi-primary);
-        border-radius: 100px;
+        /* Pill on the leading end only. The trailing end is where the buffered
+           segment picks up, and a rounded edge there curves away from the
+           buffer's own edge, leaving a visible pinch of bare track between the
+           two. Square it and the played bar and the buffer read as one
+           continuous track. (The buffer mirrors this: square left, pill right.) */
+        border-radius: 100px 0 0 100px;
         width: 0%;
         transition: width 0.1s linear;
       }
@@ -10228,7 +10233,12 @@ export class MoviElement extends HTMLElement {
         left: 0;
         height: 100%;
         background: rgba(255, 255, 255, 0.25);
-        border-radius: 100px;
+        /* Pill on the trailing end only. The leading end butts up against the
+           played bar (the buffer now starts where the current buffering run
+           began, not at 0), and two facing radii leave a lens-shaped notch of
+           bare track between them. Squaring this edge makes the join seamless
+           — it's either hidden under the played bar or flush against it. */
+        border-radius: 0 100px 100px 0;
         width: 0%;
         /* No transition: animating width across the brief post-seek window
            where the source's buffered-end is still stale produced a
@@ -17861,9 +17871,17 @@ export class MoviElement extends HTMLElement {
           // seeked — a seek to 20:00 showed 20 minutes of "buffered" that had
           // never been fetched. Anchoring lets the bar grow forward from the
           // clicked position in realtime, as the bytes actually arrive.
-          const bufferStart = this._linearMode
+          const rawBufferStart = this._linearMode
             ? Math.max(0, this.player.getBufferStartTime?.() ?? 0)
             : Math.max(0, this.player.getBufferedRangeStart?.() ?? 0);
+          // Never let the buffered segment float ahead of the playhead. A seek
+          // lands on the keyframe BEFORE its target and the clock then syncs to
+          // audio, which can sit a couple of seconds earlier still — so the
+          // run's start can be ahead of where the played bar has actually
+          // reached, and the two render as separate chunks with bare track
+          // between them. Clamping keeps the join seamless: the segment either
+          // starts under the played bar or exactly at its edge.
+          const bufferStart = Math.min(rawBufferStart, ct);
           const startPercent = Math.min(100, (bufferStart / this.duration) * 100);
           const endPercent = Math.min(100, (bufferEnd / this.duration) * 100);
           progressBuffer.style.left = `${startPercent}%`;
