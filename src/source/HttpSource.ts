@@ -119,6 +119,16 @@ export class HttpSource implements SourceAdapter {
   // instead of dribbling the whole file out as tiny range requests.
   private consecutiveOneOffFetches: number = 0;
   private readonly MAX_ONEOFF_BEFORE_RESTART = 2;
+  // Set by the player immediately before a demuxer seek. Counting one-off
+  // fetches (above) can only INFER a seek after a run of them, and each one is
+  // its own HTTP request racing the still-running old stream for bandwidth —
+  // on a big remote file the player's 3s seek timeout fires before the streak
+  // ever reaches the restart threshold, so the stream never repositions and
+  // keeps downloading the region the user just seeked away from. The hint
+  // makes it exact: the first out-of-window read after a seek IS the seek
+  // landing, so restart there at once instead of dribbling range requests.
+  // Consumed by the next read either way (an in-window seek needs no restart).
+  private seekHinted: boolean = false;
 
   // Dynamic buffer size (3% of file size, clamped)
   // Start with minimum size, will be resized when file size is known
@@ -312,6 +322,18 @@ export class HttpSource implements SourceAdapter {
 
   setPrefetchThrottle(throttled: boolean): void {
     this._prefetchThrottled = throttled;
+  }
+
+  /**
+   * Tell the source a seek is about to happen, so the next read that falls
+   * outside the stream window is treated as the seek landing and restarts the
+   * stream there — instead of being served as a one-off range fetch while the
+   * old stream keeps downloading (and saturating the link with) the region the
+   * user just left. See `seekHinted`. Harmless if the seek lands in-window:
+   * the next read simply clears the hint.
+   */
+  hintSeek(): void {
+    this.seekHinted = true;
   }
 
   private async awaitPrefetchGate(): Promise<void> {
@@ -1580,6 +1602,8 @@ export class HttpSource implements SourceAdapter {
       // Back on the sequential window — a stray one-off read didn't turn into
       // a seek, so forget the streak.
       this.consecutiveOneOffFetches = 0;
+      // The seek (if any) landed inside the window — no restart needed.
+      this.seekHinted = false;
 
       Logger.debug(TAG, `Read: serving from buffer`);
       return this.readFromBuffer(offset, length);
@@ -1640,6 +1664,8 @@ export class HttpSource implements SourceAdapter {
         // Reset force restart counter on successful read
         this.consecutiveForceRestarts = 0;
         this.consecutiveOneOffFetches = 0;
+        // Seek landed inside the active stream — nothing to reposition.
+        this.seekHinted = false;
         return this.readFromBuffer(offset, length);
       }
 
@@ -1699,6 +1725,10 @@ export class HttpSource implements SourceAdapter {
     if (
       !isCoveredByStream &&
       this.atomicIsStreaming() &&
+      // A hinted seek landed outside the window — reposition the stream now
+      // rather than serving the new region as one-off ranges while the old
+      // stream keeps consuming the bandwidth we need here.
+      !this.seekHinted &&
       length <= ONEOFF_RANGE_MAX_BYTES &&
       this.consecutiveOneOffFetches < this.MAX_ONEOFF_BEFORE_RESTART
     ) {
@@ -1771,6 +1801,7 @@ export class HttpSource implements SourceAdapter {
     // The stream is now repositioned at this offset, so the one-off streak is
     // spent — subsequent sequential reads are covered by the fresh stream.
     this.consecutiveOneOffFetches = 0;
+    this.seekHinted = false;
 
     // Don't update maxBufferedEnd on reads - it's updated when streaming writes to buffer
     return this.readFromBuffer(offset, length);

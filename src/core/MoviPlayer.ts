@@ -133,6 +133,11 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
   private mediaInfo: MediaInfo | null = null;
   private fileSize: number = -1; // Cached file size for buffer calculations
   private lastBufferedTime: number = 0;
+  // Where the current buffering run started, in media time: 0 on load, the
+  // seek target after a seek. The buffer bar spans [this .. getBufferedTime()].
+  // Without it the bar is drawn from 0, so seeking to 20:00 instantly paints
+  // everything before 20:00 as buffered when none of it has been fetched.
+  private bufferedRangeStart: number = 0;
 
   /**
    * Enable/disable seek-bar scrub previews on an already-constructed player.
@@ -597,6 +602,7 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
     this.stateManager.setState("loading");
     this.emit("loadStart", undefined);
     this.lastBufferedTime = 0;
+    this.bufferedRangeStart = 0;
 
     // Drop the previous source's cover art so a soft-reload on the same
     // instance (no destroy) doesn't keep showing stale artwork when the
@@ -2344,6 +2350,23 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
 
       if (isPostSeek) {
         burstSize = 5 * fpsScale;
+
+        // ...but never at the cost of starving audio. Burst is a PACKET cap,
+        // and codecs with tiny packets carry almost no audio per packet —
+        // TrueHD emits ~40 frames (~0.8ms @48kHz) each. Interleaved with
+        // video, a 5-packet burst yields only a couple of ms of audio per
+        // tick: an order of magnitude below realtime. The renderer then runs
+        // dry for the whole POST_SEEK_THROTTLE_MS window, so every seek on a
+        // TrueHD/DTS source was followed by ~1s of chopped-up audio. Until
+        // the cushion is back, read at the same dense-interleave rate the
+        // normal path uses (self-limiting: the outer backpressure gate stops
+        // the reads once the targets are met).
+        const hasMuxedAudio =
+          !this.disableAudio && !!this.trackManager?.getActiveAudioTrack();
+        if (hasMuxedAudio && audioBuffered < 1.0) {
+          burstSize = 160 * fpsScale;
+        }
+
         Logger.debug(
           TAG,
           `Post-seek throttling: using burst size ${burstSize}`,
@@ -2982,6 +3005,14 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
 
       if (this.seekSessionId !== mySessionId) return; // Superceded
 
+      // Tell the source a seek is coming so it repositions its stream at the
+      // landing offset. Otherwise it can only infer the seek from a run of
+      // out-of-window reads, each a separate range request competing with the
+      // old stream — on a large remote file the 3s seek timeout below fires
+      // first, so the stream keeps pulling the region we just left and the
+      // new position starves (no video frame, chopped audio, bogus buffer bar).
+      (this.source as { hintSeek?: () => void } | null)?.hintSeek?.();
+
       // Seek relative to start time (time 0 in UI = startTime in media)
       Logger.info(TAG, `seek: demuxer.seek(${(seconds + this.startTime).toFixed(2)}) starting...`);
       await this.demuxer.seek(seconds + this.startTime);
@@ -3012,8 +3043,11 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
       this.eofSince = 0;
 
       // Buffered region restarts from the new position; drop the
-      // monotonic clamp so the bar can shrink to reflect the new range.
+      // monotonic clamp so the bar can shrink to reflect the new range,
+      // and re-anchor the range's START to the seek target so the bar grows
+      // forward from where the user clicked instead of being painted from 0.
       this.lastBufferedTime = 0;
+      this.bufferedRangeStart = seconds;
 
       // Mark that we need to skip to keyframe after seek
       // This prevents decoder errors from non-keyframe packets after seek
@@ -3988,8 +4022,10 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
     this.pendingPrebufferPackets = [];
     // The poster seek advanced HttpSource's monotonic buffered-end to ~poster
     // time; reset it (as a real seek does) so the buffer bar starts from 0
-    // instead of showing a false prebuffer at the poster timestamp.
+    // instead of showing a false prebuffer at the poster timestamp. The range
+    // start goes back to 0 too — the poster seek re-seeks to the beginning.
     this.lastBufferedTime = 0;
+    this.bufferedRangeStart = 0;
     this.emit("timeUpdate", this.getCurrentTime()); // snap seek bar to 00:00
   }
 
@@ -6304,6 +6340,17 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
    * Get buffer start time in seconds (for HttpSource)
    * Converts buffer start bytes to time position using current read position as reference
    */
+  /**
+   * Where the current buffering run began, in media time — 0 after a load,
+   * the seek target after a seek. Pair with getBufferedTime() to draw the
+   * buffer bar as a real range: drawing it from 0 instead makes a seek to
+   * 20:00 paint the whole first 20 minutes as buffered the moment you click,
+   * when nothing there has been fetched.
+   */
+  getBufferedRangeStart(): number {
+    return this.bufferedRangeStart;
+  }
+
   getBufferStartTime(): number {
     if (
       !this.mediaInfo ||

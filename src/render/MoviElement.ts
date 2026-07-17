@@ -17853,10 +17853,17 @@ export class MoviElement extends HTMLElement {
           // dropped), so draw the buffer bar as [bufferStart, bufferEnd] — the
           // actual window of bytes held in memory. (Seeks clamp to a slightly
           // inset seekableStart, but showing the true window reads better — no
-          // gap between the playhead and the buffered segment.) Otherwise from 0.
+          // gap between the playhead and the buffered segment.)
+          //
+          // Otherwise anchor to where the current buffering run started: 0 on
+          // load, the seek target after a seek. Drawing from a hard 0 used to
+          // paint everything before the playhead as buffered the instant you
+          // seeked — a seek to 20:00 showed 20 minutes of "buffered" that had
+          // never been fetched. Anchoring lets the bar grow forward from the
+          // clicked position in realtime, as the bytes actually arrive.
           const bufferStart = this._linearMode
             ? Math.max(0, this.player.getBufferStartTime?.() ?? 0)
-            : 0;
+            : Math.max(0, this.player.getBufferedRangeStart?.() ?? 0);
           const startPercent = Math.min(100, (bufferStart / this.duration) * 100);
           const endPercent = Math.min(100, (bufferEnd / this.duration) * 100);
           progressBuffer.style.left = `${startPercent}%`;
