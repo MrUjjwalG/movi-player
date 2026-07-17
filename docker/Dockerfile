@@ -1,5 +1,10 @@
 # syntax=docker/dockerfile:1
-FROM --platform=linux/arm64 emscripten/emsdk:latest
+# No --platform pin: emscripten/emsdk is a multi-arch image, so this resolves to
+# the host's native architecture (amd64 or arm64) on its own. Pinning it to
+# linux/arm64 forced x86_64 hosts to pull the ARM image and run the whole build
+# under QEMU emulation — glacially slow, and a hard failure where binfmt/QEMU
+# isn't installed. The build output is WASM, so it's identical either way.
+FROM emscripten/emsdk:latest
 
 LABEL maintainer="movi"
 LABEL description="FFmpeg WASM build environment for movi"
