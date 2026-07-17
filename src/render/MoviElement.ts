@@ -16351,21 +16351,12 @@ export class MoviElement extends HTMLElement {
       // Update loading indicator after load
       this.updateLoadingIndicator();
 
-      // Mobile 4K+ FileSource: hold the spinner and defer play() until the
-      // initial preload settles. Reads height from the active video track.
-      if (this.player) {
-        const activeVideoTrack = (this.player as any)?.trackManager?.getActiveVideoTrack?.();
-        const videoHeight = activeVideoTrack?.height ?? 0;
-        if (
-          MoviPlayer.isMobileDevice() &&
-          videoHeight >= 2160 &&
-          this.player.isFileSource() &&
-          !this.player.isFileSourcePreloadComplete()
-        ) {
-          this._preloadGateActive = true;
-          this.updateLoadingIndicator();
-        }
-      }
+      // Mobile 4K+ FileSource preload gate removed. It used to hold the spinner
+      // and defer play() until the initial disk preload settled — which on
+      // low-end devices reads as "the whole file loads before it plays". We now
+      // start playback immediately and let the preload continue in the
+      // background. _preloadGateActive stays false, so every gate branch below
+      // (defer play, force spinner, release-on-preloadcomplete) is a no-op.
 
       // Auto-play if requested
       // Seek to initial position if set

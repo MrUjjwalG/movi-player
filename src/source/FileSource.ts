@@ -25,6 +25,10 @@ export class FileSource implements SourceAdapter {
   private duration: number = 0;
   private preloadOffset: number = 0; // Current byte offset being preloaded around
   private preloadAbort: boolean = false; // Signal to abort current preload cycle
+  // When false, never preload the whole file even if it fits in cache — use a
+  // bounded read-ahead instead. The host sets this on low-end mobile, where the
+  // sequential whole-file read competes with heavy 4K decode and fills RAM.
+  private fullFilePreload: boolean = true;
 
   // Disk read stats
   private totalBytesRead: number = 0;
@@ -59,6 +63,16 @@ export class FileSource implements SourceAdapter {
    */
   setOnRevoked(cb: (info: { offset: number; length: number; reason: string }) => void): void {
     this.onRevokedCallback = cb;
+  }
+
+  /**
+   * Disable whole-file preloading (bounded read-ahead only). Set by the host on
+   * low-end mobile so the initial sequential disk read doesn't compete with a
+   * strained 4K decode or fill RAM. Small files fall in the read-ahead window
+   * anyway, so they still cache fully.
+   */
+  setFullFilePreload(enabled: boolean): void {
+    this.fullFilePreload = enabled;
   }
 
   /**
@@ -241,7 +255,15 @@ export class FileSource implements SourceAdapter {
       // during playback (which causes stutter on 4K content with heavy processLoop).
       const totalChunks = Math.ceil(this.size / CHUNK_SIZE);
       const cacheMaxBytes = this.cache.getMaxSize();
-      const fileFitsInCache = cacheMaxBytes > 0 && this.size < cacheMaxBytes * 0.8;
+      // Full-file preload trades one big upfront read for zero disk I/O during
+      // playback — a win on desktop. On low-end mobile the host disables it
+      // (fullFilePreload=false): that sequential read of the whole file
+      // competes with an already-strained 4K decode and fills RAM, so fall back
+      // to a bounded read-ahead that follows playback instead.
+      const fileFitsInCache =
+        this.fullFilePreload &&
+        cacheMaxBytes > 0 &&
+        this.size < cacheMaxBytes * 0.8;
       const PRELOAD_AHEAD_CHUNKS = fileFitsInCache ? totalChunks : 20;
       const PRELOAD_BEHIND_CHUNKS = fileFitsInCache ? 0 : 5;
 

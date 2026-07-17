@@ -858,6 +858,11 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
   private async createSource(config: SourceConfig): Promise<SourceAdapter> {
     if (config.type === "file" && config.file) {
       const fs = new FileSource(config.file, this.cache);
+      // Low-end mobile: skip the whole-file preload. Its sequential read of the
+      // entire file competes with heavy 4K decode and fills RAM (the "full load
+      // before it plays" pause, plus periodic GC stalls); bounded read-ahead
+      // that follows playback is gentler. Desktop keeps the full preload.
+      if (MoviPlayer._isMobileDevice) fs.setFullFilePreload(false);
       fs.setOnRevoked((info) => {
         Logger.error(TAG, `File handle revoked: ${info.reason}`);
         this.emit("filerevoked", info);
