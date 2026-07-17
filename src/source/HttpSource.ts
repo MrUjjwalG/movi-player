@@ -74,6 +74,14 @@ export class HttpSource implements SourceAdapter {
   // failed with "Timeout at 0" when cross-origin isolation was absent.
   private fallbackStreaming: boolean = false;
 
+  // Readers parked in waitForData(), each waiting for bufferEnd to reach its
+  // own `needed` byte. The stream writer wakes them the moment their bytes
+  // land (see atomicSetWritePos). Without this, waitForData polled on a timer
+  // and a read could sit idle for most of a poll interval after its bytes had
+  // already arrived — and because WASM I/O is Asyncify-suspended, that idle
+  // time froze the whole module, decoders included.
+  private bufferWaiters: Set<{ needed: number; wake: () => void }> = new Set();
+
   // Stream state
   private reader: ReadableStreamDefaultReader<Uint8Array> | null = null;
   private abortController: AbortController | null = null;
@@ -281,6 +289,53 @@ export class HttpSource implements SourceAdapter {
     } else {
       this.fallbackWritePos = value;
     }
+    // Every buffer advance funnels through here, so this is the one place that
+    // can tell a parked reader its bytes have landed. Window shifts also call
+    // atomicSetBufferStart, but always paired with a write pos update, so the
+    // hook stays here rather than on both.
+    this.wakeBufferWaiters();
+  }
+
+  /**
+   * Wake readers parked in waitForData() whose bytes are now buffered.
+   * `force` wakes every waiter regardless of its byte target — used when the
+   * stream stops, so waiters re-evaluate the loop condition and exit rather
+   * than waiting on bytes that are never coming.
+   */
+  private wakeBufferWaiters(force: boolean = false): void {
+    if (this.bufferWaiters.size === 0) return;
+    const end = force ? Infinity : this.bufferEnd;
+    // Snapshot: wake() removes the waiter from the live set.
+    for (const waiter of [...this.bufferWaiters]) {
+      if (end >= waiter.needed) waiter.wake();
+    }
+  }
+
+  /**
+   * Resolve as soon as bufferEnd reaches `needed`, or after maxWaitMs.
+   * The timer is a safety net for the checks waitForData runs each pass
+   * (deadline, stall, superseded) — not the mechanism for spotting new bytes.
+   */
+  private waitForBufferAdvance(
+    needed: number,
+    maxWaitMs: number,
+  ): Promise<void> {
+    return new Promise<void>((resolve) => {
+      let timer: ReturnType<typeof setTimeout> | undefined;
+      let settled = false;
+      const waiter = {
+        needed,
+        wake: () => {
+          if (settled) return;
+          settled = true;
+          if (timer !== undefined) clearTimeout(timer);
+          this.bufferWaiters.delete(waiter);
+          resolve();
+        },
+      };
+      this.bufferWaiters.add(waiter);
+      timer = setTimeout(waiter.wake, maxWaitMs);
+    });
   }
 
   // IMPORTANT: Split 64-bit offset into low/high 32-bit parts to support files >= 2GB
@@ -355,6 +410,9 @@ export class HttpSource implements SourceAdapter {
     } else {
       this.fallbackStreaming = active;
     }
+    // Bytes will never arrive once the stream is down, so release parked
+    // readers immediately instead of leaving them on the safety timer.
+    if (!active) this.wakeBufferWaiters(true);
   }
 
   private atomicIncrementVersion(): void {
@@ -1507,10 +1565,15 @@ export class HttpSource implements SourceAdapter {
         }
       }
 
+      // Park until the bytes actually land. The timer only bounds how long we
+      // go without re-running the checks above; on the SAB path the writer is
+      // another thread and never calls wakeBufferWaiters, so keep polling
+      // tight there. On the main-thread path the wake is exact, so the timer
+      // can be loose.
       if (this.useSharedBuffer && this.headerView) {
         await new Promise((r) => setTimeout(r, 2));
       } else {
-        await new Promise((r) => setTimeout(r, 10));
+        await this.waitForBufferAdvance(needed, 250);
       }
     }
 
