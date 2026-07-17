@@ -370,6 +370,14 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
           );
         }
 
+        // When the renderer decides the device can't hold the source frame
+        // rate and caps presentation, let the decoder shed load too: on the
+        // software path, skip non-reference frames to cut CPU. No-op on
+        // hardware — the present-side cap is the only lever there.
+        this.videoRenderer.setOnPerformanceDegrade(() => {
+          this.videoDecoder?.setPerformanceSkip(true);
+        });
+
         Logger.info(
           TAG,
           `Video renderer initialized with canvas (forceSoftware: ${forceSoftware})`,
@@ -2726,6 +2734,7 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
                 packet.dts,
                 packet.isIdr,
                 packet.isRasl,
+                packet.disposable,
               );
             }
           } else if (activeAudio && activeAudio.id === packet.streamIndex) {

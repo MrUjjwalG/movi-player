@@ -172,6 +172,7 @@ function parsePacketInfo(module: MoviWasmModule, ptr: number): PacketInfo {
     size: view.getInt32(PACKET_INFO_OFFSETS.size, true),
     isIdr: view.getInt32(PACKET_INFO_OFFSETS.isIdr, true) !== 0,
     isRasl: view.getInt32(PACKET_INFO_OFFSETS.isRasl, true) !== 0,
+    disposable: view.getInt32(PACKET_INFO_OFFSETS.disposable, true) !== 0,
   };
 }
 

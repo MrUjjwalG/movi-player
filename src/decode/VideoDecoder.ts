@@ -67,6 +67,10 @@ export class MoviVideoDecoder {
   // first trailing picture clears. Only mid-stream RAPs reached during
   // continuous playback (references present, not post-flush) keep their RASL.
   private skipRaslAfterResume: boolean = false;
+  // Adaptive load shedding: when set (by the renderer via setPerformanceSkip),
+  // disposable (non-reference) packets are dropped before WebCodecs so the
+  // decoder does less work on a device that can't sustain the source rate.
+  private _perfSkipNonRef: boolean = false;
   private postFlushKeyframeRejects: number = 0;
   // After this many consecutive keyframe rejections immediately following a
   // flush, give up on HW for this stream and switch to software decoding.
@@ -508,6 +512,27 @@ export class MoviVideoDecoder {
     return false;
   }
 
+  /** True when video is running through the software (WASM/FFmpeg) decoder
+   *  rather than a hardware WebCodecs decoder. */
+  isUsingSoftware(): boolean {
+    return this.useSoftware;
+  }
+
+  /**
+   * Adaptive load shedding, driven by the renderer when it finds the device
+   * can't sustain the source frame rate. Both paths shed by dropping
+   * non-reference frames: the software decoder via AVDISCARD_NONREF, the
+   * WebCodecs path by dropping disposable packets before they're fed (see the
+   * _perfSkipNonRef check in decode()). Nothing references those frames, so the
+   * stream stays decodable; the decoder just does less work.
+   */
+  setPerformanceSkip(enabled: boolean): void {
+    this._perfSkipNonRef = enabled;
+    if (this.useSoftware && this.swDecoder) {
+      this.swDecoder.setNonRefSkip(enabled);
+    }
+  }
+
   /**
    * Recreate the decoder after a fatal error
    */
@@ -627,6 +652,10 @@ export class MoviVideoDecoder {
     // True for an HEVC RASL leading picture (NAL 8/9). Dropped after a
     // random-access resume (see skipRaslAfterResume). Defaults to false.
     isRasl: boolean = false,
+    // True for a disposable (non-reference) frame. Dropped before the decoder
+    // while adaptive load shedding is active (_perfSkipNonRef). Defaults to
+    // false so callers that don't pass it never drop.
+    disposable: boolean = false,
   ): void {
     // A keyframe is only a real random-access point if the demuxer classified
     // it as IDR/BLA. Open-GOP CRA frames arrive flagged keyframe but isIdr
@@ -758,6 +787,16 @@ export class MoviVideoDecoder {
       // First non-leading picture (trailing/RADL): references are valid from
       // the RAP onward, so stop skipping and resume normal decode.
       this.skipRaslAfterResume = false;
+    }
+
+    // Adaptive load shedding (hardware / in-browser path): drop disposable
+    // non-reference frames before WebCodecs so the decoder keeps up on a device
+    // that can't sustain the source rate. Nothing references them, so the
+    // stream stays decodable — the renderer just presents fewer, evenly-spaced
+    // frames. Keyframes and reference frames always pass. The software path
+    // sheds via AVDISCARD in the decoder instead, and has already returned above.
+    if (this._perfSkipNonRef && disposable && !keyframe) {
+      return;
     }
 
     // Pass packet data as-is — Chrome's WebCodecs handles both Annex B and

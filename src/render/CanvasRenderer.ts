@@ -81,6 +81,29 @@ export class CanvasRenderer {
   private static readonly PAINT_SAMPLE_COUNT = 60; // ~1 second @ 60Hz
   private static readonly PAINT_THRESHOLD_MS = 8; // >50% of 16.67ms frame budget
 
+  // Adaptive frame-rate cap — the second-stage degrade after adaptive DPR.
+  // Some devices (low-end mobile on 4K60) can't hold the source rate even at
+  // 1x DPR: either the paint/composite budget is blown or the decoder runs
+  // sub-realtime. We compare the *achieved* distinct-present rate to the source
+  // rate over 1s windows; a sustained deficit while audio is healthy means the
+  // video pipeline — not the network — is the wall (a network stall starves
+  // audio too, so gating on audio health keeps it from false-triggering). We
+  // then halve the present target, dropping intermediate frames evenly so
+  // motion stays smooth at the lower rate, and on the software path ask the
+  // decoder to skip non-reference frames to cut CPU as well. One-way per
+  // source, mirroring adaptive DPR — no oscillation.
+  private _presentFpsCap: number = 0; // 0 = uncapped
+  private _perfDegradeChecked: boolean = false;
+  private _perfWindowStart: number = 0; // performance.now() of the current window, 0 = not started
+  private _perfWindowBaseCount: number = 0; // framesPresented at window start
+  private _perfDeficitWindows: number = 0; // consecutive struggling windows
+  private _onPerformanceDegrade: ((targetFps: number) => void) | null = null;
+  private static readonly PERF_WINDOW_MS = 1000;
+  private static readonly PERF_DEFICIT_RATIO = 0.7; // achieved < 70% of source rate = struggling
+  private static readonly PERF_DEFICIT_WINDOWS = 2; // consecutive bad windows before engaging
+  private static readonly PERF_WARMUP_FRAMES = 60; // skip startup / post-seek ramp
+  private static readonly PERF_MIN_CAP_FPS = 24; // never cap below this
+
   // Audio time provider for A/V sync
   private getAudioTime: (() => number) | null = null;
   private _isAudioHealthy: (() => boolean) | null = null;
@@ -324,6 +347,12 @@ export class CanvasRenderer {
     } else {
       this.videoFrameRate = 60;
     }
+
+    // Fresh source: re-arm the adaptive-FPS detector and clear any prior cap.
+    this._presentFpsCap = 0;
+    this._perfDegradeChecked = false;
+    this._perfWindowStart = 0;
+    this._perfDeficitWindows = 0;
 
     // Set rotation from metadata
     if (rotation !== undefined) {
@@ -1005,6 +1034,86 @@ export class CanvasRenderer {
       }
       this._adaptDprChecked = true;
       this._paintSamples = [];
+    }
+  }
+
+  /** Wire a callback fired once, when the renderer decides the device can't
+   *  sustain the source frame rate and engages its adaptive cap. The player
+   *  uses it to turn on decode-side non-reference skipping on the software
+   *  path. `targetFps` is the capped rate. */
+  setOnPerformanceDegrade(cb: (targetFps: number) => void): void {
+    this._onPerformanceDegrade = cb;
+  }
+
+  /** Roll the achieved-present-rate window and engage the adaptive FPS cap on a
+   *  sustained deficit. Called once per presentation cycle, before the
+   *  empty-queue bail, so a starving (decode-bound) pipeline still advances the
+   *  window clock and registers its low present count. */
+  private samplePerformance(): void {
+    if (this._perfDegradeChecked || !this.isPlaying) return;
+    // Off-speed playback changes distinct-frames-per-wall-second on its own
+    // (2x can't show every frame on a 60Hz panel; slow-mo shows fewer) — that's
+    // not the device struggling. Only measure at normal speed.
+    if (Math.abs(this.playbackRate - 1.0) > 0.05) {
+      this._perfWindowStart = 0;
+      return;
+    }
+    // framesPresented resets to 0 on start/seek, so a low count during the
+    // ramp is expected — not a deficit. Reset the window and wait it out.
+    if (this.framesPresented <= CanvasRenderer.PERF_WARMUP_FRAMES) {
+      this._perfWindowStart = 0;
+      this._perfDeficitWindows = 0;
+      return;
+    }
+    const now = performance.now();
+    if (this._perfWindowStart === 0) {
+      this._perfWindowStart = now;
+      this._perfWindowBaseCount = this.framesPresented;
+      return;
+    }
+    const elapsed = now - this._perfWindowStart;
+    if (elapsed < CanvasRenderer.PERF_WINDOW_MS) return;
+
+    const achieved = this.framesPresented - this._perfWindowBaseCount;
+    const expected = this.videoFrameRate * (elapsed / 1000);
+    // A network stall starves audio too — don't blame the video pipeline for
+    // it. Only count a window when audio is flowing.
+    const audioHealthy = this._isAudioHealthy ? this._isAudioHealthy() : true;
+
+    if (
+      audioHealthy &&
+      expected > 0 &&
+      achieved < expected * CanvasRenderer.PERF_DEFICIT_RATIO
+    ) {
+      this._perfDeficitWindows++;
+      if (this._perfDeficitWindows >= CanvasRenderer.PERF_DEFICIT_WINDOWS) {
+        this.engagePresentCap(achieved / (elapsed / 1000));
+      }
+    } else {
+      this._perfDeficitWindows = 0;
+    }
+    this._perfWindowStart = now;
+    this._perfWindowBaseCount = this.framesPresented;
+  }
+
+  private engagePresentCap(achievedFps: number): void {
+    this._perfDegradeChecked = true; // one-way: decide once per source
+    const cap = Math.max(
+      CanvasRenderer.PERF_MIN_CAP_FPS,
+      Math.round(this.videoFrameRate / 2),
+    );
+    // Already low enough that halving would drop under the floor — nothing to
+    // gain, and dropping a 30fps source to 24 isn't worth the judder.
+    if (cap >= this.videoFrameRate) return;
+    this._presentFpsCap = cap;
+    Logger.info(
+      TAG,
+      `Adaptive FPS: sustained ~${achievedFps.toFixed(0)}/${this.videoFrameRate}fps — capping presentation to ${cap}fps`,
+    );
+    try {
+      this._onPerformanceDegrade?.(cap);
+    } catch {
+      /* ignore */
     }
   }
 
@@ -1820,6 +1929,10 @@ export class CanvasRenderer {
     // This ensures RAF timing is consistent and VSync-aligned
     this.rafId = requestAnimationFrame(this.presentationLoop);
 
+    // Roll the adaptive-FPS window every cycle (before the empty-queue bail, so
+    // a starving pipeline still registers its low present rate).
+    this.samplePerformance();
+
     // Get current playback time with high precision
     let currentPlaybackTime = this.getCurrentPlaybackTime();
 
@@ -1848,6 +1961,7 @@ export class CanvasRenderer {
     // If no frame was selected but we have frames, use the first one
     if (
       !frameToPresent &&
+      this._presentFpsCap === 0 &&
       this.videoFrameRate >= 60 &&
       this.frameQueue.length > 0
     ) {
@@ -2056,26 +2170,33 @@ export class CanvasRenderer {
     }
 
     // FPS Throttling & Memory Optimization
-    // If configured FrameRate is low (e.g. < 20fps), we enforce throttling
-    // and aggressively drop intermediate frames to save memory (crucial for 4K software decoding)
-    if (this.videoFrameRate < 20 && this.lastPresentedPts >= 0) {
-      const nextTargetTime = this.lastPresentedPts + frameInterval;
+    // Two throttles share this gate:
+    //  - Low-fps sources (< 20fps): drop far-early frames aggressively to bound
+    //    4K memory while we wait out the long inter-frame gap.
+    //  - Adaptive cap engaged: space presents at the capped interval so the
+    //    source's intermediate frames are skipped evenly. No aggressive pruning
+    //    needed there — the main selection's splice drops the skipped frames on
+    //    the next present, so the queue can't run away.
+    const capActive = this._presentFpsCap > 0;
+    if ((capActive || this.videoFrameRate < 20) && this.lastPresentedPts >= 0) {
+      const targetFps = capActive ? this._presentFpsCap : this.videoFrameRate;
+      const targetInterval = 1.0 / targetFps;
+      const nextTargetTime = this.lastPresentedPts + targetInterval;
+      const tol = capActive ? Math.min(0.05, targetInterval * 0.5) : 0.05;
 
-      // If we haven't reached the next target presentation time (with small tolerance)
-      if (currentTime < nextTargetTime - 0.05) {
-        // Prune the queue: Discard frames that are definitely too early to be useful
-        // We only keep frames close to the target time (e.g. within 200ms)
-        // This prevents buffering 1GB+ of 4K frames in memory while waiting for the next second
-        const keepThreshold = nextTargetTime - 0.2;
-
-        while (this.frameQueue.length > 0) {
-          const first = this.frameQueue[0];
-          const firstTime = first.timestamp / 1_000_000;
-
-          if (firstTime >= keepThreshold) break;
-
-          // Drop useless frame
-          this.frameQueue.shift()?.close();
+      // If we haven't reached the next target presentation time (with tolerance)
+      if (currentTime < nextTargetTime - tol) {
+        if (!capActive) {
+          // Prune the queue: discard frames too early to be useful, keeping
+          // only those within ~200ms of the target. Prevents buffering 1GB+ of
+          // 4K frames in memory while waiting for the next second.
+          const keepThreshold = nextTargetTime - 0.2;
+          while (this.frameQueue.length > 0) {
+            const first = this.frameQueue[0];
+            const firstTime = first.timestamp / 1_000_000;
+            if (firstTime >= keepThreshold) break;
+            this.frameQueue.shift()?.close();
+          }
         }
 
         // Not time to present yet

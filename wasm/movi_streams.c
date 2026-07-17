@@ -383,6 +383,11 @@ int movi_read_frame(MoviContext *ctx, PacketInfo *info, uint8_t *buffer,
           ? 0
           : movi_packet_is_rasl(stream->codecpar->codec_id, ctx->pkt->data,
                                 ctx->pkt->size);
+  // Non-reference frame: safe for JS to drop under load (nothing references it).
+  // Keyframes are never disposable.
+  info->disposable =
+      (!info->keyframe && (ctx->pkt->flags & AV_PKT_FLAG_DISPOSABLE) != 0) ? 1
+                                                                           : 0;
   if (ctx->pkt->pts != AV_NOPTS_VALUE)
     info->timestamp = ctx->pkt->pts * av_q2d(stream->time_base);
   else if (ctx->pkt->dts != AV_NOPTS_VALUE)

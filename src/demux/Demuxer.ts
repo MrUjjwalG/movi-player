@@ -476,6 +476,7 @@ export class Demuxer {
       data: result.data,
       isIdr: result.info.isIdr,
       isRasl: result.info.isRasl,
+      disposable: result.info.disposable,
     };
   }
 

@@ -65,6 +65,22 @@ export class SoftwareVideoDecoder {
     return true;
   }
 
+  /**
+   * Toggle non-reference (B-frame) skipping at runtime. Enabled adaptively when
+   * the renderer finds the device can't decode the source rate in realtime:
+   * B-frames are never referenced, so dropping them roughly halves decode CPU
+   * on typical GOP structures without corrupting the stream. Safe to call
+   * mid-playback; takes effect on the next decoded packet.
+   */
+  setNonRefSkip(enabled: boolean): void {
+    if (!this.isConfigured || this.trackIndex < 0) return;
+    this.bindings.setSkipFrame(this.trackIndex, enabled ? 1 : 0); // 1 = AVDISCARD_NONREF
+    Logger.info(
+      TAG,
+      `Non-reference frame skipping ${enabled ? "enabled" : "disabled"} for stream ${this.trackIndex}`,
+    );
+  }
+
   async flush(): Promise<void> {
     this.packetQueue = [];
     if (this.isConfigured && this.trackIndex >= 0) {

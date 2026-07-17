@@ -229,6 +229,11 @@ export interface Packet {
   // a random-access resume these reference an absent (pre-RAP) GOP and must be
   // skipped — Safari's decoder hard-errors on them. See VideoDecoder.decode.
   isRasl: boolean;
+  // True for a disposable (non-reference) frame — safe to drop under load since
+  // nothing references it. VideoDecoder drops these before the decoder when the
+  // renderer's adaptive detector reports the device can't keep up. Always false
+  // for keyframes. See VideoDecoder.decode.
+  disposable: boolean;
 }
 
 // ============================================================================
