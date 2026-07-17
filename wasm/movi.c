@@ -173,6 +173,7 @@ EMSCRIPTEN_KEEPALIVE
 void movi_destroy(MoviContext *ctx) {
   if (!ctx)
     return;
+  movi_abatch_free(ctx);
   if (ctx->fmt_ctx)
     avformat_close_input(&ctx->fmt_ctx);
   if (ctx->avio_ctx) {

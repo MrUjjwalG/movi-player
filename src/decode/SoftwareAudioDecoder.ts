@@ -166,6 +166,79 @@ export class SoftwareAudioDecoder {
     }
   }
 
+  /**
+   * Decode many packets in ONE WASM round-trip.
+   *
+   * decode() above costs ~8 JS→WASM crossings and a typed-array copy per channel
+   * for EVERY packet. TrueHD/MLP emits a 40-sample access unit (~0.8 ms), so a
+   * second of audio is ~1200 packets → ~9600 crossings and ~2400 tiny
+   * allocations. That per-packet overhead — not the decode math — is what leaves
+   * the renderer dry after a seek. Here the whole batch crosses once and the PCM
+   * comes back as one contiguous block: one copy per channel, total.
+   *
+   * Returns the number of packets CONSUMED. If that's less than you passed, the
+   * block ended early at a format change or pts discontinuity — the accumulated
+   * audio has been enqueued; call again with the remaining packets.
+   */
+  decodeBatch(packets: { data: Uint8Array; pts: number }[]): number {
+    if (!this.isConfigured || this.isBroken || packets.length === 0) return 0;
+
+    const consumed = this.bindings.decodeAudioBatch(this.trackIndex, packets);
+
+    if (consumed < 0) {
+      this.consecutiveFailures++;
+      if (this.consecutiveFailures === 1) {
+        Logger.warn(TAG, `decodeAudioBatch failed: ${consumed}`);
+      }
+      if (
+        this.consecutiveFailures >=
+        SoftwareAudioDecoder.MAX_CONSECUTIVE_FAILURES
+      ) {
+        this.isBroken = true;
+        Logger.error(
+          TAG,
+          `Audio decoder disabled after ${this.consecutiveFailures} consecutive batch failures (last: ${consumed}). Playback continues without audio.`,
+        );
+      }
+      return 0;
+    }
+
+    this.consecutiveFailures = 0;
+
+    const numberOfFrames = this.bindings.audioBatchSamples();
+    if (numberOfFrames <= 0 || !this.onData) return consumed;
+
+    const numberOfChannels = this.bindings.audioBatchChannels();
+    const sampleRate = this.bindings.audioBatchSampleRate();
+    const pts = this.bindings.audioBatchPts();
+
+    try {
+      // Read HEAPU8 only AFTER the decode call — the batch can grow the heap
+      // (ALLOW_MEMORY_GROWTH), which detaches any buffer captured before it.
+      const heap = (this.bindings as any).module.HEAPU8 as Uint8Array;
+      const planes: Float32Array[] = new Array(numberOfChannels);
+      for (let i = 0; i < numberOfChannels; i++) {
+        const ptr = this.bindings.audioBatchPlanePointer(i);
+        if (!ptr) return consumed;
+        const view = new Float32Array(heap.buffer, ptr, numberOfFrames);
+        planes[i] = new Float32Array(view); // copy out of heap
+      }
+
+      this.enqueueFrame({
+        planes,
+        numberOfFrames,
+        numberOfChannels,
+        sampleRate,
+        timestamp: pts * 1_000_000, // micro-seconds
+      });
+    } catch (e) {
+      Logger.error(TAG, "Batched PCM extraction failed", e);
+      if (this.onError) this.onError(e as Error);
+    }
+
+    return consumed;
+  }
+
   private processDecodedFrame(timestamp: number) {
     if (!this.onData) return;
 

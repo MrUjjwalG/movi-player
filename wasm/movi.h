@@ -125,7 +125,34 @@ typedef struct {
   PrefetchedSubCue *prefetched_cues;
   int prefetched_cue_count;
   int prefetched_cue_capacity;
+
+  // ---- Batched audio decode accumulation --------------------------------
+  // Decoding one packet per JS→WASM round-trip is fine for AAC (1024 frames a
+  // packet ≈ 47 packets/s) but brutal for TrueHD/MLP, whose access unit is only
+  // 40 samples (~0.8 ms) — ~1200 packets/s, each costing a send, two receives,
+  // three getters and a plane pointer per channel, plus a tiny typed-array copy
+  // per channel. That's ~9600 boundary crossings and ~2400 allocations for one
+  // second of audio, and it's the per-packet overhead — not the decode math —
+  // that starves the renderer after a seek. movi_decode_audio_batch decodes many
+  // packets in a single call and accumulates the PCM here, so JS makes one copy
+  // per channel for the whole batch. Owned by the context; freed in movi_destroy.
+  float **abatch;        // abatch_channels contiguous planes
+  int abatch_channels;   // channels the planes were allocated for
+  int abatch_capacity;   // samples each plane can hold
+  int abatch_nb_samples; // samples currently accumulated
+  int abatch_sample_rate;
+  double abatch_pts;   // pts (seconds) of the first accumulated frame
+  int abatch_has_pts;  // 0 until the first frame lands
 } MoviContext;
+
+// Release the batched-audio accumulation planes (called from movi_destroy).
+void movi_abatch_free(MoviContext *ctx);
+
+// Defined in movi_decode.c; movi_decode_audio_batch drives these internally.
+EMSCRIPTEN_KEEPALIVE int movi_send_packet(MoviContext *ctx, int stream_index,
+                                          uint8_t *data, int size, double pts,
+                                          double dts, int keyframe);
+EMSCRIPTEN_KEEPALIVE int movi_receive_frame(MoviContext *ctx, int stream_index);
 
 EMSCRIPTEN_KEEPALIVE double movi_get_start_time(MoviContext *ctx);
 EMSCRIPTEN_KEEPALIVE int movi_get_format_name(MoviContext *ctx, char *buffer, int buffer_size);

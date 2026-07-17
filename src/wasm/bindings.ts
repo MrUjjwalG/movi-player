@@ -874,6 +874,102 @@ export class WasmBindings {
   }
 
   /**
+   * Decode many audio packets in ONE round-trip, accumulating the PCM into a
+   * single contiguous planar block (read it with audioBatch*() below).
+   *
+   * Per-packet decoding costs ~8 JS→WASM crossings and a tiny typed-array copy
+   * per channel. That's fine for AAC (1024 frames/packet ≈ 47 packets/s) but
+   * TrueHD/MLP emits a 40-sample access unit (~0.8 ms), i.e. ~1200 packets/s —
+   * ~9600 crossings and ~2400 allocations for ONE second of audio. That
+   * overhead, not the decode math, is what starves the renderer.
+   *
+   * Returns the number of packets CONSUMED. It's < packets.length when a format
+   * change or pts discontinuity ended the block early: drain the batch, then
+   * call again with the remainder. Negative means a hard decode error.
+   */
+  /**
+   * Whether this WASM module exports the batched-audio entry points. The
+   * element bundle and the WASM module are built and shipped separately, so a
+   * bundle newer than the .wasm would otherwise call straight into `undefined`
+   * and take audio down entirely. Callers fall back to per-packet decode.
+   */
+  supportsAudioBatch(): boolean {
+    return typeof this.module._movi_decode_audio_batch === "function";
+  }
+
+  decodeAudioBatch(
+    streamIndex: number,
+    packets: { data: Uint8Array; pts: number }[],
+  ): number {
+    if (!this.contextPtr || packets.length === 0) return -1;
+    // Capture the export up front: a .wasm older than this bundle simply
+    // doesn't have it, and the caller falls back to per-packet decode.
+    const fn = this.module._movi_decode_audio_batch;
+    if (!fn) return -1;
+
+    let totalBytes = 0;
+    for (const p of packets) totalBytes += p.data.byteLength;
+
+    // One blob for the payloads + parallel size/pts descriptors, so the whole
+    // batch crosses the boundary as three allocations instead of 3N.
+    const blobPtr = this.module._malloc(totalBytes);
+    const sizesPtr = this.module._malloc(packets.length * 4);
+    const ptssPtr = this.module._malloc(packets.length * 8);
+    if (!blobPtr || !sizesPtr || !ptssPtr) {
+      if (blobPtr) this.module._free(blobPtr);
+      if (sizesPtr) this.module._free(sizesPtr);
+      if (ptssPtr) this.module._free(ptssPtr);
+      return -6; // ENOMEM — caller drops the batch rather than corrupt the heap
+    }
+
+    try {
+      let offset = 0;
+      const sizes = new Int32Array(this.module.HEAPU8.buffer, sizesPtr, packets.length);
+      const ptss = new Float64Array(this.module.HEAPU8.buffer, ptssPtr, packets.length);
+      for (let i = 0; i < packets.length; i++) {
+        const p = packets[i];
+        this.module.HEAPU8.set(p.data, blobPtr + offset);
+        offset += p.data.byteLength;
+        sizes[i] = p.data.byteLength;
+        ptss[i] = p.pts;
+      }
+      return fn(
+        this.contextPtr,
+        streamIndex,
+        blobPtr,
+        sizesPtr,
+        ptssPtr,
+        packets.length,
+      );
+    } finally {
+      this.module._free(blobPtr);
+      this.module._free(sizesPtr);
+      this.module._free(ptssPtr);
+    }
+  }
+
+  audioBatchSamples(): number {
+    if (!this.contextPtr) return 0;
+    return this.module._movi_audio_batch_samples?.(this.contextPtr) ?? 0;
+  }
+  audioBatchChannels(): number {
+    if (!this.contextPtr) return 0;
+    return this.module._movi_audio_batch_channels?.(this.contextPtr) ?? 0;
+  }
+  audioBatchSampleRate(): number {
+    if (!this.contextPtr) return 0;
+    return this.module._movi_audio_batch_sample_rate?.(this.contextPtr) ?? 0;
+  }
+  audioBatchPts(): number {
+    if (!this.contextPtr) return 0;
+    return this.module._movi_audio_batch_pts?.(this.contextPtr) ?? 0;
+  }
+  audioBatchPlanePointer(channel: number): number {
+    if (!this.contextPtr) return 0;
+    return this.module._movi_audio_batch_plane?.(this.contextPtr, channel) ?? 0;
+  }
+
+  /**
    * Decode a subtitle packet
    */
   async decodeSubtitle(

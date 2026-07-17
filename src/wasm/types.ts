@@ -95,6 +95,24 @@ export interface MoviWasmModule {
     keyframe: number,
   ) => number;
   _movi_receive_frame: (ctx: number, stream_index: number) => number;
+  // Batched audio decode — many packets per round-trip, PCM accumulated into
+  // one contiguous planar block. See WasmBindings.decodeAudioBatch.
+  // Optional: the element bundle and the .wasm ship separately, so a bundle
+  // newer than the module must detect these are missing (supportsAudioBatch)
+  // and fall back to per-packet decode instead of calling into undefined.
+  _movi_decode_audio_batch?: (
+    ctx: number,
+    stream_index: number,
+    blob: number,
+    sizes: number,
+    ptss: number,
+    count: number,
+  ) => number;
+  _movi_audio_batch_samples?: (ctx: number) => number;
+  _movi_audio_batch_channels?: (ctx: number) => number;
+  _movi_audio_batch_sample_rate?: (ctx: number) => number;
+  _movi_audio_batch_pts?: (ctx: number) => number;
+  _movi_audio_batch_plane?: (ctx: number, channel: number) => number;
   _movi_get_frame_width: (ctx: number) => number;
   _movi_get_frame_height: (ctx: number) => number;
   _movi_get_frame_format(ctx: number): number;

@@ -227,6 +227,186 @@ int movi_receive_frame(MoviContext *ctx, int stream_index) {
   return 0;
 }
 
+// ---- Batched audio decode ------------------------------------------------
+// See the abatch_* fields in movi.h for why this exists. In short: TrueHD/MLP
+// emits a 40-sample access unit per packet, so the per-packet JS→WASM round-trip
+// cost — not the decode math — is what starves the audio renderer. Decode many
+// packets per call and hand JS one contiguous block.
+
+void movi_abatch_free(MoviContext *ctx) {
+  if (!ctx || !ctx->abatch)
+    return;
+  for (int i = 0; i < ctx->abatch_channels; i++)
+    free(ctx->abatch[i]);
+  free(ctx->abatch);
+  ctx->abatch = NULL;
+  ctx->abatch_channels = 0;
+  ctx->abatch_capacity = 0;
+  ctx->abatch_nb_samples = 0;
+}
+
+// Grow (or (re)allocate) the planes so they hold at least `need` samples.
+// A channel-count change reallocates from scratch — the planes are per-channel.
+static int movi_abatch_ensure(MoviContext *ctx, int channels, int need) {
+  if (channels <= 0)
+    return -1;
+  if (ctx->abatch && ctx->abatch_channels != channels)
+    movi_abatch_free(ctx);
+  if (!ctx->abatch) {
+    ctx->abatch = calloc((size_t)channels, sizeof(float *));
+    if (!ctx->abatch)
+      return -1;
+    ctx->abatch_channels = channels;
+    ctx->abatch_capacity = 0;
+  }
+  if (need > ctx->abatch_capacity) {
+    int cap = ctx->abatch_capacity ? ctx->abatch_capacity : 8192;
+    while (cap < need)
+      cap *= 2;
+    for (int i = 0; i < channels; i++) {
+      float *p = realloc(ctx->abatch[i], (size_t)cap * sizeof(float));
+      if (!p)
+        return -1; // previously-allocated planes stay valid; freed in destroy
+      ctx->abatch[i] = p;
+    }
+    ctx->abatch_capacity = cap;
+  }
+  return 0;
+}
+
+// Append the just-received ctx->frame (already downmixed to FLTP by
+// movi_receive_frame) onto the accumulation planes. Returns 1 on append,
+// -1 on a hard error (the caller then abandons the batch and JS falls back).
+//
+// There is deliberately NO pts-continuity check. Frames decoded from
+// consecutive packets of one stream, in order, in a single decode run ARE
+// contiguous by construction — a real discontinuity only happens across a
+// seek, and the decoder is flushed there, which ends the batch anyway. An
+// earlier version compared each frame's pts against the block's expected end
+// and bailed out on drift; with the container's pts rounding, that fired
+// constantly, and because a frame that "didn't fit" was never enqueued while
+// its packet still counted as consumed, every batch silently dropped audio.
+static int movi_abatch_append(MoviContext *ctx, int stream_index) {
+  AVFrame *f = ctx->frame;
+  if (!f || f->nb_samples <= 0)
+    return 1; // nothing to append, but not an error
+  if (f->format != AV_SAMPLE_FMT_FLTP)
+    return -1; // not planar float — abandon the batch, JS decodes per packet
+
+  int channels = f->ch_layout.nb_channels;
+  AVRational tb = ctx->fmt_ctx->streams[stream_index]->time_base;
+  double pts_sec =
+      (f->pts == AV_NOPTS_VALUE) ? -1.0 : (double)f->pts * av_q2d(tb);
+
+  // A mid-batch format change would corrupt the block. It doesn't happen for
+  // the codecs that land here, so treat it as a hard error rather than
+  // half-flushing: JS drops the batch and replays the packets per-packet.
+  if (ctx->abatch_nb_samples > 0 &&
+      (channels != ctx->abatch_channels ||
+       f->sample_rate != ctx->abatch_sample_rate))
+    return -1;
+
+  if (movi_abatch_ensure(ctx, channels, ctx->abatch_nb_samples + f->nb_samples) <
+      0)
+    return -1;
+
+  for (int ch = 0; ch < channels; ch++) {
+    memcpy(ctx->abatch[ch] + ctx->abatch_nb_samples, f->extended_data[ch],
+           (size_t)f->nb_samples * sizeof(float));
+  }
+  if (!ctx->abatch_has_pts) {
+    ctx->abatch_pts = pts_sec >= 0 ? pts_sec : 0.0;
+    ctx->abatch_has_pts = 1;
+    ctx->abatch_sample_rate = f->sample_rate;
+  }
+  ctx->abatch_nb_samples += f->nb_samples;
+  return 1;
+}
+
+/**
+ * Decode up to `count` audio packets in one call, accumulating all PCM into a
+ * single contiguous planar block JS can read with one copy per channel.
+ *
+ * `blob` holds the packet payloads back to back; `sizes[i]` / `ptss[i]` describe
+ * packet i. Returns the number of packets CONSUMED — which is < count when a
+ * format change or a pts discontinuity ends the block early. JS must read the
+ * batch out and call again with the remainder; that keeps a gap from being
+ * flattened into the accumulated timeline.
+ *
+ * Returns a negative value only on a hard error.
+ */
+EMSCRIPTEN_KEEPALIVE
+int movi_decode_audio_batch(MoviContext *ctx, int stream_index, uint8_t *blob,
+                            int32_t *sizes, double *ptss, int count) {
+  if (!ctx || !ctx->decoders || stream_index < 0 ||
+      stream_index >= (int)ctx->fmt_ctx->nb_streams ||
+      !ctx->decoders[stream_index] || !blob || !sizes || !ptss || count <= 0)
+    return -1;
+
+  // Fresh block per call — JS drains it before calling again.
+  ctx->abatch_nb_samples = 0;
+  ctx->abatch_has_pts = 0;
+  ctx->abatch_pts = 0;
+
+  int64_t offset = 0;
+  int consumed = 0;
+
+  for (int i = 0; i < count; i++) {
+    int size = sizes[i];
+    if (size < 0)
+      return consumed > 0 ? consumed : -1;
+
+    int ret = movi_send_packet(ctx, stream_index, blob + offset, size, ptss[i],
+                               ptss[i], 1);
+    if (ret < 0) {
+      // Nothing accepted yet → surface the error; otherwise hand back what we
+      // have and let JS retry this packet on the next batch.
+      return consumed > 0 ? consumed : ret;
+    }
+    offset += size;
+    consumed++;
+
+    // Every frame the decoder hands back gets appended — none may be dropped.
+    // A frame is already out of the decoder by the time we see it, so bailing
+    // out here without appending would lose that audio for good (its packet is
+    // already counted in `consumed`, so JS won't resubmit it).
+    while (movi_receive_frame(ctx, stream_index) == 0) {
+      if (movi_abatch_append(ctx, stream_index) < 0) {
+        // Unusable frame (format change / non-FLTP). Abandon the whole batch
+        // rather than emit a torn block; JS falls back to per-packet decode.
+        ctx->abatch_nb_samples = 0;
+        ctx->abatch_has_pts = 0;
+        return -1;
+      }
+    }
+  }
+
+  return consumed;
+}
+
+EMSCRIPTEN_KEEPALIVE
+int movi_audio_batch_samples(MoviContext *ctx) {
+  return ctx ? ctx->abatch_nb_samples : 0;
+}
+EMSCRIPTEN_KEEPALIVE
+int movi_audio_batch_channels(MoviContext *ctx) {
+  return ctx ? ctx->abatch_channels : 0;
+}
+EMSCRIPTEN_KEEPALIVE
+int movi_audio_batch_sample_rate(MoviContext *ctx) {
+  return ctx ? ctx->abatch_sample_rate : 0;
+}
+EMSCRIPTEN_KEEPALIVE
+double movi_audio_batch_pts(MoviContext *ctx) {
+  return ctx ? ctx->abatch_pts : 0.0;
+}
+EMSCRIPTEN_KEEPALIVE
+float *movi_audio_batch_plane(MoviContext *ctx, int ch) {
+  if (!ctx || !ctx->abatch || ch < 0 || ch >= ctx->abatch_channels)
+    return NULL;
+  return ctx->abatch[ch];
+}
+
 /**
  * Get decoded video frame as RGBA buffer (converts any format including 10-bit HDR)
  * Returns pointer to RGBA buffer, or NULL on error
