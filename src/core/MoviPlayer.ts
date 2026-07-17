@@ -291,6 +291,19 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
   // buffers on AudioContext which would start audio playback early.
   private pendingPrebufferPackets: Packet[] = [];
 
+  // Audio packets collected during the current demux burst, handed to the
+  // decoder as ONE batch when the tick ends. Only used when the software path
+  // is active (see AudioDecoder.canBatch): TrueHD/MLP emits a 40-sample access
+  // unit, so feeding ~1200 packets/s one at a time spends more time crossing
+  // into WASM than decoding, leaving the renderer to fill the shortfall with
+  // silence ("Gap filled" underruns). Flushed in processLoop's finally so no
+  // demuxed packet is ever dropped on an early exit.
+  private _audioBatchPending: {
+    data: Uint8Array;
+    timestamp: number;
+    keyframe: boolean;
+  }[] = [];
+
   // Post-seek throttling to prevent stuttering on low-end devices
   private justSeeked: boolean = false;
   private seekTime: number = 0;
@@ -1791,9 +1804,7 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
           TAG,
           `Flushing ${this.pendingAudioPackets.length} buffered audio packets after seek sync`,
         );
-        for (const pkt of this.pendingAudioPackets) {
-          this.audioDecoder.decode(pkt.data, pkt.timestamp, pkt.keyframe);
-        }
+        this.submitAudioPackets(this.pendingAudioPackets);
         this.pendingAudioPackets = [];
       }
     } else {
@@ -1870,12 +1881,44 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
   private beginAudioPrime(): void {
     this.audioRenderer.primeForBuffering();
     if (this.pendingAudioPackets.length > 0) {
-      for (const pkt of this.pendingAudioPackets) {
-        this.audioDecoder.decode(pkt.data, pkt.timestamp, pkt.keyframe);
-      }
+      this.submitAudioPackets(this.pendingAudioPackets);
       this.pendingAudioPackets = [];
     }
     this._primingAudio = true;
+  }
+
+  /**
+   * Hand a run of audio packets to the decoder in as few WASM round-trips as
+   * possible.
+   *
+   * Only the software path batches — and that's where it matters: TrueHD/MLP
+   * emits a 40-sample access unit (~0.8 ms), so priming a 2s cushion after a
+   * seek means ~2400 packets, each otherwise costing its own send/receive/getter
+   * round-trips and per-channel copies. Batched, the whole run crosses once.
+   * WebCodecs codecs have no such cost and just replay one by one.
+   *
+   * A short `consumed` means the block ended at a format change or pts
+   * discontinuity, so the remainder goes as a fresh batch — never flattened.
+   */
+  private submitAudioPackets(
+    packets: { data: Uint8Array; timestamp: number; keyframe: boolean }[],
+  ): void {
+    if (packets.length === 0) return;
+
+    if (!this.audioDecoder.canBatch()) {
+      for (const pkt of packets) {
+        this.audioDecoder.decode(pkt.data, pkt.timestamp, pkt.keyframe);
+      }
+      return;
+    }
+
+    let batch = packets.map((p) => ({ data: p.data, pts: p.timestamp }));
+    while (batch.length > 0) {
+      const consumed = this.audioDecoder.decodeBatch(batch);
+      if (consumed <= 0) break; // decoder errored//broke — drop the rest
+      if (consumed >= batch.length) break;
+      batch = batch.slice(consumed);
+    }
   }
 
   /**
@@ -1923,7 +1966,17 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
       // buffered for the prime (with a generous max-dwell fallback so a very
       // slow decoder still eventually starts). A normal mid-playback rebuffer
       // keeps the lighter 0.1s threshold for responsiveness.
-      const audioTargetS = this._primingAudio ? 2.0 : 0.1;
+      // A mid-playback rebuffer resumes on a thin 0.1s cushion for
+      // responsiveness. That's right when the stall was I/O — the decoder is
+      // idle and refills instantly. It's badly wrong when the stall was an
+      // UNDERRUN from a sub-realtime software codec (TrueHD/MLP/DTS): 0.1s is
+      // spent within a second and we stall straight back, so the spinner
+      // ping-pongs every couple of seconds. A decoder running ~8% behind drains
+      // 0.1s in ~1s but 2s in ~25s — same deficit, a totally different
+      // experience. Rebuild a real cushion for the software path.
+      const softwareAudioStall =
+        !this.disableAudio && this.audioDecoder.usesSoftware;
+      const audioTargetS = this._primingAudio || softwareAudioStall ? 2.0 : 0.1;
       const audioReady =
         this.disableAudio ||
         !hasAudioTrack ||
@@ -1989,9 +2042,15 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
     // throws an EncodingError on every IDR). The keyframe-wait handler already
     // shows buffering during the actual recovery; this just stops the stall
     // detector from piling on right after.
+    // NOTE: this grace is applied to the VIDEO-empty branch only, not to the
+    // whole detector. Gating everything on it meant that on a source whose
+    // decoder recreates after every seek (open-GOP HEVC), the audio-underrun
+    // branch below could never fire — precisely when the user is hearing the
+    // glitches and needs the spinner. The two are independent: the video
+    // decoder rebuilding says nothing about whether audio is keeping up.
     const decoderRecovering =
       !!this.videoDecoder && this.videoDecoder.isRecentlyRecovering();
-    if (this.stateManager.getState() === "playing" && !this.eofReached && !this.waitingForVideoSync && !nearEnd && !this.isBackgrounded && !inPlayGrace && !decoderRecovering) {
+    if (this.stateManager.getState() === "playing" && !this.eofReached && !this.waitingForVideoSync && !nearEnd && !this.isBackgrounded && !inPlayGrace) {
       const videoEmpty = this.videoRenderer ? this.videoRenderer.getQueueSize() === 0 : false;
       // Split (separate-URL) audio has no track in the MAIN demuxer's
       // trackManager — it's decoded from its own demuxer into audioRenderer. So
@@ -2002,12 +2061,32 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
         (!!this.trackManager.getActiveAudioTrack() || !!this.audioDemuxer) &&
         !this.disableAudio;
       const audioLow = !hasAudio || this.audioRenderer.getBufferedDuration() < 0.05;
-      if (videoEmpty && audioLow) {
+      // Audio can starve on its own while video stays perfectly healthy: an
+      // expensive software codec (TrueHD/MLP/DTS) decodes slower than realtime,
+      // so the renderer quietly patches hole after hole with silence while the
+      // player still reports "playing". The user hears broken audio and gets no
+      // signal at all. Treat sustained underrunning as a stall in its own right
+      // — buffering pauses cleanly and lets the cushion rebuild, which at least
+      // trades a visible spinner for inaudible glitches. (Not gated on
+      // videoEmpty: the bytes are usually already in memory; it's CPU, not I/O.)
+      const audioUnderrunning = hasAudio && this.audioRenderer.isUnderrunning();
+      if ((videoEmpty && audioLow && !decoderRecovering) || audioUnderrunning) {
+        // An underrun isn't a silent buffer dipping low — it's a hole the user
+        // ALREADY heard as a click. Waiting the full stall window means five or
+        // six audible glitches before the spinner appears, which is the whole
+        // complaint. Two gaps is enough evidence the decoder is behind.
+        const effectiveStallTimeout =
+          audioUnderrunning && !videoEmpty ? 200 : stallTimeout;
         if (!this._stallStartTime) {
           this._stallStartTime = performance.now();
-        } else if (performance.now() - this._stallStartTime > stallTimeout) {
+        } else if (performance.now() - this._stallStartTime > effectiveStallTimeout) {
           // Only enter buffering after 500ms of continuous stall
-          Logger.warn(TAG, "Stall detected: buffers empty for 500ms, entering buffering state");
+          Logger.warn(
+            TAG,
+            audioUnderrunning
+              ? "Stall detected: audio underrunning for 500ms (decode behind realtime), entering buffering state"
+              : "Stall detected: buffers empty for 500ms, entering buffering state",
+          );
           this.wasPlayingBeforeRebuffer = true;
           this._bufferingEntryTime = performance.now();
           this.stateManager.setState("buffering");
@@ -2390,9 +2469,25 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
         // During initial play grace period with audio active, use a gentler burst to
         // avoid overwhelming the main thread (audio decode + render + stable audio
         // processing is CPU-heavy alongside 4K video decode).
-        const bufferTarget = isSoftware ? 2.0 : fps >= 60 ? 1.0 : 0.5;
+        // `isSoftware` is the VIDEO decoder's state, so a hardware-decoded
+        // HEVC/AV1 file carrying TrueHD/DTS landed on the thin 0.5s target even
+        // though its audio is the expensive, sub-realtime software path. That
+        // left no headroom: any hiccup drained the renderer and it patched the
+        // hole with silence ("Gap filled"). Software audio gets the deep target
+        // too, independent of how the video is decoded.
+        const softwareAudio = !this.disableAudio && this.audioDecoder.usesSoftware;
+        const bufferTarget =
+          isSoftware || softwareAudio ? 2.0 : fps >= 60 ? 1.0 : 0.5;
         if (videoQueue < 30 || currentAudioBuffered < bufferTarget) {
-          if (inPlayGrace && !this.muted && !this.disableAudio && !isSoftware) {
+          if (
+            inPlayGrace &&
+            !this.muted &&
+            !this.disableAudio &&
+            !isSoftware &&
+            // Software audio can't afford the gentle ramp either — 20 packets a
+            // tick is a few ms of TrueHD, nowhere near realtime.
+            !softwareAudio
+          ) {
             burstSize = 20 * fpsScale; // Gentler ramp during initial fill with audio
           } else {
             // Burst is a PACKET cap, but what matters for a cushion is how many
@@ -2674,11 +2769,19 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
                 }
               }
 
-              this.audioDecoder.decode(
-                packet.data,
-                packet.timestamp,
-                packet.keyframe,
-              );
+              // Software codecs (TrueHD/MLP/DTS) go in as one batch per tick —
+              // their access units are tiny, so the per-packet WASM round-trip,
+              // not the decode itself, is what starves the renderer. WebCodecs
+              // has no such cost, so it decodes inline as before.
+              if (this.audioDecoder.canBatch()) {
+                this._audioBatchPending.push(packet);
+              } else {
+                this.audioDecoder.decode(
+                  packet.data,
+                  packet.timestamp,
+                  packet.keyframe,
+                );
+              }
             }
           } else {
             // Check for subtitle track
@@ -2771,6 +2874,18 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
       // For non-fatal errors, continue (transient network glitches, etc.)
     } finally {
       this.demuxInFlight = false;
+      // Hand this tick's audio to the decoder as one batch. In the finally so
+      // it runs on EVERY exit path — an early return on a superseded seek, a
+      // non-fatal error, or normal completion. The packets are already demuxed;
+      // dropping them would tear a hole in the audio the same way the old
+      // per-packet path did by starving the renderer. (A seek flushes the
+      // decoder anyway, so any stale batch decoded here is discarded — exactly
+      // what happened before, when packets were decoded as they were read.)
+      if (this._audioBatchPending.length > 0) {
+        const batch = this._audioBatchPending;
+        this._audioBatchPending = [];
+        this.submitAudioPackets(batch);
+      }
     }
   };
 
@@ -2993,6 +3108,13 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
       await this.videoDecoder.flush();
       Logger.info(TAG, `seek: flushing audio decoder...`);
       await this.audioDecoder.flush();
+      // Drop any audio collected for the current tick's batch — it belongs to
+      // the position we're leaving. The decoder has just been flushed, and the
+      // batch is submitted from processLoop's finally AFTER this, so keeping it
+      // would push pre-seek packets into the fresh decoder and emit audio at
+      // stale timestamps. play() re-seeks, which is why pause→play was enough
+      // to trigger it: the batch stranded by the pause got replayed on resume.
+      this._audioBatchPending = [];
       Logger.info(TAG, `seek: decoders flushed`);
 
       // Clear video frame queue to prevent old frames from being displayed

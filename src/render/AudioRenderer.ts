@@ -51,6 +51,23 @@ export class AudioRenderer {
   private firstBufferScheduledAt: number = 0;
   private firstBufferMediaTime: number = 0;
   private hasFirstBuffer: boolean = false;
+  // performance.now() of the last buffer underrun (a hole we patched with
+  // silence). Sustained underruns mean packets aren't reaching the renderer in
+  // realtime — see isUnderrunning().
+  private _lastUnderrunAt: number = 0;
+  // True while the input is faded out to cover a run of underruns. Stitched
+  // output across underruns is audibly broken — clicks and chopped syllables —
+  // and chopped audio reads as "this player is broken" where silence just reads
+  // as "it's loading". So we fade out for the whole stuttery stretch and fade
+  // back in only once packets have flowed cleanly again. The player's buffering
+  // spinner covers the same window, so the silence is explained on screen.
+  private _ducked: boolean = false;
+  private static readonly DUCK_FADE_OUT = 0.01; // 10ms: beats the glitch, still too slow to click
+  private static readonly DUCK_FADE_IN = 0.04; // 40ms: audibly smooth on the way back
+  // Hold the silence until this long without a fresh underrun. Must stay well
+  // clear of the gap cadence during a bad stretch, or we'd fade in and out
+  // between holes and turn a dropout into tremolo.
+  private static readonly DUCK_CLEAR_MS = 300;
   private currentMediaTime: number = 0;
   private maxScheduledMediaTime: number = 0; // Track the furthest media time we've scheduled
 
@@ -508,6 +525,19 @@ export class AudioRenderer {
 
     // Detect buffer underrun
     if (this.scheduledTime < now) {
+      // Record it: a run of these means the decode pipeline is behind realtime
+      // and playback is audibly broken. The player watches this to show its
+      // buffering state instead of pretending to play while we quietly patch
+      // holes with silence. (Only counts once we're actually playing out —
+      // before the first buffer there's nothing to under-run.)
+      if (this.hasFirstBuffer) {
+        this._lastUnderrunAt = performance.now();
+        // Silence the output for this stretch. The gap fill below stops the
+        // pops at the seams, but what plays between the holes is still chopped
+        // — better not heard at all.
+        this.duckForUnderrun();
+      }
+
       // Stable audio: fill the gap with a short silence buffer to prevent pops
       if (this._stableAudio && this.hasFirstBuffer && this.audioContext) {
         const gapDuration = now - this.scheduledTime;
@@ -539,6 +569,10 @@ export class AudioRenderer {
         this.firstBufferMediaTime = audioTime;
       }
     }
+
+    // Packets are flowing again if this buffer arrived without a hole; fade
+    // back in once that's held for DUCK_CLEAR_MS. No-op unless ducked.
+    this.unduckIfClean();
 
     // Calculate expected playback time based on timestamp
     let targetScheduleTime = this.scheduledTime;
@@ -1182,6 +1216,22 @@ export class AudioRenderer {
     this.activeSources = [];
     this.scheduledTime = this.audioContext?.currentTime ?? 0;
 
+    // Drop the underrun duck. A seek/flush retires the stretch that caused it,
+    // and unduckIfClean() only runs from the scheduling path — so leaving this
+    // set would keep a freshly-seeked, perfectly healthy player silent.
+    this._ducked = false;
+    this._lastUnderrunAt = 0;
+    if (this.inputNode && this.audioContext) {
+      try {
+        const param = this.inputNode.gain;
+        const now = this.audioContext.currentTime;
+        param.cancelScheduledValues(now);
+        param.setValueAtTime(1, now);
+      } catch {
+        // Ignore ramp errors
+      }
+    }
+
     // Reset clock tracking
     this.hasFirstBuffer = false;
     this.firstBufferScheduledAt = 0;
@@ -1347,6 +1397,63 @@ export class AudioRenderer {
   getBufferedDuration(): number {
     if (!this.audioContext) return 0;
     return Math.max(0, this.scheduledTime - this.audioContext.currentTime);
+  }
+
+  /**
+   * True if we patched a hole with silence within `withinMs`. A run of these
+   * means the decode pipeline has fallen behind realtime — the audio the user
+   * hears is already broken, so the player surfaces its buffering state rather
+   * than claiming to play. High packet-rate codecs (TrueHD/MLP/DTS) are what
+   * hit this: they read far more often than AAC, so anything that adds latency
+   * per read shows up here first — the same file decodes clean from a local
+   * file and stutters over HTTP.
+   */
+  isUnderrunning(withinMs: number = 500): boolean {
+    return (
+      this._lastUnderrunAt > 0 &&
+      performance.now() - this._lastUnderrunAt < withinMs
+    );
+  }
+
+  /**
+   * Fade the input out to cover a run of underruns.
+   * Rides on inputNode, never gainNode: gainNode carries the user's volume and
+   * boost, and stomping it here would fight setVolume() and leave the ducked
+   * level behind as the user's own setting.
+   */
+  private duckForUnderrun(): void {
+    if (this._ducked || !this.inputNode || !this.audioContext) return;
+    this._ducked = true;
+    try {
+      const param = this.inputNode.gain;
+      const now = this.audioContext.currentTime;
+      param.cancelScheduledValues(now);
+      param.setValueAtTime(param.value, now);
+      param.linearRampToValueAtTime(0, now + AudioRenderer.DUCK_FADE_OUT);
+      Logger.debug(TAG, `Duck: engaged (underrun)`);
+    } catch {
+      // Ignore ramp errors
+    }
+  }
+
+  /**
+   * Fade back in, but only once no underrun has landed for DUCK_CLEAR_MS.
+   * Called on every scheduled buffer, so recovery needs no external signal.
+   */
+  private unduckIfClean(): void {
+    if (!this._ducked || !this.inputNode || !this.audioContext) return;
+    if (this.isUnderrunning(AudioRenderer.DUCK_CLEAR_MS)) return;
+    this._ducked = false;
+    try {
+      const param = this.inputNode.gain;
+      const now = this.audioContext.currentTime;
+      param.cancelScheduledValues(now);
+      param.setValueAtTime(param.value, now);
+      param.linearRampToValueAtTime(1, now + AudioRenderer.DUCK_FADE_IN);
+      Logger.debug(TAG, `Duck: released (clean)`);
+    } catch {
+      // Ignore ramp errors
+    }
   }
 
   /**
