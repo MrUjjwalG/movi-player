@@ -979,6 +979,13 @@ export class HttpSource implements SourceAdapter {
         }
 
         this.reader = response.body!.getReader();
+        // Capture this loop's own reader. A superseding startStream (e.g. a seek
+        // repositioning right after audio-only unpaused and resumed this parked
+        // loop) swaps this.reader out; reading this.reader below would then hit a
+        // null mid-swap (the "this.reader.read of null" crash) or steal the new
+        // stream's reader and corrupt it. The loop bails the moment this.reader
+        // is no longer ours.
+        const reader = this.reader;
         retryCount = 0; // Reset retry on success
         consecutiveOnlineFetchFailures = 0; // Successful fetch — not a CORS issue
 
@@ -1003,8 +1010,11 @@ export class HttpSource implements SourceAdapter {
         while (this.atomicIsStreaming()) {
           // Yield the network to a bandwidth-starved native <audio> track.
           await this.awaitPrefetchGate();
-          if (!this.atomicIsStreaming()) break;
-          const { done, value } = await this.reader.read();
+          // Bail if the stream stopped OR was superseded while we were parked
+          // (this.reader swapped to a new stream's reader — reading it here would
+          // corrupt the new stream and can be null mid-swap).
+          if (!this.atomicIsStreaming() || this.reader !== reader) break;
+          const { done, value } = await reader.read();
           if (done) {
             this.atomicSetStreaming(false);
             break;
