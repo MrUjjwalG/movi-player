@@ -92,6 +92,13 @@ export class AudioRenderer {
   private signalsmith: SignalsmithStretcher | null = null;
   private signalsmithLoading: boolean = false;
   private signalsmithSampleRate: number = 0;
+  // Sample rate of the most recently decoded audio buffer. The stretcher is
+  // fixed-rate per instance and MUST be built at this rate — not the
+  // AudioContext's, which can differ (e.g. 48kHz media in a 44.1kHz context).
+  // Cached here so the pre-warm on the first rate change targets the right rate
+  // instead of building at the context rate and then throwing it away + lazily
+  // rebuilding on the first chunk (the ~1-2s opening-silence gap).
+  private _decodedSampleRate: number = 0;
 
   // Stable audio: master toggle (off by default, opt-in via element attribute)
   private _stableAudio: boolean = false;
@@ -494,6 +501,7 @@ export class AudioRenderer {
 
     const numberOfChannels = audioBuffer.numberOfChannels;
     const sampleRate = audioBuffer.sampleRate;
+    this._decodedSampleRate = sampleRate;
 
     // Clear rebuffering flag as soon as audio data arrives (decoder is producing).
     // Don't wait for successful scheduling — the stretcher may swallow a few
@@ -645,6 +653,7 @@ export class AudioRenderer {
   renderSamples(samples: Float32Array[], sampleRate: number): void {
     if (!this.audioContext || !this.gainNode) return;
     if (!this.isPlaying) return;
+    this._decodedSampleRate = sampleRate;
 
     try {
       const numberOfChannels = samples.length;
@@ -706,13 +715,18 @@ export class AudioRenderer {
     // (saved preference, or rate set while paused). Kicks WASM construction
     // off now so it's ready before the first decoded chunk needs stretching,
     // avoiding the opening silence gap the chunk-time lazy init would leave.
+    // Build at the decoded media rate when known (falls back to the context
+    // rate before the first chunk) so we don't build the wrong-rate instance
+    // and pay a destroy+rebuild when audio arrives at a different rate.
     if (
       this.preservePitch &&
       this.audioContext &&
       !this.signalsmith &&
       Math.abs(this._playbackRate - 1.0) > 0.01
     ) {
-      this.maybeInitSignalsmith(this.audioContext.sampleRate);
+      this.maybeInitSignalsmith(
+        this._decodedSampleRate || this.audioContext.sampleRate,
+      );
     }
 
     // Resume the AudioContext when either (a) we're not muted so audio
@@ -1039,9 +1053,18 @@ export class AudioRenderer {
       // first chunk, leaving the opening ~1s with no stretcher — which falls
       // through to the silence path (no chipmunk, but a brief audio gap).
       // Warming it ahead of the chunks closes that gap in the common case.
-      // sampleRate matches the AudioContext; processStretch rebuilds the
-      // instance if a decoded chunk ever arrives at a different rate.
-      this.maybeInitSignalsmith(this.audioContext.sampleRate);
+      //
+      // Build at the DECODED media rate (cached from the audio already
+      // playing), NOT the AudioContext rate — they differ when e.g. 48kHz
+      // media plays in a 44.1kHz context. Building at the context rate made
+      // processStretch destroy it and lazily rebuild at the real rate on the
+      // first chunk, which reintroduced the very ~1-2s silence this warmup
+      // exists to prevent (only on the FIRST rate change; later ones reused the
+      // now-correct instance). Fall back to the context rate only before any
+      // audio has decoded.
+      this.maybeInitSignalsmith(
+        this._decodedSampleRate || this.audioContext.sampleRate,
+      );
     }
 
     // Re-anchor the audio→media clock at the CURRENT play position, then drop
