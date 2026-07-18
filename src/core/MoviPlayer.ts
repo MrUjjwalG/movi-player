@@ -496,10 +496,7 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
       };
     }
 
-    this.audioDecoder.setOnData((data) => {
-      // WebCodecs / hardware path: AudioData lands here.
-      this.audioRenderer.render(data);
-    });
+    this.audioDecoder.setOnData((data) => this.renderDecodedAudio(data));
 
     this.audioDecoder.setOnPCM((frame) => {
       // Software path (FFmpeg/WASM) emits planar Float32 PCM so we avoid
@@ -548,9 +545,7 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
         }
       }
 
-      this.audioDecoder.setOnData((data) => {
-        this.audioRenderer.render(data);
-      });
+      this.audioDecoder.setOnData((data) => this.renderDecodedAudio(data));
 
       this.audioDecoder.setOnPCM((frame) => {
         this.audioRenderer.renderPCM(frame);
@@ -1618,6 +1613,32 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
   // playout head and the last video frame), force the ended transition
   // rather than freezing one frame short of the end forever.
   private eofSince = 0;
+
+  /**
+   * Route a decoded audio frame to the renderer, dropping any that predate the
+   * active seek target. FFmpeg seeks to the keyframe BEFORE the target, so it
+   * decodes pre-target packets, and a seek-flush can emit an in-flight frame
+   * from the OLD position — both would let the renderer sync the clock back to
+   * where playback was, which reads as "the first seek jumped back and audio
+   * stopped" (a second seek then works because the pipeline is clean). The
+   * demux-level skip in pumpSplitAudio only catches packets read after the
+   * seek, not frames already in the decoder pipeline; this catches those.
+   * Mirrors the video onFrame guard.
+   */
+  private renderDecodedAudio(data: AudioData): void {
+    if (
+      this.seekTargetTime !== -1 &&
+      data.timestamp / 1_000_000 < this.seekTargetTime
+    ) {
+      try {
+        data.close();
+      } catch {
+        /* ignore */
+      }
+      return;
+    }
+    this.audioRenderer.render(data);
+  }
 
   /**
    * Internal handler for seek completion when first target frame is found.
@@ -4849,7 +4870,16 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
     // position seconds past the video, which never catches up (perpetual
     // "buffers empty" stall loop). The muxed path holds audio the same way via
     // pendingAudioPackets. Idle until video sync completes.
-    if (this.waitingForVideoSync && this.trackManager.getActiveVideoTrack()) {
+    //
+    // Never in audio-only: there's no video being shown to sync to, so holding
+    // audio for a video keyframe just starves it — worst on a seek into a
+    // not-yet-buffered region, where the video can't produce that frame for
+    // seconds and the audio (often fully cached) goes silent for no reason.
+    if (
+      !this._audioOnly &&
+      this.waitingForVideoSync &&
+      this.trackManager.getActiveVideoTrack()
+    ) {
       return true;
     }
 
