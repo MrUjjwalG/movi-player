@@ -3072,10 +3072,35 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
       this.seekKeyframeOffset = 0;
       this.eofReached = false;
       this.eofSince = 0;
-      if (
+      // Honor a resume intent, mirroring what the video path does in
+      // notifySeekCompletion. play()'s first-play (and replay) branch sets
+      // wasPlayingBeforeSeek before calling seek(0); in audio-only there are no
+      // video frames to decode, so that completion callback NEVER fires and the
+      // transition to "playing" would otherwise never happen — autoplay on an
+      // auto-advanced track silently stalls in "ready" (audio loop never
+      // starts, context never resumes) until a manual play. Drive it here.
+      // Also covers an already-rolling state (a live user scrub while playing).
+      const shouldResume =
+        this.wasPlayingBeforeSeek ||
+        this.wasPlayingBeforeRebuffer ||
         this.stateManager.is("playing") ||
-        this.stateManager.is("buffering")
-      ) {
+        this.stateManager.is("buffering");
+      if (shouldResume) {
+        this.wasPlayingBeforeSeek = false;
+        this.wasPlayingBeforeRebuffer = false;
+        if (this._playStartTime === 0) {
+          this._playStartTime = performance.now();
+        }
+        if (!this.stateManager.is("playing")) {
+          this.stateManager.setState("playing");
+        }
+        this.clock.start();
+        // Resume the (auto-suspended) context so audio is audible. Fire-and-
+        // forget like the video path — the shared context was already unlocked
+        // by the previous track, so this wakes it without a fresh gesture.
+        if (!this.disableAudio && !this.audioRenderer.isAudioPlaying()) {
+          this.audioRenderer.play();
+        }
         this.startAudioLoop();
       }
       this.emit("seeking", t);
@@ -4946,11 +4971,59 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
     return !this._splitAudioEof;
   }
 
+  /** True once the split-audio demuxer has hit EOF and the renderer has played
+   *  out its buffered tail — i.e. the track is actually finished. Mirrors the
+   *  main processLoop's audioPlayedOut check. */
+  private isSplitAudioPlayedOut(): boolean {
+    const currentTime = this.clock.getTime();
+    const duration = this.mediaInfo?.duration ?? 0;
+    const maxScheduled = this.audioRenderer.getMaxScheduledMediaTime();
+    const reachedEnd =
+      duration > 0 && currentTime >= duration + this.startTime - 0.25;
+    const playedOut =
+      maxScheduled > 0 && currentTime >= maxScheduled - 0.1;
+    return playedOut || reachedEnd || duration === 0;
+  }
+
+  /** In audio-only mode the main processLoop (which normally emits "ended") is
+   *  parked, so the split-audio path must detect end-of-track itself — else a
+   *  finished track never fires "ended" and the host can't auto-advance. Emits
+   *  once the demuxer hit EOF (not a pause/stop) and the tail has drained.
+   *  Returns true when it ended. Safe from both the rAF loop and the background
+   *  timer. */
+  private maybeEndSplitAudio(): boolean {
+    if (
+      this._audioOnly &&
+      this._splitAudioEof &&
+      (this.stateManager.is("playing") || this.stateManager.is("buffering")) &&
+      this.isSplitAudioPlayedOut()
+    ) {
+      this.handleEnded();
+      return true;
+    }
+    return false;
+  }
+
   private audioProcessLoop = async () => {
     const keepGoing = await this.pumpSplitAudio();
-    this.audioAnimationFrameId = keepGoing
-      ? requestAnimationFrame(this.audioProcessLoop)
-      : null;
+    if (keepGoing) {
+      this.audioAnimationFrameId = requestAnimationFrame(this.audioProcessLoop);
+      return;
+    }
+    // The pump stopped. If it's because the demuxer hit EOF (audio-only), keep
+    // ticking until the buffered tail drains, then end — otherwise it stopped
+    // for a pause/state change and we just idle.
+    if (
+      this._audioOnly &&
+      this._splitAudioEof &&
+      (this.stateManager.is("playing") || this.stateManager.is("buffering"))
+    ) {
+      this.audioAnimationFrameId = this.maybeEndSplitAudio()
+        ? null
+        : requestAnimationFrame(this.audioProcessLoop);
+      return;
+    }
+    this.audioAnimationFrameId = null;
   };
 
   private startAudioLoop(): void {
@@ -5898,6 +5971,17 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
     return this.audioRenderer.isBlockedSuspended();
   }
 
+  /**
+   * True once the shared AudioContext has been unlocked at any point this
+   * session. A subsequent suspended state (e.g. right after init() on an
+   * auto-advanced track) is then just a resume in flight that will recover, so
+   * the element waits it out instead of flashing the unmute pill.
+   */
+  wasAudioContextActivated(): boolean {
+    if (this.disableAudio) return false;
+    return this.audioRenderer.wasEverActivated();
+  }
+
   /** True when audio-only (data-saver) mode is active. */
   isAudioOnly(): boolean {
     return this._audioOnly;
@@ -6309,6 +6393,8 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
       // avoid piling frames into a queue nothing is draining — except in PiP,
       // where the video IS visible in the PiP window.
       this.pumpSplitAudio();
+      // A track finishing while backgrounded must still auto-advance (music).
+      this.maybeEndSplitAudio();
       if (this.isPiPActive) this.processLoop();
     } else {
       // Muxed: processLoop decodes the in-file audio inline, so it's all we need.

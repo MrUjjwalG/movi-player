@@ -1364,6 +1364,19 @@ export class AudioRenderer {
   }
 
   /**
+   * True once the shared AudioContext has run (been unlocked by a gesture) at
+   * any point this session — see the module-level sharedContextActivated latch.
+   * After that, a gesture-free resume() will succeed on its own, so a suspended
+   * state seen right after init() is just the async resume still in flight and
+   * WILL recover. Callers use this to wait it out instead of falling back to
+   * muted autoplay (which would flash the "tap to unmute" pill on every
+   * auto-advanced track).
+   */
+  wasEverActivated(): boolean {
+    return sharedContextActivated;
+  }
+
+  /**
    * Check if audio has healthy buffers (not in underrun state)
    * Used by video renderer to decide whether to sync to audio
    */

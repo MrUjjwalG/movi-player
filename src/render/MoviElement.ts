@@ -1339,6 +1339,15 @@ export class MoviElement extends HTMLElement {
       // Defensive — updateMuted() should hide it via updateUnmuteOverlay,
       // but if state is mid-flight this guarantees the click feels instant.
       unmuteOverlay.style.display = "none";
+      // The tap is a user gesture — if playback isn't running, start it too.
+      // An auto-advanced audio-only track that couldn't autoplay with sound
+      // lands paused behind this pill; without this the user has to unmute AND
+      // then hit play. Skipped when already playing (a muted-autoplay video is
+      // rolling), so we only ever resume a genuinely stopped player.
+      const state = this.player?.getState();
+      if (state && state !== "playing" && state !== "buffering") {
+        this.play();
+      }
     });
     shadowRoot.appendChild(unmuteOverlay);
     this.unmuteOverlay = unmuteOverlay;
@@ -15894,9 +15903,20 @@ export class MoviElement extends HTMLElement {
     if (!this.player || this._muted || this._userHasUnmuted) return;
     if (!this.player.hasAudibleSource()) return;
 
-    // Give the async resume() a moment; re-check across a few frames before
-    // concluding the context is genuinely blocked rather than mid-wakeup.
-    if (!this.player.isAudioBlockedSuspended()) {
+    if (this.player.isAudioBlockedSuspended()) {
+      // Suspended. If the shared context was already unlocked earlier this
+      // session, this is just init()'s gesture-free resume() still in flight
+      // (typical on an auto-advanced track) — it WILL recover on its own, so
+      // wait it out rather than flashing the pill. Poll up to ~40 frames
+      // (~650ms) before giving up; only a genuine gesture-required cold start
+      // (context never activated) falls back immediately.
+      if (this.player.wasAudioContextActivated() && attempt < 40) {
+        requestAnimationFrame(() => this.maybeFallbackToMutedAutoplay(attempt + 1));
+        return;
+      }
+    } else {
+      // Not blocked (running, or mid-wakeup). Re-check across a few frames in
+      // case the block surfaces late, then conclude audio is fine.
       if (attempt < 5) {
         requestAnimationFrame(() => this.maybeFallbackToMutedAutoplay(attempt + 1));
       }
