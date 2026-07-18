@@ -68,6 +68,12 @@ export class AudioRenderer {
   // clear of the gap cadence during a bad stretch, or we'd fade in and out
   // between holes and turn a dropout into tremolo.
   private static readonly DUCK_CLEAR_MS = 300;
+  // performance.now() before which ducking is suppressed. The player sets this
+  // around a background→foreground recovery: the recovery flushes the video
+  // decoder and re-seeks, which briefly starves audio — a transient underrun,
+  // not glitchy playback. Ducking there would mute audio the instant the user
+  // returns, which reads as "the audio stopped".
+  private _suppressDuckUntil: number = 0;
   private currentMediaTime: number = 0;
   private maxScheduledMediaTime: number = 0; // Track the furthest media time we've scheduled
 
@@ -1421,7 +1427,47 @@ export class AudioRenderer {
    * boost, and stomping it here would fight setVolume() and leave the ducked
    * level behind as the user's own setting.
    */
+  /**
+   * Suppress ducking for the next `ms` and release any current duck. Called by
+   * the player around a background→foreground recovery, whose decoder flush +
+   * re-seek briefly starves audio — a transient underrun that must not mute.
+   */
+  suppressDuckFor(ms: number): void {
+    this._suppressDuckUntil = performance.now() + ms;
+    this.forceUnduck();
+  }
+
+  /** Immediately restore the input gain and clear the duck (no fade). */
+  private forceUnduck(): void {
+    if (!this._ducked || !this.inputNode || !this.audioContext) return;
+    this._ducked = false;
+    try {
+      const param = this.inputNode.gain;
+      const now = this.audioContext.currentTime;
+      param.cancelScheduledValues(now);
+      param.setValueAtTime(1, now);
+    } catch {
+      // Ignore ramp errors
+    }
+  }
+
   private duckForUnderrun(): void {
+    // Suppressed right after a foreground recovery: the recovery's own
+    // decoder flush/seek causes a one-off underrun that must not mute audio.
+    if (performance.now() < this._suppressDuckUntil) {
+      this.forceUnduck();
+      return;
+    }
+    // Never duck in the background. The duck exists to mute glitchy audio while
+    // a spinner shows — but there's no spinner when hidden, and the decode loop
+    // is throttled there so underruns are constant. Muting on them would
+    // silence background audio playback entirely (music stops the moment the
+    // tab hides). If we were already ducked when the tab hid, release it so the
+    // audio isn't left muted.
+    if (typeof document !== "undefined" && document.hidden) {
+      this.forceUnduck();
+      return;
+    }
     if (this._ducked || !this.inputNode || !this.audioContext) return;
     this._ducked = true;
     try {

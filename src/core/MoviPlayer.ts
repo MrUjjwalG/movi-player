@@ -240,6 +240,13 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
   private backgroundIntervalId: number | null = null;
   private backgroundWorker: Worker | null = null; // Worker-based timer for Safari
   private isBackgrounded: boolean = false; // True when tab is hidden (background)
+  // performance.now() of the last background→foreground recovery. For a short
+  // window after, the audio-underrun stall detector is suppressed: returning
+  // from background the decode loop was throttled, so a transient underrun is
+  // expected and refills on its own. Without this the detector would suspend
+  // audio the instant the user returns — stopping e.g. background music that
+  // was playing fine — which it never did before the underrun-stall was added.
+  private _foregroundRecoveryAt: number = 0;
 
   // WakeLock to prevent screen sleep during playback
   private wakeLock: WakeLockSentinel | null = null;
@@ -1468,8 +1475,12 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
         this.videoRenderer.stopPresentationLoop();
         this.videoRenderer.clearQueue();
       }
+      // Count the split (separate-URL) audio demuxer too — its track isn't in
+      // the main trackManager, so without this the background timer never starts
+      // for split audio and its rAF-driven loop dies the moment the tab hides.
       const hasAudio =
-        !!this.trackManager.getActiveAudioTrack() && !this.disableAudio;
+        (!!this.trackManager.getActiveAudioTrack() || !!this.audioDemuxer) &&
+        !this.disableAudio;
       if (hasAudio) this.startBackgroundTimer();
     }
 
@@ -2082,7 +2093,15 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
       // — buffering pauses cleanly and lets the cushion rebuild, which at least
       // trades a visible spinner for inaudible glitches. (Not gated on
       // videoEmpty: the bytes are usually already in memory; it's CPU, not I/O.)
-      const audioUnderrunning = hasAudio && this.audioRenderer.isUnderrunning();
+      // Suppress the underrun→buffering path briefly after returning from
+      // background: the throttled-decode underrun that lands on recovery is
+      // transient and refills on its own. Suspending audio for it would stop
+      // playback (e.g. background music) the instant the user comes back.
+      const inForegroundGrace =
+        this._foregroundRecoveryAt > 0 &&
+        performance.now() - this._foregroundRecoveryAt < 3000;
+      const audioUnderrunning =
+        hasAudio && !inForegroundGrace && this.audioRenderer.isUnderrunning();
       if ((videoEmpty && audioLow && !decoderRecovering) || audioUnderrunning) {
         // An underrun isn't a silent buffer dipping low — it's a hole the user
         // ALREADY heard as a click. Waiting the full stall window means five or
@@ -4783,24 +4802,22 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
    * (separate WASM module, so independent of the video demuxInFlight critical
    * section). Bounded lead so it doesn't fetch the whole audio file ahead.
    */
-  private audioProcessLoop = async () => {
-    if (!this.audioDemuxer || this._splitAudioEof) {
-      this.audioAnimationFrameId = null;
-      return;
-    }
+  // One decode pass of the split-audio demuxer. Returns false when the loop
+  // should stop (no demuxer / EOF / not playing), true to keep going. Does NOT
+  // schedule the next tick — the caller owns cadence: the rAF wrapper in the
+  // foreground, the un-throttled background Worker timer when hidden (rAF is
+  // throttled in background, which is exactly what stalled audio there).
+  private async pumpSplitAudio(): Promise<boolean> {
+    if (!this.audioDemuxer || this._splitAudioEof) return false;
     const state = this.stateManager.getState();
     if (
       state !== "playing" &&
       state !== "buffering" &&
       !this.waitingForVideoSync
     ) {
-      this.audioAnimationFrameId = null;
-      return;
+      return false;
     }
-    if (this.audioDemuxInFlight) {
-      this.audioAnimationFrameId = requestAnimationFrame(this.audioProcessLoop);
-      return;
-    }
+    if (this.audioDemuxInFlight) return true;
 
     // Hold audio while the video is still hunting its first keyframe after a
     // seek/first-play. The AudioRenderer plays buffers the instant they're
@@ -4808,10 +4825,9 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
     // run ahead during the ~2s sync window — the clock then snaps to an audio
     // position seconds past the video, which never catches up (perpetual
     // "buffers empty" stall loop). The muxed path holds audio the same way via
-    // pendingAudioPackets. Idle-reschedule until video sync completes.
+    // pendingAudioPackets. Idle until video sync completes.
     if (this.waitingForVideoSync && this.trackManager.getActiveVideoTrack()) {
-      this.audioAnimationFrameId = requestAnimationFrame(this.audioProcessLoop);
-      return;
+      return true;
     }
 
     // Read a SMALL burst of packets per tick — enough to stay ahead of AAC's
@@ -4837,10 +4853,7 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
     // unmute land on the playhead. Once audible, use the full smooth-buffer lead.
     const lead = this.muted ? 0.25 : bufferedTarget;
     const mediaNow = Math.max(0, this.clock.getTime() - this.startTime);
-    if (this._lastSplitAudioPts - mediaNow > lead) {
-      this.audioAnimationFrameId = requestAnimationFrame(this.audioProcessLoop);
-      return;
-    }
+    if (this._lastSplitAudioPts - mediaNow > lead) return true;
 
     this.audioDemuxInFlight = true;
     try {
@@ -4877,11 +4890,14 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
       this.audioDemuxInFlight = false;
     }
 
-    if (this._splitAudioEof) {
-      this.audioAnimationFrameId = null;
-    } else {
-      this.audioAnimationFrameId = requestAnimationFrame(this.audioProcessLoop);
-    }
+    return !this._splitAudioEof;
+  }
+
+  private audioProcessLoop = async () => {
+    const keepGoing = await this.pumpSplitAudio();
+    this.audioAnimationFrameId = keepGoing
+      ? requestAnimationFrame(this.audioProcessLoop)
+      : null;
   };
 
   private startAudioLoop(): void {
@@ -5854,10 +5870,10 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
       // UI can swap to the album-art / strip view without a stale last frame.
       if (this.videoRenderer) this.videoRenderer.clearQueue();
       if (splitSource) {
-        // Split source: stop the MAIN (video) demux loop so the video body stops
-        // downloading + decoding. Audio keeps playing on its own — the native
-        // <audio> element, or (WASM split) the separate audioProcessLoop, which
-        // is driven by audioAnimationFrameId and is untouched here.
+        // Split source: stop the MAIN (video) demux loop so video stops
+        // decoding. Audio keeps playing on its own — the native <audio>
+        // element, or (WASM split) the separate audioProcessLoop, which is
+        // driven by audioAnimationFrameId and is untouched here.
         // (Doing this live — never via a reload — avoids tearing down the WASM
         // context while a read is in flight, which crashes with an OOB.)
         if (this.animationFrameId !== null) {
@@ -5869,8 +5885,8 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
       // Muxed source: keep the demux loop running (it still decodes the in-file
       // audio); the processLoop's _audioOnly check skips only the video decode.
     } else {
-      // Re-enabling video. Seek to the current playhead to recover a keyframe and
-      // resync; for a split source the demux loop was stopped, so restart it.
+      // Re-enabling video. Seek to the current playhead to recover a keyframe
+      // and resync; for a split source the demux loop was stopped, so restart it.
       const t = this.getCurrentTime();
       this.seek(t)
         .then(() => {
@@ -6023,7 +6039,13 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
       // video decode is skipped AND there's no audio to drive — running the loop
       // would just race the demuxer to EOF (no backpressure → eofReached=true →
       // foreground recovery returns early → video stuck on resume).
-      const hasAudio = !!this.trackManager.getActiveAudioTrack() && !this.disableAudio;
+      // Count split (separate-URL) audio too — its track lives in audioDemuxer,
+      // not the main trackManager, so without this the timer never starts for
+      // split audio and its rAF-driven decode loop dies the moment the tab hides
+      // (audio stops seconds after backgrounding).
+      const hasAudio =
+        (!!this.trackManager.getActiveAudioTrack() || !!this.audioDemuxer) &&
+        !this.disableAudio;
       if (hasAudio || this.isPiPActive) {
         this.startBackgroundTimer();
       }
@@ -6050,6 +6072,13 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
       this.ensureWakeLock();
 
       if (isPlaying) {
+        // Open the underrun-stall grace window: the decode loop was throttled
+        // in background, so an underrun right now is transient and self-heals.
+        this._foregroundRecoveryAt = performance.now();
+        // Same window for the audio duck: the recovery's video-decoder flush +
+        // re-seek briefly starves audio, and ducking there would mute it the
+        // instant the user returns (reads as "the audio stopped").
+        this.audioRenderer?.suppressDuckFor(3000);
         // Resume AudioContext if needed. On mobile after long background the
         // browser may keep it suspended (autoplay policy — prior gesture has
         // expired). If resume doesn't actually move us back to "running",
@@ -6182,29 +6211,39 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
         };
       `], { type: "application/javascript" });
       this.backgroundWorker = new Worker(URL.createObjectURL(blob));
-      this.backgroundWorker.onmessage = () => {
-        const state = this.stateManager.getState();
-        if (state === "playing" || state === "buffering") {
-          this.processLoop();
-          // In PiP mode, also drive video rendering since main window rAF is stopped
-          if (this.isPiPActive && this.videoRenderer) {
-            (this.videoRenderer as any).presentationLoop?.();
-          }
-        }
-      };
+      this.backgroundWorker.onmessage = () => this.backgroundTick();
       this.backgroundWorker.postMessage("start");
     } catch {
       // Worker not available — fallback to setInterval
       Logger.debug(TAG, "Worker unavailable, using setInterval fallback");
-      this.backgroundIntervalId = window.setInterval(() => {
-        const state = this.stateManager.getState();
-        if (state === "playing" || state === "buffering") {
-          this.processLoop();
-          if (this.isPiPActive && this.videoRenderer) {
-            (this.videoRenderer as any).presentationLoop?.();
-          }
-        }
-      }, 16);
+      this.backgroundIntervalId = window.setInterval(
+        () => this.backgroundTick(),
+        16,
+      );
+    }
+  }
+
+  /**
+   * One background-timer tick (Worker or setInterval). Drives decode while the
+   * tab is hidden and rAF is throttled.
+   */
+  private backgroundTick(): void {
+    const state = this.stateManager.getState();
+    if (state !== "playing" && state !== "buffering") return;
+    if (this.audioDemuxer) {
+      // Split (separate-URL) audio: keep the audio decoding — its own loop runs
+      // on rAF, which is throttled while hidden (this is what stalled it). The
+      // video body isn't shown in the background, so skip its decode entirely to
+      // avoid piling frames into a queue nothing is draining — except in PiP,
+      // where the video IS visible in the PiP window.
+      this.pumpSplitAudio();
+      if (this.isPiPActive) this.processLoop();
+    } else {
+      // Muxed: processLoop decodes the in-file audio inline, so it's all we need.
+      this.processLoop();
+    }
+    if (this.isPiPActive && this.videoRenderer) {
+      (this.videoRenderer as any).presentationLoop?.();
     }
   }
 
