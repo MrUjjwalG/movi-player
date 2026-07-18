@@ -103,6 +103,12 @@ export class CanvasRenderer {
   private static readonly PERF_DEFICIT_WINDOWS = 2; // consecutive bad windows before engaging
   private static readonly PERF_WARMUP_FRAMES = 60; // skip startup / post-seek ramp
   private static readonly PERF_MIN_CAP_FPS = 24; // never cap below this
+  // Below this achieved rate the pipeline is STUCK (decoder error / recovering /
+  // EOF / starved), not merely slow — capping the present rate or dropping
+  // frames can't help, and it must not turn on disposable-frame skipping while
+  // the decoder is hunting a keyframe to recover. A genuinely decode-bound
+  // device still presents well above this.
+  private static readonly PERF_MIN_ACHIEVED_FPS = 5;
 
   // Audio time provider for A/V sync
   private getAudioTime: (() => number) | null = null;
@@ -1075,13 +1081,19 @@ export class CanvasRenderer {
     if (elapsed < CanvasRenderer.PERF_WINDOW_MS) return;
 
     const achieved = this.framesPresented - this._perfWindowBaseCount;
+    const achievedFps = achieved / (elapsed / 1000);
     const expected = this.videoFrameRate * (elapsed / 1000);
     // A network stall starves audio too — don't blame the video pipeline for
     // it. Only count a window when audio is flowing.
     const audioHealthy = this._isAudioHealthy ? this._isAudioHealthy() : true;
+    // Near-zero present rate = pipeline STUCK, not slow (see the constant). Don't
+    // treat it as a deficit; capping/skipping can't help and would fire during
+    // decoder recovery. Genuine decode-bound playback stays well above the floor.
+    const producing = achievedFps >= CanvasRenderer.PERF_MIN_ACHIEVED_FPS;
 
     if (
       audioHealthy &&
+      producing &&
       expected > 0 &&
       achieved < expected * CanvasRenderer.PERF_DEFICIT_RATIO
     ) {
