@@ -221,6 +221,12 @@ export class AudioRenderer {
         });
       }
       this.audioContext = sharedAudioContext;
+      // Inheriting an already-running shared context (a prior player kept it
+      // alive) is itself proof audio is unlocked — latch it so the next
+      // pause-suspended switch can wake without a gesture, even if the monitor
+      // below never sees a transition (no statechange fires for an already-
+      // running context).
+      if (this.audioContext.state === "running") sharedContextActivated = true;
       // If the user already unlocked audio this session but a prior player's
       // pause()/end left the shared context suspended, wake it here — early in
       // load, well before autoplay's suspended-context check — so an
@@ -1638,6 +1644,13 @@ export class AudioRenderer {
       } else if (state === "running") {
         // Successfully recovered
         this.recoveryAttempts = 0;
+        // The context reaching "running" — via play(), the tap-to-unmute
+        // resume(), a recovery, anything — means audio is unlocked this session.
+        // Latch it so an auto-advanced / switched video's init() can wake the
+        // (pause-suspended) shared context without a fresh gesture. Previously
+        // only play() set this, so a first unlock via tap-to-unmute left it
+        // false and the NEXT video re-showed "tap to unmute".
+        sharedContextActivated = true;
         Logger.debug(TAG, "AudioContext recovered to running state");
       }
     };
