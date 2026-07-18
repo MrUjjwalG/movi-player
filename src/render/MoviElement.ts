@@ -6808,11 +6808,14 @@ export class MoviElement extends HTMLElement {
 
   /** One stutter sample: compare presented FPS to the smooth-playback baseline. */
   private sampleStutter(): void {
-    // Audio-only (data-saver) decodes no video, so framesPresented never climbs
-    // — the heuristic below would treat that as a stutter and falsely nag "Play
-    // at 1x for smoother playback" when there's no video to smooth and audio at
-    // non-1x is handled cleanly by the pitch stretcher. Skip entirely.
-    if (this.player?.isAudioOnly?.()) {
+    // No video to smooth → the frame-drop heuristic is meaningless and would
+    // falsely nag "Play at 1x for smoother playback" (framesPresented never
+    // climbs, and audio at non-1x is time-stretched cleanly). Covers BOTH a
+    // pure audio file (mp3/m4a — no video track at all) and data-saver
+    // audio-only mode (video track dropped). Skip entirely.
+    const hasVideoTrack =
+      !!this.player?.trackManager?.getActiveVideoTrack?.();
+    if (!hasVideoTrack || this.player?.isAudioOnly?.()) {
       this._stutterSeconds = 0;
       return;
     }
