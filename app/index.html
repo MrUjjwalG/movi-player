@@ -1564,6 +1564,127 @@
         display: inline-flex;
       }
 
+      /* Embed options — native <dialog> modal (developer feature). Renders in
+         the top layer via showModal(), so it's never clipped by the player
+         section's overflow the way an inline popover was. */
+      .embed-dialog {
+        position: fixed;
+        top: 50%;
+        left: 50%;
+        transform: translate(-50%, -50%);
+        margin: 0;
+        width: 400px;
+        max-width: 92vw;
+        max-height: calc(100dvh - 48px);
+        padding: 0;
+        border: 1px solid var(--border-subtle);
+        border-radius: 16px;
+        /* Match the site's panels (playlist etc.): neutral card surface with a
+           faint accent wash at the top, not the raw navy of --bg-elevated. */
+        background:
+          linear-gradient(180deg, rgba(124, 108, 240, 0.05) 0%, transparent 46%),
+          var(--bg-card);
+        color: var(--text-primary);
+        box-shadow: var(--shadow-heavy);
+        overflow: hidden;
+      }
+      .embed-dialog::backdrop {
+        background: rgba(6, 6, 14, 0.6);
+        backdrop-filter: blur(3px);
+      }
+      .embed-dialog[open] {
+        display: flex;
+        flex-direction: column;
+        animation: embed-dialog-in 0.18s cubic-bezier(0.16, 1, 0.3, 1);
+      }
+      /* Keep the centering translate in the keyframes so the entry animation
+         doesn't fight the fixed-position centering above. */
+      @keyframes embed-dialog-in {
+        from { opacity: 0; transform: translate(-50%, -46%) scale(0.97); }
+        to { opacity: 1; transform: translate(-50%, -50%) scale(1); }
+      }
+      .embed-dialog-head {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        padding: 14px 18px;
+        flex-shrink: 0;
+        border-bottom: 1px solid var(--border-subtle);
+      }
+      .embed-dialog-title {
+        font-weight: 600;
+        font-size: 15px;
+        color: var(--text-primary);
+      }
+      .embed-dialog-close {
+        appearance: none;
+        border: none;
+        background: transparent;
+        color: var(--text-secondary);
+        cursor: pointer;
+        display: inline-flex;
+        padding: 5px;
+        border-radius: 8px;
+        transition: background 0.15s ease, color 0.15s ease;
+      }
+      .embed-dialog-close:hover {
+        background: var(--border-subtle);
+        color: var(--text-primary);
+      }
+      .embed-dialog-body {
+        padding: 16px 18px 18px;
+        display: flex;
+        flex-direction: column;
+        gap: 11px;
+        min-height: 0;
+        overflow-y: auto;
+      }
+      .embed-opt {
+        display: flex;
+        align-items: center;
+        gap: 10px;
+        font-size: 14px;
+        color: var(--text-primary);
+        cursor: pointer;
+        user-select: none;
+      }
+      .embed-opt input {
+        accent-color: var(--accent);
+        cursor: pointer;
+        margin: 0;
+        width: 16px;
+        height: 16px;
+      }
+      .embed-code {
+        width: 100%;
+        height: 82px;
+        resize: none;
+        margin-top: 4px;
+        font: 11px/1.45 ui-monospace, "SF Mono", Menlo, monospace;
+        background: var(--bg-card);
+        border: 1px solid var(--border-subtle);
+        border-radius: 8px;
+        padding: 9px;
+        color: var(--text-secondary);
+        white-space: pre-wrap;
+        word-break: break-all;
+      }
+      .embed-copy-btn {
+        appearance: none;
+        border: none;
+        border-radius: 9px;
+        padding: 10px 12px;
+        font-size: 13px;
+        font-weight: 600;
+        color: #fff;
+        background: var(--accent);
+        cursor: pointer;
+        transition: filter 0.15s ease;
+      }
+      .embed-copy-btn:hover {
+        filter: brightness(1.08);
+      }
+
       /* ===== PLAYER SECTION ===== */
       .player-section {
         position: relative;
@@ -3269,13 +3390,31 @@
             </svg>
             Show playlist
           </button>
-          <button class="hero-link-btn btn-embed" id="embed-btn" title="Copy embed code (developer feature)">
+          <button class="hero-link-btn btn-embed" id="embed-btn" title="Copy embed code (developer feature)" aria-haspopup="dialog">
             <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
               <polyline points="16 18 22 12 16 6"></polyline>
               <polyline points="8 6 2 12 8 18"></polyline>
             </svg>
             Embed
           </button>
+          <dialog class="embed-dialog" id="embed-dialog" aria-label="Embed options">
+            <div class="embed-dialog-head">
+              <span class="embed-dialog-title">Embed options</span>
+              <button class="embed-dialog-close" id="embed-dialog-close" type="button" aria-label="Close">
+                <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"></line><line x1="6" y1="6" x2="18" y2="18"></line></svg>
+              </button>
+            </div>
+            <div class="embed-dialog-body">
+              <label class="embed-opt"><input type="checkbox" data-attr="autoplay" checked> Autoplay</label>
+              <label class="embed-opt"><input type="checkbox" data-attr="muted"> Muted</label>
+              <label class="embed-opt"><input type="checkbox" data-attr="loop"> Loop</label>
+              <label class="embed-opt"><input type="checkbox" data-attr="thumb" checked> Seek thumbnails</label>
+              <label class="embed-opt"><input type="checkbox" data-attr="resume"> Resume playback</label>
+              <label class="embed-opt"><input type="checkbox" data-attr="ambientmode"> Ambient glow</label>
+              <textarea class="embed-code" id="embed-code" readonly rows="4" spellcheck="false" aria-label="Embed code"></textarea>
+              <button class="embed-copy-btn" id="embed-copy-btn" type="button">Copy embed code</button>
+            </div>
+          </dialog>
           <a class="hero-link-btn" href="/compare" title="Compare your file against the native <video> tag">
             <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
               <rect x="3" y="4" width="8" height="16" rx="1"></rect>
@@ -5215,16 +5354,69 @@
         }
       });
 
-      // --- Embed copy ---
-      embedBtn.addEventListener("click", () => {
-        if (!currentVideoUrl) return;
-        const embedCode = `<iframe src="https://moviplayer.com/embed?url=${encodeURIComponent(currentVideoUrl)}&autoplay" width="800" height="450" frameborder="0" allowfullscreen allow="autoplay"></iframe>`;
-        navigator.clipboard.writeText(embedCode).then(() => {
-          const orig = embedBtn.innerHTML;
-          embedBtn.innerHTML = `<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"></polyline></svg> Copied!`;
-          setTimeout(() => { embedBtn.innerHTML = orig; }, 2000);
+      // --- Embed options dialog + copy ---
+      // The Embed button opens a modal <dialog> of essential toggles (autoplay,
+      // resume, thumbnails, …). Each checked box becomes a query param on the
+      // /embed URL, which the worker maps to the matching <movi-player>
+      // attribute. The code textarea updates live; Copy puts it on the clipboard.
+      const embedDialog = document.getElementById("embed-dialog");
+      const embedDialogClose = document.getElementById("embed-dialog-close");
+      const embedCodeEl = document.getElementById("embed-code");
+      const embedCopyBtn = document.getElementById("embed-copy-btn");
+      const embedOptInputs = embedDialog
+        ? embedDialog.querySelectorAll("input[data-attr]")
+        : [];
+
+      const buildEmbedCode = () => {
+        const params = ["url=" + encodeURIComponent(currentVideoUrl || "")];
+        let wantAutoplay = false;
+        embedOptInputs.forEach((cb) => {
+          if (!cb.checked) return;
+          params.push(cb.dataset.attr);
+          if (cb.dataset.attr === "autoplay") wantAutoplay = true;
         });
+        // Autoplay in a cross-origin iframe needs the allow directive too.
+        const allow = "fullscreen" + (wantAutoplay ? "; autoplay" : "");
+        return `<iframe src="https://moviplayer.com/embed?${params.join("&")}" width="800" height="450" frameborder="0" allowfullscreen allow="${allow}"></iframe>`;
+      };
+
+      const refreshEmbedCode = () => {
+        if (embedCodeEl) embedCodeEl.value = buildEmbedCode();
+      };
+
+      embedBtn.addEventListener("click", () => {
+        if (!currentVideoUrl || !embedDialog) return;
+        refreshEmbedCode();
+        embedDialog.showModal();
       });
+
+      embedOptInputs.forEach((cb) =>
+        cb.addEventListener("change", refreshEmbedCode),
+      );
+
+      if (embedDialogClose) {
+        embedDialogClose.addEventListener("click", () => embedDialog.close());
+      }
+
+      // Click on the backdrop (the dialog element itself, outside its padded
+      // content) closes it. showModal() already wires the Escape key.
+      if (embedDialog) {
+        embedDialog.addEventListener("click", (e) => {
+          if (e.target === embedDialog) embedDialog.close();
+        });
+      }
+
+      if (embedCopyBtn) {
+        embedCopyBtn.addEventListener("click", () => {
+          navigator.clipboard.writeText(embedCodeEl.value).then(() => {
+            const orig = embedCopyBtn.textContent;
+            embedCopyBtn.textContent = "Copied!";
+            setTimeout(() => {
+              embedCopyBtn.textContent = orig;
+            }, 1500);
+          });
+        });
+      }
 
       // --- Sync document title with player title ---
       player.addEventListener("titlechange", (e) => {
