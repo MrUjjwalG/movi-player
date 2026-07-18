@@ -5624,18 +5624,19 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
     if (muted) {
       this.audioRenderer.mute();
     } else {
-      // Tap-to-unmute is a user gesture — the right moment to (re)acquire the
-      // screen wake lock. Muted autoplay had no gesture, so the wake-lock
-      // request there was denied (NotAllowedError) and the screen can sleep
-      // mid-playback until the user interacts. Do it first, synchronously, so
-      // the request rides the gesture's activation. No-ops if already held or
-      // not actively playing.
-      this.ensureWakeLock();
-      // unmute() is async (initializes AudioContext on first unmute)
-      // but we don't await it to keep setMuted() synchronous
+      // unmute() is async (initializes AudioContext on first unmute) but we
+      // don't await it to keep setMuted() synchronous. Call it FIRST so its
+      // AudioContext.resume() claims the tap's user activation before anything
+      // else can: on Safari the wake-lock request below consumes the transient
+      // activation, and if it ran first the resume would be denied — leaving the
+      // shared context suspended and re-showing "tap to unmute" on the next video.
       this.audioRenderer.unmute().catch((err) => {
         Logger.error("MoviPlayer", "Failed to unmute", err);
       });
+      // Tap-to-unmute is also a good moment to (re)acquire the screen wake lock,
+      // which muted autoplay couldn't get without a gesture. Best-effort, after
+      // unmute — losing the activation to it here is harmless; losing audio isn't.
+      this.ensureWakeLock();
     }
     if (this.nativeAudioEl) {
       this.nativeAudioEl.muted = muted;
