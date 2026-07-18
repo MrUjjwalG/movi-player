@@ -93,6 +93,10 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
   // a genuinely dead audio element (e.g. unsupported codec) can never freeze
   // video prefetch permanently.
   private _prefetchThrottleTimer: ReturnType<typeof setTimeout> | null = null;
+  // True while audio-only holds the video source's prefetch paused. Kept
+  // separate from the native-audio bandwidth throttle so that throttle's
+  // auto-release can't resume the whole-file video download mid-audio-only.
+  private _audioOnlyPrefetchPaused: boolean = false;
   // True while playback is held in a loading state waiting for a native <audio>
   // track to buffer enough to start in sync (see gateOnNativeAudioReady).
   private _nativeAudioGateActive: boolean = false;
@@ -4645,6 +4649,10 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
    * audio element (unsupported codec, dead URL) can't freeze video prefetch.
    */
   private setSourcePrefetchThrottle(throttled: boolean): void {
+    // Audio-only holds the video source paused persistently; don't let the
+    // native-audio bandwidth balancer (or its watchdog) resume the video
+    // download underneath it.
+    if (!throttled && this._audioOnlyPrefetchPaused) return;
     const src = this.source as unknown as {
       setPrefetchThrottle?: (v: boolean) => void;
     } | null;
@@ -4663,6 +4671,21 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
         src.setPrefetchThrottle!(false);
       }, 6000);
     }
+  }
+
+  /**
+   * Pause/resume the video source's background prefetch for audio-only mode —
+   * persistently (no auto-release watchdog), unlike setSourcePrefetchThrottle.
+   * The flag also blocks the native-audio balancer from resuming the download
+   * while audio-only holds it paused. Only used for split sources, where
+   * this.source is video-only and the audio streams independently.
+   */
+  private setVideoSourcePrefetchPaused(paused: boolean): void {
+    this._audioOnlyPrefetchPaused = paused;
+    const src = this.source as unknown as {
+      setPrefetchThrottle?: (v: boolean) => void;
+    } | null;
+    src?.setPrefetchThrottle?.(paused);
   }
 
   /**
@@ -5881,12 +5904,23 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
           this.animationFrameId = null;
         }
         this.stopPauseBuffering();
+        // Stopping the demux loop halts video DECODE, but it does NOT stop the
+        // download: HttpSource runs its own background stream (a full-file
+        // prefetch that pulls the entire video body regardless of demux reads).
+        // Pause that stream so audio-only actually stops downloading video —
+        // otherwise a 200MB video keeps flowing while the user only wants
+        // audio. The video source is separate from the audio source here, so
+        // this never touches audio. Resumed when video is re-enabled below.
+        this.setVideoSourcePrefetchPaused(true);
       }
       // Muxed source: keep the demux loop running (it still decodes the in-file
       // audio); the processLoop's _audioOnly check skips only the video decode.
     } else {
-      // Re-enabling video. Seek to the current playhead to recover a keyframe
-      // and resync; for a split source the demux loop was stopped, so restart it.
+      // Re-enabling video. Resume the video source prefetch that audio-only
+      // paused (idempotent no-op if it wasn't paused), then seek to the current
+      // playhead to recover a keyframe and resync; for a split source the demux
+      // loop was stopped, so restart it.
+      this.setVideoSourcePrefetchPaused(false);
       const t = this.getCurrentTime();
       this.seek(t)
         .then(() => {
