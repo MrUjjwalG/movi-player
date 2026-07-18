@@ -2336,14 +2336,18 @@
       /* Audio-strip mode: when the inner <movi-player> picks up its
          .movi-audio-strip class (no video, no embedded cover art), the
          stage's 16:9 reservation becomes a tall black slab with a thin
-         strip on top. Collapse aspect-ratio, drop the black surface,
-         centre the strip vertically, and let pop-up menus escape the
-         overflow gate. Matches the chrome / VS Code extension layout. */
+         strip on top. Collapse aspect-ratio, drop the black surface, and
+         let pop-up menus escape the overflow gate. Matches the chrome /
+         VS Code extension layout.
+         Reserve real height (min-height) and anchor the strip to the
+         BOTTOM: the resume dialog floats ~90px above the strip, so on a
+         razor-thin auto-height stage it spilled past the top and got
+         clipped. The reserved space above the bottom strip now holds it. */
       .player-stage:has(movi-player.movi-audio-strip) {
         aspect-ratio: auto;
         height: auto;
-        min-height: 0;
-        align-items: center;
+        min-height: 160px;
+        align-items: flex-end;
         background: transparent;
         overflow: visible;
         padding: 16px 0;
@@ -2353,6 +2357,12 @@
         max-width: 880px;
         height: auto;
         flex: 0 0 auto;
+      }
+      /* The wrapper clips rounded video corners with overflow:hidden — but in
+         audio-strip mode there are no video corners, and that clip cut off the
+         resume dialog floating above the strip. Let it escape here. */
+      .player-wrapper:has(movi-player.movi-audio-strip) {
+        overflow: visible;
       }
 
       movi-player {
