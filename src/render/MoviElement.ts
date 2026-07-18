@@ -6808,6 +6808,14 @@ export class MoviElement extends HTMLElement {
 
   /** One stutter sample: compare presented FPS to the smooth-playback baseline. */
   private sampleStutter(): void {
+    // Audio-only (data-saver) decodes no video, so framesPresented never climbs
+    // — the heuristic below would treat that as a stutter and falsely nag "Play
+    // at 1x for smoother playback" when there's no video to smooth and audio at
+    // non-1x is handled cleanly by the pitch stretcher. Skip entirely.
+    if (this.player?.isAudioOnly?.()) {
+      this._stutterSeconds = 0;
+      return;
+    }
     // Only judge during genuine playback — buffering/seeking legitimately
     // present few/no frames and would false-positive.
     if (this.player?.getState?.() !== "playing") {
