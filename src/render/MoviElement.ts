@@ -17901,6 +17901,22 @@ export class MoviElement extends HTMLElement {
           progressBuffer.style.width = "0%";
         }
       }
+    } else if (!this._qualitySwitchInProgress) {
+      // No media loaded yet (duration 0 — initial load or a source change to a
+      // new track). Without this the filled/handle/buffer keep the PREVIOUS
+      // track's fill until the new media's duration arrives, even though the
+      // time readout has already reset to 0:00 — the bar and clock disagree.
+      // Zero them so the bar matches the clock during the load.
+      //
+      // A quality switch is deliberately excluded: it preserves the playhead,
+      // so the bar must NOT jump back to 0. Normally the getter already returns
+      // the cached _switchResumeDuration (> 0) during a switch so we take the
+      // branch above — but if getDuration() threw when seeding that cache it
+      // can read 0, and this guard keeps the bar pinned instead of snapping it
+      // back mid-switch.
+      if (progressFilled) progressFilled.style.width = "0%";
+      if (progressHandle) progressHandle.style.left = "0%";
+      if (progressBuffer) progressBuffer.style.width = "0%";
     }
   }
 
