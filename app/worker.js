@@ -381,7 +381,7 @@ export default {
 
     // --- Embed player ---
     if (path === "/embed") {
-      return handleEmbed(url);
+      return handleEmbed(url, request);
     }
 
     // --- Video proxy ---
@@ -490,9 +490,74 @@ async function handleDocs(url) {
   });
 }
 
-function handleEmbed(url) {
+// Attributes an /embed URL may set on <movi-player>, as ?attr (boolean) or
+// ?attr=value. Presentational only — URL / DRM / header attributes (src,
+// crossorigin, encrypted, tokenurl, videourl, videoid, drm, licenseurl,
+// licenseheaders, headers, lcevc*, audiooutput) are deliberately excluded so an
+// embed link can't repoint the player at arbitrary token/license endpoints or
+// inject request headers. Attribute NAMES are whitelisted here; values are
+// HTML-escaped at serialization.
+const EMBED_ATTR_WHITELIST = new Set([
+  "autoplay", "controls", "loop", "muted", "playsinline", "preload",
+  "poster", "postertime", "volume", "playbackrate", "startat",
+  "subtitledelay", "subtitlesize", "subtitlecolor", "subtitlebg", "subtitleedge",
+  "ambientmode", "ambientwrapper", "objectfit", "thumb", "hdr", "theme",
+  "fps", "gesturefs", "nohotkeys", "fastseek", "doubletap", "themecolor",
+  "buffersize", "title", "showtitle", "resume", "stablevolume", "audioonly",
+  "vr", "vrpad", "renderer", "width", "height", "sw",
+]);
+
+function escapeEmbedAttr(v) {
+  return String(v)
+    .replace(/&/g, "&amp;")
+    .replace(/"/g, "&quot;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;");
+}
+
+// Build the <movi-player> attribute string for an embed: sensible presentational
+// defaults, then any whitelisted query params layered on top (a value overrides
+// the default; `attr=0`/`attr=false` drops a default such as controls).
+function buildEmbedPlayerAttrs(searchParams) {
+  const attrs = new Map([
+    ["renderer", "canvas"],
+    ["controls", true],
+    ["objectfit", "control"],
+    ["gesturefs", true],
+    ["fastseek", true],
+    ["stablevolume", true],
+  ]);
+  for (const [rawName, value] of searchParams) {
+    const name = rawName.toLowerCase();
+    if (name === "url") continue;
+    if (!EMBED_ATTR_WHITELIST.has(name)) continue;
+    if (value === "0" || value === "false") {
+      attrs.delete(name); // explicit off — lets an embed drop a default
+    } else if (value === "" || value === "1" || value === "true") {
+      attrs.set(name, true); // boolean attribute
+    } else {
+      attrs.set(name, value); // value attribute
+    }
+  }
+  return [...attrs]
+    .map(([k, v]) => (v === true ? k : `${k}="${escapeEmbedAttr(v)}"`))
+    .join(" ");
+}
+
+function handleEmbed(url, request) {
+  // Embed-only: this page is meant to live inside an <iframe>, never opened
+  // directly. Sec-Fetch-Dest tells us the request's destination — 'iframe' or
+  // 'frame' when embedded, 'document' on a top-level navigation (typing the
+  // URL, opening in a new tab). Block the top-level case. All current browsers
+  // send this header; when it's absent (older clients) we fall through and the
+  // client-side guard in the page below handles it.
+  const dest = request && request.headers.get("Sec-Fetch-Dest");
+  if (dest === "document") {
+    return embedTopLevelBlock();
+  }
+
   const videoUrl = url.searchParams.get("url") || "";
-  const autoplay = url.searchParams.has("autoplay");
+  const playerAttrs = buildEmbedPlayerAttrs(url.searchParams);
 
   const embedHTML = `<!doctype html>
 <html lang="en">
@@ -538,14 +603,35 @@ movi-player{width:100%;height:100%;display:block}
 </script>
 </head>
 <body>
-<movi-player id="p" renderer="canvas" controls objectfit="control" gesturefs fastseek stablevolume${autoplay ? " autoplay" : ""}></movi-player>
+<movi-player id="p" ${playerAttrs}></movi-player>
 <script type="module">
 import "/dist/${BUILD_VERSION}/element.js";
-const p=document.getElementById("p");
-const url="${videoUrl.replace(/"/g, "&quot;")}";
-// Adaptive-streaming manifests (HLS/DASH/Smooth) load directly — the player
-// fetches their (relative-URL) segments itself, which /proxy?url= would break.
-if(url) p.src=/\\.(m3u8|mpd|ism)($|\\?)/i.test(url)?url:"/proxy?url="+encodeURIComponent(url);
+// Fallback for the rare browser that doesn't send Sec-Fetch-Dest (the worker
+// already blocks the top-level case for everyone else): if we're the top-level
+// document rather than framed, this embed URL was opened directly — show the
+// notice instead of the player. window.top vs window.self compares safely even
+// across origins (reference compare, no property access).
+if (window.top === window.self) {
+  // Build via DOM (not innerHTML) so there's zero markup-injection surface,
+  // even though the strings here are all static. Text nodes escape the literal
+  // "<iframe>" for us.
+  document.body.textContent = "";
+  const box = document.createElement("div");
+  box.setAttribute("style", "font:14px/1.5 system-ui,sans-serif;color:#cfcfe6;display:flex;align-items:center;justify-content:center;height:100%;text-align:center;padding:24px");
+  box.append("This is an embed-only page — open it inside an <iframe>. ");
+  const a = document.createElement("a");
+  a.href = "https://moviplayer.com";
+  a.textContent = "moviplayer.com";
+  a.setAttribute("style", "color:#8b7bff;margin-left:6px");
+  box.appendChild(a);
+  document.body.appendChild(box);
+} else {
+  const p=document.getElementById("p");
+  const url="${videoUrl.replace(/"/g, "&quot;")}";
+  // Adaptive-streaming manifests (HLS/DASH/Smooth) load directly — the player
+  // fetches their (relative-URL) segments itself, which /proxy?url= would break.
+  if(url) p.src=/\\.(m3u8|mpd|ism)($|\\?)/i.test(url)?url:"/proxy?url="+encodeURIComponent(url);
+}
 </script>
 </body>
 </html>`;
@@ -554,6 +640,55 @@ if(url) p.src=/\\.(m3u8|mpd|ism)($|\\?)/i.test(url)?url:"/proxy?url="+encodeURIC
     headers: {
       "Content-Type": "text/html;charset=UTF-8",
       "Cache-Control": "public, max-age=3600",
+      // The response depends on Sec-Fetch-Dest (embed vs top-level block), so
+      // caches must key on it — otherwise a cached iframe copy could be served
+      // to a direct top-level open, or vice versa.
+      "Vary": "Sec-Fetch-Dest",
+      ...SECURITY_HEADERS,
+    },
+  });
+}
+
+// 403 shown when /embed is opened as a top-level document instead of inside an
+// <iframe>. Never cached (no-store) and non-indexable so the block page can't
+// be served in place of a legitimately-framed embed.
+function embedTopLevelBlock() {
+  const html = `<!doctype html>
+<html lang="en">
+<head>
+<meta charset="UTF-8"/>
+<meta name="viewport" content="width=device-width,initial-scale=1.0"/>
+<title>Embed only — MoviPlayer</title>
+<style>
+*{margin:0;padding:0;box-sizing:border-box}
+html,body{height:100%}
+body{font:15px/1.6 system-ui,-apple-system,sans-serif;background:#0e0e1a;color:#cfcfe6;display:flex;align-items:center;justify-content:center;text-align:center;padding:24px}
+h1{font-size:18px;margin-bottom:8px;color:#fff}
+a{color:#8b7bff;text-decoration:none}
+a:hover{text-decoration:underline}
+.brand{display:flex;align-items:center;justify-content:center;gap:10px;margin-bottom:20px}
+.brand svg{display:block;filter:drop-shadow(0 4px 14px rgba(108,93,211,0.45))}
+.brand-name{font-size:19px;font-weight:700;letter-spacing:-0.02em;color:#fff}
+</style>
+</head>
+<body>
+<div>
+<div class="brand">
+<svg width="40" height="40" viewBox="0 0 100 100" aria-hidden="true"><defs><linearGradient id="g" x1="0%" y1="0%" x2="100%" y2="100%"><stop offset="0%" stop-color="#8a7cf2"/><stop offset="100%" stop-color="#6c5dd3"/></linearGradient></defs><circle cx="50" cy="50" r="46" fill="url(#g)"/><polygon points="40,29 40,71 73,50" fill="#ffffff"/></svg>
+<span class="brand-name">MoviPlayer</span>
+</div>
+<h1>This is an embed-only page</h1>
+<p>Open it inside an &lt;iframe&gt;, or visit <a href="https://moviplayer.com">moviplayer.com</a>.</p>
+</div>
+</body>
+</html>`;
+  return new Response(html, {
+    status: 403,
+    headers: {
+      "Content-Type": "text/html;charset=UTF-8",
+      "Cache-Control": "no-store",
+      "Vary": "Sec-Fetch-Dest",
+      "X-Robots-Tag": "noindex",
       ...SECURITY_HEADERS,
     },
   });
