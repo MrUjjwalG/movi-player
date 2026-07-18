@@ -344,10 +344,11 @@
     });
 
     // ---------- Google auth (GIS token client) ----------
-    // The token is cached in sessionStorage so a reload doesn't force a fresh
-    // sign-in, and on load we try a SILENT grant (prompt:"none", a hidden
-    // iframe — no popup, no click) so returning users with an active Google
-    // session skip the button entirely.
+    // The token is cached in sessionStorage so a reload within the session
+    // doesn't force a fresh sign-in. We do NOT attempt a grant on load — GIS
+    // can't do a silent (hidden-iframe) grant when third-party cookies are
+    // restricted and falls back to a popup, so auth happens only on an explicit
+    // click (or when arriving via Drive "Open with").
     const TOKEN_KEY = "movi-drive-token";
     let silentAuth = false;
 
@@ -497,10 +498,12 @@
       // Valid cached token from this session → straight into the app.
       setState("app");
     } else {
-      // Try a silent grant first so returning users skip the click; fall back
-      // to the sign-in screen if there's no active grant.
+      // Show the sign-in screen and wait for an explicit click. We used to fire
+      // a silent grant (prompt:"none") on load so returning users skipped the
+      // button — but with third-party cookies restricted (Chrome/Safari default)
+      // GIS can't do the hidden-iframe grant and falls back to a popup that
+      // opens the instant the page loads. Sign-in now happens only on click.
       setState("signed-out");
-      whenGisReady(() => ensureAuth(true));
     }
 
     // ---------- Theme (auto → light → dark) ----------
