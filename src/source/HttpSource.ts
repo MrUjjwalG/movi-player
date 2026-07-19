@@ -642,12 +642,20 @@ export class HttpSource implements SourceAdapter {
    *              this; pass-through callers can ignore it.
    */
   protected async buildRequestHeaders(
-    range?: { offset: number; length: number },
+    range?: { offset: number; length: number; openEnded?: boolean },
   ): Promise<Record<string, string>> {
     if (range) {
       return {
         ...this.headers,
-        Range: `bytes=${range.offset}-${range.offset + range.length - 1}`,
+        // openEnded requests `bytes=<offset>-` (to EOF) instead of a bounded
+        // `bytes=<offset>-<end>`. Some token/proxy servers reject a bounded
+        // range that starts at offset 0 (e.g. bytes=0-1048575) with 403 while
+        // accepting the same range open-ended — the stream read loop caps the
+        // actual download at the window regardless, so this stays bounded in
+        // practice. See readStreamBackground's 403 retry.
+        Range: range.openEnded
+          ? `bytes=${range.offset}-`
+          : `bytes=${range.offset}-${range.offset + range.length - 1}`,
       };
     }
     return { ...this.headers };
@@ -880,6 +888,9 @@ export class HttpSource implements SourceAdapter {
     let rangeRetryCount = 0;
     let consecutiveOnlineFetchFailures = 0;
     let streamBaseOffset = startOffset;
+    // Set once a bounded range fetch is rejected with 403 by a server that only
+    // accepts open-ended ranges; from then on this stream requests `bytes=N-`.
+    let useOpenEndedRange = false;
 
     while (this.atomicIsStreaming()) {
       try {
@@ -918,10 +929,29 @@ export class HttpSource implements SourceAdapter {
           headers: await this.buildRequestHeaders({
             offset: resumeOffset,
             length: rangeEnd - resumeOffset + 1,
+            openEnded: useOpenEndedRange,
           }),
           cache: 'no-store', // Prevent cached 200 responses
           signal: this.abortController!.signal,
         });
+
+        // Some token/proxy file servers reject a BOUNDED range that starts at
+        // offset 0 (e.g. `bytes=0-1048575`) with 403, yet serve the very same
+        // range OPEN-ENDED (`bytes=0-`) — and any non-zero-offset bounded range
+        // — as 206. (Seen with Telegram/CDN proxy workers whose first-chunk
+        // logic caps a 0-based bounded range.) Retry this stream open-ended; the
+        // read loop still stops at the window (maxDownload) and cancels, so we
+        // never pull the whole file. Only flips once, so if the open-ended fetch
+        // also 403s it falls through to the fatal-4xx path below.
+        if (response.status === 403 && !useOpenEndedRange) {
+          useOpenEndedRange = true;
+          try { response.body?.cancel(); } catch {}
+          Logger.warn(
+            TAG,
+            `403 for bounded range ${resumeOffset}-${rangeEnd}; retrying open-ended (bytes=${resumeOffset}-)`,
+          );
+          continue;
+        }
 
         // Check for 206 Partial Content response
         // If server returns 200, it may be a CDN cache warming issue (e.g. Cloudflare first hit)
