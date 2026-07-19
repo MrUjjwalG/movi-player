@@ -305,6 +305,11 @@ export class MoviElement extends HTMLElement {
   // Reset on dispose so the next source gets a fresh hardware attempt
   // instead of inheriting a fallback that was only needed for the prior file.
   private _swForcedForCurrentSource: boolean = false;
+  // Sticky for the element's lifetime (a new video remounts the element, so it
+  // resets per video): once the user has fallen back to software decoding once,
+  // later qualities that also fail on hardware auto-apply software silently
+  // instead of re-showing the "Try software decoding" prompt every switch.
+  private _userAcceptedSoftwareFallback: boolean = false;
   // Guards the sw-attr-change callback from auto-reloading during dispose().
   private _suppressSwReload: boolean = false;
 
@@ -6597,6 +6602,11 @@ export class MoviElement extends HTMLElement {
   // identical across quality variants, but the new player's mediaInfo
   // isn't populated until the demuxer opens.
   private _switchResumeDuration: number = 0;
+  // The current switch's 8s poster-safety timeout. Stored so a rapid next
+  // switch (or the switch completing) can cancel it — otherwise a stale timer
+  // from an earlier switch fires mid-way through a later one, tearing down its
+  // switch cover early and flashing 00:00 + the poster.
+  private _switchPosterTimeout: ReturnType<typeof setTimeout> | null = null;
 
   /**
    * Swap the active video source and resume playback at the same position.
@@ -6665,8 +6675,11 @@ export class MoviElement extends HTMLElement {
 
     // Safety net: if the new player never reaches "playing" (e.g. autoplay
     // blocked AND user never resumes), make sure we don't leave the poster
-    // permanently suppressed.
-    setTimeout(() => {
+    // permanently suppressed. Cancel any prior switch's timer first so a stale
+    // one can't fire mid-way through this switch and clear its cover early.
+    if (this._switchPosterTimeout) clearTimeout(this._switchPosterTimeout);
+    this._switchPosterTimeout = setTimeout(() => {
+      this._switchPosterTimeout = null;
       if (this._qualitySwitchInProgress) {
         this._qualitySwitchInProgress = false;
         this._switchResumeTime = 0;
@@ -6680,6 +6693,18 @@ export class MoviElement extends HTMLElement {
     // Setting the attribute funnels through the existing observedAttributes
     // path which destroys the player and reinitialises with the new src.
     this._suppressSwReload = true;
+    // A quality switch is a fresh shot at hardware decoding. If the current
+    // source was forced into software (an unsupported codec/profile), drop that
+    // preference so the new quality — possibly a different codec/profile the GPU
+    // CAN decode (e.g. a lower AV1 profile, or H.264) — is tried on hardware
+    // first instead of staying stuck in software. _suppressSwReload above keeps
+    // removeAttribute from kicking off its own reload; the setAttribute("src")
+    // below is the single reinit that re-evaluates hardware support.
+    if (this._swForcedForCurrentSource) {
+      this._swForcedForCurrentSource = false;
+      this._sw = "auto";
+      if (this.hasAttribute("sw")) this.removeAttribute("sw");
+    }
     this.setAttribute("src", newSrc);
 
     let restored = false;
@@ -16359,7 +16384,8 @@ export class MoviElement extends HTMLElement {
         this.player instanceof MoviPlayer &&
         this.player.isSoftwareDecoding() &&
         this._sw !== "software" &&
-        this.getAttribute("sw") !== "auto" // Silent fallback for explicit "auto"
+        this.getAttribute("sw") !== "auto" && // Silent fallback for explicit "auto"
+        !this._userAcceptedSoftwareFallback // ...or once accepted for this video: keep the auto software fallback silent
       ) {
         Logger.warn(
           TAG,
@@ -16646,16 +16672,33 @@ export class MoviElement extends HTMLElement {
       }
       // Hide poster on state change to playing
       if (state === "playing" && this.posterElement) {
-        // Drop the frozen-frame snapshot overlay used during quality switch
-        // so the live canvas underneath is visible again.
+        // Drop the frozen-frame snapshot overlay used during a quality switch
+        // so the live canvas underneath is visible again — but ONLY once the
+        // resume seek has actually moved the playhead to the resume position.
+        // A premature "playing" (autoplay's first-play lands at 0 before the
+        // resume seek applies) would otherwise clear the switch cover and flash
+        // 00:00 + the poster for a frame before the playhead jumps back. The 8s
+        // safety timeout in switchPremuxedQuality is the backstop if the resume
+        // never lands.
         if (this._qualitySwitchInProgress) {
-          this._hideSnapshotPoster();
-          this._qualitySwitchInProgress = false;
-          this._switchResumeTime = 0;
-          this._switchResumeDuration = 0;
-          this._startAt = this._startAtBeforeSwitch;
+          const at = this.player?.getCurrentTime?.() ?? 0;
+          const resumed =
+            this._switchResumeTime <= 0 || at >= this._switchResumeTime - 1;
+          if (resumed) {
+            if (this._switchPosterTimeout) {
+              clearTimeout(this._switchPosterTimeout);
+              this._switchPosterTimeout = null;
+            }
+            this._hideSnapshotPoster();
+            this._qualitySwitchInProgress = false;
+            this._switchResumeTime = 0;
+            this._switchResumeDuration = 0;
+            this._startAt = this._startAtBeforeSwitch;
+            this.posterElement.style.display = "none";
+          }
+        } else {
+          this.posterElement.style.display = "none";
         }
-        this.posterElement.style.display = "none";
       }
 
       this.dispatchEvent(new CustomEvent("statechange", { detail: state }));
@@ -18076,15 +18119,20 @@ export class MoviElement extends HTMLElement {
       msgLower.includes("decoder") ||
       msgLower.includes("codec"));
 
-    // Silent fallback if sw="auto" is set
+    // Silent software fallback — no broken-icon prompt — when either the caller
+    // opted into auto fallback (sw="auto"), or the user already accepted
+    // software once for this video, so a later quality that also can't
+    // hardware-decode applies it automatically. Skipped if already in software.
     if (
       isDecoderError &&
-      this.getAttribute("sw") === "auto" &&
-      this._sw !== "software"
+      this._sw !== "software" &&
+      (this.getAttribute("sw") === "auto" || this._userAcceptedSoftwareFallback)
     ) {
       Logger.info(
         TAG,
-        'Decoder error detected with sw="auto", triggering silent software fallback',
+        this._userAcceptedSoftwareFallback
+          ? "Decoder error — auto-applying software (accepted earlier this video)"
+          : 'Decoder error detected with sw="auto", triggering silent software fallback',
       );
       this.enableSoftwareDecoding();
       return;
@@ -18222,12 +18270,44 @@ export class MoviElement extends HTMLElement {
       this.brokenIndicator.style.display = "none";
     }
 
+    // Fast path — no reinit: if the player already fell back to software
+    // internally (isSoftwareDecoding) and isn't errored, it is ALREADY decoding
+    // on the exact same WASM software decoder that forceSoftware would use — the
+    // reinit is redundant. Worse, tearing the player down here (often mid-op,
+    // e.g. the resume seek after a quality switch) lets the old WASM demuxer
+    // read race the fresh instance and corrupt the open (duration=0, invalid-
+    // data frame reads → black video, dead progress bar). Just latch the sticky
+    // flag and resume the player, which the broken-icon prompt had paused.
+    if (
+      this.player &&
+      (this.player as any).isSoftwareDecoding?.() &&
+      (this.player as any).getState?.() !== "error"
+    ) {
+      this._userAcceptedSoftwareFallback = true;
+      Logger.info(TAG, "Already software-decoding — accepting without reinit");
+      try {
+        (this.player as any).play?.();
+      } catch {}
+      return;
+    }
+
     // Set sw attribute to enable software decoding for THIS source. The
     // flag is cleared on dispose so the next source isn't forced into
     // software just because the previous one had to fall back.
     this._sw = "software";
     this._swForcedForCurrentSource = true;
+    // Remember (for this video) that software was accepted, so a later quality
+    // that also can't hardware-decode auto-applies it instead of re-prompting.
+    this._userAcceptedSoftwareFallback = true;
+    // Reflect the flag to the attribute, but suppress the attributeChangedCallback's
+    // own load(). We reinitialise explicitly (initializePlayer) below; without this
+    // BOTH fire — the sw-attribute load() spins up one player and the explicit
+    // init spins up another. The two race, their overlapping async media-opens
+    // deadlock ("No pending read to fulfill"), the surviving instance never
+    // configures its decoder, and playback is stuck loading forever.
+    this._suppressSwReload = true;
     this.setAttribute("sw", "");
+    this._suppressSwReload = false;
 
     // Get current source
     const currentSrc = this._src;
