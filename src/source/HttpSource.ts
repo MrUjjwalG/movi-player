@@ -513,6 +513,16 @@ export class HttpSource implements SourceAdapter {
         if (/Access denied|Authentication required|Video not found/.test(msg)) {
           throw err;
         }
+        // The HEAD itself failed — a thrown fetch, not a status. Some origins
+        // reject HEAD entirely (or the OPTIONS preflight it triggers) while
+        // serving GET Range perfectly, so a HEAD network/CORS error must NOT be
+        // treated as "the file is unreachable". Recover the size from a ranged
+        // GET (then a plain GET) before retrying/failing — mirrors the 403/401
+        // fallback above. (issue #14)
+        const sizeViaRange = await this.resolveSizeViaRange();
+        if (sizeViaRange !== null) return sizeViaRange;
+        const sizeViaGet = await this.resolveSizeViaPlainGet();
+        if (sizeViaGet !== null) return sizeViaGet;
         lastError = err instanceof Error ? err : new Error(String(err));
       }
 
