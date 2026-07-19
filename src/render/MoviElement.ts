@@ -6631,7 +6631,17 @@ export class MoviElement extends HTMLElement {
     // new player's own load-seek(0). That race got worse once the split-audio
     // WASM demuxer lengthened load, intermittently starting switches from 0.
     this._startAtBeforeSwitch = this._startAt;
-    if (resumeTime > 0) this._startAt = resumeTime;
+    if (resumeTime > 0) {
+      this._startAt = resumeTime;
+      // Also arm the deferred-seek path. The _startAt load-seek and restore()
+      // below both call player.seek() directly; if either fires while the new
+      // instance is still "loading" the seek is rejected (canSeek=false) and
+      // playback restarts from 0 (the intermittent switch-from-0 race noted
+      // above). _pendingSeek is the designed hold-until-seekable channel — the
+      // stateChange handler applies it the moment the new player reaches
+      // ready/paused/playing, so the resume lands deterministically.
+      this._pendingSeek = resumeTime;
+    }
     try {
       this._switchResumeDuration = this.player ? (this.player as any).getDuration?.() || 0 : 0;
     } catch {
