@@ -11,6 +11,7 @@
  */
 
 import { MoviPlayer } from "../core/MoviPlayer";
+import { NativeVideoWrapper } from "./NativeVideoWrapper";
 import type {
   SourceConfig,
   RendererType,
@@ -300,6 +301,17 @@ export class MoviElement extends HTMLElement {
   private _hdr: boolean = true; // HDR enabled by default
   private _theme: "dark" | "light" = "dark"; // Default theme
   private _sw: DecoderType = "auto"; // Preferred decoder mode (auto or software)
+  // fallback="native" state. `_nativeFallbackActive` latches while the browser's
+  // own <video> owns the surface (so pointer activity doesn't re-show Movi's
+  // chrome over it). `_nativeFallbackAttempted` records that native was already
+  // tried for THIS source, so a native failure falls through to software/error
+  // rather than retrying native forever. Both cleared on dispose (new source).
+  private _nativeFallbackActive = false;
+  private _nativeFallbackAttempted = false;
+  // Guards startUIUpdates() against starting a second concurrent rAF loop (the
+  // native-fallback path starts one; a later software re-init would start
+  // another). The loop clears this when the player goes away.
+  private _uiUpdatesRunning = false;
   // True when `sw` was flipped to software as a per-source fallback (user
   // clicked "Try software" on the broken indicator for this specific video).
   // Reset on dispose so the next source gets a fresh hardware attempt
@@ -497,6 +509,7 @@ export class MoviElement extends HTMLElement {
       "vr",
       "vrpad",
       "audiooutput",
+      "fallback",
     ];
   }
 
@@ -5598,6 +5611,26 @@ export class MoviElement extends HTMLElement {
   `;
 
   private async togglePiP(): Promise<void> {
+    // Native fallback: the visible surface is a real <video>, not the canvas, so
+    // use the standard video PiP API. It works even for opaque cross-origin video
+    // (PiP never exposes pixels to JS) and inside iframes granted the
+    // picture-in-picture permission — unlike Movi's Document-PiP path, which
+    // would move the hidden canvas and show a blank window here.
+    if (this._nativeFallbackActive && this.video) {
+      try {
+        if (document.pictureInPictureElement === this.video) {
+          await document.exitPictureInPicture();
+          this.dispatchEvent(new CustomEvent("pipchange", { detail: { pip: false } }));
+        } else {
+          await this.video.requestPictureInPicture();
+          this.dispatchEvent(new CustomEvent("pipchange", { detail: { pip: true } }));
+        }
+      } catch (e) {
+        Logger.warn(TAG, "Native video PiP failed", e);
+      }
+      return;
+    }
+
     if (!this.player || !this.canvas) return;
 
     const docPiP = (window as any).documentPictureInPicture;
@@ -8902,6 +8935,11 @@ export class MoviElement extends HTMLElement {
     if (
       !MoviElement.audioSinkSupported() ||
       !speakerAllowed ||
+      // Output routing goes through audioRenderer.setSinkId(), which isn't in the
+      // path when audio plays through a native <video> — adaptive streams
+      // (HLS/DASH/Shaka), native split-source audio, or the fallback="native"
+      // surface. The picker would be a dead control there, so hide it.
+      this.player?.usesNativeAudio?.() ||
       (real.length < 1 && !canUnlock)
     ) {
       divider.style.display = "none";
@@ -9110,6 +9148,8 @@ export class MoviElement extends HTMLElement {
   }
 
   private startUIUpdates(): void {
+    if (this._uiUpdatesRunning) return;
+    this._uiUpdatesRunning = true;
     this.updateAspectRatioIcon();
     // Throttle UI updates to ~4Hz (250ms). Time display, progress bar
     // and icons don't need 60fps precision — at 60fps the six DOM
@@ -9121,7 +9161,10 @@ export class MoviElement extends HTMLElement {
     const UI_UPDATE_MIN_MS = 250;
     let lastRun = 0;
     const updateUI = (timestamp: number) => {
-      if (!this.player) return;
+      if (!this.player) {
+        this._uiUpdatesRunning = false;
+        return;
+      }
 
       if (timestamp - lastRun >= UI_UPDATE_MIN_MS) {
         lastRun = timestamp;
@@ -14512,6 +14555,37 @@ export class MoviElement extends HTMLElement {
       :host(.movi-audio-mode) .movi-context-menu-item[data-action="subtitle-track"] {
         display: none !important;
       }
+
+      /* Native-video render (fallback="native" over a raw <video>): no canvas
+         and no WASM frame access, so the controls that need either can't work.
+         Hide them rather than show broken no-ops. Kept: play / seek / volume
+         (0-100%) / mute / speed / loop / fullscreen / PiP — the <video> element
+         handles those natively. Audio-graph controls (stable audio, >100% boost,
+         audio-output) can't touch opaque audio; canvas controls (rotate, ambient,
+         snapshot, aspect) and WASM ones (timeline previews, HDR tone-map) don't
+         apply. Quality / subtitle / audio-track menus are empty here anyway. */
+      :host(.movi-native-video) .movi-hdr-container,
+      :host(.movi-native-video) .movi-aspect-ratio-btn,
+      :host(.movi-native-video) .movi-snapshot-btn,
+      :host(.movi-native-video) .movi-rotate-btn,
+      :host(.movi-native-video) .movi-stable-audio-container,
+      :host(.movi-native-video) .movi-quality-container,
+      :host(.movi-native-video) .movi-subtitle-track-container {
+        display: none !important;
+      }
+      :host(.movi-native-video) .movi-context-menu-item[data-action="fit"],
+      :host(.movi-native-video) .movi-context-menu-item[data-action="rotate-video"],
+      :host(.movi-native-video) .movi-context-menu-item[data-action="ambient-toggle"],
+      :host(.movi-native-video) .movi-context-menu-item[data-action="snapshot"],
+      :host(.movi-native-video) .movi-context-menu-item[data-action="timeline"],
+      :host(.movi-native-video) .movi-context-menu-item[data-action="hdr-toggle"],
+      :host(.movi-native-video) .movi-context-menu-item[data-action="stable-audio-toggle"],
+      :host(.movi-native-video) .movi-context-menu-item[data-action="subtitle-track"],
+      :host(.movi-native-video) .movi-context-menu-item-audiodevice,
+      :host(.movi-native-video) .movi-context-menu-divider-audiodevice,
+      :host(.movi-native-video) .movi-context-menu-submenu-audiodevice {
+        display: none !important;
+      }
       /* The more-button reveals the mobile-expandable cluster. On a wide
          viewport everything's visible already, so the button is noise —
          hide. Below 600px the expandable collapses (rule further down)
@@ -15773,9 +15847,18 @@ export class MoviElement extends HTMLElement {
       this.guessMediaType(this._src).startsWith("audio/");
     // Audio-only (data-saver) forces the audio surface even on a video source —
     // we're deliberately not decoding the video, so show album art / strip.
+    // Native fallback exposes no track list, so hasVideoTrack is always false —
+    // the generic "!hasVideoTrack && hasAudio → audio" path would collapse a
+    // playing VIDEO into the 56px strip on resize. Trust the <video> element
+    // itself: real video dimensions (or a non-audio src before metadata loads)
+    // keep the full video surface; a genuine audio-only source still strips.
+    const nativeFallbackIsVideo =
+      this._nativeFallbackActive &&
+      (this.video.videoWidth > 0 || !srcIsAudio);
     const audioMode =
-      this._audioOnly ||
-      (tracksUnresolved ? srcIsAudio : !hasVideoTrack && hasAudio);
+      !nativeFallbackIsVideo &&
+      (this._audioOnly ||
+        (tracksUnresolved ? srcIsAudio : !hasVideoTrack && hasAudio));
 
     // Audio-only with a `poster` URL but no embedded album art: load the poster
     // into a bitmap and paint it through the cover-art canvas so it reads as
@@ -16409,6 +16492,12 @@ export class MoviElement extends HTMLElement {
         this.player.setHDREnabled(this._hdr);
         this.player.setStableAudio(this._stableVolume);
         this.updateStableAudioUI();
+        // Re-evaluate now that the source has loaded (the stream wrapper is set
+        // during load, after setupAudioOutputs' first pass): ambient + audio-
+        // output can't work through a native <video>, so hide them for adaptive
+        // streams. See updateAmbientUI / updateAudioOutputMenu.
+        this.updateAmbientUI();
+        this.updateAudioOutputMenu();
         this.detectAndApplyVR360();
       }
       this.updateHDRVisibility();
@@ -17424,6 +17513,30 @@ export class MoviElement extends HTMLElement {
       }
     }
 
+    // Tear down any native-fallback handoff so the next source starts fresh on
+    // Movi's own canvas pipeline (the previous source may have degraded to the
+    // browser <video> via fallback="native").
+    this._nativeFallbackAttempted = false;
+    if (this._nativeFallbackActive) {
+      this._nativeFallbackActive = false;
+      if (this.video) {
+        try {
+          this.video.pause();
+        } catch {}
+        this.video.removeAttribute("src");
+        try {
+          this.video.load();
+        } catch {}
+        this.video.controls = false;
+        this.video.style.display = "none";
+      }
+      if (this.canvas) this.canvas.style.display = "block";
+      if (this.controlsContainer) this.controlsContainer.style.display = "";
+      // Un-gate the canvas/WASM controls hidden for the native surface.
+      this.classList.remove("movi-native-video");
+      this.syncMenuPortalAudioClasses();
+    }
+
     // Revoke any postertime-generated poster URL and hide the overlay so
     // the next source doesn't briefly flash the old frame.
     if (this._generatedPosterUrl) {
@@ -18107,7 +18220,142 @@ export class MoviElement extends HTMLElement {
     return `${m.toString().padStart(2, "0")}:${s.toString().padStart(2, "0")}`;
   }
 
+  /**
+   * fallback="native" — graceful degradation when the WASM/WebCodecs pipeline
+   * can't READ the source bytes (cross-origin + no-CORS, or a transient network
+   * failure) but the browser's own <video> can still render them opaquely. Hands
+   * playback off to the native element instead of showing a hard error.
+   *
+   * This is the BROWSER decoding, not Movi: codecs the browser can't handle
+   * natively (e.g. AC-3/E-AC-3 audio, HEVC on Chrome) stay silent or fail, and
+   * Movi's canvas features (advanced HDR, 360, ambient, subtitle styling) are
+   * off. It's "play something instead of a network error", not a full recovery.
+   * If the native element can't play it either, the real error is surfaced.
+   */
+  private engageNativeFallback(
+    url: string,
+    origTitle?: string,
+    origMessage?: string,
+  ): void {
+    if (this._nativeFallbackActive) return;
+    this._nativeFallbackActive = true;
+    Logger.info(
+      TAG,
+      'fallback="native" — source unreadable via fetch; handing off to a native <video> under Movi\'s own UI',
+    );
+
+    // The WASM pipeline is dead for this source. Tear it down so the load
+    // finally-block (and anything else) doesn't try to resume a corpse.
+    if (this.player) {
+      try {
+        this.player.destroy();
+      } catch {}
+      this.player = null;
+    }
+    this._isUnsupported = false;
+    this.isLoading = false;
+
+    const v = this.video;
+    if (!v) {
+      this._nativeFallbackActive = false;
+      this.handleUnsupportedVideo(origTitle, origMessage);
+      return;
+    }
+
+    // Show the native surface but KEEP Movi's own chrome — the wrapper below
+    // makes the <video> look like a MoviPlayer, so Movi's controls drive it.
+    // No native `controls` attribute: Movi's bar is the UI.
+    if (this.canvas) this.canvas.style.display = "none";
+    if (this.brokenIndicator) this.brokenIndicator.style.display = "none";
+    if (this.emptyStateIndicator) this.emptyStateIndicator.style.display = "none";
+    if (this.posterElement) this.posterElement.style.display = "none";
+    const loadingIndicator = this.shadowRoot?.querySelector(
+      ".movi-loading-indicator",
+    ) as HTMLElement | null;
+    if (loadingIndicator) loadingIndicator.style.display = "none";
+    v.controls = false;
+    v.style.display = "block";
+    v.style.objectFit =
+      this._objectFit === "cover" || this._objectFit === "fill"
+        ? this._objectFit
+        : "contain";
+
+    // Wrap the raw <video> in the MoviPlayer interface and make it THE player,
+    // so every existing control handler + the UI-poll loop drive it unchanged.
+    const wrapper = new NativeVideoWrapper(v);
+    this.player = wrapper as unknown as MoviPlayer;
+
+    // The polled UI loop (startUIUpdates) drives time/progress/icons off
+    // this.player; these keep the play/pause state + controls snappy on change.
+    wrapper.on("stateChange", () => {
+      this.updatePlayPauseIcon();
+      this.updateControlsState();
+    });
+    wrapper.on("ended", () => {
+      if (this._loop) {
+        wrapper.seek(0);
+        wrapper.play().catch(() => {});
+      } else {
+        this.dispatchEvent(new Event("ended"));
+      }
+    });
+    // Native can't render it either (unreadable, OR a codec the browser can't
+    // play) → replay the ORIGINAL failure so the right next step runs: a decoder
+    // error auto-applies software; a read/network error surfaces the real error.
+    // _nativeFallbackAttempted stays latched, so we don't loop back into native.
+    wrapper.on("error", () => {
+      if (!this._nativeFallbackActive) return; // torn down already
+      this._nativeFallbackActive = false;
+      try {
+        wrapper.destroy();
+      } catch {}
+      this.player = null;
+      // Restore Movi's surfaces — this path doesn't go through dispose().
+      if (this.canvas) this.canvas.style.display = "block";
+      v.style.display = "none";
+      this.handleUnsupportedVideo(origTitle, origMessage);
+    });
+
+    wrapper
+      .load(url, {
+        autoplay: this._autoplay,
+        muted: this._muted,
+        loop: this._loop,
+        playsInline: this._playsinline,
+      })
+      .catch(() => {});
+
+    // Bring Movi's own chrome to life against the wrapper.
+    this.startUIUpdates();
+    this.updateControlsVisibility();
+    this.updateControlsState();
+    this.updatePlayPauseIcon();
+    // Native-video render: hide every canvas/WASM-dependent control (rotate,
+    // ambient, snapshot, aspect, timeline, HDR, stable-audio, audio-output,
+    // quality/subtitle menus) via the host class — see the :host(.movi-native-
+    // video) CSS. Sync it onto a portaled context menu too.
+    this.classList.add("movi-native-video");
+    this.syncMenuPortalAudioClasses();
+    // Native audio is opaque → no AudioContext boost: cap the volume slider at
+    // 100%. Guard isLoading so updateVolume()'s change-OSD doesn't flash on load.
+    const wasLoading = this.isLoading;
+    this.isLoading = true;
+    this.updateVolumeCap();
+    this.isLoading = wasLoading;
+
+    this.dispatchEvent(new CustomEvent("nativefallback", { detail: { src: url } }));
+    this.dispatchEvent(new Event("loadeddata"));
+  }
+
   private handleUnsupportedVideo(title?: string, message?: string): void {
+    // A single failed load fires BOTH the player's runtime "error" event AND the
+    // init-catch, so this runs twice for one failure. If the first call already
+    // handed the source to the native <video> (fallback="native") and it's live,
+    // the second must not paint the broken overlay over the playing fallback.
+    // (When native itself FAILS, onNativeError clears _nativeFallbackActive
+    // first, so the real error/software path still runs.)
+    if (this._nativeFallbackActive) return;
+
     const msgLower = message?.toLowerCase() || "";
     const isNetworkError = msgLower.includes("http 4") || msgLower.includes("http 5") ||
       msgLower.includes("stream unavailable") || msgLower.includes("network error") ||
@@ -18119,6 +18367,22 @@ export class MoviElement extends HTMLElement {
       msgLower.includes("decoder") ||
       msgLower.includes("codec"));
 
+    // fallback="native" (native-first, any failure): before the software path or
+    // any prompt, hand ANY source Movi can't play to the browser's own <video> —
+    // once per source. The original title/message is carried through so that if
+    // native ALSO can't render it, engageNativeFallback's error handler re-enters
+    // here with _nativeFallbackAttempted latched and the SAME error class, and we
+    // fall through to the software path (decoder errors) or the real error below.
+    if (
+      this.getAttribute("fallback") === "native" &&
+      !this._nativeFallbackAttempted &&
+      typeof this._src === "string"
+    ) {
+      this._nativeFallbackAttempted = true;
+      this.engageNativeFallback(this._src, title, message);
+      return;
+    }
+
     // Silent software fallback — no broken-icon prompt — when either the caller
     // opted into auto fallback (sw="auto"), or the user already accepted
     // software once for this video, so a later quality that also can't
@@ -18126,7 +18390,11 @@ export class MoviElement extends HTMLElement {
     if (
       isDecoderError &&
       this._sw !== "software" &&
-      (this.getAttribute("sw") === "auto" || this._userAcceptedSoftwareFallback)
+      (this.getAttribute("sw") === "auto" ||
+        this._userAcceptedSoftwareFallback ||
+        // fallback="native": after native has already been tried (and failed) on
+        // a decoder error, auto-apply software silently — never show the prompt.
+        this.getAttribute("fallback") === "native")
     ) {
       Logger.info(
         TAG,
@@ -18177,7 +18445,10 @@ export class MoviElement extends HTMLElement {
         const shouldShowSwButton =
           isDecoderError &&
           this._sw !== "software" &&
-          this.getAttribute("sw") !== "false";
+          this.getAttribute("sw") !== "false" &&
+          // fallback="native" recovers automatically (native → software) — the
+          // manual "Try Software Decoding" prompt is never surfaced.
+          this.getAttribute("fallback") !== "native";
         swFallbackBtn.style.display = shouldShowSwButton ? "flex" : "none";
       }
     }
@@ -19294,10 +19565,23 @@ export class MoviElement extends HTMLElement {
     if (!shadowRoot) return;
     const menuRoot = this.contextMenuRoot();
 
-    const menuItem = menuRoot.querySelector('.movi-context-menu-item[data-action="ambient-toggle"]');
+    const menuItem = menuRoot.querySelector(
+      '.movi-context-menu-item[data-action="ambient-toggle"]',
+    ) as HTMLElement | null;
     const status = menuRoot.querySelector(".movi-ambient-status");
     const ctxOutline = menuRoot.querySelector(".movi-context-menu-ambient-outline") as HTMLElement;
     const ctxFilled = menuRoot.querySelector(".movi-context-menu-ambient-filled") as HTMLElement;
+
+    // The ambient glow samples the WASM renderer's 16x16 mirror. Adaptive
+    // streams (HLS/DASH/Shaka) draw via a separate stream-side renderer that
+    // never fills that mirror, and the fallback="native" surface has no canvas
+    // at all — so the glow can't work in either. Hide the toggle there. (Native
+    // fallback is also covered by the :host(.movi-native-video) CSS.)
+    if (menuItem) {
+      const canAmbient =
+        !this.player?.isStreamPlayback?.() && !this._nativeFallbackActive;
+      menuItem.style.display = canAmbient ? "" : "none";
+    }
 
     if (this._ambientMode) {
       menuItem?.classList.add("movi-context-menu-active");
@@ -19314,13 +19598,27 @@ export class MoviElement extends HTMLElement {
 
   private updateStableAudioUI(shadowRoot: ShadowRoot | null = this.shadowRoot): void {
     if (!shadowRoot) return;
-    const isEnabled = this.player?.getStableAudio() ?? true;
     const menuRoot = this.contextMenuRoot();
-
-    const stableBtn = shadowRoot.querySelector(".movi-stable-audio-btn");
     const stableMenuItem = menuRoot.querySelector(
       '.movi-context-menu-item[data-action="stable-audio-toggle"]',
-    );
+    ) as HTMLElement | null;
+
+    // Stable audio runs through Movi's AudioContext compressor, which isn't in
+    // the path when audio plays through a native <video>: adaptive streams
+    // (HLS/DASH/Shaka), native split-source audio, or the fallback="native"
+    // surface. The toggle would be a silent no-op there, so hide it. (The >100%
+    // boost is capped separately via getMaxVolume(), which reads the same
+    // usesNativeAudio() signal.)
+    const nativeAudio = !!this.player?.usesNativeAudio?.();
+    const stableContainer = shadowRoot.querySelector(
+      ".movi-stable-audio-container",
+    ) as HTMLElement | null;
+    if (stableContainer) stableContainer.style.display = nativeAudio ? "none" : "";
+    if (stableMenuItem) stableMenuItem.style.display = nativeAudio ? "none" : "";
+    if (nativeAudio) return;
+
+    const isEnabled = this.player?.getStableAudio() ?? true;
+    const stableBtn = shadowRoot.querySelector(".movi-stable-audio-btn");
     const stableStatus = menuRoot.querySelector(".movi-stable-audio-status");
 
     // Context menu icons
@@ -21129,6 +21427,10 @@ export class MoviElement extends HTMLElement {
     host.classList.toggle(
       "movi-audio-strip",
       this.classList.contains("movi-audio-strip"),
+    );
+    host.classList.toggle(
+      "movi-native-video",
+      this.classList.contains("movi-native-video"),
     );
   }
 

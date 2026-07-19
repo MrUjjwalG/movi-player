@@ -5332,6 +5332,17 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
     return this.streamWrapper !== null || this.nativeAudioEl !== null;
   }
 
+  /**
+   * True when playback runs through an adaptive-stream wrapper (HLS/DASH/Shaka)
+   * rather than the WASM demux + canvas renderer. Such playback draws frames via
+   * a separate stream-side CanvasRenderer, so the WASM renderer's 16x16 ambient
+   * mirror is never populated — the ambient glow can't sample it and the control
+   * is hidden.
+   */
+  isStreamPlayback(): boolean {
+    return this.streamWrapper !== null;
+  }
+
   /** True for a live (dynamic) adaptive stream — drives the LIVE indicator. */
   isLiveStream(): boolean {
     // Shaka-only extras — undefined on the hls.js/dash.js fallback wrappers.
