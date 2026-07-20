@@ -4649,9 +4649,15 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
 
   resizeCanvas(width: number, height: number): void {
     if (this.streamWrapper) {
+      // The active stream wrapper owns the shared canvas — resize only its
+      // renderer. The main videoRenderer isn't the active renderer here and,
+      // crucially, only the wrapper's canvasRenderer receives setVideoRotation,
+      // so the main one stays at 0°. Resizing it too would re-run its
+      // (unrotated) resize on the SAME canvas and clobber the wrapper's
+      // rotation-aware styles (position/transform/dimension-swap) — the video
+      // reverts to un-rotated on any resize after a rotate.
       this.streamWrapper.resizeCanvas(width, height);
-    }
-    if (this.videoRenderer) {
+    } else if (this.videoRenderer) {
       this.videoRenderer.resize(width, height);
     }
     // A resize often coincides with a fullscreen / orientation / PiP change —
