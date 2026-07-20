@@ -6655,8 +6655,18 @@ export class MoviElement extends HTMLElement {
     qualityContainer.style.display = "flex";
     const player = this.player as any;
 
+    // Which rendition is playing now: after an in-place swap the src attribute
+    // is unchanged (no reload), so the player tracks it via its active-rendition
+    // url; on the first render that's "" and we fall back to the element's chosen
+    // (default) src.
+    const activeSrc =
+      (player?.getActiveDashRendition?.() as string) ||
+      (typeof this._src === "string" ? this._src : "");
+
     // Feed the qualities (with bitrate) to the player's ABR so "Auto" can size
-    // and switch them; needs 2+ with a (real or estimated) bitrate.
+    // and switch them; needs 2+ with a (real or estimated) bitrate. Pass the
+    // active src so the ABR knows which rendition is already on screen and
+    // doesn't "switch" to the identical file (a pointless swap that desyncs).
     const abrCapable =
       this._videoQualities.filter((q) => (q.bandwidth || 0) > 0).length >= 2;
     if (abrCapable) {
@@ -6667,6 +6677,7 @@ export class MoviElement extends HTMLElement {
           label: q.label,
           bandwidth: q.bandwidth || this._estimateBitrate(q.height),
         })),
+        activeSrc,
       );
       // Re-apply a persisted Auto preference (survives the per-video element
       // rebuild) before reading isAuto, so a fresh video lands on Auto.
@@ -6676,12 +6687,6 @@ export class MoviElement extends HTMLElement {
     }
     const isAuto = !!player?.isAutoQuality?.();
 
-    // After an in-place swap the src attribute is unchanged (no reload), so the
-    // active quality is tracked by the player's active-rendition url; fall back
-    // to the element src for the reload path / first render.
-    const activeSrc =
-      (player?.getActiveDashRendition?.() as string) ||
-      (typeof this._src === "string" ? this._src : "");
     const activeQuality = this._videoQualities.find((q) => q.src === activeSrc);
     this._updateQualityBtnBadge(activeQuality?.badge || this._heightBadge(activeQuality?.height || 0));
 

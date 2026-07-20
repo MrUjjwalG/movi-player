@@ -166,6 +166,16 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
   // stale reads. A fully-downloaded single file (premuxed) reports 0 once idle,
   // so without this the ABR would lose its estimate and freeze at the start rung.
   private _lastThroughputBps: number = 0;
+  // Anti-thrash state for the ABR. Each in-place switch resets the video
+  // pipeline (new file download, brief keyframe wait) which perturbs both the
+  // throughput estimate and the buffer, so without hysteresis the controller
+  // oscillates between rungs every tick. _lastAbrSwitchAt gates how soon the
+  // next switch may fire; the up-candidate counter requires an upshift target
+  // to persist across ticks before committing (a lone throughput spike — e.g. a
+  // cache-served burst — shouldn't upshift).
+  private _lastAbrSwitchAt: number = Number.NEGATIVE_INFINITY;
+  private _abrUpCandidate: string = "";
+  private _abrUpConfirms: number = 0;
   private _activeSubtitleLang: string = "";
   private _externalSubCues: SubtitleCue[] = [];
   private _externalSubTimer: number | null = null;
@@ -1369,16 +1379,32 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
     const activeIdx = rungs.findIndex(
       (r) => r.url === this._activeDashRendition,
     );
+    const now = performance.now();
+    const sinceSwitch = now - this._lastAbrSwitchAt;
 
-    // Emergency downshift: the pipeline is starving (video can't keep up — the
-    // most reliable "network too slow" signal, since a throughput estimate can
-    // be fooled by cache-served segments). Drop one rung immediately.
+    // Emergency downshift: a GENUINE stall (real buffering state or a near-empty
+    // audio buffer). Deliberately does NOT trip on a normally-shallow buffer:
+    // each in-place switch briefly resets the video pipeline (new file, keyframe
+    // wait), and treating that transient as "network too slow" was what made the
+    // controller oscillate down-then-up. A short settle window since the last
+    // switch keeps that transient from counting.
     const audioBuf = this.audioRenderer?.getBufferedDuration?.() ?? 99;
-    const starving = this.stateManager.is("buffering") || audioBuf < 1.0;
-    if (starving && activeIdx >= 0 && activeIdx < rungs.length - 1) {
-      await this.abrSwitchTo(rungs[activeIdx + 1].url);
+    const stalling = this.stateManager.is("buffering") || audioBuf < 0.4;
+    if (
+      stalling &&
+      sinceSwitch > 5000 &&
+      activeIdx >= 0 &&
+      activeIdx < rungs.length - 1
+    ) {
+      await this.abrCommit(rungs[activeIdx + 1].url, now);
       return;
     }
+
+    // Voluntary (throughput-driven) changes hold for a cooldown after any switch
+    // so a single change can't cascade into a rung-by-rung oscillation — the
+    // throughput estimate is noisy right after a swap (it reflects the new file's
+    // fresh download), so give it time to settle before trusting it again.
+    if (sinceSwitch < 12000) return;
 
     const raw =
       (this.source as { getNetworkStats?: () => { currentSpeed: number } })
@@ -1387,11 +1413,11 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
     if (raw > 0) this._lastThroughputBps = raw;
     const bps = this._lastThroughputBps;
     if (bps <= 0) {
-      // No throughput sample yet (e.g. a fully-downloaded single file that
+      // Never measured throughput yet (e.g. a fully-downloaded single file that
       // reports 0 once idle). Probe one rung UP so Auto doesn't sit stuck at a
       // low starting quality — that switch fetches a file, which measures real
-      // throughput; the buffering downshift undoes it if the link can't cope.
-      if (activeIdx > 0) await this.abrSwitchTo(rungs[activeIdx - 1].url);
+      // throughput; the emergency downshift undoes it if the link can't cope.
+      if (activeIdx > 0) await this.abrCommit(rungs[activeIdx - 1].url, now);
       return;
     }
 
@@ -1403,9 +1429,35 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
         break;
       }
     }
-    if (pick.url !== this._activeDashRendition) {
-      await this.abrSwitchTo(pick.url);
+    if (pick.url === this._activeDashRendition) {
+      this._abrUpCandidate = "";
+      this._abrUpConfirms = 0;
+      return;
     }
+
+    const pickIdx = rungs.findIndex((r) => r.url === pick.url);
+    const isUpshift = activeIdx >= 0 && pickIdx < activeIdx;
+    if (isUpshift) {
+      // Confirm an upshift across two consecutive ticks: a lone throughput spike
+      // (a cache-served burst, one unusually fast chunk) shouldn't bounce the
+      // quality up only to fall straight back on the next real sample.
+      if (this._abrUpCandidate === pick.url) {
+        this._abrUpConfirms++;
+      } else {
+        this._abrUpCandidate = pick.url;
+        this._abrUpConfirms = 1;
+      }
+      if (this._abrUpConfirms < 2) return;
+    }
+    await this.abrCommit(pick.url, now);
+  }
+
+  /** Perform an ABR switch and arm the anti-thrash cooldown/hysteresis. */
+  private async abrCommit(url: string, now: number): Promise<void> {
+    this._lastAbrSwitchAt = now;
+    this._abrUpCandidate = "";
+    this._abrUpConfirms = 0;
+    await this.abrSwitchTo(url);
   }
 
   private async abrSwitchTo(url: string): Promise<void> {
@@ -4561,13 +4613,23 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
   /**
    * Externally supply the video renditions (with bitrate) for the ABR — used by
    * the premuxed multi-source path, which owns the quality list in the element.
-   * The active rendition still comes from getActiveDashRendition (set by the
-   * in-place swap), so the initial value stays the element's chosen src.
+   *
+   * `activeUrl` seeds which rendition is *currently* playing. This matters: the
+   * ABR compares its pick against `_activeDashRendition`, and until a swap sets
+   * that it's "". With it empty the ABR can't recognise the file already on
+   * screen, so it "switches" to the identical rendition — a pointless in-place
+   * swap that reseeks the video and desyncs it against the still-running split
+   * audio. Seed it once (only when unset, so a real swap's value isn't clobbered
+   * by a later menu re-render passing the unchanged element src).
    */
   setDashRenditions(
     renditions: { url: string; label: string; id: string; bandwidth?: number }[],
+    activeUrl?: string,
   ): void {
     this._dashRenditions = renditions;
+    if (activeUrl && !this._activeDashRendition) {
+      this._activeDashRendition = activeUrl;
+    }
   }
 
   /**
