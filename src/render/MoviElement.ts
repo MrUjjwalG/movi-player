@@ -23,6 +23,7 @@ import type {
 } from "../types";
 import { Logger, LogLevel } from "../utils/Logger";
 import type { SourceAdapter } from "../source/SourceAdapter";
+import { isOpenableScheme } from "../source/adapterRegistry";
 
 import { SettingsStorage } from "../utils/SettingsStorage";
 import { QoECollector, beaconSink, type QoESink, type QoESession } from "../utils/QoE";
@@ -16257,19 +16258,16 @@ export class MoviElement extends HTMLElement {
    * so these don't parse-fail; they die later at fetch() with a generic
    * "Failed to fetch", which reads as a network problem. Detecting the bad
    * scheme lets both error paths (init-catch and the runtime "error" handler)
-   * blame the URL instead. Skipped when a custom source adapter is set — it
-   * reads the bytes itself and may legitimately use any scheme (s3://, ipfs://,
-   * ws://), so the http(s)/blob/data/file whitelist must not apply.
+   * blame the URL instead. Skipped when a custom source adapter INSTANCE is set
+   * (element.sourceAdapter) — it reads the bytes itself. A scheme registered
+   * via registerSourceAdapter("s3", …) is treated as openable too, so custom
+   * schemes aren't falsely flagged; only genuine typos fall through.
    */
   private hasUnfetchableSrcScheme(): boolean {
     if (this._sourceAdapter) return false;
     if (typeof this._src !== "string" || !this._src) return false;
-    try {
-      const proto = new URL(this._src, location.href).protocol;
-      return !["http:", "https:", "blob:", "data:", "file:"].includes(proto);
-    } catch {
-      return true; // didn't even parse as a URL
-    }
+    // Resolve against the page so relative paths ("video.mp4") stay valid.
+    return !isOpenableScheme(this._src, location.href);
   }
 
   /**

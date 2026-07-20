@@ -58,6 +58,15 @@ export { FileSource, createFileSource } from './source/FileSource';
 export { ThumbnailHttpSource, createThumbnailHttpSource } from './source/ThumbnailHttpSource';
 export { EncryptedHttpSource } from './source/EncryptedHttpSource';
 export type { EncryptedSourceConfig } from './source/EncryptedHttpSource';
+export {
+  registerSourceAdapter,
+  unregisterSourceAdapter,
+  getRegisteredSchemes,
+} from './source/adapterRegistry';
+export type {
+  SourceAdapterFactory,
+  SourceAdapterFactoryConfig,
+} from './source/adapterRegistry';
 export { generateFingerprint } from './utils/Fingerprint';
 
 // Cache

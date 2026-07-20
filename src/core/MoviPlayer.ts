@@ -24,6 +24,7 @@ import {
   ThumbnailHttpSource,
   EncryptedHttpSource,
   analyzeDashFallback,
+  getSourceAdapterFactory,
   type SourceAdapter,
 } from "../source";
 import { LRUCache } from "../cache";
@@ -647,7 +648,14 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
     // FFmpeg fallback to fork on here.
     const src = this.config.source;
     const streamUrl =
-      !this.config.sourceAdapter && src && src.type === "url" && src.url
+      // A registered custom scheme (s3://…) is read via its SourceAdapter, which
+      // the HLS/DASH (MSE) engines can't use — they fetch the URL directly. Keep
+      // such URLs off the stream path so they reach the demuxer + adapter below.
+      !this.config.sourceAdapter &&
+      src &&
+      src.type === "url" &&
+      src.url &&
+      !getSourceAdapterFactory(src.url)
         ? src.url
         : null;
     const lowerUrl = streamUrl?.toLowerCase() ?? "";
@@ -887,6 +895,13 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
     }
 
     if (config.type === "url" && config.url) {
+      // A custom scheme registered via registerSourceAdapter("s3", …) is built
+      // through its factory instead of fetch(), letting the demuxer read bytes
+      // from anything the app can supply (S3, IPFS, WebSocket, IndexedDB, …).
+      const factory = getSourceAdapterFactory(config.url);
+      if (factory) {
+        return await factory({ url: config.url, headers: config.headers });
+      }
       const maxBufferSizeMB = this.config.cache?.maxSizeMB;
       const source = new HttpSource(
         config.url,
