@@ -37,12 +37,12 @@ export class SegmentStreamSource implements SourceAdapter {
   private cacheOrder: number[] = [];
   private readonly maxCached = 24;
   private _throughputBps = 0; // EWMA download speed (bytes/s) for ABR
-  // Set on close() (e.g. when an in-place quality switch swaps this source out).
-  // Gates *new* fetches so the old rendition stops pulling bytes we no longer
-  // need — without abort()ing in-flight ones, which would surface as red
-  // "(canceled)" rows in the Network tab that read like a failure. Any fetch
-  // already in flight just finishes (one small segment) and is discarded.
-  private _closed = false;
+  // Aborts in-flight segment/measure fetches on close() — e.g. the instant an
+  // in-place quality switch swaps this source out — so the old rendition stops
+  // pulling bytes we'll never use. The resulting "(canceled)" rows in the
+  // Network tab are expected (this is what YouTube does on a quality switch),
+  // not a failure; the AbortErrors it raises are swallowed below, not logged.
+  private abortController = new AbortController();
 
   private readonly key: string;
 
@@ -68,6 +68,7 @@ export class SegmentStreamSource implements SourceAdapter {
       const head = await fetch(url, {
         method: "HEAD",
         headers: this.headers,
+        signal: this.abortController.signal,
       });
       const cl = head.headers.get("Content-Length");
       if (head.ok && cl) return { length: parseInt(cl, 10), srcOffset: 0, isRange: false };
@@ -78,6 +79,7 @@ export class SegmentStreamSource implements SourceAdapter {
     try {
       const res = await fetch(url, {
         headers: { ...(this.headers || {}), Range: "bytes=0-0" },
+        signal: this.abortController.signal,
       });
       const cr = res.headers.get("Content-Range");
       if (cr) {
@@ -88,7 +90,10 @@ export class SegmentStreamSource implements SourceAdapter {
       /* fall through */
     }
     // Last resort: pull the whole segment and measure it (cached for read()).
-    const full = await fetch(url, this.headers ? { headers: this.headers } : undefined);
+    const full = await fetch(url, {
+      headers: this.headers,
+      signal: this.abortController.signal,
+    });
     const buf = await full.arrayBuffer();
     return { length: buf.byteLength, srcOffset: 0, isRange: false };
   }
@@ -116,7 +121,8 @@ export class SegmentStreamSource implements SourceAdapter {
         try {
           push(this.initSegment, await this.measure(this.initSegment));
         } catch (e) {
-          Logger.warn(TAG, "init segment measure failed", e);
+          if ((e as Error)?.name !== "AbortError")
+            Logger.warn(TAG, "init segment measure failed", e);
         }
       }
 
@@ -134,7 +140,8 @@ export class SegmentStreamSource implements SourceAdapter {
           try {
             measured[i] = await this.measure(seg.url, seg.byteRange);
           } catch (e) {
-            Logger.warn(TAG, `segment ${i} measure failed`, e);
+            if ((e as Error)?.name !== "AbortError")
+              Logger.warn(TAG, `segment ${i} measure failed`, e);
             measured[i] = { length: 0, srcOffset: 0, isRange: false };
           }
         }
@@ -167,8 +174,6 @@ export class SegmentStreamSource implements SourceAdapter {
   private async fetchEntry(entryIdx: number): Promise<ArrayBuffer> {
     const cached = this.cache.get(entryIdx);
     if (cached) return cached;
-    // Source was swapped out — don't start a new segment download.
-    if (this._closed) return new ArrayBuffer(0);
 
     const e = this.entries[entryIdx];
     const reqHeaders: Record<string, string> = { ...(this.headers || {}) };
@@ -176,11 +181,23 @@ export class SegmentStreamSource implements SourceAdapter {
       reqHeaders["Range"] = `bytes=${e.srcOffset}-${e.srcOffset + e.length - 1}`;
     }
     const t0 = performance.now();
-    const res = await fetch(e.url, { headers: reqHeaders });
-    if (!res.ok && res.status !== 206) {
-      throw new Error(`segment ${entryIdx} HTTP ${res.status}`);
+    let res: Response;
+    let buf: ArrayBuffer;
+    try {
+      res = await fetch(e.url, {
+        headers: reqHeaders,
+        signal: this.abortController.signal,
+      });
+      if (!res.ok && res.status !== 206) {
+        throw new Error(`segment ${entryIdx} HTTP ${res.status}`);
+      }
+      buf = await res.arrayBuffer();
+    } catch (err) {
+      // close() aborted us mid-fetch (source swapped out) — not an error;
+      // return empty and let the discarded read unwind quietly.
+      if ((err as Error)?.name === "AbortError") return new ArrayBuffer(0);
+      throw err;
     }
-    let buf = await res.arrayBuffer();
     // Throughput estimate (bytes/s) for ABR — EWMA over segment downloads.
     // Floor the elapsed time instead of skipping fast fetches: the lowest
     // renditions have tiny segments that finish in a few ms, and skipping them
@@ -257,11 +274,14 @@ export class SegmentStreamSource implements SourceAdapter {
   }
 
   close(): void {
-    // Graceful stop: block *new* segment fetches so a swapped-out rendition
-    // stops pulling data, but don't abort() in-flight ones — that shows up as a
-    // failed "(canceled)" request. The at-most-one in-flight segment just
-    // finishes and is discarded.
-    this._closed = true;
+    // Abort in-flight segment/measure fetches so a swapped-out rendition stops
+    // downloading data we'll never use. (The "(canceled)" Network-tab rows this
+    // produces are expected — same as YouTube on a quality switch.)
+    try {
+      this.abortController.abort();
+    } catch {
+      /* already aborted */
+    }
     this.cache.clear();
     this.cacheOrder = [];
   }
