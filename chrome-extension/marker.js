@@ -1,6 +1,9 @@
-// Tell the official Movi Player site that the extension is installed,
-// so it can hide its "Add to Chrome" prompt. Domain-scoped via manifest
-// so the extension's presence doesn't leak to unrelated sites.
+// Expose the extension's presence to the page via a window flag (MAIN world),
+// so the official Movi Player site can hide its "Add to Chrome" prompt on any
+// host. A window property — instead of a DOM attribute on <html>/<body> — means
+// we never mutate the server-rendered DOM before the page hydrates, so React /
+// Next / Nuxt sites don't throw hydration mismatches. Runs at document_start so
+// the flag is set before any page script reads it.
 try {
-  document.documentElement.setAttribute("data-movi-extension", "installed");
+  window.__moviExtension = { installed: true };
 } catch {}

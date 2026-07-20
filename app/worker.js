@@ -817,10 +817,14 @@ async function handleBadge(which) {
   if (!src) return new Response("Not Found", { status: 404 });
   try {
     // cf.cacheEverything caches the upstream SVG at the edge for 12h so
-    // we don't hit the badge service on every page view.
+    // we don't hit the badge service on every page view. Bound the fetch:
+    // a slow badge service (vsmarketplacebadges.dev has stalled 100s+) must
+    // never hold the request — and thus the page's <img> and the tab's load
+    // spinner — open. On timeout we fall through to the static fallback.
     const upstream = await fetch(src, {
       cf: { cacheTtl: 43200, cacheEverything: true },
       headers: { "User-Agent": "movi-app-badge-proxy" },
+      signal: AbortSignal.timeout(4000),
     });
     if (!upstream.ok) throw new Error("badge upstream " + upstream.status);
     const svg = await upstream.text();

@@ -1,12 +1,5 @@
-// Mark the document so the official Movi Player site can detect that the
-// extension is installed and skip its "Add to Chrome" prompt. Runs on every
-// page (cheap, single attribute write) so we don't depend on manifest match
-// patterns being perfectly tuned for every host (localhost ports, etc.).
-try {
-  if (document.documentElement) {
-    document.documentElement.setAttribute("data-movi-extension", "installed");
-  }
-} catch {}
+// Extension-presence signalling lives in marker.js (a MAIN-world script that
+// sets window.__moviExtension) — see that file for why we don't tag the DOM.
 
 // Detect media (video + audio) URLs on page and add a play button overlay.
 // Kept in sync with MEDIA_EXT_RE in player.js so anything the player can open

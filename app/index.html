@@ -3255,10 +3255,13 @@
         if (!wrap || !closeBtn) return;
         if (location.protocol === "chrome-extension:" || location.protocol === "moz-extension:") return;
 
-        // The extension's content script tags <html> with this attribute on our
-        // own domain. If the marker is present (now or set later), don't promote.
+        // The extension exposes its presence via a window flag (set by its
+        // MAIN-world marker script before our own scripts run). Older builds
+        // (<= 0.3.5) instead tagged <html> with a data attribute, so accept
+        // either. If the marker is present (now or set later), don't promote.
         function isExtInstalled() {
-          return document.documentElement.getAttribute("data-movi-extension") === "installed";
+          return (window.__moviExtension && window.__moviExtension.installed === true) ||
+            document.documentElement.getAttribute("data-movi-extension") === "installed";
         }
         if (isExtInstalled()) return;
 
@@ -3455,13 +3458,13 @@
         <!-- Install/usage badges, proxied same-origin from /badge/*.svg (worker.js) -->
         <div class="hero-badges" aria-label="Extension stats">
           <a href="https://chromewebstore.google.com/detail/movi-player/ckleeigcopjnpehkjokijokjegknfgej" rel="noopener" target="_blank" title="MoviPlayer on the Chrome Web Store">
-            <img src="/badge/chrome.svg" height="20" decoding="async" alt="Chrome Web Store users" />
+            <img src="/badge/chrome.svg" height="20" loading="lazy" decoding="async" alt="Chrome Web Store users" />
           </a>
           <a href="https://marketplace.visualstudio.com/items?itemName=mrujjwalg.movi-player-vscode" rel="noopener" target="_blank" title="Movi Player on the VS Code Marketplace">
-            <img src="/badge/vscode.svg" height="20" decoding="async" alt="VS Code Marketplace downloads" />
+            <img src="/badge/vscode.svg" height="20" loading="lazy" decoding="async" alt="VS Code Marketplace downloads" />
           </a>
           <a href="https://www.npmjs.com/package/movi-player" rel="noopener" target="_blank" title="movi-player on npm">
-            <img src="/badge/npm.svg" height="20" decoding="async" alt="npm total downloads" />
+            <img src="/badge/npm.svg" height="20" loading="lazy" decoding="async" alt="npm total downloads" />
           </a>
         </div>
 
