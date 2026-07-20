@@ -302,6 +302,27 @@ export function buildVttFromSegments(texts: string[]): string {
   return "WEBVTT\n\n" + cueBlocks.join("\n\n") + "\n";
 }
 
+/**
+ * Fetch + parse just one variant's media playlist → its segments (and fMP4
+ * init). Used by the in-place quality switch, which only needs the new video
+ * segments — no need to re-analyze the whole master, audio and subtitles.
+ */
+export async function loadHlsVariant(
+  variantUrl: string,
+  headers?: Record<string, string>,
+): Promise<{ segments: HlsSegment[]; initSegment?: string } | null> {
+  try {
+    const text = await fetchText(variantUrl, headers);
+    const track = parseMediaPlaylist(text, variantUrl);
+    return track.segments.length
+      ? { segments: track.segments, initSegment: track.initSegment }
+      : null;
+  } catch (e) {
+    Logger.warn(TAG, `variant load failed: ${variantUrl}`, e);
+    return null;
+  }
+}
+
 async function loadMediaTrack(
   url: string,
   headers?: Record<string, string>,

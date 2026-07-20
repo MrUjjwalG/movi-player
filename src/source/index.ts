@@ -6,7 +6,7 @@ export { EncryptedHttpSource } from './EncryptedHttpSource';
 export type { EncryptedSourceConfig } from './EncryptedHttpSource';
 export { analyzeDashFallback } from './DashFallback';
 export type { DashFallbackPlan } from './DashFallback';
-export { analyzeHlsFallback, buildVttFromSegments } from './HlsFallback';
+export { analyzeHlsFallback, buildVttFromSegments, loadHlsVariant } from './HlsFallback';
 export type {
   HlsFallbackPlan,
   HlsSegment,

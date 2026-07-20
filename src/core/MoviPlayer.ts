@@ -25,6 +25,7 @@ import {
   EncryptedHttpSource,
   analyzeDashFallback,
   analyzeHlsFallback,
+  loadHlsVariant,
   buildVttFromSegments,
   SegmentStreamSource,
   getSourceAdapterFactory,
@@ -1149,6 +1150,156 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
   /**
    * Configure decoders for active tracks
    */
+  /**
+   * A+ verify-then-swap quality switch for the demuxer fallback (HLS/DASH).
+   * Instead of tearing the player down and reloading, prepare the new
+   * rendition's demuxer (open + seek to the current position) WHILE the old one
+   * keeps playing, then atomically swap the video source/demuxer and reconfigure
+   * the video decoder. Audio, subtitles, the clock and the AudioContext are
+   * never touched — only the video briefly freezes on the last frame (no black
+   * flash, no audio gap, no loading). Uses one decode pipeline at a time (the
+   * new demuxer opens on an isolated WASM module so it doesn't clash with the
+   * old during prep, but the video decoder only reconfigures at swap-time), so
+   * memory stays flat. Returns false (staying on the current rendition) if the
+   * new one can't be prepared, so a failed switch never breaks playback.
+   */
+  async switchVideoRenditionInPlace(newRenditionUrl: string): Promise<boolean> {
+    if (!this.demuxer || !this.videoDecoder) return false;
+    if (newRenditionUrl === this._activeDashRendition) return true;
+
+    const cfgSrc = this.config.source;
+    const srcUrl =
+      cfgSrc && "url" in cfgSrc && cfgSrc.url ? cfgSrc.url : "";
+    const isHls = srcUrl.toLowerCase().includes(".m3u8");
+    const headers = this.config.headers;
+    const resumeTime = this.getCurrentTime();
+
+    // --- PREP (old keeps playing): build + open the new demuxer on an isolated
+    // WASM module and seek it to the current position. Any failure here bails
+    // out cleanly, leaving the old rendition untouched. ---
+    let newSource: SourceAdapter;
+    try {
+      if (isHls) {
+        const variant = await loadHlsVariant(newRenditionUrl, headers);
+        if (!variant) return false;
+        newSource = new SegmentStreamSource(
+          variant.segments,
+          variant.initSegment,
+          newRenditionUrl,
+          headers,
+        );
+      } else {
+        newSource = await this.createSource({
+          type: "url",
+          url: newRenditionUrl,
+          headers,
+        });
+      }
+    } catch (e) {
+      Logger.warn(TAG, "in-place switch: new source build failed", e);
+      return false;
+    }
+
+    const newDemuxer = new Demuxer(newSource, this.config.wasmBinary, true);
+    let newInfo: MediaInfo;
+    try {
+      newInfo = await newDemuxer.open();
+    } catch (e) {
+      Logger.warn(TAG, "in-place switch: new demuxer open failed", e);
+      try { newDemuxer.close(); } catch {}
+      try { newSource.close(); } catch {}
+      return false;
+    }
+    const newVideoTrack = newInfo.tracks.find(
+      (t) => t.type === "video",
+    ) as VideoTrack | undefined;
+    if (!newVideoTrack) {
+      try { newDemuxer.close(); } catch {}
+      try { newSource.close(); } catch {}
+      return false;
+    }
+    const newStartTime = newInfo.startTime || 0;
+    try {
+      await newDemuxer.seek(resumeTime + newStartTime);
+    } catch (e) {
+      Logger.warn(TAG, "in-place switch: new demuxer seek failed", e);
+      try { newDemuxer.close(); } catch {}
+      try { newSource.close(); } catch {}
+      return false;
+    }
+
+    // --- ATOMIC SWAP: stop the video loop (audio + clock keep running), swap
+    // the video source/demuxer, reconfigure the video decoder, resume. ---
+    if (this.animationFrameId !== null) {
+      cancelAnimationFrame(this.animationFrameId);
+      this.animationFrameId = null;
+    }
+    ++this.seekSessionId; // supersede any in-flight seek
+    let guard = 0;
+    while (this.demuxInFlight && guard++ < 100) {
+      await new Promise((r) => setTimeout(r, 10));
+    }
+
+    const oldDemuxer = this.demuxer;
+    const oldSource = this.source;
+
+    this.demuxer = newDemuxer;
+    this.source = newSource;
+    this.startTime = newStartTime;
+    try {
+      this.fileSize = await newSource.getSize();
+    } catch {}
+
+    // The video decoder's software path reads through the demuxer's WASM module.
+    const bindings = newDemuxer.getBindings();
+    if (bindings) this.videoDecoder.setBindings(bindings);
+
+    // Reflect the new video track (the split-audio demuxer path keeps only the
+    // video track in the TrackManager; audio + subtitles live elsewhere).
+    this.trackManager.setTracks([newVideoTrack]);
+    this.trackManager.selectVideoTrack(newVideoTrack.id);
+
+    // Flush + reconfigure the video decoder/renderer for the new resolution.
+    try { await this.videoDecoder.flush(); } catch {}
+    this.videoRenderer?.clearQueue();
+    const extradata = newDemuxer.getExtradata(newVideoTrack.id) ?? undefined;
+    await this.videoDecoder.configure(
+      newVideoTrack,
+      extradata,
+      this.config.frameRate ?? 0,
+    );
+    this.videoRenderer?.configure(
+      newVideoTrack.width,
+      newVideoTrack.height,
+      newVideoTrack.colorPrimaries,
+      newVideoTrack.colorTransfer,
+      this.config.frameRate || newVideoTrack.frameRate,
+      newVideoTrack.rotation ?? 0,
+      newVideoTrack.isHDR,
+      newVideoTrack.pixelFormat,
+    );
+
+    this._activeDashRendition = newRenditionUrl;
+    // NOTE: deliberately do NOT set seekTargetTime here — it's a shared field
+    // the split-audio pump also honors, so setting it would make the untouched
+    // audio drop packets and glitch. The video re-syncs to the running clock on
+    // its own; the new demuxer is already seeked to the resume point.
+    this.seekKeyframeOffset = 0;
+
+    // Resume the video loop from the current position.
+    this.processLoop();
+
+    // --- Tear down the old video pipeline (audio pipeline untouched). ---
+    try { oldDemuxer.close(); } catch {}
+    try { oldSource?.close(); } catch {}
+
+    Logger.info(
+      TAG,
+      `in-place quality switch → ${newVideoTrack.width}x${newVideoTrack.height}`,
+    );
+    return true;
+  }
+
   private async configureDecoders(): Promise<void> {
     if (!this.demuxer) return;
 

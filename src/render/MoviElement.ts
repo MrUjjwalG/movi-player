@@ -6732,6 +6732,35 @@ export class MoviElement extends HTMLElement {
       url === ((this.player as any).getActiveDashRendition?.() || "")
     )
       return;
+    // Prefer the in-place demuxer swap: no reload, no loading gap — the video
+    // freezes on the current frame for a moment while audio keeps playing, then
+    // the new quality takes over. Fall back to the full reload if the player
+    // lacks the method or the swap bails (staying on the current rendition).
+    const player = this.player as any;
+    if (typeof player.switchVideoRenditionInPlace === "function") {
+      this._suppressSwReload = true;
+      player
+        .switchVideoRenditionInPlace(url)
+        .then((ok: boolean) => {
+          if (!ok) this._reloadQualitySwitch(url);
+        })
+        .catch(() => this._reloadQualitySwitch(url));
+      return;
+    }
+    this._reloadQualitySwitch(url);
+  }
+
+  /**
+   * Full teardown + reload at the chosen rendition. The fallback path for the
+   * in-place swap: freezes the current frame as a poster and restores the
+   * playhead after the reload.
+   */
+  private _reloadQualitySwitch(url: string): void {
+    if (
+      !this.player ||
+      url === ((this.player as any).getActiveDashRendition?.() || "")
+    )
+      return;
     const wasPaused = (this.player as any).getState?.() === "paused";
     let resumeTime = 0;
     try {
