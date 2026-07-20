@@ -4546,6 +4546,18 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
   }
 
   /**
+   * Externally supply the video renditions (with bitrate) for the ABR — used by
+   * the premuxed multi-source path, which owns the quality list in the element.
+   * The active rendition still comes from getActiveDashRendition (set by the
+   * in-place swap), so the initial value stays the element's chosen src.
+   */
+  setDashRenditions(
+    renditions: { url: string; label: string; id: string; bandwidth?: number }[],
+  ): void {
+    this._dashRenditions = renditions;
+  }
+
+  /**
    * Get video tracks
    */
   getVideoTracks(): VideoTrack[] {

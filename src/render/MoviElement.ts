@@ -216,7 +216,7 @@ export class MoviElement extends HTMLElement {
   // Pre-muxed video qualities declared via multiple <source> tags with
   // data-height / data-label. Lets the player drive a YouTube-style quality
   // menu for plain MP4 sources (where there's no HLS manifest to enumerate).
-  private _videoQualities: { src: string; type?: string; height: number; label: string; fps?: number; badge?: string }[] = [];
+  private _videoQualities: { src: string; type?: string; height: number; label: string; fps?: number; badge?: string; bandwidth?: number }[] = [];
   private _audioTracks: { src: string; type?: string; lang: string; label: string }[] = []; // Multi-language audio
   private _subtitleTracks: { src: string; lang: string; label: string; format?: string }[] = []; // External subtitles
   private _autoplay: boolean = false;
@@ -6395,7 +6395,10 @@ export class MoviElement extends HTMLElement {
       (this.player as any)?.getDashRenditions?.() as
         | { url: string; label: string; id: string }[]
         | undefined;
-    if (dashRenditions && dashRenditions.length > 1) {
+    // Only for the demuxer fallback (adaptive .m3u8/.mpd src). The premuxed
+    // path also populates the player's renditions (for the ABR) but keeps its
+    // own menu below, so gate this on isAdaptive to avoid stealing it.
+    if (isAdaptive && dashRenditions && dashRenditions.length > 1) {
       this.renderDashQualityMenu(qualityList, qualityContainer, dashRenditions);
       return;
     }
@@ -6571,6 +6574,26 @@ export class MoviElement extends HTMLElement {
    * Map a video height to its YouTube-style quality badge (HD/4K/8K) or
    * empty string when the resolution doesn't qualify.
    */
+  /** Rough H.264 bitrate (bps) for a resolution height — used to size premuxed
+   *  renditions for the ABR when a source declares no explicit bitrate. */
+  private _estimateBitrate(height: number): number {
+    if (height <= 0) return 0;
+    const tiers: [number, number][] = [
+      [144, 200_000],
+      [240, 400_000],
+      [360, 800_000],
+      [480, 1_400_000],
+      [540, 1_800_000],
+      [720, 2_800_000],
+      [1080, 5_000_000],
+      [1440, 10_000_000],
+      [2160, 18_000_000],
+      [4320, 45_000_000],
+    ];
+    for (const [h, bps] of tiers) if (height <= h) return bps;
+    return tiers[tiers.length - 1][1];
+  }
+
   private _heightBadge(height: number, width: number = 0): string {
     // Use the 16:9-normalised height when a width is known so ultrawide /
     // letterboxed tracks (e.g. 3840×2080) still tier as 4K rather than HD.
@@ -6612,19 +6635,47 @@ export class MoviElement extends HTMLElement {
     qualityContainer: HTMLElement,
   ): void {
     qualityContainer.style.display = "flex";
+    const player = this.player as any;
+
+    // Feed the qualities (with bitrate) to the player's ABR so "Auto" can size
+    // and switch them; needs 2+ with a (real or estimated) bitrate.
+    const abrCapable =
+      this._videoQualities.filter((q) => (q.bandwidth || 0) > 0).length >= 2;
+    if (abrCapable) {
+      player?.setDashRenditions?.(
+        this._videoQualities.map((q) => ({
+          url: q.src,
+          id: q.src,
+          label: q.label,
+          bandwidth: q.bandwidth || this._estimateBitrate(q.height),
+        })),
+      );
+    }
+    const isAuto = !!player?.isAutoQuality?.();
 
     // After an in-place swap the src attribute is unchanged (no reload), so the
     // active quality is tracked by the player's active-rendition url; fall back
     // to the element src for the reload path / first render.
     const activeSrc =
-      ((this.player as any)?.getActiveDashRendition?.() as string) ||
+      (player?.getActiveDashRendition?.() as string) ||
       (typeof this._src === "string" ? this._src : "");
     const activeQuality = this._videoQualities.find((q) => q.src === activeSrc);
     this._updateQualityBtnBadge(activeQuality?.badge || this._heightBadge(activeQuality?.height || 0));
 
-    qualityList.innerHTML = this._videoQualities
-      .map((q) => {
-        const isActive = q.src === activeSrc;
+    const check = `<svg class="movi-quality-check" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"></polyline></svg>`;
+    const rows: string[] = [];
+    if (abrCapable) {
+      const cur =
+        isAuto && activeQuality
+          ? `<span class="movi-quality-item-badge" style="margin-left:8px;font-size:9px;font-weight:700;padding:1px 5px;border-radius:4px;background:rgba(255,255,255,0.16);color:#fff;">${activeQuality.label}</span>`
+          : "";
+      rows.push(
+        `<div class="movi-quality-item ${isAuto ? "movi-quality-active" : ""}" data-src="__auto__"><span class="movi-quality-label-wrap"><span class="movi-quality-label">Auto</span>${cur}</span>${isAuto ? check : ""}</div>`,
+      );
+    }
+    rows.push(
+      ...this._videoQualities.map((q) => {
+        const isActive = !isAuto && q.src === activeSrc;
         // Label may already include the fps suffix (e.g. "1080p60"). Only
         // append fps if it isn't already present in the label.
         const fpsSuffix =
@@ -6635,35 +6686,32 @@ export class MoviElement extends HTMLElement {
         const badgeHtml = q.badge
           ? `<span class="movi-quality-badge movi-quality-badge-${q.badge.toLowerCase()}">${q.badge}</span>`
           : "";
-        return `
-          <div class="movi-quality-item ${isActive ? "movi-quality-active" : ""}" data-src="${q.src.replace(/"/g, "&quot;")}">
-            <span class="movi-quality-label-wrap">
-              <span class="movi-quality-label">${label}</span>
-              ${badgeHtml}
-            </span>
-            ${
-              isActive
-                ? `<svg class="movi-quality-check" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round">
-                    <polyline points="20 6 9 17 4 12"></polyline>
-                  </svg>`
-                : ""
-            }
-          </div>
-        `;
-      })
-      .join("");
+        return `<div class="movi-quality-item ${isActive ? "movi-quality-active" : ""}" data-src="${q.src.replace(/"/g, "&quot;")}"><span class="movi-quality-label-wrap"><span class="movi-quality-label">${label}</span>${badgeHtml}</span>${isActive ? check : ""}</div>`;
+      }),
+    );
+    qualityList.innerHTML = rows.join("");
 
+    const closeMenu = () => {
+      const menu = this.shadowRoot?.querySelector(
+        ".movi-quality-menu",
+      ) as HTMLElement;
+      if (menu) menu.style.display = "none";
+    };
     qualityList.querySelectorAll(".movi-quality-item").forEach((item) => {
       item.addEventListener("click", (e) => {
         e.stopPropagation();
         const newSrc = (item as HTMLElement).dataset.src;
-        if (!newSrc || newSrc === activeSrc) return;
-        this.switchPremuxedQuality(newSrc);
-
-        const menu = this.shadowRoot?.querySelector(
-          ".movi-quality-menu",
-        ) as HTMLElement;
-        if (menu) menu.style.display = "none";
+        if (newSrc === "__auto__") {
+          player?.setAutoQuality?.(true);
+          this.updateQualityMenu();
+          closeMenu();
+          return;
+        }
+        // A specific pick leaves Auto.
+        player?.setAutoQuality?.(false);
+        if (newSrc && newSrc !== activeSrc) this.switchPremuxedQuality(newSrc);
+        else this.updateQualityMenu();
+        closeMenu();
       });
     });
   }
@@ -15297,6 +15345,13 @@ export class MoviElement extends HTMLElement {
           label: el.getAttribute("data-label") || el.getAttribute("label") || "",
           fps: parseInt(el.getAttribute("data-fps") || "", 10) || 0,
           badge: el.getAttribute("data-badge") || "",
+          bandwidth:
+            parseInt(
+              el.getAttribute("data-bandwidth") ||
+                el.getAttribute("data-bitrate") ||
+                "",
+              10,
+            ) || 0,
           srclang: el.getAttribute("srclang") || el.getAttribute("lang") || "",
           isDefault: el.hasAttribute("data-default") || el.hasAttribute("default"),
         })).filter((s) => s.src);
@@ -15316,6 +15371,9 @@ export class MoviElement extends HTMLElement {
               label: s.label || (s.height ? `${s.height}p` : ""),
               fps: s.fps || undefined,
               badge: s.badge || undefined,
+              // Real bitrate if declared, else estimated from height so the ABR
+              // ("Auto") can size these premuxed renditions.
+              bandwidth: s.bandwidth || this._estimateBitrate(s.height),
             }))
             .sort((a, b) => b.height - a.height);
 
