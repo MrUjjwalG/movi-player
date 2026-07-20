@@ -1385,7 +1385,14 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
       !this._autoQuality ||
       this._abrSwitchInProgress ||
       this._dashRenditions.length < 2 ||
-      !this.source
+      !this.source ||
+      // Never switch while a seek is resolving. The in-place swap replaces the
+      // video demuxer/source and bumps seekSessionId; doing that concurrently
+      // with a user seek races the seek's own demuxer reads and leaves the WASM
+      // demuxer reading bytes at the wrong offset — surfacing as "corrupt data
+      // stream" plus a large A/V desync. Wait for the seek to settle first.
+      this.stateManager.is("seeking") ||
+      this.waitingForVideoSync
     ) {
       return;
     }
