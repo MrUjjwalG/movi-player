@@ -1,22 +1,29 @@
 /**
- * Fallback resolver for MPEG-DASH manifests that Shaka Player refuses to load.
+ * Fallback resolver for MPEG-DASH manifests the MSE engines (Shaka / hls.js /
+ * dash.js) refuse or can't play — so movi's own FFmpeg-WASM demuxer takes over.
  *
- * Some valid-but-under-specified DASH manifests declare each Representation as a
- * single self-contained file via a bare <BaseURL>, with NO <SegmentBase>,
- * <SegmentList>, or <SegmentTemplate>. The DASH spec lets a player treat that
- * file as one segment and read its internal `sidx` index, which is exactly what
- * dash.js does — but Shaka is strict and skips every such Representation
- * ("Representation does not contain a segment information source"), failing the
- * whole load with DASH_EMPTY_PERIOD (4004).
+ * It targets the "single file per Representation" shape: each Representation is
+ * one complete (fragmented) MP4 addressed by a <BaseURL>, either with NO segment
+ * addressing at all, or with a <SegmentBase> that merely indexes the sidx INSIDE
+ * that one file. Both are ordinary MP4s the FFmpeg demuxer reads whole via range
+ * requests. (SegmentTemplate / SegmentList split media across many separate
+ * files and are NOT handled here — that needs a segment-streaming source.)
  *
- * Those files are just ordinary (fragmented) MP4s, which the player's FFmpeg
- * demuxer reads natively. This module probes the manifest and, when it finds the
- * bare-BaseURL case, resolves the best video file URL plus (for demuxed content)
- * the separate audio file URL, so the caller can play them through the demuxer
- * (+ a native <audio> element for the split audio).
+ * Two failure modes this recovers:
+ *  - Shaka is strict and skips single-file-with-SegmentBase Representations
+ *    ("does not contain a segment information source"), failing the load with
+ *    DASH_EMPTY_PERIOD (4004).
+ *  - The browser's MSE can't decode the stream's codec (e.g. Safari + HE-AAC),
+ *    so Shaka loads the manifest but appendBuffer fails (error 3014). The WASM
+ *    demuxer decodes every codec, so routing the same file through it plays.
  *
- * Returns null when the manifest has proper segment info (so Shaka's failure was
- * for some other reason and this fallback wouldn't help).
+ * This module probes the manifest and, when it finds the single-file case,
+ * resolves the best video file URL plus (for demuxed content) the separate
+ * audio file URL, so the caller can play them through the demuxer (+ a native
+ * <audio> element / audioSource for the split audio).
+ *
+ * Returns null when every Representation is multi-segment (SegmentTemplate /
+ * SegmentList), so Shaka's failure was for a reason this fallback can't help.
  */
 
 import { Logger } from "../utils/Logger";
@@ -31,6 +38,43 @@ export interface DashFallbackPlan {
   videoUrl: string;
   /** Separate audio file for demuxed content; omitted when muxed/audio-only. */
   audioUrl?: string;
+  /**
+   * Sidecar caption files (single-file WebVTT/SRT text Representations) so the
+   * demuxer path can surface them as external subtitle tracks — otherwise the
+   * manifest's captions would be lost when we leave the MSE engine.
+   */
+  subtitles?: { url: string; lang: string; label: string }[];
+  /**
+   * Every selectable audio Representation (best-first), so the demuxer path can
+   * offer the same audio menu the stream engine had — different languages, or
+   * different bitrates of one language. `lang` is a unique key (a same-language
+   * bitrate variant gets the bitrate appended); `label` is the display name.
+   * Present only when there's more than one; a single audio uses `audioUrl`.
+   */
+  audioTracks?: { url: string; lang: string; label: string }[];
+  /**
+   * Every selectable video Representation (best-first) with a display label
+   * (e.g. "1080p"), so the demuxer path can offer a quality menu. Switching a
+   * quality re-loads the main source with that Representation's file. Present
+   * only when there's more than one.
+   */
+  videoTracks?: { url: string; label: string; id: string }[];
+}
+
+/** BCP-47 code → human language name (viewer's locale), falling back to the code. */
+function langName(code: string): string {
+  const base = (code || "").split("-")[0];
+  if (!base || base === "und") return "Audio";
+  try {
+    const locale =
+      (typeof navigator !== "undefined" && navigator.language) || "en";
+    return (
+      new Intl.DisplayNames([locale], { type: "language" }).of(base) ||
+      base.toUpperCase()
+    );
+  } catch {
+    return base.toUpperCase();
+  }
 }
 
 /** Resolve a (possibly relative) URL against a base. */
@@ -52,17 +96,29 @@ function baseUrlOf(el: Element | null): string | null {
   return null;
 }
 
-/** A Representation is "bare" when it has a BaseURL but no segment addressing. */
-function isBareRepresentation(rep: Element, adaptation: Element): boolean {
+/**
+ * A Representation is a single demuxable file when it has a BaseURL and no
+ * MULTI-segment addressing. SegmentTemplate / SegmentList split the media into
+ * many separate segment files, which the whole-file demuxer can't follow. A
+ * SegmentBase, by contrast, only points at the `sidx` index INSIDE an otherwise
+ * complete single file — the FFmpeg demuxer reads that file whole via range
+ * requests and ignores the index hint, so it counts as single-file here. This
+ * is the common "one fragmented-MP4 per Representation" VOD case (e.g. the
+ * Elephants Dream test stream) that Shaka rejects but the demuxer plays fine —
+ * including codecs the browser's MSE can't decode (Safari + HE-AAC).
+ */
+function isSingleFileRepresentation(rep: Element, adaptation: Element): boolean {
   if (!baseUrlOf(rep)) return false;
-  const hasSegmentInfo = (el: Element) =>
+  const hasMultiSegment = (el: Element) =>
     el.getElementsByTagName("SegmentTemplate").length > 0 ||
-    el.getElementsByTagName("SegmentList").length > 0 ||
-    el.getElementsByTagName("SegmentBase").length > 0;
-  return !hasSegmentInfo(rep) && !hasSegmentInfo(adaptation);
+    el.getElementsByTagName("SegmentList").length > 0;
+  return !hasMultiSegment(rep) && !hasMultiSegment(adaptation);
 }
 
-function contentTypeOf(rep: Element, adaptation: Element): "audio" | "video" | "other" {
+function contentTypeOf(
+  rep: Element,
+  adaptation: Element,
+): "audio" | "video" | "text" | "other" {
   const ct = (
     adaptation.getAttribute("contentType") ||
     rep.getAttribute("mimeType") ||
@@ -71,6 +127,8 @@ function contentTypeOf(rep: Element, adaptation: Element): "audio" | "video" | "
   ).toLowerCase();
   if (ct.includes("audio")) return "audio";
   if (ct.includes("video")) return "video";
+  if (ct.includes("text") || ct.includes("vtt") || ct.includes("ttml"))
+    return "text";
   const codecs = rep.getAttribute("codecs") || adaptation.getAttribute("codecs") || "";
   if (VIDEO_CODEC_RE.test(codecs)) return "video";
   if (AUDIO_CODEC_RE.test(codecs)) return "audio";
@@ -109,6 +167,15 @@ export async function analyzeDashFallback(
 
   let bestVideo: { url: string; bw: number; muxed: boolean } | null = null;
   let bestAudio: { url: string; bw: number } | null = null;
+  const subtitles: { url: string; lang: string; label: string }[] = [];
+  const audioReps: { url: string; lang: string; bw: number; id: string }[] = [];
+  const videoReps: {
+    url: string;
+    bw: number;
+    height: number;
+    id: string;
+    muxed: boolean;
+  }[] = [];
 
   // First period only — these single-file manifests are single-period VOD.
   const period = mpd.getElementsByTagName("Period")[0];
@@ -118,7 +185,7 @@ export async function analyzeDashFallback(
   for (const adaptation of Array.from(period.getElementsByTagName("AdaptationSet"))) {
     const adaptationBase = resolve(periodBase, baseUrlOf(adaptation));
     for (const rep of Array.from(adaptation.getElementsByTagName("Representation"))) {
-      if (!isBareRepresentation(rep, adaptation)) continue;
+      if (!isSingleFileRepresentation(rep, adaptation)) continue;
       const url = resolve(adaptationBase, baseUrlOf(rep));
       const bw = parseInt(rep.getAttribute("bandwidth") || "0", 10);
       const type = contentTypeOf(rep, adaptation);
@@ -127,8 +194,41 @@ export async function analyzeDashFallback(
 
       if (type === "video") {
         if (!bestVideo || bw > bestVideo.bw) bestVideo = { url, bw, muxed };
+        const height = parseInt(
+          rep.getAttribute("height") || adaptation.getAttribute("height") || "0",
+          10,
+        );
+        const id = rep.getAttribute("id") || String(bw);
+        if (!videoReps.some((v) => v.url === url)) {
+          videoReps.push({ url, bw, height, id, muxed });
+        }
       } else if (type === "audio") {
         if (!bestAudio || bw > bestAudio.bw) bestAudio = { url, bw };
+        const lang =
+          adaptation.getAttribute("lang") || rep.getAttribute("lang") || "und";
+        const id = rep.getAttribute("id") || String(bw);
+        if (!audioReps.some((a) => a.url === url)) {
+          audioReps.push({ url, lang, bw, id });
+        }
+      } else if (type === "text") {
+        // Sidecar caption file — only WebVTT/SRT, which movi's external-subtitle
+        // path renders (segmented / TTML text isn't handled here).
+        const mime = (
+          adaptation.getAttribute("mimeType") ||
+          rep.getAttribute("mimeType") ||
+          ""
+        ).toLowerCase();
+        if (/\.(vtt|srt)(\?|#|$)/i.test(url) || /vtt/.test(mime)) {
+          const lang =
+            adaptation.getAttribute("lang") || rep.getAttribute("lang") || "und";
+          const label =
+            adaptation.getAttribute("label") ||
+            rep.getAttribute("id") ||
+            lang.toUpperCase();
+          if (!subtitles.some((s) => s.url === url)) {
+            subtitles.push({ url, lang, label });
+          }
+        }
       }
     }
   }
@@ -145,9 +245,51 @@ export async function analyzeDashFallback(
   const plan: DashFallbackPlan = { videoUrl: bestVideo!.url };
   // Muxed file already carries audio; otherwise attach the separate audio file.
   if (!bestVideo!.muxed && bestAudio) plan.audioUrl = bestAudio.url;
+  if (subtitles.length > 0) plan.subtitles = subtitles;
+  // More than one selectable audio Representation (languages, or bitrate
+  // variants of one language) → expose the whole menu, best-first.
+  if (!bestVideo!.muxed && audioReps.length > 1) {
+    const langCounts: Record<string, number> = {};
+    for (const a of audioReps) langCounts[a.lang] = (langCounts[a.lang] || 0) + 1;
+    plan.audioTracks = audioReps
+      .slice()
+      .sort((a, b) => b.bw - a.bw)
+      .map((a) => {
+        const dupLang = langCounts[a.lang] > 1;
+        return {
+          url: a.url,
+          // Switching keys on `lang`, so a same-language bitrate variant needs a
+          // unique key — append the Representation id.
+          lang: dupLang ? `${a.lang}-${a.id}` : a.lang,
+          label: dupLang
+            ? `${langName(a.lang)} · ${Math.round(a.bw / 1000)} kbps`
+            : langName(a.lang),
+        };
+      });
+  }
+  // More than one video Representation → expose a quality menu, best-first.
+  // Label by height ("1080p") when known, else bitrate.
+  if (videoReps.length > 1) {
+    const heightCounts: Record<number, number> = {};
+    for (const v of videoReps) heightCounts[v.height] = (heightCounts[v.height] || 0) + 1;
+    plan.videoTracks = videoReps
+      .slice()
+      .sort((a, b) => b.bw - a.bw)
+      .map((v) => ({
+        url: v.url,
+        id: v.id,
+        label:
+          v.height > 0
+            ? // Two renditions at the same height → disambiguate with bitrate.
+              heightCounts[v.height] > 1
+              ? `${v.height}p · ${Math.round(v.bw / 1000)} kbps`
+              : `${v.height}p`
+            : `${Math.round(v.bw / 1000)} kbps`,
+      }));
+  }
   Logger.info(
     TAG,
-    `DASH fallback → video=${plan.videoUrl}${plan.audioUrl ? `, audio=${plan.audioUrl}` : " (muxed)"}`,
+    `DASH fallback → video=${plan.videoUrl}${plan.videoTracks ? ` (${plan.videoTracks.length} qualities)` : ""}${plan.audioUrl ? `, audio=${plan.audioUrl}` : " (muxed)"}${plan.audioTracks ? `, audioTracks=${plan.audioTracks.length}` : ""}${plan.subtitles ? `, subs=${plan.subtitles.length}` : ""}`,
   );
   return plan;
 }

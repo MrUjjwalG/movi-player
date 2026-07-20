@@ -309,6 +309,13 @@ export class MoviElement extends HTMLElement {
   // rather than retrying native forever. Both cleared on dispose (new source).
   private _nativeFallbackActive = false;
   private _nativeFallbackAttempted = false;
+  // Adaptive-stream (DASH) decode-fallback state. When the browser's MSE can't
+  // decode a stream's codec (e.g. Safari + HE-AAC), we re-init once forcing the
+  // DASH source through the FFmpeg-WASM demuxer. `_streamDemuxTried` is the
+  // one-shot guard (reset on new source); `_streamDemuxNext` is consumed by the
+  // next initializePlayer() to set config.forceStreamDemux.
+  private _streamDemuxTried = false;
+  private _streamDemuxNext = false;
   // Guards startUIUpdates() against starting a second concurrent rAF loop (the
   // native-fallback path starts one; a later software re-init would start
   // another). The loop clears this when the player goes away.
@@ -15410,7 +15417,13 @@ export class MoviElement extends HTMLElement {
           // New source → reset the "has been played" flag so the
           // next source's initial poster-seek "paused" transition
           // doesn't trigger a premature bar surface.
-          if (newValue !== oldSrc) this._hasEverPlayed = false;
+          if (newValue !== oldSrc) {
+            this._hasEverPlayed = false;
+            // Fresh source gets a fresh shot at the DASH→demuxer fallback.
+            // (Reset here, on a genuine src change — NOT in load(), which the
+            // fallback's own re-init calls, or a multi-segment miss would loop.)
+            this._streamDemuxTried = false;
+          }
 
           // Show/hide empty state indicator based on src
           if (this.emptyStateIndicator) {
@@ -16428,6 +16441,14 @@ export class MoviElement extends HTMLElement {
         playerConfig.canvas = this.canvas;
         this.canvas.style.display = "block";
         this.video.style.display = "none";
+      }
+
+      // Consume a pending DASH→demuxer fallback request (set when an MSE engine
+      // failed to decode this stream). One-shot per attempt; MoviPlayer skips
+      // the stream engines and plays the single-file Representation via WASM.
+      if (this._streamDemuxNext) {
+        this._streamDemuxNext = false;
+        playerConfig.forceStreamDemux = true;
       }
 
       // MPEG-5 LCEVC (opt-in): Shaka composites the enhanced layer onto the
@@ -18447,6 +18468,32 @@ export class MoviElement extends HTMLElement {
       msgLower.includes("decoder") ||
       msgLower.includes("codec"));
 
+    // Adaptive-stream (DASH) decode failure: the browser's MSE can't decode this
+    // stream's codec (e.g. Safari + HE-AAC → Shaka error 3014). Software decoding
+    // can't help — it re-runs the same MSE engine. The only escape is leaving the
+    // stream engine, so re-init once forcing the DASH source through movi's
+    // FFmpeg-WASM demuxer, which decodes every codec. Guarded one-shot per source;
+    // after the switch it's demuxer (not stream) playback, so isStreamPlayback()
+    // is false and this can't re-fire. If the demuxer path ALSO fails, the normal
+    // error UI shows. Runs before fallback="native" because handing a .mpd to a
+    // native <video> can't play DASH (Safari has no native DASH).
+    if (
+      isDecoderError &&
+      !this._streamDemuxTried &&
+      this.player?.isStreamPlayback?.() &&
+      typeof this._src === "string" &&
+      /\.mpd(\?|#|$)/i.test(this._src)
+    ) {
+      this._streamDemuxTried = true;
+      this._streamDemuxNext = true;
+      Logger.info(
+        TAG,
+        "Stream decode error — MSE can't decode this codec; retrying via the FFmpeg demuxer",
+      );
+      this.load().catch(() => {});
+      return;
+    }
+
     // fallback="native" (native-first, any failure): before the software path or
     // any prompt, hand ANY source Movi can't play to the browser's own <video> —
     // once per source. The original title/message is carried through so that if
@@ -19077,8 +19124,11 @@ export class MoviElement extends HTMLElement {
    * Switch audio to a different language
    */
   selectAudioLang(lang: string): boolean {
-    if (this.player) return this.player.selectAudioLang(lang);
-    return false;
+    if (!this.player) return false;
+    // Fire-and-forget — the switch is async (it re-stands-up the WASM audio
+    // pipeline); callers here don't await the result.
+    void this.player.selectAudioLang(lang);
+    return true;
   }
 
   /**

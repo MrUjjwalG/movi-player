@@ -684,8 +684,64 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
         this.streamWrapper?.selectSubtitleTrack(track ? track.id : null);
       });
 
-      // --- Tier 1: Shaka (HLS + DASH + MSS + muxed). ---
-      try {
+      // Force-demux: a prior MSE attempt failed at RUNTIME on a codec the
+      // browser can't decode (e.g. Safari rejecting a HE-AAC track → Shaka
+      // error 3014). Skip the MSE stream engines entirely and play the
+      // single-file DASH Representation through the FFmpeg-WASM demuxer, which
+      // decodes every codec. Only single-file DASH (BaseURL + optional
+      // SegmentBase) works — analyzeDashFallback returns null for multi-segment,
+      // in which case we fall back to the normal stream path below.
+      if (this.config.forceStreamDemux && isDash) {
+        try {
+          const plan = await analyzeDashFallback(streamUrl!, src?.headers);
+          if (plan) {
+            Logger.info(
+              TAG,
+              "forceStreamDemux: MSE failed at runtime — routing this DASH source through the FFmpeg demuxer",
+            );
+            this.source = await this.createSource({
+              type: "url",
+              url: plan.videoUrl,
+              headers: src?.headers,
+            });
+            // Prefer the full audio menu (languages / bitrate variants) when the
+            // manifest has more than one; else the single best audio file.
+            if (plan.audioTracks?.length) {
+              this.config.audioTracks = plan.audioTracks.map((t) => ({
+                url: t.url,
+                lang: t.lang,
+                label: t.label,
+              }));
+            } else if (plan.audioUrl) {
+              this.config.audioSource = {
+                type: "url",
+                url: plan.audioUrl,
+                headers: src?.headers,
+              };
+            }
+            // Carry the manifest's caption files across as external subtitle
+            // tracks so the demuxer path keeps the CC the stream engine had.
+            if (plan.subtitles?.length) {
+              this.config.subtitleTracks = plan.subtitles.map((s) => ({
+                url: s.url,
+                lang: s.lang,
+                label: s.label,
+              }));
+            }
+          } else {
+            Logger.warn(
+              TAG,
+              "forceStreamDemux: manifest is multi-segment — demuxer can't play it, retrying the stream path",
+            );
+          }
+        } catch (eDemux) {
+          Logger.warn(TAG, "forceStreamDemux: DASH fallback probe failed", eDemux);
+        }
+      }
+
+      // --- Tier 1: Shaka (HLS + DASH + MSS + muxed). Skipped when force-demux
+      // above already resolved a demuxable single-file source. ---
+      if (!this.source) try {
         const shaka = new ShakaPlayerWrapper(this.config);
         this.streamWrapper = shaka;
         this.wireStreamWrapper(shaka);
@@ -735,8 +791,21 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
                 url: plan.videoUrl,
                 headers: src?.headers,
               });
-              if (plan.audioUrl) {
+              if (plan.audioTracks?.length) {
+                this.config.audioTracks = plan.audioTracks.map((t) => ({
+                  url: t.url,
+                  lang: t.lang,
+                  label: t.label,
+                }));
+              } else if (plan.audioUrl) {
                 this.config.audioSource = { type: "url", url: plan.audioUrl, headers: src?.headers };
+              }
+              if (plan.subtitles?.length) {
+                this.config.subtitleTracks = plan.subtitles.map((s) => ({
+                  url: s.url,
+                  lang: s.lang,
+                  label: s.label,
+                }));
               }
               fellBack = true; // fall through to the demuxer path below
             }
@@ -5304,26 +5373,98 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
   }
 
   /**
-   * Switch audio to an external language track (native <audio> element).
-   * Disables WASM audio if it was active. Preserves position & playback.
+   * Switch audio to another language/track through the SAME WASM split-audio
+   * pipeline as the initial audio — NOT a native <audio> element. Native
+   * <audio> stalls on the fragmented-MP4 audio files DASH ships (served as
+   * video/mp4, readyState never settles), so instead we tear down the current
+   * audio demuxer and stand up a fresh one for the new URL, re-seek it to the
+   * current position, and resume. Position & play state are preserved.
    */
-  selectAudioLang(lang: string): boolean {
+  async selectAudioLang(lang: string): Promise<boolean> {
     const track = this._audioTracks.find((t) => t.lang === lang);
     if (!track) {
       Logger.warn(TAG, `Audio track not found for lang: ${lang}`);
       return false;
     }
-    if (lang === this._activeAudioLang && this.nativeAudioEl) return true;
+    if (lang === this._activeAudioLang && this.audioDemuxer) return true;
 
-    // Mute WASM audio if it was active (don't destroy — keep decodable for switch-back)
-    if (!this.disableAudio) {
-      this.audioRenderer.mute();
-      this.disableAudio = true;
+    const t = this.getCurrentTime();
+    const resume =
+      this.stateManager.is("playing") || this.stateManager.is("buffering");
+
+    // Stop the audio pump and let any in-flight audio demux settle before we
+    // swap the demuxer out from under it.
+    this.stopAudioLoop();
+    let guard = 0;
+    while (this.audioDemuxInFlight && guard++ < 200) {
+      await new Promise((r) => setTimeout(r, 5));
     }
 
+    // Tear down the current audio — a WASM split demuxer, or a legacy native el.
+    if (this.nativeAudioEl) {
+      try {
+        this.nativeAudioEl.pause();
+        this.nativeAudioEl.src = "";
+      } catch {
+        /* ignore */
+      }
+      this.nativeAudioEl = null;
+      this.revokeNativeAudioObjectUrl();
+      this._nativeAudioLogicalUrl = null;
+    }
+    if (this.audioDemuxer) {
+      try {
+        this.audioDemuxer.close();
+      } catch {
+        /* ignore */
+      }
+      this.audioDemuxer = null;
+    }
+    if (this.audioSource) {
+      try {
+        this.audioSource.close();
+      } catch {
+        /* ignore */
+      }
+      this.audioSource = null;
+    }
+    this._splitAudioTrackId = -1;
+    this.audioDecoder.flush();
+    this.audioRenderer.reset();
+
+    // Stand up the new track through the WASM split-audio pipeline.
     this._activeAudioLang = lang;
-    this.setupNativeAudio(track.url);
-    Logger.info(TAG, `Audio switched to external: ${track.label} (${track.lang})`);
+    this.disableAudio = false;
+    await this.setupSplitAudio(track.url);
+    const ad = this.audioDemuxer as Demuxer | null;
+    if (!ad) {
+      // WASM setup failed — last-resort native <audio> element (mute WASM).
+      Logger.warn(
+        TAG,
+        `Audio switch: WASM setup failed for ${track.label}; using native <audio>`,
+      );
+      if (!this.disableAudio) {
+        this.audioRenderer.mute();
+        this.disableAudio = true;
+      }
+      this.setupNativeAudio(track.url);
+      this.emit("audioTrackChange" as any, { lang, label: track.label });
+      return true;
+    }
+
+    // Re-seek the fresh audio demuxer to the current position and resume.
+    try {
+      await ad.seek(t + this.startTime);
+    } catch (e) {
+      Logger.warn(TAG, `Audio switch seek failed: ${(e as any)?.message ?? e}`);
+    }
+    this._splitAudioEof = false;
+    this._lastSplitAudioPts = t;
+    if (resume) {
+      if (!this.audioRenderer.isAudioPlaying()) this.audioRenderer.play();
+      this.startAudioLoop();
+    }
+    Logger.info(TAG, `Audio switched (WASM) to: ${track.label} (${track.lang})`);
     this.emit("audioTrackChange" as any, { lang, label: track.label });
     return true;
   }

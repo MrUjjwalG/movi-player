@@ -141,6 +141,13 @@ export interface PlayerConfig {
    * branch. The adapter's `getSize()` and `read()` are called directly.
    */
   sourceAdapter?: import("./source/SourceAdapter").SourceAdapter;
+  /**
+   * Skip the MSE stream engines (Shaka / hls.js / dash.js) for a DASH source
+   * and play its single-file Representation through the FFmpeg-WASM demuxer
+   * instead. Set after an MSE engine fails at RUNTIME on a codec the browser
+   * can't decode (e.g. Safari + HE-AAC): the demuxer decodes every codec.
+   */
+  forceStreamDemux?: boolean;
   /** Separate audio source — single or multi-language */
   audioSource?: SourceConfig;
   /** Multiple audio tracks with language metadata */
