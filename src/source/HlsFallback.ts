@@ -67,6 +67,21 @@ export interface HlsFallbackPlan {
   selectedVariant?: string;
 }
 
+/** BCP-47 code → human language name (viewer's locale), else "". */
+function langName(code: string): string {
+  if (!code || code === "und") return "";
+  try {
+    const base = code.split("-")[0];
+    const locale =
+      (typeof navigator !== "undefined" && navigator.language) || "en";
+    return (
+      new Intl.DisplayNames([locale], { type: "language" }).of(base) || code
+    );
+  } catch {
+    return code;
+  }
+}
+
 function resolveUrl(uri: string, base: string): string {
   try {
     return new URL(uri, base).href;
@@ -376,19 +391,29 @@ export async function analyzeHlsFallback(
       }));
     }
 
-    // Separate audio group → one rendition per language (segment playlists).
+    // Separate audio group → one rendition per LANGUAGE (this is a language
+    // selector, not a channel/bitrate picker — a group can list the same
+    // language twice, e.g. stereo + 5.1). Prefer the DEFAULT tag, else the
+    // first seen, so a language is never listed (or shown active) twice.
     if (best.audioGroup) {
       const audioTags = media.filter(
         (m) => m.type === "AUDIO" && m.groupId === best.audioGroup && m.uri,
       );
+      const byLang = new Map<string, MediaTag>();
+      for (const t of audioTags) {
+        const key = t.language || "und";
+        const cur = byLang.get(key);
+        if (!cur || (t.isDefault && !cur.isDefault)) byLang.set(key, t);
+      }
       const loaded = await Promise.all(
-        audioTags.map(async (t) => {
+        [...byLang.values()].map(async (t) => {
           const track = await loadMediaTrack(t.uri!, headers);
           if (!track) return null;
+          const lang = t.language || "und";
           const rendition: HlsAudioRendition = {
             ...track,
-            lang: t.language || "und",
-            label: t.name || t.language || "Audio",
+            lang,
+            label: langName(lang) || t.name || "Audio",
             isDefault: t.isDefault,
           };
           return rendition;
@@ -398,19 +423,26 @@ export async function analyzeHlsFallback(
       if (audioRenditions.length > 0) plan.audioRenditions = audioRenditions;
     }
 
-    // Subtitle group → segmented WebVTT per language.
+    // Subtitle group → segmented WebVTT, one rendition per language.
     if (best.subtitlesGroup) {
       const subTags = media.filter(
         (m) =>
           m.type === "SUBTITLES" && m.groupId === best.subtitlesGroup && m.uri,
       );
+      const byLang = new Map<string, MediaTag>();
+      for (const t of subTags) {
+        const key = t.language || "und";
+        const cur = byLang.get(key);
+        if (!cur || (t.isDefault && !cur.isDefault)) byLang.set(key, t);
+      }
       const loaded = await Promise.all(
-        subTags.map(async (t) => {
+        [...byLang.values()].map(async (t) => {
           const track = await loadMediaTrack(t.uri!, headers);
           if (!track) return null;
+          const lang = t.language || "und";
           const rendition: HlsSubtitleRendition = {
-            lang: t.language || "und",
-            label: t.name || t.language || "Subtitle",
+            lang,
+            label: langName(lang) || t.name || "Subtitle",
             segments: track.segments,
             isDefault: t.isDefault,
           };
