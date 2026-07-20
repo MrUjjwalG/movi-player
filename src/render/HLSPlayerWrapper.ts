@@ -6,6 +6,7 @@ import {
   PlayerConfig,
   Track,
   VideoTrack,
+  AudioTrack,
   SubtitleTrack,
 } from "../types";
 import { CanvasRenderer } from "./CanvasRenderer";
@@ -108,6 +109,19 @@ export class HLSPlayerWrapper extends EventEmitter<PlayerEventMap> {
         track
           ? `Selected subtitle track ${track.id} (${track.language || track.label || ""})`
           : "Subtitles disabled",
+      );
+    });
+
+    // Audio-rendition switch. id is the index into hls.audioTracks (alternate
+    // EXT-X-MEDIA TYPE=AUDIO renditions); setting hls.audioTrack changes the
+    // active language. hls.js runs bitrate selection independently.
+    this.trackManager.on("audioTrackChange", (track: AudioTrack | null) => {
+      if (!this.hls || !track) return;
+      if (this.hls.audioTrack === track.id) return; // already active
+      this.hls.audioTrack = track.id;
+      Logger.info(
+        TAG,
+        `Selected audio track ${track.id} (${track.language || track.label || ""})`,
       );
     });
   }
@@ -508,10 +522,37 @@ export class HLSPlayerWrapper extends EventEmitter<PlayerEventMap> {
       } as SubtitleTrack);
     });
 
+    // Audio tracks — alternate EXT-X-MEDIA TYPE=AUDIO renditions (declared in
+    // the master playlist, so parsed by MANIFEST_PARSED). id is the index into
+    // hls.audioTracks, exactly what the `audioTrack` setter expects. Muxed-only
+    // streams have 0-1 entries, so the selector stays hidden there.
+    const auds = this.hls?.audioTracks ?? [];
+    auds.forEach((t, index) => {
+      const lang = t.lang && t.lang !== "und" ? t.lang : "";
+      const label = t.name || lang || `Audio ${index + 1}`;
+      tracks.push({
+        id: index,
+        type: "audio",
+        codec: "",
+        language: lang,
+        label,
+        channels: 0,
+        sampleRate: 0,
+      } as AudioTrack);
+    });
+
     this.trackManager.setTracks(tracks);
 
     // Select Auto by default
     this.trackManager.selectVideoTrack(-1);
+
+    // Reflect hls.js's active audio rendition as the selected track.
+    if (auds.length > 1 && typeof this.hls?.audioTrack === "number") {
+      const activeIdx = this.hls.audioTrack;
+      if (activeIdx >= 0 && activeIdx < auds.length) {
+        this.trackManager.selectAudioTrack(activeIdx);
+      }
+    }
 
     if (this.canvasRenderer && data.levels.length > 0) {
       const level = data.levels[0];
@@ -717,11 +758,15 @@ export class HLSPlayerWrapper extends EventEmitter<PlayerEventMap> {
     this.trackManager.selectVideoTrack(id);
   }
 
-  getAudioTracks() {
-    return [];
+  getAudioTracks(): AudioTrack[] {
+    return this.trackManager
+      .getTracks()
+      .filter((t) => t.type === "audio") as AudioTrack[];
   }
-  selectAudioTrack(_id: number): boolean {
-    return false;
+  selectAudioTrack(id: number): boolean {
+    // Drives the trackManager audioTrackChange handler, which sets
+    // hls.audioTrack to perform the rendition switch.
+    return this.trackManager.selectAudioTrack(id);
   }
   getSubtitleTracks(): SubtitleTrack[] {
     return this.trackManager
