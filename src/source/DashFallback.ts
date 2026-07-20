@@ -50,11 +50,11 @@ export interface DashFallbackPlan {
     format?: "vtt" | "srt" | "ttml";
   }[];
   /**
-   * Every selectable audio Representation (best-first), so the demuxer path can
-   * offer the same audio menu the stream engine had — different languages, or
-   * different bitrates of one language. `lang` is a unique key (a same-language
-   * bitrate variant gets the bitrate appended); `label` is the display name.
-   * Present only when there's more than one; a single audio uses `audioUrl`.
+   * One audio Representation per LANGUAGE (best bitrate, best-first), so the
+   * demuxer path offers the same language menu the stream engine had. Bitrate
+   * variants of one language are collapsed (that's ABR, not a track). `lang` is
+   * the BCP-47 key; `label` is the display name. Present only when 2+ distinct
+   * languages exist; a single language uses `audioUrl`.
    */
   audioTracks?: { url: string; lang: string; label: string }[];
   /**
@@ -262,26 +262,28 @@ export async function analyzeDashFallback(
   // Muxed file already carries audio; otherwise attach the separate audio file.
   if (!bestVideo!.muxed && bestAudio) plan.audioUrl = bestAudio.url;
   if (subtitles.length > 0) plan.subtitles = subtitles;
-  // More than one selectable audio Representation (languages, or bitrate
-  // variants of one language) → expose the whole menu, best-first.
+  // Collapse bitrate variants to the best Representation per language, then
+  // expose an audio menu only when there are 2+ distinct LANGUAGES. Bitrate
+  // within one language is an ABR/quality axis, not a separate audio track —
+  // showing "English · 48 kbps / · 64 kbps" would be a manual bitrate picker no
+  // mainstream player offers. Matches the dash.js/hls.js stream path, where a
+  // single-language multi-bitrate audio shows no selector. A lone language
+  // falls through to plan.audioUrl (bestAudio = highest bitrate).
   if (!bestVideo!.muxed && audioReps.length > 1) {
-    const langCounts: Record<string, number> = {};
-    for (const a of audioReps) langCounts[a.lang] = (langCounts[a.lang] || 0) + 1;
-    plan.audioTracks = audioReps
-      .slice()
-      .sort((a, b) => b.bw - a.bw)
-      .map((a) => {
-        const dupLang = langCounts[a.lang] > 1;
-        return {
+    const bestPerLang = new Map<string, (typeof audioReps)[number]>();
+    for (const a of audioReps) {
+      const cur = bestPerLang.get(a.lang);
+      if (!cur || a.bw > cur.bw) bestPerLang.set(a.lang, a);
+    }
+    if (bestPerLang.size > 1) {
+      plan.audioTracks = Array.from(bestPerLang.values())
+        .sort((a, b) => b.bw - a.bw)
+        .map((a) => ({
           url: a.url,
-          // Switching keys on `lang`, so a same-language bitrate variant needs a
-          // unique key — append the Representation id.
-          lang: dupLang ? `${a.lang}-${a.id}` : a.lang,
-          label: dupLang
-            ? `${langName(a.lang)} · ${Math.round(a.bw / 1000)} kbps`
-            : langName(a.lang),
-        };
-      });
+          lang: a.lang,
+          label: langName(a.lang),
+        }));
+    }
   }
   // More than one video Representation → expose a quality menu, best-first.
   // Label by height ("1080p") when known, else bitrate.
