@@ -6615,6 +6615,91 @@ export class MoviElement extends HTMLElement {
     }
   }
 
+  // How many times we've reloaded onto a different rendition trying to escape a
+  // source error on the current video. Bounded so a genuinely dead link still
+  // ends at the error overlay instead of cycling renditions forever.
+  private _qualityRecoveryAttempts = 0;
+  private static readonly MAX_QUALITY_RECOVERIES = 3;
+
+  /**
+   * On a network/source error, switch to a different (lower) rendition instead
+   * of surfacing a fatal overlay — a failure often hits just one variant (an
+   * expired/hiccupped URL), and another quality frequently still loads. Returns
+   * true when a recovery switch was started (caller then skips the overlay).
+   */
+  private _tryQualityRecovery(message: string): boolean {
+    // Only worth retrying for network/source failures — a decode/OOM/bad-scheme
+    // error would fail identically on every rendition.
+    const networkish =
+      /HTTP \d|Stream (failed|ended)|Failed to fetch|Connection lost|network|does not support range|CORS/i.test(
+        message,
+      );
+    if (!networkish) return false;
+    if (this._qualityRecoveryAttempts >= MoviElement.MAX_QUALITY_RECOVERIES) {
+      return false;
+    }
+    const player = this.player as unknown as {
+      getActiveDashRendition?: () => string;
+      getDashRenditions?: () => { url: string; bandwidth?: number }[];
+      switchVideoRenditionInPlace?: (url: string) => Promise<boolean>;
+    } | null;
+
+    // Premuxed multi-source (e.g. movi-tube): swap onto the lowest OTHER quality
+    // — the smallest file, likeliest to fetch on a degraded link. Use the
+    // in-place swap directly (not switchPremuxedQuality, whose reload fallback
+    // re-points the bare `src` and would drop the separate audio/subtitle
+    // tracks); it swaps only the video demuxer, keeping split audio alive. If it
+    // can't recover, fall through to the overlay.
+    if (
+      this._videoQualities.length >= 2 &&
+      typeof player?.switchVideoRenditionInPlace === "function"
+    ) {
+      const activeSrc =
+        player?.getActiveDashRendition?.() ||
+        (typeof this._src === "string" ? this._src : "");
+      const target = [...this._videoQualities]
+        .sort((a, b) => a.height - b.height)
+        .find((q) => q.src && q.src !== activeSrc);
+      if (!target) return false;
+      this._qualityRecoveryAttempts++;
+      Logger.warn(
+        TAG,
+        `Source error — recovering onto ${target.label || target.height + "p"} (attempt ${this._qualityRecoveryAttempts})`,
+      );
+      const fail = () =>
+        this.handleUnsupportedVideo(
+          "Network Error",
+          "Playback was interrupted and couldn't be recovered.",
+        );
+      player
+        .switchVideoRenditionInPlace(target.src)
+        .then((ok) => {
+          if (!ok) fail();
+        })
+        .catch(fail);
+      return true;
+    }
+
+    // Demuxer fallback (DASH/HLS): switch to the lowest OTHER rendition.
+    const rends = player?.getDashRenditions?.() || [];
+    if (rends.length >= 2) {
+      const activeUrl = player?.getActiveDashRendition?.() || "";
+      const target = [...rends]
+        .sort((a, b) => (a.bandwidth || 0) - (b.bandwidth || 0))
+        .find((r) => r.url && r.url !== activeUrl);
+      if (!target) return false;
+      this._qualityRecoveryAttempts++;
+      Logger.warn(
+        TAG,
+        `Source error — recovering onto a lower rendition (attempt ${this._qualityRecoveryAttempts})`,
+      );
+      this.switchDashRendition(target.url);
+      return true;
+    }
+
+    return false;
+  }
+
   /** Rough H.264 bitrate (bps) for a resolution height — used to size premuxed
    *  renditions for the ABR when a source declares no explicit bitrate. */
   private _estimateBitrate(height: number): number {
@@ -17514,10 +17599,15 @@ export class MoviElement extends HTMLElement {
     );
 
     const errorHandler = (error: unknown) => {
-      this._qoe.error(
-        error instanceof Error ? error.message : String(error),
-        true,
-      );
+      const rawMsg = error instanceof Error ? error.message : String(error);
+      // Before surfacing a fatal "Playback Error" overlay, try recovering onto a
+      // different rendition. A source/network failure often hits just one variant
+      // (an expired or hiccupped segment URL — common after a long watch), and
+      // another quality frequently still loads. Only for network-ish errors, and
+      // capped so a genuinely dead link still ends at the overlay.
+      if (this._tryQualityRecovery(rawMsg)) return;
+
+      this._qoe.error(rawMsg, true);
       this.dispatchEvent(new CustomEvent("error", { detail: error }));
       // Always log the raw error before the message gets prettified for
       // the overlay — without this, "State: ... -> error" appears in
