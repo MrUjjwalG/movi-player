@@ -1512,6 +1512,10 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
       }
     }
     const upIdx = rungs.indexOf(up);
+    Logger.info(
+      TAG,
+      `ABR: ${(throughputBits / 1e6).toFixed(1)}Mbps affordable → ${up.label} (idx ${upIdx}); current idx ${activeIdx} (${currentRung?.label ?? "?"})`,
+    );
     if (activeIdx < 0) {
       // Current rung unknown (unseeded) — establish the affordable one at once.
       await this.abrCommit(up.url, now);
@@ -4732,6 +4736,26 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
   seedNetworkThroughputBps(bps: number): void {
     if (bps > 0 && this._lastThroughputBps <= 0) {
       this._lastThroughputBps = bps;
+    }
+  }
+
+  /**
+   * Fold the source's live download speed into the throughput estimate. Meant to
+   * be called frequently (every UI tick, ~250ms) — the ABR's own 4s tick is too
+   * coarse to catch a small file that finishes downloading in under a second, so
+   * a fully-cached video would otherwise leave the estimate stale/low and Auto,
+   * thinking the link is slow, would sit stuck at the low starting rung.
+   */
+  sampleThroughput(): void {
+    const raw =
+      (this.source as { getNetworkStats?: () => { currentSpeed: number } })
+        .getNetworkStats?.()
+        ?.currentSpeed ?? 0;
+    if (raw > 0) {
+      this._lastThroughputBps =
+        this._lastThroughputBps > 0
+          ? this._lastThroughputBps * 0.7 + raw * 0.3
+          : raw;
     }
   }
 

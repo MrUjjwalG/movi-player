@@ -9646,8 +9646,12 @@ export class MoviElement extends HTMLElement {
         return;
       }
 
-      // Persist the live throughput estimate every few seconds so the ABR on the
-      // next video (a fresh player instance) starts from a real number.
+      // Fold the live download speed into the ABR estimate on every UI tick —
+      // the ABR's own 4s cadence misses a small file that caches in under a
+      // second, which left Auto stuck at a low rung on a fast link.
+      this.player.sampleThroughput?.();
+      // Persist the estimate every few seconds so the ABR on the next video (a
+      // fresh player instance) starts from a real number.
       if (timestamp - lastThroughputSave >= 5000) {
         lastThroughputSave = timestamp;
         const bps = this.player.getNetworkThroughputBps?.() ?? 0;
