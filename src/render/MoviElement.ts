@@ -715,6 +715,15 @@ export class MoviElement extends HTMLElement {
             </svg>
             Try Software Decoding
           </button>
+          <button class="movi-retry-btn" style="display: none;">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" width="16" height="16">
+              <path d="M21 12a9 9 0 0 0-9-9 9.75 9.75 0 0 0-6.74 2.74L3 8"/>
+              <path d="M3 3v5h5"/>
+              <path d="M3 12a9 9 0 0 0 9 9 9.75 9.75 0 0 0 6.74-2.74L21 16"/>
+              <path d="M16 16h5v5"/>
+            </svg>
+            Retry
+          </button>
         </div>
       </div>
     `;
@@ -726,6 +735,14 @@ export class MoviElement extends HTMLElement {
     );
     swFallbackBtn?.addEventListener("click", () => {
       this.enableSoftwareDecoding();
+    });
+
+    // Retry re-attempts the full load (dispose + re-init) without a page
+    // refresh — for transient network/server failures. load() resets
+    // _isUnsupported and hides this overlay.
+    const retryBtn = this.brokenIndicator.querySelector(".movi-retry-btn");
+    retryBtn?.addEventListener("click", () => {
+      this.load().catch(() => {});
     });
 
     // Create empty state indicator (shown when no src is set)
@@ -13776,7 +13793,8 @@ export class MoviElement extends HTMLElement {
         text-align: center;
       }
       
-      .movi-sw-fallback-btn {
+      .movi-sw-fallback-btn,
+      .movi-retry-btn {
         display: flex;
         align-items: center;
         justify-content: center;
@@ -13792,14 +13810,16 @@ export class MoviElement extends HTMLElement {
         cursor: pointer;
         transition: all 0.2s ease;
       }
-      
-      .movi-sw-fallback-btn:hover {
+
+      .movi-sw-fallback-btn:hover,
+      .movi-retry-btn:hover {
         background: rgba(255, 255, 255, 0.25);
         border-color: rgba(255, 255, 255, 0.4);
         transform: scale(1.02);
       }
-      
-      .movi-sw-fallback-btn svg {
+
+      .movi-sw-fallback-btn svg,
+      .movi-retry-btn svg {
         flex-shrink: 0;
       }
 
@@ -16232,6 +16252,27 @@ export class MoviElement extends HTMLElement {
   }
 
   /**
+   * True when the current string src uses a scheme fetch() can't handle — a
+   * typo like "httpss://", or a missing scheme. new URL() accepts any scheme,
+   * so these don't parse-fail; they die later at fetch() with a generic
+   * "Failed to fetch", which reads as a network problem. Detecting the bad
+   * scheme lets both error paths (init-catch and the runtime "error" handler)
+   * blame the URL instead. Skipped when a custom source adapter is set — it
+   * reads the bytes itself and may legitimately use any scheme (s3://, ipfs://,
+   * ws://), so the http(s)/blob/data/file whitelist must not apply.
+   */
+  private hasUnfetchableSrcScheme(): boolean {
+    if (this._sourceAdapter) return false;
+    if (typeof this._src !== "string" || !this._src) return false;
+    try {
+      const proto = new URL(this._src, location.href).protocol;
+      return !["http:", "https:", "blob:", "data:", "file:"].includes(proto);
+    } catch {
+      return true; // didn't even parse as a URL
+    }
+  }
+
+  /**
    * Automatically create and initialize MoviPlayer
    */
   private async initializePlayer(): Promise<void> {
@@ -16629,8 +16670,19 @@ export class MoviElement extends HTMLElement {
       if (error instanceof Error) {
         message = error.message;
 
-        // Check for CORS errors - these typically show as "Load failed" TypeError
+        // A src whose scheme isn't fetchable (typo like "httpss://", or no
+        // scheme) fails at fetch() with a generic "Failed to fetch" that reads
+        // as a network problem — blame the URL up front, BEFORE the CORS/fetch
+        // branches that would otherwise swallow it. See hasUnfetchableSrcScheme.
         if (
+          this.hasUnfetchableSrcScheme() ||
+          /invalid url|failed to construct 'url'/i.test(message)
+        ) {
+          title = "Invalid Video URL";
+          message =
+            "The video URL is malformed or uses an unsupported scheme. Use a full, valid http(s):// URL.";
+        } else if (
+          // CORS errors — these typically show as a "Load failed" TypeError
           message.includes("Load failed") ||
           message.toLowerCase().includes("cors") ||
           message.toLowerCase().includes("access-control-allow-origin")
@@ -16642,6 +16694,10 @@ export class MoviElement extends HTMLElement {
           title = "Network Error";
           message =
             "Failed to fetch video resource. Check your connection or try again.";
+        } else if (message.includes("does not support range requests")) {
+          title = "Server Not Supported";
+          message =
+            "This server doesn't support byte-range requests, which Movi needs to stream video. Serve the file with Range support (Accept-Ranges), or host it somewhere that does.";
         } else if (
           /out of bounds memory access|memory access out of bounds|RuntimeError|Aborted\(\)/i.test(message)
         ) {
@@ -17053,7 +17109,14 @@ export class MoviElement extends HTMLElement {
       // like "HTTP 503" or "Stream failed after maximum retries" which means
       // nothing to a user staring at a buffering UI that just gave up.
       const httpMatch = message.match(/^HTTP (\d{3})/);
-      if (httpMatch) {
+      if (this.hasUnfetchableSrcScheme()) {
+        // Bad/typo'd URL scheme fails at fetch() and surfaces here as a generic
+        // network error — blame the URL, not the network. Checked first: a bad
+        // scheme never gets far enough to produce an HTTP status code.
+        title = "Invalid Video URL";
+        message =
+          "The video URL is malformed or uses an unsupported scheme. Use a full, valid http(s):// URL.";
+      } else if (httpMatch) {
         const code = httpMatch[1];
         title = "Network Error";
         if (code === "404") message = "Video not found (HTTP 404).";
@@ -18371,9 +18434,14 @@ export class MoviElement extends HTMLElement {
     if (this._nativeFallbackActive) return;
 
     const msgLower = message?.toLowerCase() || "";
-    const isNetworkError = msgLower.includes("http 4") || msgLower.includes("http 5") ||
+    // Title is the authoritative signal: both classification sites set
+    // "Network Error" for fetch-fail / CORS, whose MESSAGE ("Failed to fetch
+    // video resource…") carries none of the keyword hints below — so keying on
+    // the message alone missed the most common network error (no Retry button).
+    const isNetworkError = title === "Network Error" ||
+      msgLower.includes("http 4") || msgLower.includes("http 5") ||
       msgLower.includes("stream unavailable") || msgLower.includes("network error") ||
-      msgLower.includes("hls error");
+      msgLower.includes("hls error") || msgLower.includes("failed to fetch");
     const isDecoderError = !isNetworkError && (
       title === "Format Unsupported" ||
       title === "Codec Unsupported" ||
@@ -18464,6 +18532,22 @@ export class MoviElement extends HTMLElement {
           // manual "Try Software Decoding" prompt is never surfaced.
           this.getAttribute("fallback") !== "native";
         swFallbackBtn.style.display = shouldShowSwButton ? "flex" : "none";
+      }
+
+      // Show/hide the Retry button. Retry re-attempts the whole load without a
+      // page refresh — the right recovery for transient network/server errors.
+      // Decoder errors get "Try Software Decoding" instead.
+      //
+      // NOT gated on fallback="native": when native fallback SUCCEEDS,
+      // handleUnsupportedVideo early-returns (_nativeFallbackActive) and never
+      // reaches this overlay code at all. We only get here when there's no
+      // native fallback OR native was already tried and ALSO failed — and in
+      // that case Retry is exactly the recovery the user wants.
+      const retryBtn = this.brokenIndicator.querySelector(
+        ".movi-retry-btn",
+      ) as HTMLElement;
+      if (retryBtn) {
+        retryBtn.style.display = isNetworkError ? "flex" : "none";
       }
     }
 
