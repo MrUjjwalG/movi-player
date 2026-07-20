@@ -147,7 +147,13 @@ export class HttpSource implements SourceAdapter {
   private streamStartTime: number = 0;
   private lastSpeedBytes: number = 0;
   private lastSpeedTime: number = 0;
-  private currentSpeed: number = 0; // bytes per second
+  private currentSpeed: number = 0; // bytes per second (0 when idle — for UI)
+  // Last measured active download rate (bytes/s), NOT zeroed when idle. The ABR
+  // needs the link's capability even after a small file finishes caching; a
+  // fully-downloaded source reporting currentSpeed 0 was why Auto sat stuck at a
+  // low rung. Captured on the sub-1s path too (currentSpeed's 0.5s window misses
+  // a file that downloads in a few hundred ms).
+  private lastSpeed: number = 0;
 
   // Maximum buffer size (from cache config, defaults to DEFAULT_MAX_BUFFER_SIZE_MB)
   private maxBufferSizeMB: number;
@@ -1070,6 +1076,7 @@ export class HttpSource implements SourceAdapter {
             if (speedElapsed >= 0.5) {
               const bytesSinceLast = this.totalBytesDownloaded - this.lastSpeedBytes;
               this.currentSpeed = bytesSinceLast / speedElapsed;
+              this.lastSpeed = this.currentSpeed;
               this.lastSpeedBytes = this.totalBytesDownloaded;
               this.lastSpeedTime = now;
             }
@@ -1077,6 +1084,9 @@ export class HttpSource implements SourceAdapter {
             if (downloadedBytes - lastLogBytes > 1024 * 1024) {
               // Log every 1MB
               const elapsed = (Date.now() - startTime) / 1000;
+              // Per-1MB active rate (bytes/s) — captured even for a sub-0.5s
+              // download that the window above never gets to measure.
+              if (elapsed > 0) this.lastSpeed = downloadedBytes / elapsed;
               const speed =
                 elapsed > 0 ? downloadedBytes / 1024 / 1024 / elapsed : 0;
               Logger.debug(
@@ -2048,12 +2058,18 @@ export class HttpSource implements SourceAdapter {
   /**
    * Get network stats for nerd stats overlay
    */
-  getNetworkStats(): { totalBytes: number; currentSpeed: number; elapsed: number } {
+  getNetworkStats(): {
+    totalBytes: number;
+    currentSpeed: number;
+    lastSpeed: number;
+    elapsed: number;
+  } {
     const timeSinceLastRead = this.lastSpeedTime > 0 ? (Date.now() - this.lastSpeedTime) / 1000 : 0;
     const speed = timeSinceLastRead > 1 ? 0 : this.currentSpeed;
     return {
       totalBytes: this.totalBytesDownloaded,
-      currentSpeed: speed,
+      currentSpeed: speed, // 0 when idle — UI graph / stats
+      lastSpeed: this.lastSpeed, // last measured rate, persists when idle — ABR
       elapsed: this.streamStartTime > 0 ? (Date.now() - this.streamStartTime) / 1000 : 0,
     };
   }

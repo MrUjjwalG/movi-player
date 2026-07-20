@@ -292,7 +292,9 @@ export class SegmentStreamSource implements SourceAdapter {
 
   /** Download-speed estimate (bytes/s) for the ABR controller. Shape mirrors
    *  HttpSource.getNetworkStats() so the caller can duck-type either source. */
-  getNetworkStats(): { currentSpeed: number } {
-    return { currentSpeed: this._throughputBps };
+  getNetworkStats(): { currentSpeed: number; lastSpeed: number } {
+    // _throughputBps is already a persistent EWMA, so currentSpeed and lastSpeed
+    // are the same here (the ABR reads lastSpeed).
+    return { currentSpeed: this._throughputBps, lastSpeed: this._throughputBps };
   }
 }

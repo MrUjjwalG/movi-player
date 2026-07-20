@@ -1435,10 +1435,15 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
     // fresh download), so give it time to settle before trusting it again.
     if (sinceSwitch < 12000) return;
 
-    const raw =
-      (this.source as { getNetworkStats?: () => { currentSpeed: number } })
-        .getNetworkStats?.()
-        ?.currentSpeed ?? 0;
+    const netStats = (
+      this.source as {
+        getNetworkStats?: () => { currentSpeed: number; lastSpeed?: number };
+      }
+    ).getNetworkStats?.();
+    // Prefer lastSpeed (the last measured rate, which survives idle) over
+    // currentSpeed (0 once a small file finishes caching) so Auto keeps a real
+    // estimate to size the rung from.
+    const raw = netStats?.lastSpeed ?? netStats?.currentSpeed ?? 0;
     // EWMA-smooth the estimate. A single reading is noisy on the premuxed path:
     // each in-place switch restarts a file download (TCP ramp reads low) and a
     // full buffer pauses the download (trickle reads low), so an unsmoothed
@@ -4747,10 +4752,12 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
    * thinking the link is slow, would sit stuck at the low starting rung.
    */
   sampleThroughput(): void {
-    const raw =
-      (this.source as { getNetworkStats?: () => { currentSpeed: number } })
-        .getNetworkStats?.()
-        ?.currentSpeed ?? 0;
+    const s = (
+      this.source as {
+        getNetworkStats?: () => { currentSpeed: number; lastSpeed?: number };
+      }
+    ).getNetworkStats?.();
+    const raw = s?.lastSpeed ?? s?.currentSpeed ?? 0;
     if (raw > 0) {
       this._lastThroughputBps =
         this._lastThroughputBps > 0
