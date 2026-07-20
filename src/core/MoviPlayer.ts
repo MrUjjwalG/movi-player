@@ -1433,35 +1433,65 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
       return;
     }
 
-    const affordableBits = bps * 8 * 0.85; // safety margin
-    let pick = rungs[rungs.length - 1]; // lowest by default
-    for (const r of rungs) {
-      if ((r.bandwidth || 0) <= affordableBits) {
-        pick = r;
-        break;
+    const throughputBits = bps * 8;
+    const currentRung = activeIdx >= 0 ? rungs[activeIdx] : null;
+
+    // DOWNSHIFT — only when the current rung genuinely can't be sustained: its
+    // bitrate exceeds the raw (un-margined) measured throughput. Drop to the
+    // highest rung the throughput does sustain, in one hop. Using raw throughput
+    // for the down threshold but a margin for the up threshold (below) opens a
+    // hysteresis dead-zone between them, so a throughput hovering near a rung
+    // boundary no longer flips the quality up-and-down every cooldown.
+    if (
+      currentRung &&
+      (currentRung.bandwidth || 0) > throughputBits &&
+      activeIdx < rungs.length - 1
+    ) {
+      let target = rungs[rungs.length - 1];
+      for (const r of rungs) {
+        if ((r.bandwidth || 0) <= throughputBits) {
+          target = r;
+          break;
+        }
       }
-    }
-    if (pick.url === this._activeDashRendition) {
-      this._abrUpCandidate = "";
-      this._abrUpConfirms = 0;
+      if (target.url !== currentRung.url) {
+        await this.abrCommit(target.url, now);
+      }
       return;
     }
 
-    const pickIdx = rungs.findIndex((r) => r.url === pick.url);
-    const isUpshift = activeIdx >= 0 && pickIdx < activeIdx;
-    if (isUpshift) {
-      // Confirm an upshift across two consecutive ticks: a lone throughput spike
-      // (a cache-served burst, one unusually fast chunk) shouldn't bounce the
-      // quality up only to fall straight back on the next real sample.
-      if (this._abrUpCandidate === pick.url) {
+    // UPSHIFT — only to a higher rung that fits with a safety margin, and only
+    // after it holds for two consecutive ticks so a lone spike (a cache-served
+    // burst, one fast chunk) doesn't bounce quality up then straight back down.
+    const affordableBits = throughputBits * 0.85;
+    let up = rungs[rungs.length - 1];
+    for (const r of rungs) {
+      if ((r.bandwidth || 0) <= affordableBits) {
+        up = r;
+        break;
+      }
+    }
+    const upIdx = rungs.indexOf(up);
+    if (activeIdx < 0) {
+      // Current rung unknown (unseeded) — establish the affordable one at once.
+      await this.abrCommit(up.url, now);
+      return;
+    }
+    if (upIdx < activeIdx) {
+      if (this._abrUpCandidate === up.url) {
         this._abrUpConfirms++;
       } else {
-        this._abrUpCandidate = pick.url;
+        this._abrUpCandidate = up.url;
         this._abrUpConfirms = 1;
       }
-      if (this._abrUpConfirms < 2) return;
+      if (this._abrUpConfirms >= 2) await this.abrCommit(up.url, now);
+      return;
     }
-    await this.abrCommit(pick.url, now);
+
+    // Current rung sits inside the hysteresis dead-zone — hold, and clear any
+    // half-formed upshift streak.
+    this._abrUpCandidate = "";
+    this._abrUpConfirms = 0;
   }
 
   /** Perform an ABR switch and arm the anti-thrash cooldown/hysteresis. */
@@ -4641,6 +4671,22 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
     this._dashRenditions = renditions;
     if (activeUrl && !this._activeDashRendition) {
       this._activeDashRendition = activeUrl;
+    }
+  }
+
+  /** Current network throughput estimate (bytes/s). Hosts can persist this and
+   *  re-seed the next video (a fresh player) so the ABR sizes the starting
+   *  quality from a real number instead of climbing up from a cold estimate. */
+  getNetworkThroughputBps(): number {
+    return this._lastThroughputBps;
+  }
+
+  /** Seed the throughput estimate (bytes/s) before playback measures its own.
+   *  Only applied while no live measurement exists, so a real sample always
+   *  wins. Lets a fresh video pick the right rung on the first ABR tick. */
+  seedNetworkThroughputBps(bps: number): void {
+    if (bps > 0 && this._lastThroughputBps <= 0) {
+      this._lastThroughputBps = bps;
     }
   }
 

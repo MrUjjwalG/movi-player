@@ -6597,6 +6597,24 @@ export class MoviElement extends HTMLElement {
     }
   }
 
+  /** Persisted network throughput estimate (bytes/s). Carried across videos (a
+   *  fresh player each time in hosts like movi-tube) so the ABR can size the
+   *  starting quality directly instead of climbing up from a cold estimate. */
+  private _readStoredThroughput(): number {
+    try {
+      return parseFloat(localStorage.getItem("movi:net-bps") || "0") || 0;
+    } catch {
+      return 0;
+    }
+  }
+  private _writeStoredThroughput(bps: number): void {
+    try {
+      localStorage.setItem("movi:net-bps", String(Math.round(bps)));
+    } catch {
+      /* storage disabled — estimate just won't carry to the next video */
+    }
+  }
+
   /** Rough H.264 bitrate (bps) for a resolution height — used to size premuxed
    *  renditions for the ABR when a source declares no explicit bitrate. */
   private _estimateBitrate(height: number): number {
@@ -6684,6 +6702,9 @@ export class MoviElement extends HTMLElement {
         })),
         activeSrc,
       );
+      // Seed the ABR with the throughput carried from the previous video so its
+      // first decision sizes quality directly (no rung-by-rung climb).
+      player?.seedNetworkThroughputBps?.(this._readStoredThroughput());
       // Re-apply a persisted Auto preference (survives the per-video element
       // rebuild) before reading isAuto, so a fresh video lands on Auto.
       if (this._readQualityAutoPref() && !player?.isAutoQuality?.()) {
@@ -6772,8 +6793,11 @@ export class MoviElement extends HTMLElement {
     // isAuto, so a fresh load lands on Auto instead of a fixed rung.
     const abrCapable =
       renditions.filter((r) => (r.bandwidth || 0) > 0).length >= 2;
-    if (abrCapable && this._readQualityAutoPref() && !player?.isAutoQuality?.()) {
-      player?.setAutoQuality?.(true);
+    if (abrCapable) {
+      player?.seedNetworkThroughputBps?.(this._readStoredThroughput());
+      if (this._readQualityAutoPref() && !player?.isAutoQuality?.()) {
+        player?.setAutoQuality?.(true);
+      }
     }
     const isAuto = !!player?.isAutoQuality?.();
     const active = renditions.find((r) => r.url === activeUrl);
@@ -9526,10 +9550,19 @@ export class MoviElement extends HTMLElement {
     // event, so reactive listeners still feel immediate.
     const UI_UPDATE_MIN_MS = 250;
     let lastRun = 0;
+    let lastThroughputSave = 0;
     const updateUI = (timestamp: number) => {
       if (!this.player) {
         this._uiUpdatesRunning = false;
         return;
+      }
+
+      // Persist the live throughput estimate every few seconds so the ABR on the
+      // next video (a fresh player instance) starts from a real number.
+      if (timestamp - lastThroughputSave >= 5000) {
+        lastThroughputSave = timestamp;
+        const bps = this.player.getNetworkThroughputBps?.() ?? 0;
+        if (bps > 0) this._writeStoredThroughput(bps);
       }
 
       if (timestamp - lastRun >= UI_UPDATE_MIN_MS) {
