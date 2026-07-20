@@ -1926,6 +1926,21 @@ export class HttpSource implements SourceAdapter {
     const localOffset = offset - bufferStart;
     const available = Math.min(length, this.bufferEnd - offset);
 
+    // Never hand the demuxer a SHORT buffer for a read that isn't a genuine EOF
+    // tail. If the streaming window stopped at a 40MB-chunk boundary (or slid)
+    // just before the last bytes of this range landed, returning the partial
+    // slice makes the WASM demuxer parse a truncated packet and trap with
+    // RuntimeError: Aborted() — surfaced to the user as "corrupt data stream".
+    // Throw a retriable I/O error instead: the read loop restarts the stream and
+    // retries, and the demuxer treats it as a normal read failure (no crash). A
+    // real EOF tail (range extends past the known file size) still returns short.
+    const isEofTail = this.size > 0 && offset + length > this.size;
+    if ((available < length || localOffset < 0) && !isEofTail) {
+      throw new Error(
+        `Incomplete read at ${offset}: ${Math.max(0, available)}/${length} bytes buffered`,
+      );
+    }
+
     const result = new Uint8Array(available);
     result.set(buffer.subarray(localOffset, localOffset + available));
 
