@@ -4041,6 +4041,27 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
   }
 
   /**
+   * Get the currently active video track.
+   */
+  getActiveVideoTrack(): VideoTrack | null {
+    return this.trackManager.getActiveVideoTrack();
+  }
+
+  /**
+   * Get the currently active audio track.
+   */
+  getActiveAudioTrack(): AudioTrack | null {
+    return this.trackManager.getActiveAudioTrack();
+  }
+
+  /**
+   * Get the currently active subtitle track, or null when subtitles are disabled.
+   */
+  getActiveSubtitleTrack(): SubtitleTrack | null {
+    return this.trackManager.getActiveSubtitleTrack();
+  }
+
+  /**
    * Select audio track
    */
   selectAudioTrack(trackId: number): boolean {
