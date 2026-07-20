@@ -1943,8 +1943,13 @@ export class HttpSource implements SourceAdapter {
     // RuntimeError: Aborted() — surfaced to the user as "corrupt data stream".
     // Throw a retriable I/O error instead: the read loop restarts the stream and
     // retries, and the demuxer treats it as a normal read failure (no crash). A
-    // real EOF tail (range extends past the known file size) still returns short.
-    const isEofTail = this.size > 0 && offset + length > this.size;
+    // real EOF tail (starts INSIDE the file but runs past its end) still returns
+    // short. A read that *starts* at/after the file end (offset >= size) is not a
+    // tail — it's an out-of-range read (e.g. a rendition swap left a byte cursor
+    // sized for the previous, larger file); treat it as incomplete so it throws
+    // rather than slicing a negative-length array or feeding garbage to the WASM.
+    const isEofTail =
+      this.size > 0 && offset < this.size && offset + length > this.size;
     if ((available < length || localOffset < 0) && !isEofTail) {
       throw new Error(
         `Incomplete read at ${offset}: ${Math.max(0, available)}/${length} bytes buffered`,

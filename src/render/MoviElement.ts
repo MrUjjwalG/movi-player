@@ -6649,19 +6649,19 @@ export class MoviElement extends HTMLElement {
     const player = this.player as unknown as {
       getActiveDashRendition?: () => string;
       getDashRenditions?: () => { url: string; bandwidth?: number }[];
-      switchVideoRenditionInPlace?: (url: string) => Promise<boolean>;
     } | null;
 
-    // Premuxed multi-source (e.g. movi-tube): swap onto the lowest OTHER quality
-    // — the smallest file, likeliest to fetch on a degraded link. Use the
-    // in-place swap directly (not switchPremuxedQuality, whose reload fallback
-    // re-points the bare `src` and would drop the separate audio/subtitle
-    // tracks); it swaps only the video demuxer, keeping split audio alive. If it
-    // can't recover, fall through to the overlay.
-    if (
-      this._videoQualities.length >= 2 &&
-      typeof player?.switchVideoRenditionInPlace === "function"
-    ) {
+    // IMPORTANT: recover via the full RELOAD path, not the in-place swap. A fatal
+    // error leaves the player in the "error" state, and the state machine only
+    // permits error→idle — an in-place swap keeps the error state, so canPlay()
+    // stays false and the play button dies with "Cannot play in current state"
+    // (exactly the "can't play" the user hit). The reload re-inits from scratch
+    // (clearing the error) and re-reads the <source> children, so the separate
+    // audio/subtitle tracks survive.
+
+    // Premuxed multi-source (e.g. movi-tube): reload onto the lowest OTHER
+    // quality — the smallest file, likeliest to fetch on a degraded link.
+    if (this._videoQualities.length >= 2) {
       const activeSrc =
         player?.getActiveDashRendition?.() ||
         (typeof this._src === "string" ? this._src : "");
@@ -6674,21 +6674,11 @@ export class MoviElement extends HTMLElement {
         TAG,
         `Source error — recovering onto ${target.label || target.height + "p"} (attempt ${this._qualityRecoveryAttempts})`,
       );
-      const fail = () =>
-        this.handleUnsupportedVideo(
-          "Network Error",
-          "Playback was interrupted and couldn't be recovered.",
-        );
-      player
-        .switchVideoRenditionInPlace(target.src)
-        .then((ok) => {
-          if (!ok) fail();
-        })
-        .catch(fail);
+      this._reloadPremuxedQuality(target.src);
       return true;
     }
 
-    // Demuxer fallback (DASH/HLS): switch to the lowest OTHER rendition.
+    // Demuxer fallback (DASH/HLS): reload onto the lowest OTHER rendition.
     const rends = player?.getDashRenditions?.() || [];
     if (rends.length >= 2) {
       const activeUrl = player?.getActiveDashRendition?.() || "";
@@ -6701,7 +6691,7 @@ export class MoviElement extends HTMLElement {
         TAG,
         `Source error — recovering onto a lower rendition (attempt ${this._qualityRecoveryAttempts})`,
       );
-      this.switchDashRendition(target.url);
+      this._reloadQualitySwitch(target.url);
       return true;
     }
 
