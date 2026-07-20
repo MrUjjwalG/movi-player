@@ -4611,12 +4611,49 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
     // keyframe before savedTime is usually behind the sliding window and the
     // read would fail (seek timeout → buffering). Skip it; the worst case is a
     // brief read-ahead pivot on rate change, far better than a stalled seek.
-    if (playingNow && !this.isLinearPlayback()) {
+    //
+    // Also skip it when a healthy audio clock is already anchoring playback:
+    // AudioRenderer.setPlaybackRate() re-anchors in place (stops the stale
+    // old-rate sources, pulls scheduledTime to now, keeps firstBufferMediaTime)
+    // so the pivot is already prevented WITHOUT a seek. The seek is a
+    // re-prime of the whole demux→decode→render pipeline — invisible spinner,
+    // but a brief frame hitch. Dropping it here makes the common case (audio
+    // playing, buffer healthy) as seek-free as a native <video> rate change.
+    // The seek stays as the fallback for video-only / unhealthy-audio playback,
+    // where nothing else re-anchors the clock.
+    if (
+      playingNow &&
+      !this.isLinearPlayback() &&
+      !this.hasHealthyAudioAnchor()
+    ) {
       this.seek(savedTime, {
         suppressSpinner: true,
         preservePlaying: true,
       }).catch(() => {});
     }
+  }
+
+  /**
+   * True when a healthy audio clock is currently anchoring playback, so the
+   * corrective seek in setPlaybackRate() is redundant (the audio pipeline
+   * re-anchors the rate change in place). Used to keep rate changes seek-free
+   * — and therefore native-video-smooth — in the common case.
+   */
+  private hasHealthyAudioAnchor(): boolean {
+    // Native <audio> path (separate / multi-language source): the element owns
+    // its own clock and re-times smoothly on a playbackRate change, so there's
+    // no demuxer read-ahead pivot to correct.
+    if (this.nativeAudioEl) return true;
+    // Software-mixed path: only when AudioRenderer is actually the clock master
+    // and its buffer is healthy — the same signal Clock uses to let audio drive
+    // A/V sync. If audio isn't anchoring (video-only, starving, mid-resync),
+    // fall through so the corrective seek still runs.
+    return (
+      this.clock.isSyncedToAudio() &&
+      !!this.audioRenderer &&
+      this.audioRenderer.getAudioClock() >= 0 &&
+      this.audioRenderer.hasHealthyBuffer()
+    );
   }
 
   /**
