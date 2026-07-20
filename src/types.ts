@@ -149,6 +149,13 @@ export interface PlayerConfig {
    */
   forceStreamDemux?: boolean;
   /**
+   * Skip Shaka and play a stream through a specific MSE engine (hls.js /
+   * dash.js) directly. Set when Shaka failed at runtime but the other engine
+   * is more lenient (e.g. a manifest/actual codec mismatch) — tried before the
+   * heavier WASM demuxer so hardware MSE playback is preferred when possible.
+   */
+  forceStreamEngine?: "dashjs" | "hlsjs";
+  /**
    * When force-demuxing a DASH source, use this specific video Representation
    * file instead of the best one — set when the user picks a quality in the
    * demuxer-mode quality menu, so the re-load lands on the chosen rendition.

@@ -316,6 +316,12 @@ export class MoviElement extends HTMLElement {
   // next initializePlayer() to set config.forceStreamDemux.
   private _streamDemuxTried = false;
   private _streamDemuxNext = false;
+  // Stage-1 stream fallback: retry a failed Shaka stream through the other MSE
+  // engine (dash.js / hls.js) before the WASM demuxer. `_streamEngineTried` is
+  // the one-shot guard (reset on new source); `_streamEngineNext` is consumed
+  // by the next initializePlayer() as config.forceStreamEngine.
+  private _streamEngineTried = false;
+  private _streamEngineNext: "dashjs" | "hlsjs" | null = null;
   // Video Representation URL the user picked in the demuxer-mode DASH quality
   // menu. Carried into the next initializePlayer() as config.forceVideoRendition
   // so the re-load lands on that rendition. Reset on a genuine src change.
@@ -15563,6 +15569,7 @@ export class MoviElement extends HTMLElement {
           // quality-switch re-init calls load() directly, not setAttribute, so
           // it never reaches here — no risk of clearing its own forced pick.)
           this._streamDemuxTried = false;
+          this._streamEngineTried = false;
           this._forcedDashRendition = null;
           if (newValue !== oldSrc) {
             this._hasEverPlayed = false;
@@ -16592,6 +16599,11 @@ export class MoviElement extends HTMLElement {
       if (this._streamDemuxNext) {
         this._streamDemuxNext = false;
         playerConfig.forceStreamDemux = true;
+      }
+      // Stage-1 fallback: skip Shaka, play through the specified MSE engine.
+      if (this._streamEngineNext) {
+        playerConfig.forceStreamEngine = this._streamEngineNext;
+        this._streamEngineNext = null;
       }
       // A DASH quality pick forces that Representation on the demuxer re-load.
       if (this._forcedDashRendition) {
@@ -18615,30 +18627,42 @@ export class MoviElement extends HTMLElement {
       msgLower.includes("decoder") ||
       msgLower.includes("codec"));
 
-    // Adaptive-stream (DASH) decode failure: the browser's MSE can't decode this
-    // stream's codec (e.g. Safari + HE-AAC → Shaka error 3014). Software decoding
-    // can't help — it re-runs the same MSE engine. The only escape is leaving the
-    // stream engine, so re-init once forcing the DASH source through movi's
-    // FFmpeg-WASM demuxer, which decodes every codec. Guarded one-shot per source;
-    // after the switch it's demuxer (not stream) playback, so isStreamPlayback()
-    // is false and this can't re-fire. If the demuxer path ALSO fails, the normal
-    // error UI shows. Runs before fallback="native" because handing a .mpd to a
-    // native <video> can't play DASH (Safari has no native DASH).
-    if (
-      isDecoderError &&
-      !this._streamDemuxTried &&
-      this.player?.isStreamPlayback?.() &&
-      typeof this._src === "string" &&
-      /\.mpd(\?|#|$)/i.test(this._src)
-    ) {
-      this._streamDemuxTried = true;
-      this._streamDemuxNext = true;
-      Logger.info(
-        TAG,
-        "Stream decode error — MSE can't decode this codec; retrying via the FFmpeg demuxer",
-      );
-      this.load().catch(() => {});
-      return;
+    // Adaptive-stream decode failure (e.g. Shaka error 3014). Escalate through
+    // two stages before surfacing the error, both keeping the .mpd/.m3u8 src:
+    //   1. Try the OTHER MSE engine (dash.js / hls.js). It's often more lenient
+    //      than Shaka — a manifest-vs-actual codec mismatch Shaka rejects can
+    //      play here on hardware (verified: DASH-IF 4b plays in dash.js on both
+    //      Safari & Chrome where Shaka fails). Preferred over WASM.
+    //   2. If that also fails (a genuine MSE codec limit, e.g. Safari + HE-AAC),
+    //      DASH only: re-load through the FFmpeg-WASM demuxer, which decodes any
+    //      codec. After that it's demuxer (not stream) playback, so this can't
+    //      re-fire. If everything fails, the normal error UI shows.
+    // Runs before fallback="native" (handing a manifest to a native <video>
+    // can't play adaptive DASH — Safari has no native DASH).
+    if (isDecoderError && this.player?.isStreamPlayback?.()) {
+      const srcL = typeof this._src === "string" ? this._src.toLowerCase() : "";
+      const isDashSrc = srcL.includes(".mpd");
+      const isHlsSrc = srcL.includes(".m3u8");
+      if ((isDashSrc || isHlsSrc) && !this._streamEngineTried) {
+        this._streamEngineTried = true;
+        this._streamEngineNext = isDashSrc ? "dashjs" : "hlsjs";
+        Logger.info(
+          TAG,
+          `Stream decode error — retrying via ${this._streamEngineNext} (Shaka may be over-strict)`,
+        );
+        this.load().catch(() => {});
+        return;
+      }
+      if (isDashSrc && !this._streamDemuxTried) {
+        this._streamDemuxTried = true;
+        this._streamDemuxNext = true;
+        Logger.info(
+          TAG,
+          "Stream decode error persists — retrying via the FFmpeg-WASM demuxer",
+        );
+        this.load().catch(() => {});
+        return;
+      }
     }
 
     // fallback="native" (native-first, any failure): before the software path or

@@ -759,6 +759,43 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
         }
       }
 
+      // --- Force a specific MSE engine (hls.js / dash.js), skipping Shaka. Set
+      // when Shaka failed at RUNTIME but the other engine is more lenient with
+      // the stream — e.g. a manifest-vs-actual codec mismatch Shaka rejects but
+      // dash.js plays (hardware, lightweight). Preferred over the WASM demuxer,
+      // which is the last resort. If this engine also can't LOAD, fall through
+      // to Shaka/demuxer below; if it loads but fails at runtime, the element
+      // escalates to force-demux (WASM). ---
+      if (
+        !this.source &&
+        this.config.forceStreamEngine &&
+        (isHls || isDash)
+      ) {
+        try {
+          const engine = this.config.forceStreamEngine;
+          const fb =
+            engine === "hlsjs"
+              ? new HLSPlayerWrapper(this.config)
+              : new DASHPlayerWrapper(this.config);
+          this.streamWrapper = fb;
+          this.wireStreamWrapper(fb);
+          Logger.info(TAG, `forceStreamEngine: playing ${kind} via ${engine}`);
+          await fb.load();
+          this.stateManager.setState("ready");
+          return;
+        } catch (eEngine) {
+          Logger.warn(
+            TAG,
+            `forceStreamEngine (${this.config.forceStreamEngine}) failed to load; falling through`,
+            eEngine,
+          );
+          try {
+            this.streamWrapper?.destroy();
+          } catch {}
+          this.streamWrapper = null;
+        }
+      }
+
       // --- Tier 1: Shaka (HLS + DASH + MSS + muxed). Skipped when force-demux
       // above already resolved a demuxable single-file source. ---
       if (!this.source) try {
