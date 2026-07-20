@@ -4092,10 +4092,17 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
     const isEncrypted = sourceConfig
       && typeof sourceConfig !== "string"
       && (sourceConfig as any).type === "encrypted";
+    // HLS demuxer fallback: the media is a concatenated segment stream, not the
+    // .m3u8 playlist in config.source — opening that URL as media would fail.
+    // Reuse the SegmentStreamSource: its read() is offset-explicit (safe to
+    // share with the thumbnail demuxer) and its segment cache is shared too.
+    if (this.source instanceof SegmentStreamSource) {
+      this.thumbnailSource = this.source;
+    }
     // Custom user-supplied adapter — we can't safely spin up a second reader
     // (we don't know the underlying protocol), so reuse the main source.
     // The user's read() must tolerate interleaved offsets in this case.
-    if (this.config.sourceAdapter && this.source) {
+    else if (this.config.sourceAdapter && this.source) {
       this.thumbnailSource = this.source;
     } else if (isEncrypted && this.source) {
       this.thumbnailSource = this.source;

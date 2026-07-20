@@ -245,9 +245,17 @@ function fmtVttTime(t: number): string {
 export function buildVttFromSegments(texts: string[]): string {
   const cueBlocks: string[] = [];
   const seen = new Set<string>();
+  // Baseline = the first segment's presentation offset (the media start PTS).
+  // Subtract it so cue times come out 0-based (relative to content start),
+  // matching movi's timeline — getCurrentTime() subtracts the media startTime,
+  // and external cues are matched against it. Without this, cues land ~startTime
+  // seconds late (e.g. a TS stream whose first PTS is ~10s).
+  let baseline: number | null = null;
   for (const raw of texts) {
     if (!raw || !raw.includes("-->")) continue;
-    const offset = vttTimestampOffset(raw);
+    const rawOffset = vttTimestampOffset(raw);
+    if (baseline === null) baseline = rawOffset;
+    const offset = rawOffset - baseline;
     const blocks = raw.replace(/^﻿/, "").split(/\r?\n\r?\n/);
     for (const block of blocks) {
       if (!block.includes("-->")) continue; // header / STYLE / NOTE / REGION
