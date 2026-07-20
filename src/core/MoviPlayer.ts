@@ -24,6 +24,8 @@ import {
   ThumbnailHttpSource,
   EncryptedHttpSource,
   analyzeDashFallback,
+  analyzeHlsFallback,
+  SegmentStreamSource,
   getSourceAdapterFactory,
   type SourceAdapter,
 } from "../source";
@@ -756,6 +758,36 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
           }
         } catch (eDemux) {
           Logger.warn(TAG, "forceStreamDemux: DASH fallback probe failed", eDemux);
+        }
+      }
+
+      // Force-demux (HLS): both MSE engines failed a codec the browser can't
+      // decode. HLS has no single demuxable file, so parse the playlist and
+      // present its segments to the FFmpeg-WASM demuxer as one concatenated,
+      // seekable stream (SegmentStreamSource). MVP: the best muxed variant —
+      // separate audio / subtitle renditions are deferred.
+      if (this.config.forceStreamDemux && isHls && !this.source) {
+        try {
+          const plan = await analyzeHlsFallback(streamUrl!, src?.headers);
+          if (plan) {
+            Logger.info(
+              TAG,
+              `forceStreamDemux: routing HLS through the FFmpeg demuxer (${plan.segments.length} segments)`,
+            );
+            this.source = new SegmentStreamSource(
+              plan.segments,
+              plan.initSegment,
+              streamUrl!,
+              src?.headers,
+            );
+          } else {
+            Logger.warn(
+              TAG,
+              "forceStreamDemux: HLS playlist not demuxable, retrying the stream path",
+            );
+          }
+        } catch (eDemux) {
+          Logger.warn(TAG, "forceStreamDemux: HLS fallback probe failed", eDemux);
         }
       }
 

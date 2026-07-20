@@ -6,6 +6,9 @@ export { EncryptedHttpSource } from './EncryptedHttpSource';
 export type { EncryptedSourceConfig } from './EncryptedHttpSource';
 export { analyzeDashFallback } from './DashFallback';
 export type { DashFallbackPlan } from './DashFallback';
+export { analyzeHlsFallback } from './HlsFallback';
+export type { HlsFallbackPlan, HlsSegment } from './HlsFallback';
+export { SegmentStreamSource } from './SegmentStreamSource';
 export { generateFingerprint } from '../utils/Fingerprint';
 export {
   registerSourceAdapter,

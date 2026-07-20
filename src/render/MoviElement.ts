@@ -18634,9 +18634,11 @@ export class MoviElement extends HTMLElement {
     //      play here on hardware (verified: DASH-IF 4b plays in dash.js on both
     //      Safari & Chrome where Shaka fails). Preferred over WASM.
     //   2. If that also fails (a genuine MSE codec limit, e.g. Safari + HE-AAC),
-    //      DASH only: re-load through the FFmpeg-WASM demuxer, which decodes any
-    //      codec. After that it's demuxer (not stream) playback, so this can't
-    //      re-fire. If everything fails, the normal error UI shows.
+    //      re-load through the FFmpeg-WASM demuxer, which decodes any codec:
+    //      DASH via its single-file Representation, HLS via a concatenated,
+    //      seekable segment stream (SegmentStreamSource). After that it's
+    //      demuxer (not stream) playback, so this can't re-fire. If everything
+    //      fails, the normal error UI shows.
     // Runs before fallback="native" (handing a manifest to a native <video>
     // can't play adaptive DASH — Safari has no native DASH).
     if (isDecoderError && this.player?.isStreamPlayback?.()) {
@@ -18653,7 +18655,7 @@ export class MoviElement extends HTMLElement {
         this.load().catch(() => {});
         return;
       }
-      if (isDashSrc && !this._streamDemuxTried) {
+      if ((isDashSrc || isHlsSrc) && !this._streamDemuxTried) {
         this._streamDemuxTried = true;
         this._streamDemuxNext = true;
         Logger.info(
