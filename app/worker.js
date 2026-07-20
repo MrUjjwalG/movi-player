@@ -1,6 +1,7 @@
 import HTML_RAW from "./index.html";
 import TEST_NATIVE_HTML from "./test-native.html";
 import COMPARE_HTML from "./compare.html";
+import EXAMPLES_HTML from "./examples.html";
 import DRIVE_HTML from "./drive.html";
 import SITEMAP from "./sitemap.xml";
 import ROBOTS from "./robots.txt";
@@ -10,6 +11,7 @@ const BUILD_VERSION = "__BUILD_VERSION__";
 const HTML_WITH_VERSION = HTML_RAW.replace(/__BUILD_VERSION__/g, BUILD_VERSION);
 const TEST_NATIVE_WITH_VERSION = TEST_NATIVE_HTML.replace(/__BUILD_VERSION__/g, BUILD_VERSION);
 const COMPARE_WITH_VERSION = COMPARE_HTML.replace(/__BUILD_VERSION__/g, BUILD_VERSION);
+const EXAMPLES_WITH_VERSION = EXAMPLES_HTML.replace(/__BUILD_VERSION__/g, BUILD_VERSION);
 const DRIVE_WITH_VERSION = DRIVE_HTML.replace(/__BUILD_VERSION__/g, BUILD_VERSION);
 
 // Turnstile site key is injected per-request from env so it can be
@@ -334,6 +336,22 @@ export default {
           "Content-Type": "text/html;charset=UTF-8",
           "Cache-Control": "public, max-age=600",
           ...SECURITY_HEADERS,
+        },
+      });
+    }
+
+    // --- Examples gallery: real, copy-paste <movi-player> setups. Served
+    // WITHOUT COEP: it embeds cross-origin demo streams (HLS/DASH), and
+    // require-corp would fight their opaque/CORS fetches. The player needs no
+    // SharedArrayBuffer (single-threaded WASM + Asyncify I/O), so dropping
+    // cross-origin isolation costs nothing here. ---
+    if (path === "/examples" || path === "/examples.html" || path === "/examples/") {
+      return new Response(EXAMPLES_WITH_VERSION, {
+        headers: {
+          "Content-Type": "text/html;charset=UTF-8",
+          "Cache-Control": "public, max-age=600",
+          "X-Content-Type-Options": "nosniff",
+          "Referrer-Policy": "strict-origin-when-cross-origin",
         },
       });
     }

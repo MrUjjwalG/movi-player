@@ -1,0 +1,741 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Examples — real MoviPlayer setups you can copy</title>
+    <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
+
+    <meta name="description" content="Real, working <movi-player> examples — adaptive HLS/DASH streaming, multi-track MKV, 360° video, audio with cover art, graceful native fallback, and custom byte sources. Copy the markup, drop it in." />
+    <meta name="robots" content="index, follow" />
+    <link rel="canonical" href="https://moviplayer.com/examples" />
+
+    <meta property="og:type" content="website" />
+    <meta property="og:url" content="https://moviplayer.com/examples" />
+    <meta property="og:title" content="One tag. Every format, source, and surface." />
+    <meta property="og:description" content="Adaptive streams, multi-track MKV, 360° video, custom byte sources — real MoviPlayer setups you can copy and paste." />
+    <meta property="og:image" content="https://moviplayer.com/og-image.png" />
+
+    <meta name="twitter:card" content="summary_large_image" />
+    <meta name="twitter:title" content="One tag. Every format, source, and surface." />
+    <meta name="twitter:description" content="Real, copy-paste <movi-player> examples — streaming, MKV, 360°, custom sources." />
+
+    <meta name="theme-color" content="#0f0f12" />
+
+    <style>
+      :root {
+        --primary-accent: #6c5dd3;
+        --secondary-accent: #00d4ff;
+        --bg-base: #0f0f12;
+        --bg-panel: #16161b;
+        --bg-elevated: #1c1c22;
+        --text-primary: #ffffff;
+        --text-secondary: #a0a0b0;
+        --text-muted: #6a6a78;
+        --border: rgba(255, 255, 255, 0.08);
+        --navbar-bg: rgba(15, 15, 18, 0.6);
+        --navbar-bg-scrolled: rgba(15, 15, 18, 0.85);
+        --navbar-border: rgba(255, 255, 255, 0.06);
+        --navbar-border-scrolled: rgba(255, 255, 255, 0.1);
+        --surface-soft: rgba(255, 255, 255, 0.06);
+        --surface-soft-hover: rgba(255, 255, 255, 0.1);
+        --code-bg: #0c0c10;
+        --success: #4ade80;
+        --font-family: "Inter", system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+        --mono-family: "JetBrains Mono", "SF Mono", Menlo, Consolas, monospace;
+      }
+
+      /* Light theme — mirrors app/index.html + /compare (same localStorage key
+         "theme-preference") so the choice carries across pages. */
+      [data-theme="light"] {
+        --bg-base: #f5f5f5;
+        --bg-panel: #ffffff;
+        --bg-elevated: #ffffff;
+        --text-primary: #141414;
+        --text-secondary: #5a5a68;
+        --text-muted: #9e9e9e;
+        --border: rgba(0, 0, 0, 0.08);
+        --navbar-bg: rgba(255, 255, 255, 0.7);
+        --navbar-bg-scrolled: rgba(255, 255, 255, 0.92);
+        --navbar-border: rgba(0, 0, 0, 0.06);
+        --navbar-border-scrolled: rgba(0, 0, 0, 0.1);
+        --surface-soft: rgba(0, 0, 0, 0.04);
+        --surface-soft-hover: rgba(0, 0, 0, 0.08);
+        --code-bg: #14141a;
+      }
+      [data-theme="light"] body {
+        background-image:
+          radial-gradient(circle at 20% 10%, rgba(108, 93, 211, 0.08) 0%, transparent 35%),
+          radial-gradient(circle at 80% 90%, rgba(0, 212, 255, 0.05) 0%, transparent 35%);
+      }
+      [data-theme="light"] .brand-text {
+        background: linear-gradient(135deg, #6c5dd3 0%, #00a8d8 100%);
+        background-clip: text;
+        -webkit-background-clip: text;
+        -webkit-text-fill-color: transparent;
+      }
+      /* Code stays dark in both themes — it reads better and matches editors. */
+      [data-theme="light"] .code { color: #e6e6f0; }
+
+      * { margin: 0; padding: 0; box-sizing: border-box; }
+      html { scroll-behavior: smooth; }
+
+      body {
+        background: var(--bg-base);
+        background-image:
+          radial-gradient(circle at 20% 10%, rgba(108, 93, 211, 0.12) 0%, transparent 35%),
+          radial-gradient(circle at 80% 90%, rgba(0, 212, 255, 0.08) 0%, transparent 35%);
+        color: var(--text-primary);
+        font-family: var(--font-family);
+        min-height: 100vh;
+        line-height: 1.55;
+        overflow-x: hidden;
+      }
+
+      /* ---- Navbar (matches index.html + /compare) ---- */
+      .navbar {
+        position: fixed; top: 0; left: 0; right: 0; z-index: 100;
+        padding: 0 4%; height: 64px;
+        display: flex; align-items: center; justify-content: space-between;
+        background: var(--navbar-bg);
+        backdrop-filter: blur(20px) saturate(1.8);
+        -webkit-backdrop-filter: blur(20px) saturate(1.8);
+        border-bottom: 1px solid var(--navbar-border);
+        transition: background 0.3s ease, border-color 0.3s ease;
+      }
+      .navbar.scrolled {
+        background: var(--navbar-bg-scrolled);
+        border-bottom-color: var(--navbar-border-scrolled);
+      }
+      .nav-left { display: flex; align-items: center; gap: 2rem; }
+      .brand {
+        display: inline-flex; align-items: center; gap: 0.55rem;
+        text-decoration: none; user-select: none; transition: opacity 0.15s ease;
+      }
+      .brand:hover { opacity: 0.88; }
+      .brand-logo {
+        width: 28px; height: 28px; flex-shrink: 0;
+        filter: drop-shadow(0 2px 8px rgba(124, 108, 240, 0.35));
+      }
+      .brand-text {
+        font-size: 1.35rem; font-weight: 800;
+        background: linear-gradient(135deg, #ffffff 0%, #c8c8e0 100%);
+        background-clip: text; -webkit-background-clip: text;
+        -webkit-text-fill-color: transparent;
+        letter-spacing: -0.3px; line-height: 1;
+      }
+      @media (max-width: 480px) {
+        .brand-text { font-size: 1.15rem; }
+        .brand-logo { width: 24px; height: 24px; }
+      }
+      .nav-links { display: flex; gap: 1.5rem; list-style: none; }
+      .nav-links a {
+        color: var(--text-secondary); text-decoration: none;
+        font-size: 0.8125rem; font-weight: 500; letter-spacing: 0.2px;
+        transition: color 0.2s;
+      }
+      .nav-links a:hover, .nav-links a.active { color: var(--text-primary); }
+      .nav-right { display: flex; align-items: center; gap: 0.5rem; }
+      .nav-icon-link {
+        color: var(--text-primary); width: 36px; height: 36px; border-radius: 10px;
+        border: 1px solid transparent; display: flex; align-items: center;
+        justify-content: center; text-decoration: none;
+        transition: background 0.2s, border-color 0.2s;
+      }
+      .nav-icon-link:hover { background: var(--surface-soft); border-color: var(--border); }
+      .nav-icon-btn {
+        background: transparent; border: 1px solid transparent; color: var(--text-primary);
+        width: 36px; height: 36px; border-radius: 50%;
+        display: inline-flex; align-items: center; justify-content: center;
+        cursor: pointer; padding: 0; transition: background 0.2s, border-color 0.2s;
+      }
+      .nav-icon-btn:hover { background: var(--surface-soft); border-color: var(--border); }
+      .nav-icon-btn svg { width: 18px; height: 18px; }
+
+      main {
+        max-width: 1180px; margin: 0 auto;
+        padding: calc(64px + 3rem) 1.5rem 6rem;
+      }
+
+      /* ---- Hero ---- */
+      .hero { text-align: center; margin-bottom: 3.5rem; }
+      .hero-eyebrow {
+        display: inline-block; font-size: 0.78rem; font-weight: 600;
+        letter-spacing: 0.08em; text-transform: uppercase; color: var(--primary-accent);
+        padding: 0.35rem 0.85rem; border: 1px solid rgba(108, 93, 211, 0.3);
+        border-radius: 999px; background: rgba(108, 93, 211, 0.08); margin-bottom: 1.5rem;
+      }
+      .hero h1 {
+        font-size: clamp(1.8rem, 4vw, 2.8rem); font-weight: 700;
+        letter-spacing: -0.02em; line-height: 1.15; margin-bottom: 1rem;
+      }
+      .hero h1 .accent {
+        background: linear-gradient(135deg, var(--primary-accent), var(--secondary-accent));
+        -webkit-background-clip: text; background-clip: text; -webkit-text-fill-color: transparent;
+      }
+      .hero p.sub {
+        color: var(--text-secondary); font-size: 1.05rem; max-width: 640px; margin: 0 auto;
+      }
+
+      /* ---- Section heading ---- */
+      .section-head { margin: 3rem 0 1.5rem; }
+      .section-head h2 {
+        font-size: 1.4rem; font-weight: 700; letter-spacing: -0.01em;
+        display: flex; align-items: center; gap: 0.6rem;
+      }
+      .section-head p { color: var(--text-secondary); font-size: 0.95rem; margin-top: 0.35rem; }
+
+      /* ---- Card grid ---- */
+      .grid {
+        display: grid; gap: 1.25rem;
+        grid-template-columns: repeat(auto-fill, minmax(340px, 1fr));
+      }
+      .card {
+        background: var(--bg-panel); border: 1px solid var(--border);
+        border-radius: 16px; overflow: hidden; display: flex; flex-direction: column;
+        transition: border-color 0.2s ease, transform 0.2s ease;
+      }
+      .card:hover { border-color: rgba(108, 93, 211, 0.35); }
+      .card-head { padding: 1.15rem 1.25rem 0.5rem; }
+      .card-cat {
+        font-size: 0.68rem; font-weight: 700; letter-spacing: 0.09em; text-transform: uppercase;
+        color: var(--primary-accent);
+      }
+      .tag-new {
+        display: inline-block; margin-left: 0.5rem; padding: 0.05rem 0.45rem;
+        font-size: 0.6rem; letter-spacing: 0.06em; border-radius: 999px;
+        background: linear-gradient(135deg, var(--primary-accent), var(--secondary-accent));
+        color: #fff; vertical-align: middle;
+      }
+      .card-head h3 { font-size: 1.08rem; font-weight: 650; margin: 0.35rem 0 0.35rem; }
+      .card-head p { color: var(--text-secondary); font-size: 0.875rem; }
+
+      /* ---- Live demo stage ---- */
+      .stage {
+        position: relative; margin: 0.9rem 1.25rem 0; aspect-ratio: 16 / 9;
+        border-radius: 12px; overflow: hidden; background: #000;
+        border: 1px solid var(--border);
+      }
+      .stage movi-player { width: 100%; height: 100%; display: block; }
+      .stage-poster {
+        position: absolute; inset: 0; display: flex; flex-direction: column;
+        align-items: center; justify-content: center; gap: 0.85rem; cursor: pointer;
+        background:
+          radial-gradient(circle at 30% 25%, rgba(108, 93, 211, 0.35) 0%, transparent 55%),
+          radial-gradient(circle at 75% 80%, rgba(0, 212, 255, 0.25) 0%, transparent 55%),
+          #0b0b10;
+        border: none; width: 100%; color: #fff; font-family: inherit;
+        transition: filter 0.2s ease;
+      }
+      .stage-poster:hover { filter: brightness(1.08); }
+      .stage-poster .play {
+        width: 58px; height: 58px; border-radius: 50%;
+        background: rgba(255, 255, 255, 0.14); backdrop-filter: blur(6px);
+        display: flex; align-items: center; justify-content: center;
+        border: 1px solid rgba(255, 255, 255, 0.25);
+      }
+      .stage-poster .play svg { width: 24px; height: 24px; }
+      .stage-poster .load-label { font-size: 0.85rem; font-weight: 600; }
+      .stage-poster .load-hint { font-size: 0.72rem; color: rgba(255, 255, 255, 0.6); }
+
+      /* ---- Code block ---- */
+      .code {
+        position: relative; margin: 0.9rem 1.25rem 1.25rem;
+        background: var(--code-bg); border: 1px solid var(--border);
+        border-radius: 10px; overflow: hidden;
+      }
+      .code.grow { margin-top: 0; }
+      .code pre { margin: 0; padding: 0.9rem 1rem; overflow-x: auto; }
+      .code code {
+        font-family: var(--mono-family); font-size: 0.8rem; line-height: 1.6;
+        color: #d5d5e6; white-space: pre; background: none; padding: 0;
+      }
+      .code .tok-tag { color: #8a7cf2; }
+      .code .tok-attr { color: #00d4ff; }
+      .code .tok-str { color: #7fdca0; }
+      .code .tok-com { color: #6a6a78; font-style: italic; }
+      .code .tok-kw { color: #f0a45c; }
+      .copy-btn {
+        position: absolute; top: 0.5rem; right: 0.5rem;
+        background: rgba(255, 255, 255, 0.08); border: 1px solid rgba(255, 255, 255, 0.12);
+        color: #cfcfe0; font-family: var(--font-family); font-size: 0.7rem; font-weight: 600;
+        padding: 0.28rem 0.6rem; border-radius: 6px; cursor: pointer;
+        transition: background 0.15s ease;
+      }
+      .copy-btn:hover { background: rgba(255, 255, 255, 0.16); }
+      .copy-btn.done { color: var(--success); border-color: rgba(74, 222, 128, 0.4); }
+
+      .recipe .card-head { padding-bottom: 0.35rem; }
+
+      /* ---- Modal player (opens on a live-demo click) ---- */
+      .modal {
+        position: fixed; inset: 0; z-index: 200; display: none;
+        align-items: center; justify-content: center; padding: 1.5rem;
+        background: rgba(6, 6, 10, 0.82);
+        backdrop-filter: blur(8px); -webkit-backdrop-filter: blur(8px);
+      }
+      .modal.open { display: flex; animation: modal-in 0.18s ease; }
+      @keyframes modal-in { from { opacity: 0; } to { opacity: 1; } }
+      .modal-inner {
+        width: min(1000px, 100%); background: var(--bg-panel);
+        border: 1px solid var(--border); border-radius: 16px; overflow: hidden;
+        box-shadow: 0 30px 80px rgba(0, 0, 0, 0.55);
+      }
+      .modal-bar {
+        display: flex; align-items: center; justify-content: space-between;
+        gap: 1rem; padding: 0.7rem 0.7rem 0.7rem 1.1rem;
+        border-bottom: 1px solid var(--border);
+      }
+      .modal-title {
+        font-size: 0.9rem; font-weight: 600; color: var(--text-secondary);
+        overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+      }
+      .modal-close {
+        flex-shrink: 0; background: var(--surface-soft); border: 1px solid var(--border);
+        color: var(--text-primary); width: 34px; height: 34px; border-radius: 9px;
+        font-size: 1.3rem; line-height: 1; cursor: pointer;
+        display: flex; align-items: center; justify-content: center;
+        transition: background 0.15s ease;
+      }
+      .modal-close:hover { background: var(--surface-soft-hover); }
+      .modal-stage { aspect-ratio: 16 / 9; background: #000; }
+      .modal-stage movi-player { width: 100%; height: 100%; display: block; }
+      @media (max-width: 760px) { .modal { padding: 0.75rem; } }
+
+      /* ---- Footer CTA ---- */
+      .footer-cta { text-align: center; padding: 4rem 1rem 1rem; }
+      .footer-cta p { color: var(--text-secondary); margin-bottom: 1.25rem; }
+      .btn {
+        display: inline-block; padding: 0.85rem 1.5rem; border-radius: 10px;
+        text-decoration: none; font-weight: 600; font-size: 0.95rem;
+        transition: transform 0.15s, box-shadow 0.15s; margin: 0.25rem 0.3rem;
+      }
+      .btn-primary {
+        background: linear-gradient(135deg, var(--primary-accent), #4a3bba); color: #fff;
+        box-shadow: 0 8px 16px rgba(108, 93, 211, 0.3);
+      }
+      .btn-primary:hover { transform: translateY(-1px); box-shadow: 0 12px 22px rgba(108, 93, 211, 0.42); }
+      .btn-secondary {
+        background: var(--surface-soft); color: var(--text-primary); border: 1px solid var(--border);
+      }
+      .btn-secondary:hover { background: var(--surface-soft-hover); }
+
+      code.inline {
+        font-family: var(--mono-family); font-size: 0.86em;
+        background: var(--surface-soft); padding: 0.1em 0.4em; border-radius: 4px;
+      }
+
+      @media (max-width: 760px) {
+        main { padding: calc(64px + 2rem) 1rem 4rem; }
+        .navbar { padding: 0 0.75rem; }
+        .nav-left { gap: 0.85rem; }
+        .nav-links { gap: 0.9rem; }
+        .nav-right { gap: 0.25rem; }
+        .nav-icon-link, .nav-icon-btn { width: 32px; height: 32px; }
+        .nav-icon-btn svg, .nav-icon-link svg { width: 16px; height: 16px; }
+        .grid { grid-template-columns: 1fr; }
+      }
+      @media (max-width: 560px) {
+        .nav-links { display: none; }
+      }
+    </style>
+  </head>
+  <body>
+    <nav class="navbar" id="navbar">
+      <div class="nav-left">
+        <a href="/" class="brand" aria-label="MoviPlayer — home">
+          <svg class="brand-logo" viewBox="0 0 100 100" aria-hidden="true">
+            <defs>
+              <linearGradient id="brand-logo-grad" x1="0%" y1="0%" x2="100%" y2="100%">
+                <stop offset="0%" stop-color="#8a7cf2"/>
+                <stop offset="100%" stop-color="#6c5dd3"/>
+              </linearGradient>
+            </defs>
+            <circle cx="50" cy="50" r="46" fill="url(#brand-logo-grad)"/>
+            <polygon points="40,29 40,71 73,50" fill="#ffffff"/>
+          </svg>
+          <span class="brand-text">MoviPlayer</span>
+        </a>
+        <ul class="nav-links">
+          <li><a href="/">Player</a></li>
+          <li><a href="/examples" class="active">Examples</a></li>
+          <li><a href="/compare">Compare</a></li>
+          <li><a href="/docs">Docs</a></li>
+        </ul>
+      </div>
+      <div class="nav-right">
+        <button id="theme-toggle" class="nav-icon-btn" aria-label="Switch Theme" type="button"></button>
+        <a href="https://chromewebstore.google.com/detail/movi-player/ckleeigcopjnpehkjokijokjegknfgej" target="_blank" rel="noopener" class="nav-icon-link" aria-label="Chrome Extension" title="Get Chrome Extension">
+          <svg width="18" height="18" viewBox="0 0 512 512" fill="currentColor"><path d="M188.8,255.93A67.2,67.2,0,1,0,256,188.75,67.38,67.38,0,0,0,188.8,255.93Z"/><path d="M476.75,217.79s0,0,0,.05a206.63,206.63,0,0,0-7-28.84h-.11a202.16,202.16,0,0,1,7.07,29h0a203.5,203.5,0,0,0-7.07-29H314.24c19.05,17,31.36,40.17,31.36,67.05a86.55,86.55,0,0,1-12.31,44.73L231,478.45a2.44,2.44,0,0,1,0,.27V479h0v-.26A224,224,0,0,0,256,480c6.84,0,13.61-.39,20.3-1a222.91,222.91,0,0,0,29.78-4.74C405.68,451.52,480,362.4,480,255.94A225.25,225.25,0,0,0,476.75,217.79Z"/><path d="M256,345.5c-33.6,0-61.6-17.91-77.29-44.79L76,123.05l-.14-.24A224,224,0,0,0,207.4,474.55l0-.05,77.69-134.6A84.13,84.13,0,0,1,256,345.5Z"/><path d="M91.29,104.57l77.35,133.25A89.19,89.19,0,0,1,256,166H461.17a246.51,246.51,0,0,0-25.78-43.94l.12.08A245.26,245.26,0,0,1,461.17,166h.17a245.91,245.91,0,0,0-25.66-44,2.63,2.63,0,0,1-.35-.26A223.93,223.93,0,0,0,91.14,104.34l.14.24Z"/></svg>
+        </a>
+        <a href="https://github.com/mrujjwalg/movi-player" target="_blank" rel="noopener" class="nav-icon-link" aria-label="GitHub" title="View on GitHub">
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor"><path d="M12 0C5.37 0 0 5.37 0 12c0 5.31 3.435 9.795 8.205 11.385.6.105.825-.255.825-.57 0-.285-.015-1.23-.015-2.235-3.015.555-3.795-.735-4.035-1.41-.135-.345-.72-1.41-1.23-1.695-.42-.225-1.02-.78-.015-.795.945-.015 1.62.87 1.845 1.23 1.08 1.815 2.805 1.305 3.495.99.105-.78.42-1.305.765-1.605-2.67-.3-5.46-1.335-5.46-5.925 0-1.305.465-2.385 1.23-3.225-.12-.3-.54-1.53.12-3.18 0 0 1.005-.315 3.3 1.23.96-.27 1.98-.405 3-.405s2.04.135 3 .405c2.295-1.56 3.3-1.23 3.3-1.23.66 1.65.24 2.88.12 3.18.765.84 1.23 1.905 1.23 3.225 0 4.605-2.805 5.625-5.475 5.925.435.375.81 1.095.81 2.22 0 1.605-.015 2.895-.015 3.3 0 .315.225.69.825.57A12.02 12.02 0 0024 12c0-6.63-5.37-12-12-12z"/></svg>
+        </a>
+      </div>
+    </nav>
+
+    <main>
+      <section class="hero">
+        <span class="hero-eyebrow">Examples</span>
+        <h1>One tag. Every <span class="accent">format, source, and surface.</span></h1>
+        <p class="sub">Real, working <code class="inline">&lt;movi-player&gt;</code> setups — adaptive streams, multi-track MKV, 360° video, custom byte sources. Load them live or copy the markup straight into your page.</p>
+      </section>
+
+      <!-- ============ LIVE DEMOS ============ -->
+      <div class="section-head">
+        <h2>Try it live</h2>
+        <p>Click a poster to spin up a real player. Nothing plays until you ask it to.</p>
+      </div>
+
+      <div class="grid">
+        <!-- Multi-track MKV -->
+        <div class="card" data-src="/samples/sintel-2010-1080p.mkv" data-title="Sintel — multi-track MKV (CC-BY)">
+          <div class="card-head">
+            <div class="card-cat">Multi-track MKV</div>
+            <h3>Decoded in the browser</h3>
+            <p>A 1080p MKV (Sintel, CC-BY) — multiple audio tracks, embedded subtitles and chapters, all decoded in-browser via WebCodecs + FFmpeg-WASM. Nothing your native <code class="inline">&lt;video&gt;</code> tag can see. Open the ⚙ menu.</p>
+          </div>
+          <div class="stage">
+            <button class="stage-poster load-btn" type="button" aria-label="Load the multi-track MKV example">
+              <span class="play"><svg viewBox="0 0 24 24" fill="#fff"><path d="M9 6v12l9-6z"/></svg></span>
+              <span class="load-label">Load example</span>
+              <span class="load-hint">MKV · ~1.1 GB streamed</span>
+            </button>
+          </div>
+          <div class="code grow">
+            <button class="copy-btn" type="button">Copy</button>
+            <pre><code><span class="tok-tag">&lt;movi-player</span> <span class="tok-attr">src</span>=<span class="tok-str">"movie.mkv"</span> <span class="tok-attr">controls</span> <span class="tok-attr">thumb</span> <span class="tok-attr">showtitle</span><span class="tok-tag">&gt;&lt;/movi-player&gt;</span></code></pre>
+          </div>
+        </div>
+
+        <!-- Adaptive HLS -->
+        <div class="card" data-src="https://test-streams.mux.dev/x36xhzz/x36xhzz.m3u8" data-title="Mux — adaptive HLS test stream">
+          <div class="card-head">
+            <div class="card-cat">Adaptive · HLS</div>
+            <h3>HLS stream, auto quality</h3>
+            <p>An <code class="inline">.m3u8</code> ladder that adapts to bandwidth. Same tag, no config — MoviPlayer routes it through its streaming engine automatically.</p>
+          </div>
+          <div class="stage">
+            <button class="stage-poster load-btn" type="button" aria-label="Load the HLS streaming example">
+              <span class="play"><svg viewBox="0 0 24 24" fill="#fff"><path d="M9 6v12l9-6z"/></svg></span>
+              <span class="load-label">Load example</span>
+              <span class="load-hint">HLS · Mux test stream</span>
+            </button>
+          </div>
+          <div class="code grow">
+            <button class="copy-btn" type="button">Copy</button>
+            <pre><code><span class="tok-tag">&lt;movi-player</span> <span class="tok-attr">src</span>=<span class="tok-str">"stream.m3u8"</span> <span class="tok-attr">controls</span><span class="tok-tag">&gt;&lt;/movi-player&gt;</span></code></pre>
+          </div>
+        </div>
+
+        <!-- Adaptive DASH + captions -->
+        <div class="card" data-src="https://storage.googleapis.com/shaka-demo-assets/sintel-mp4-only/dash.mpd" data-title="Sintel — DASH with captions">
+          <div class="card-head">
+            <div class="card-cat">Adaptive · DASH</div>
+            <h3>MPEG-DASH with captions</h3>
+            <p>A DASH <code class="inline">.mpd</code> manifest (H.264 + AAC-LC, so it plays cross-browser incl. Safari) with selectable caption tracks in many languages. Pick one from the ⚙ menu.</p>
+          </div>
+          <div class="stage">
+            <button class="stage-poster load-btn" type="button" aria-label="Load the DASH streaming example">
+              <span class="play"><svg viewBox="0 0 24 24" fill="#fff"><path d="M9 6v12l9-6z"/></svg></span>
+              <span class="load-label">Load example</span>
+              <span class="load-hint">DASH · H.264 + captions</span>
+            </button>
+          </div>
+          <div class="code grow">
+            <button class="copy-btn" type="button">Copy</button>
+            <pre><code><span class="tok-tag">&lt;movi-player</span> <span class="tok-attr">src</span>=<span class="tok-str">"manifest.mpd"</span> <span class="tok-attr">controls</span><span class="tok-tag">&gt;&lt;/movi-player&gt;</span></code></pre>
+          </div>
+        </div>
+
+        <!-- 360° / VR -->
+        <div class="card" data-src="https://raw.githubusercontent.com/mrdoob/three.js/dev/examples/textures/MaryOculus.webm" data-attrs="vr vrpad" data-title="360° VR video">
+          <div class="card-head">
+            <div class="card-cat">Immersive</div>
+            <h3>360° / VR video</h3>
+            <p>Equirectangular video rendered on a sphere — drag to look around, or use the on-screen joystick. Spherical sources auto-enter 360°; here the <code class="inline">vr</code> attribute forces it.</p>
+          </div>
+          <div class="stage">
+            <button class="stage-poster load-btn" type="button" aria-label="Load the 360 video example">
+              <span class="play"><svg viewBox="0 0 24 24" fill="#fff"><path d="M9 6v12l9-6z"/></svg></span>
+              <span class="load-label">Load example</span>
+              <span class="load-hint">360° equirect · drag to look</span>
+            </button>
+          </div>
+          <div class="code grow">
+            <button class="copy-btn" type="button">Copy</button>
+            <pre><code><span class="tok-tag">&lt;movi-player</span> <span class="tok-attr">src</span>=<span class="tok-str">"360-clip.mp4"</span> <span class="tok-attr">vr</span> <span class="tok-attr">vrpad</span> <span class="tok-attr">controls</span><span class="tok-tag">&gt;&lt;/movi-player&gt;</span></code></pre>
+          </div>
+        </div>
+
+        <!-- Music / audio -->
+        <div class="card" data-src="https://www.soundhelix.com/examples/mp3/SoundHelix-Song-1.mp3" data-proxy="true" data-title="Audio playback">
+          <div class="card-head">
+            <div class="card-cat">Audio</div>
+            <h3>Music &amp; cover art</h3>
+            <p>Point it at a FLAC/MP3/Opus file — pitch-preserving speed control and stable volume come for free. Embedded album art, when present, becomes an ambient backdrop.</p>
+          </div>
+          <div class="stage">
+            <button class="stage-poster load-btn" type="button" aria-label="Load the audio example">
+              <span class="play"><svg viewBox="0 0 24 24" fill="#fff"><path d="M9 6v12l9-6z"/></svg></span>
+              <span class="load-label">Load example</span>
+              <span class="load-hint">MP3 · pitch-preserving speed</span>
+            </button>
+          </div>
+          <div class="code grow">
+            <button class="copy-btn" type="button">Copy</button>
+            <pre><code><span class="tok-tag">&lt;movi-player</span> <span class="tok-attr">src</span>=<span class="tok-str">"album/track.flac"</span> <span class="tok-attr">controls</span> <span class="tok-attr">stablevolume</span><span class="tok-tag">&gt;&lt;/movi-player&gt;</span></code></pre>
+          </div>
+        </div>
+
+        <!-- Split source: separate video + audio -->
+        <div class="card" data-video="https://interactive-examples.mdn.mozilla.net/media/cc0-videos/flower.mp4" data-audio="https://www.soundhelix.com/examples/mp3/SoundHelix-Song-1.mp3" data-audio-proxy="true" data-title="Split source — video + audio">
+          <div class="card-head">
+            <div class="card-cat">Split source</div>
+            <h3>Separate video &amp; audio</h3>
+            <p>Video from one file, audio from another — muxed at playback, the way DASH and YouTube ship them. Here a video plays with an independent audio track laid over it.</p>
+          </div>
+          <div class="stage">
+            <button class="stage-poster load-btn" type="button" aria-label="Load the split-source example">
+              <span class="play"><svg viewBox="0 0 24 24" fill="#fff"><path d="M9 6v12l9-6z"/></svg></span>
+              <span class="load-label">Load example</span>
+              <span class="load-hint">video + separate audio</span>
+            </button>
+          </div>
+          <div class="code grow">
+            <button class="copy-btn" type="button">Copy</button>
+            <pre><code><span class="tok-tag">&lt;movi-player</span> <span class="tok-attr">controls</span> <span class="tok-attr">showtitle</span><span class="tok-tag">&gt;</span>
+  <span class="tok-tag">&lt;source</span> <span class="tok-attr">src</span>=<span class="tok-str">"video-only.mp4"</span> <span class="tok-attr">type</span>=<span class="tok-str">"video/mp4"</span><span class="tok-tag">&gt;</span>
+  <span class="tok-tag">&lt;source</span> <span class="tok-attr">src</span>=<span class="tok-str">"audio.m4a"</span> <span class="tok-attr">type</span>=<span class="tok-str">"audio/mp4"</span> <span class="tok-attr">kind</span>=<span class="tok-str">"audio"</span><span class="tok-tag">&gt;</span>
+<span class="tok-tag">&lt;/movi-player&gt;</span></code></pre>
+          </div>
+        </div>
+      </div>
+
+      <!-- ============ RECIPES ============ -->
+      <div class="section-head">
+        <h2>Recipes</h2>
+        <p>Copy-paste patterns for the setups that need a source you supply.</p>
+      </div>
+
+      <div class="grid">
+        <!-- Graceful native fallback -->
+        <div class="card recipe">
+          <div class="card-head">
+            <div class="card-cat">Resilience</div>
+            <h3>Graceful native fallback</h3>
+            <p>If Movi's WASM pipeline can't read a source (CORS-blocked, opaque, no range support), <code class="inline">fallback="native"</code> degrades to a native <code class="inline">&lt;video&gt;</code> under Movi's own controls instead of erroring out.</p>
+          </div>
+          <div class="code">
+            <button class="copy-btn" type="button">Copy</button>
+            <pre><code><span class="tok-tag">&lt;movi-player</span> <span class="tok-attr">src</span>=<span class="tok-str">"https://cdn.example.com/clip.mp4"</span>
+             <span class="tok-attr">fallback</span>=<span class="tok-str">"native"</span> <span class="tok-attr">controls</span><span class="tok-tag">&gt;&lt;/movi-player&gt;</span></code></pre>
+          </div>
+        </div>
+
+        <!-- Custom source scheme -->
+        <div class="card recipe">
+          <div class="card-head">
+            <div class="card-cat">Advanced<span class="tag-new">NEW</span></div>
+            <h3>Custom source scheme</h3>
+            <p>Teach the player a scheme once — S3, IPFS, a WebSocket, an encrypted blob, IndexedDB — and any <code class="inline">src</code> using it "just works". Your adapter supplies the bytes; the demuxer does the rest.</p>
+          </div>
+          <div class="code">
+            <button class="copy-btn" type="button">Copy</button>
+            <pre><code><span class="tok-kw">import</span> { registerSourceAdapter } <span class="tok-kw">from</span> <span class="tok-str">'movi-player'</span>;
+
+<span class="tok-com">// register one factory for one or more schemes…</span>
+registerSourceAdapter([<span class="tok-str">'s3'</span>, <span class="tok-str">'s3a'</span>], ({ url, headers }) =&gt;
+  <span class="tok-kw">new</span> MyS3Source(url, headers)   <span class="tok-com">// implements SourceAdapter</span>
+);</code></pre>
+          </div>
+          <div class="code grow">
+            <button class="copy-btn" type="button">Copy</button>
+            <pre><code><span class="tok-com">&lt;!-- …then just point src at it --&gt;</span>
+<span class="tok-tag">&lt;movi-player</span> <span class="tok-attr">src</span>=<span class="tok-str">"s3://my-bucket/movie.mkv"</span> <span class="tok-attr">controls</span><span class="tok-tag">&gt;&lt;/movi-player&gt;</span></code></pre>
+          </div>
+        </div>
+
+        <!-- Install & embed -->
+        <div class="card recipe">
+          <div class="card-head">
+            <div class="card-cat">Getting started</div>
+            <h3>Install &amp; embed</h3>
+            <p>Bundle it with npm, or drop in a single module script from a CDN — no build step. Importing the element registers the <code class="inline">&lt;movi-player&gt;</code> custom element.</p>
+          </div>
+          <div class="code">
+            <button class="copy-btn" type="button">Copy</button>
+            <pre><code><span class="tok-com"># bundlers (Vite, webpack, Next, …)</span>
+npm install movi-player</code></pre>
+          </div>
+          <div class="code grow">
+            <button class="copy-btn" type="button">Copy</button>
+            <pre><code><span class="tok-kw">import</span> <span class="tok-str">'movi-player/element'</span>;  <span class="tok-com">// registers &lt;movi-player&gt;</span></code></pre>
+          </div>
+          <div class="code grow">
+            <button class="copy-btn" type="button">Copy</button>
+            <pre><code><span class="tok-com">&lt;!-- …or straight from a CDN, no build --&gt;</span>
+<span class="tok-tag">&lt;script</span> <span class="tok-attr">type</span>=<span class="tok-str">"module"</span>
+        <span class="tok-attr">src</span>=<span class="tok-str">"https://unpkg.com/movi-player/dist/element.js"</span><span class="tok-tag">&gt;&lt;/script&gt;</span>
+<span class="tok-tag">&lt;movi-player</span> <span class="tok-attr">src</span>=<span class="tok-str">"video.mkv"</span> <span class="tok-attr">controls</span><span class="tok-tag">&gt;&lt;/movi-player&gt;</span></code></pre>
+          </div>
+        </div>
+      </div>
+
+      <section class="footer-cta">
+        <p>Every one of these is the same <code class="inline">&lt;movi-player&gt;</code> tag — no per-format plumbing, no server transcoding.</p>
+        <a class="btn btn-primary" href="/docs">Read the docs</a>
+        <a class="btn btn-secondary" href="/compare">See it vs native &lt;video&gt;</a>
+      </section>
+    </main>
+
+    <div class="modal" id="player-modal" role="dialog" aria-modal="true" aria-label="Video player">
+      <div class="modal-inner">
+        <div class="modal-bar">
+          <span class="modal-title" id="player-modal-title"></span>
+          <button class="modal-close" type="button" aria-label="Close player">&times;</button>
+        </div>
+        <div class="modal-stage" id="player-mount"></div>
+      </div>
+    </div>
+
+    <script type="module">
+      import "/dist/__BUILD_VERSION__/element.js";
+
+      // --- Navbar scroll state ---
+      const navbar = document.getElementById("navbar");
+      const onScroll = () => navbar.classList.toggle("scrolled", window.scrollY > 8);
+      window.addEventListener("scroll", onScroll, { passive: true });
+      onScroll();
+
+      // --- Theme logic (mirrors index.html / compare — same localStorage key) ---
+      const themeToggle = document.getElementById("theme-toggle");
+      const svgNs = "http://www.w3.org/2000/svg";
+      const parseSvg = (markup) => {
+        const doc = new DOMParser().parseFromString(
+          `<svg xmlns="${svgNs}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">${markup}</svg>`,
+          "image/svg+xml",
+        );
+        return document.importNode(doc.documentElement, true);
+      };
+      const themeIcons = {
+        auto: () => parseSvg('<rect x="2" y="3" width="20" height="14" rx="2" ry="2"/><line x1="8" y1="21" x2="16" y2="21"/><line x1="12" y1="17" x2="12" y2="21"/>'),
+        light: () => parseSvg('<circle cx="12" cy="12" r="5"/><line x1="12" y1="1" x2="12" y2="3"/><line x1="12" y1="21" x2="12" y2="23"/><line x1="4.22" y1="4.22" x2="5.64" y2="5.64"/><line x1="18.36" y1="18.36" x2="19.78" y2="19.78"/><line x1="1" y1="12" x2="3" y2="12"/><line x1="21" y1="12" x2="23" y2="12"/><line x1="4.22" y1="19.78" x2="5.64" y2="18.36"/><line x1="18.36" y1="5.64" x2="19.78" y2="4.22"/>'),
+        dark: () => parseSvg('<path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"/>'),
+      };
+      const themeModes = ["auto", "light", "dark"];
+      let themeMode = localStorage.getItem("theme-preference") || "auto";
+      let effectiveTheme = "dark";
+
+      const applyTheme = (mode) => {
+        effectiveTheme = mode === "auto"
+          ? (window.matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light")
+          : mode;
+        if (effectiveTheme === "light") {
+          document.documentElement.setAttribute("data-theme", "light");
+        } else {
+          document.documentElement.removeAttribute("data-theme");
+        }
+        themeToggle.replaceChildren(themeIcons[mode]());
+        themeToggle.setAttribute("title", `Theme: ${mode[0].toUpperCase() + mode.slice(1)}`);
+        // Keep any already-loaded players in sync with the page chrome.
+        document.querySelectorAll("movi-player").forEach((p) => p.setAttribute("theme", effectiveTheme));
+      };
+      window.matchMedia("(prefers-color-scheme: dark)").addEventListener("change", () => {
+        if (themeMode === "auto") applyTheme("auto");
+      });
+      themeToggle.addEventListener("click", () => {
+        themeMode = themeModes[(themeModes.indexOf(themeMode) + 1) % themeModes.length];
+        localStorage.setItem("theme-preference", themeMode);
+        applyTheme(themeMode);
+      });
+      applyTheme(themeMode);
+
+      // --- Live demos open a real player in a modal, built on click ---
+      const modal = document.getElementById("player-modal");
+      const modalMount = document.getElementById("player-mount");
+      const modalTitle = document.getElementById("player-modal-title");
+      let activePlayer = null;
+
+      const closeModal = () => {
+        if (activePlayer) { try { activePlayer.pause?.(); } catch {} }
+        modalMount.replaceChildren();   // destroys the player, stops playback
+        activePlayer = null;
+        modal.classList.remove("open");
+        document.body.style.overflow = "";
+      };
+
+      // Route a URL through the site's same-origin proxy when it can't be read
+      // cross-origin directly (no CORS headers). The proxy forwards Range, so
+      // seeking still works. Same-origin URLs (/samples/…) never need it.
+      const proxied = (u) => "/proxy?url=" + encodeURIComponent(u);
+
+      const openModal = (card) => {
+        // Build via the parser, NOT document.createElement: MoviElement's
+        // constructor sets attributes on itself, which makes createElement throw
+        // "The result must not have attributes". A parser-created element carries
+        // its attributes and upgrades on insertion instead, where that's allowed
+        // — exactly how a declarative <movi-player> tag behaves.
+        const proto = new DOMParser()
+          .parseFromString(
+            '<movi-player controls playsinline autoplay showtitle stablevolume objectfit="contain"></movi-player>',
+            "text/html",
+          )
+          .body.firstElementChild;
+        const player = document.importNode(proto, true);
+
+        if (card.dataset.video && card.dataset.audio) {
+          // Split source: separate video + audio files, given as <source> kids.
+          const v = card.dataset.videoProxy === "true" ? proxied(card.dataset.video) : card.dataset.video;
+          const a = card.dataset.audioProxy === "true" ? proxied(card.dataset.audio) : card.dataset.audio;
+          const vs = document.createElement("source"); vs.setAttribute("src", v);
+          const as = document.createElement("source"); as.setAttribute("src", a); as.setAttribute("kind", "audio");
+          player.append(vs, as);   // children present before upgrade → read on connect
+        } else {
+          const s = card.dataset.proxy === "true" ? proxied(card.dataset.src) : card.dataset.src;
+          player.setAttribute("src", s);
+          player.setAttribute("thumb", "");
+          // Per-card extras, e.g. data-attrs="vr vrpad" for the 360° demo.
+          for (const a of (card.dataset.attrs || "").split(/\s+/).filter(Boolean)) {
+            player.setAttribute(a, "");
+          }
+        }
+
+        const title = card.dataset.title || card.querySelector("h3")?.textContent || "";
+        player.setAttribute("theme", effectiveTheme);
+        if (title) player.setAttribute("title", title);   // drives showtitle overlay
+        modalTitle.textContent = title;
+        modalMount.replaceChildren(player);
+        activePlayer = player;
+        modal.classList.add("open");
+        document.body.style.overflow = "hidden";
+        // autoplay works here because the click is a user gesture — no forced
+        // mute, so the demo plays with sound. Controls stay for pause/seek.
+        player.play?.().catch(() => {});
+      };
+
+      document.querySelectorAll(".card[data-src] .load-btn, .card[data-video] .load-btn").forEach((btn) => {
+        btn.addEventListener("click", () => openModal(btn.closest(".card")));
+      });
+      modal.querySelector(".modal-close").addEventListener("click", closeModal);
+      modal.addEventListener("click", (e) => { if (e.target === modal) closeModal(); });
+      document.addEventListener("keydown", (e) => {
+        if (e.key === "Escape" && modal.classList.contains("open")) closeModal();
+      });
+
+      // --- Copy buttons ---
+      document.querySelectorAll(".copy-btn").forEach((btn) => {
+        btn.addEventListener("click", async () => {
+          const code = btn.parentElement.querySelector("code")?.innerText ?? "";
+          try {
+            await navigator.clipboard.writeText(code);
+            const prev = btn.textContent;
+            btn.textContent = "Copied";
+            btn.classList.add("done");
+            setTimeout(() => { btn.textContent = prev; btn.classList.remove("done"); }, 1400);
+          } catch { /* clipboard blocked — no-op */ }
+        });
+      });
+    </script>
+  </body>
+</html>
