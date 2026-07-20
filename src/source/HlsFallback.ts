@@ -57,6 +57,14 @@ export interface HlsFallbackPlan {
   audioRenditions?: HlsAudioRendition[];
   /** Subtitle languages (segmented WebVTT). */
   subtitleRenditions?: HlsSubtitleRendition[];
+  /**
+   * Selectable video qualities (the master's variants in the chosen audio
+   * group, best-first). `url` is the variant playlist URL — pass it back as
+   * `forceVariantUrl` to switch quality. Present only when there's a choice.
+   */
+  videoTracks?: { url: string; label: string; id: string }[];
+  /** The variant playlist URL this plan was built from (the active quality). */
+  selectedVariant?: string;
 }
 
 function resolveUrl(uri: string, base: string): string {
@@ -105,6 +113,7 @@ interface MediaTag {
 interface VariantTag {
   bandwidth: number;
   hasVideo: boolean;
+  height: number;
   audioGroup?: string;
   subtitlesGroup?: string;
   url: string;
@@ -135,6 +144,8 @@ function parseMaster(
       const codecs = a["CODECS"] || "";
       const hasVideo =
         !!a["RESOLUTION"] || /avc|hvc|hev|vp0?9|av01|mp4v|dvh/i.test(codecs);
+      const resM = /(\d+)x(\d+)/.exec(a["RESOLUTION"] || "");
+      const height = resM ? parseInt(resM[2], 10) : 0;
       let j = i + 1;
       while (
         j < lines.length &&
@@ -145,6 +156,7 @@ function parseMaster(
         variants.push({
           bandwidth: parseInt(a["BANDWIDTH"] || "0", 10),
           hasVideo,
+          height,
           audioGroup: a["AUDIO"] || undefined,
           subtitlesGroup: a["SUBTITLES"] || undefined,
           url: resolveUrl(lines[j].trim(), base),
@@ -296,6 +308,7 @@ async function loadMediaTrack(
 export async function analyzeHlsFallback(
   url: string,
   headers?: Record<string, string>,
+  forceVariantUrl?: string,
 ): Promise<HlsFallbackPlan | null> {
   try {
     const text = await fetchText(url, headers);
@@ -314,14 +327,17 @@ export async function analyzeHlsFallback(
       return { ...track };
     }
 
-    // Master: pick the best video variant, then resolve its audio/subtitle groups.
+    // Master: pick a video variant (a forced quality, else the best), then
+    // resolve its audio/subtitle groups.
     const { media, variants } = parseMaster(text, url);
     const videoVariants = variants.filter((v) => v.hasVideo);
     const pool = videoVariants.length > 0 ? videoVariants : variants;
-    const best = pool.reduce(
+    const highest = pool.reduce(
       (a, b) => (b.bandwidth > a.bandwidth ? b : a),
       pool[0],
     );
+    const best =
+      (forceVariantUrl && pool.find((v) => v.url === forceVariantUrl)) || highest;
     if (!best) {
       Logger.warn(TAG, "master playlist has no usable variant");
       return null;
@@ -334,6 +350,31 @@ export async function analyzeHlsFallback(
     }
 
     const plan: HlsFallbackPlan = { ...videoTrack };
+    plan.selectedVariant = best.url;
+
+    // Quality menu: the video variants in the chosen variant's audio group
+    // (so switching keeps the same audio), one per resolution, best-first.
+    const sameGroup = pool.filter((v) => v.audioGroup === best.audioGroup);
+    const heightCounts = new Map<number, number>();
+    for (const v of sameGroup)
+      heightCounts.set(v.height, (heightCounts.get(v.height) || 0) + 1);
+    const byHeight = new Map<number, VariantTag>();
+    for (const v of sameGroup) {
+      const cur = byHeight.get(v.height);
+      if (!cur || v.bandwidth > cur.bandwidth) byHeight.set(v.height, v);
+    }
+    const uniqueVariants = [...byHeight.values()].sort(
+      (a, b) => b.height - a.height || b.bandwidth - a.bandwidth,
+    );
+    if (uniqueVariants.length > 1) {
+      plan.videoTracks = uniqueVariants.map((v) => ({
+        url: v.url,
+        id: v.url,
+        label: v.height
+          ? `${v.height}p`
+          : `${Math.round(v.bandwidth / 1000)} kbps`,
+      }));
+    }
 
     // Separate audio group → one rendition per language (segment playlists).
     if (best.audioGroup) {

@@ -778,12 +778,20 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
       // subtitle renditions are concatenated into external subtitle tracks.
       if (this.config.forceStreamDemux && isHls && !this.source) {
         try {
-          const plan = await analyzeHlsFallback(streamUrl!, src?.headers);
+          const plan = await analyzeHlsFallback(
+            streamUrl!,
+            src?.headers,
+            this.config.forceVideoRendition,
+          );
           if (plan) {
             Logger.info(
               TAG,
               `forceStreamDemux: routing HLS through the FFmpeg demuxer (${plan.segments.length} video segments)`,
             );
+            // Quality menu: reuse the demuxer-mode rendition machinery (shared
+            // with DASH) — the variant playlists are the selectable qualities.
+            this._dashRenditions = plan.videoTracks ?? [];
+            this._activeDashRendition = plan.selectedVariant ?? "";
             // Video (or muxed) stream.
             this.source = new SegmentStreamSource(
               plan.segments,
