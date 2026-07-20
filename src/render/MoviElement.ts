@@ -316,6 +316,10 @@ export class MoviElement extends HTMLElement {
   // next initializePlayer() to set config.forceStreamDemux.
   private _streamDemuxTried = false;
   private _streamDemuxNext = false;
+  // Video Representation URL the user picked in the demuxer-mode DASH quality
+  // menu. Carried into the next initializePlayer() as config.forceVideoRendition
+  // so the re-load lands on that rendition. Reset on a genuine src change.
+  private _forcedDashRendition: string | null = null;
   // Guards startUIUpdates() against starting a second concurrent rAF loop (the
   // native-fallback path starts one; a later software re-init would start
   // another). The loop clears this when the player goes away.
@@ -6378,6 +6382,18 @@ export class MoviElement extends HTMLElement {
       (this._src.toLowerCase().includes(".m3u8") ||
         this._src.toLowerCase().includes(".mpd"));
 
+    // DASH force-demux mode: the .mpd is playing through the demuxer, so the
+    // adaptive getVideoTracks() only has the one decoded track. Offer the
+    // manifest's Representations instead — picking one re-loads at that quality.
+    const dashRenditions =
+      (this.player as any)?.getDashRenditions?.() as
+        | { url: string; label: string; id: string }[]
+        | undefined;
+    if (dashRenditions && dashRenditions.length > 1) {
+      this.renderDashQualityMenu(qualityList, qualityContainer, dashRenditions);
+      return;
+    }
+
     // Pre-muxed multi-quality path: build a virtual track list from the
     // declarative <source> tags so the picker works without an adaptive stream.
     if (!isAdaptive && this._videoQualities.length > 1) {
@@ -6639,6 +6655,130 @@ export class MoviElement extends HTMLElement {
         if (menu) menu.style.display = "none";
       });
     });
+  }
+
+  /**
+   * Quality menu for DASH-fallback (demuxer) mode: lists the manifest's video
+   * Representations. Built via DOM nodes (not innerHTML). Picking one re-loads
+   * the same .mpd forcing that rendition through the demuxer, preserving the
+   * separate audio + subtitle tracks (which a bare-file swap would drop).
+   */
+  private renderDashQualityMenu(
+    qualityList: HTMLElement,
+    qualityContainer: HTMLElement,
+    renditions: { url: string; label: string; id: string }[],
+  ): void {
+    qualityContainer.style.display = "flex";
+    const activeUrl =
+      ((this.player as any)?.getActiveDashRendition?.() as string) || "";
+    const active = renditions.find((r) => r.url === activeUrl);
+    this._updateQualityBtnBadge(
+      this._heightBadge(parseInt(active?.label || "0", 10)),
+    );
+
+    const checkSvg = () =>
+      document.importNode(
+        new DOMParser().parseFromString(
+          '<svg xmlns="http://www.w3.org/2000/svg" class="movi-quality-check" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"></polyline></svg>',
+          "image/svg+xml",
+        ).documentElement,
+        true,
+      );
+
+    const items = renditions.map((r) => {
+      const isActive = r.url === activeUrl;
+      const item = document.createElement("div");
+      item.className =
+        "movi-quality-item" + (isActive ? " movi-quality-active" : "");
+      const wrap = document.createElement("span");
+      wrap.className = "movi-quality-label-wrap";
+      const label = document.createElement("span");
+      label.className = "movi-quality-label";
+      label.textContent = r.label;
+      wrap.appendChild(label);
+      item.appendChild(wrap);
+      if (isActive) item.appendChild(checkSvg());
+      item.addEventListener("click", (e) => {
+        e.stopPropagation();
+        if (isActive) return;
+        this.switchDashRendition(r.url);
+        const menu = this.shadowRoot?.querySelector(
+          ".movi-quality-menu",
+        ) as HTMLElement;
+        if (menu) menu.style.display = "none";
+      });
+      return item;
+    });
+    qualityList.replaceChildren(...items);
+  }
+
+  /**
+   * Switch DASH quality in demuxer mode. Reuses the resume + frozen-frame
+   * machinery of switchPremuxedQuality, but instead of swapping `src` to a bare
+   * video file (which loses the split audio + subtitles) it keeps the .mpd and
+   * re-loads with config.forceStreamDemux + forceVideoRendition, so
+   * analyzeDashFallback re-attaches the audio/subtitle and only the video
+   * Representation changes.
+   */
+  private switchDashRendition(url: string): void {
+    if (
+      !this.player ||
+      url === ((this.player as any).getActiveDashRendition?.() || "")
+    )
+      return;
+    const wasPaused = (this.player as any).getState?.() === "paused";
+    let resumeTime = 0;
+    try {
+      resumeTime = (this.player as any).getCurrentTime?.() || 0;
+    } catch {}
+
+    this._qualitySwitchInProgress = true;
+    this._switchResumeTime = resumeTime;
+    this._startAtBeforeSwitch = this._startAt;
+    if (resumeTime > 0) {
+      this._startAt = resumeTime;
+      this._pendingSeek = resumeTime;
+    }
+    try {
+      this._switchResumeDuration =
+        (this.player as any).getDuration?.() || 0;
+    } catch {
+      this._switchResumeDuration = 0;
+    }
+    // Freeze the current frame as a poster so the swap isn't a black flash.
+    try {
+      const snapshot = this.canvas?.toDataURL?.("image/jpeg", 0.85);
+      if (snapshot && snapshot.length > 32) {
+        this._lastFrameSnapshot = snapshot;
+        this._showSnapshotPoster();
+      }
+    } catch {
+      /* tainted canvas */
+    }
+    if (this._switchPosterTimeout) clearTimeout(this._switchPosterTimeout);
+    this._switchPosterTimeout = setTimeout(() => {
+      this._switchPosterTimeout = null;
+      if (this._qualitySwitchInProgress) {
+        this._qualitySwitchInProgress = false;
+        this._switchResumeTime = 0;
+        this._switchResumeDuration = 0;
+        this._startAt = this._startAtBeforeSwitch;
+        this._hideSnapshotPoster();
+        this.updatePoster();
+      }
+    }, 8000);
+
+    // Re-load the same .mpd through the demuxer at the chosen rendition.
+    this._forcedDashRendition = url;
+    this._streamDemuxNext = true;
+    this._suppressSwReload = true;
+    this.load()
+      .then(() => {
+        // Resume playback if it was rolling before the switch — the re-load
+        // otherwise lands paused at the seeked position.
+        if (!wasPaused) this.player?.play?.().catch(() => {});
+      })
+      .catch(() => {});
   }
 
   // Audio element preserved across a quality switch. Re-adopted by the new
@@ -15417,12 +15557,15 @@ export class MoviElement extends HTMLElement {
           // New source → reset the "has been played" flag so the
           // next source's initial poster-seek "paused" transition
           // doesn't trigger a premature bar surface.
+          // Any src (re)set — even to the same URL — is a fresh load, so clear
+          // the DASH-fallback guards: the fallback must be able to run again,
+          // and a stale forced-quality pick must not carry over. (The
+          // quality-switch re-init calls load() directly, not setAttribute, so
+          // it never reaches here — no risk of clearing its own forced pick.)
+          this._streamDemuxTried = false;
+          this._forcedDashRendition = null;
           if (newValue !== oldSrc) {
             this._hasEverPlayed = false;
-            // Fresh source gets a fresh shot at the DASH→demuxer fallback.
-            // (Reset here, on a genuine src change — NOT in load(), which the
-            // fallback's own re-init calls, or a multi-segment miss would loop.)
-            this._streamDemuxTried = false;
           }
 
           // Show/hide empty state indicator based on src
@@ -16449,6 +16592,10 @@ export class MoviElement extends HTMLElement {
       if (this._streamDemuxNext) {
         this._streamDemuxNext = false;
         playerConfig.forceStreamDemux = true;
+      }
+      // A DASH quality pick forces that Representation on the demuxer re-load.
+      if (this._forcedDashRendition) {
+        playerConfig.forceVideoRendition = this._forcedDashRendition;
       }
 
       // MPEG-5 LCEVC (opt-in): Shaka composites the enhanced layer onto the

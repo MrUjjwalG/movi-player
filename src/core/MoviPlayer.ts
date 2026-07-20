@@ -115,6 +115,10 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
   private audioDemuxInFlight: boolean = false;
   private _splitAudioTrackId: number = -1;
   private _splitAudioEof: boolean = false;
+  // True while an audio-track switch tears the audio demuxer down and re-stands
+  // it up. hasAudibleSource() honors it so the volume control doesn't blink out
+  // during the swap (audioDemuxer is briefly null).
+  private _audioSwitchInProgress: boolean = false;
   // Set once destroy() runs. load() awaits (WASM loads, the split-audio second
   // demuxer) can outlive a rapid source switch that destroys this instance; the
   // continuation must bail instead of configuring/rendering onto the now-shared
@@ -129,6 +133,10 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
 
   // External subtitle tracks (VTT/SRT)
   private _subtitleTracks: SubtitleSourceEntry[] = [];
+  // DASH-fallback video Representations (best-first) + the one currently playing,
+  // for the demuxer-mode quality menu. Populated only in the force-demux path.
+  private _dashRenditions: { url: string; label: string; id: string }[] = [];
+  private _activeDashRendition: string = "";
   private _activeSubtitleLang: string = "";
   private _externalSubCues: SubtitleCue[] = [];
   private _externalSubTimer: number | null = null;
@@ -699,9 +707,20 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
               TAG,
               "forceStreamDemux: MSE failed at runtime — routing this DASH source through the FFmpeg demuxer",
             );
+            // Remember the renditions for the demuxer-mode quality menu, and
+            // honor a user-picked one (forceVideoRendition) over the best.
+            this._dashRenditions = plan.videoTracks ?? [];
+            const videoUrl =
+              (this.config.forceVideoRendition &&
+                this._dashRenditions.some(
+                  (r) => r.url === this.config.forceVideoRendition,
+                ) &&
+                this.config.forceVideoRendition) ||
+              plan.videoUrl;
+            this._activeDashRendition = videoUrl;
             this.source = await this.createSource({
               type: "url",
-              url: plan.videoUrl,
+              url: videoUrl,
               headers: src?.headers,
             });
             // Prefer the full audio menu (languages / bitrate variants) when the
@@ -4104,6 +4123,17 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
   }
 
   /**
+   * DASH-fallback video Representations for the demuxer-mode quality menu
+   * (best-first), and the one currently playing. Empty unless force-demuxing.
+   */
+  getDashRenditions(): { url: string; label: string; id: string }[] {
+    return this._dashRenditions;
+  }
+  getActiveDashRendition(): string {
+    return this._activeDashRendition;
+  }
+
+  /**
    * Get video tracks
    */
   getVideoTracks(): VideoTrack[] {
@@ -5388,6 +5418,10 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
     }
     if (lang === this._activeAudioLang && this.audioDemuxer) return true;
 
+    // Keep the volume control (and any hasAudibleSource-gated UI) visible while
+    // the demuxer is briefly torn down below.
+    this._audioSwitchInProgress = true;
+
     const t = this.getCurrentTime();
     const resume =
       this.stateManager.is("playing") || this.stateManager.is("buffering");
@@ -5448,6 +5482,7 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
         this.disableAudio = true;
       }
       this.setupNativeAudio(track.url);
+      this._audioSwitchInProgress = false;
       this.emit("audioTrackChange" as any, { lang, label: track.label });
       return true;
     }
@@ -5464,6 +5499,7 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
       if (!this.audioRenderer.isAudioPlaying()) this.audioRenderer.play();
       this.startAudioLoop();
     }
+    this._audioSwitchInProgress = false;
     Logger.info(TAG, `Audio switched (WASM) to: ${track.label} (${track.lang})`);
     this.emit("audioTrackChange" as any, { lang, label: track.label });
     return true;
@@ -5518,6 +5554,8 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
    */
   hasAudibleSource(): boolean {
     return (
+      this._audioSwitchInProgress ||
+      this._audioTracks.length > 0 ||
       this.trackManager.getAudioTracks().length > 0 ||
       this.hasNativeAudio() ||
       this.audioDemuxer !== null ||

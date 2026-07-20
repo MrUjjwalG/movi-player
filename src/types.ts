@@ -148,6 +148,12 @@ export interface PlayerConfig {
    * can't decode (e.g. Safari + HE-AAC): the demuxer decodes every codec.
    */
   forceStreamDemux?: boolean;
+  /**
+   * When force-demuxing a DASH source, use this specific video Representation
+   * file instead of the best one — set when the user picks a quality in the
+   * demuxer-mode quality menu, so the re-load lands on the chosen rendition.
+   */
+  forceVideoRendition?: string;
   /** Separate audio source — single or multi-language */
   audioSource?: SourceConfig;
   /** Multiple audio tracks with language metadata */
