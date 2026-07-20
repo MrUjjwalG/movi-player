@@ -31,14 +31,24 @@ export class TrackManager extends EventEmitter<TrackManagerEvents> {
     const videoTracks = this.getVideoTracks();
     const audioTracks = this.getAudioTracks();
     
-    if (videoTracks.length > 0 && !this.activeVideoTrack) {
-      this.activeVideoTrack = videoTracks[0];
+    // Re-resolve the active video track against the NEW list. An in-place
+    // quality switch replaces the single video track with a fresh object (new
+    // resolution) but reuses the same stream id; keying only on "is activeVideo
+    // null?" left the stale old-resolution object as active, so getActiveVideo-
+    // Track() reported the previous height to anything listening on the
+    // tracksChange this emits (e.g. the qualitychange forwarder). Point it at
+    // the same-id track in the new list, falling back to the first.
+    if (videoTracks.length > 0) {
+      const keep = this.activeVideoTrack
+        ? videoTracks.find((t) => t.id === this.activeVideoTrack!.id)
+        : undefined;
+      this.activeVideoTrack = keep || videoTracks[0];
     }
-    
+
     if (audioTracks.length > 0 && !this.activeAudioTrack) {
       this.activeAudioTrack = audioTracks[0];
     }
-    
+
     this.emit('tracksChange', this.tracks);
     Logger.info(TAG, `Tracks set: ${tracks.length} total`);
   }
