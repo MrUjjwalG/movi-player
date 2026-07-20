@@ -98,27 +98,25 @@ export class DASHPlayerWrapper extends EventEmitter<PlayerEventMap> {
 
     this.trackManager.on("subtitleTrackChange", (track: SubtitleTrack | null) => {
       if (!this.dash) return;
-      // Drop the previous track's on-screen cue on EVERY change, not just on
-      // disable. dash.js keeps per-track cueData and only runs CUE_EXIT for the
-      // active track, so after a language switch the old track's active cue
-      // never gets its exit — its text would linger until the new track's next
-      // cue boundary (looks like "stuck on the old language"). The new track's
-      // currently-active cue re-fires CUE_ENTER on switch, so this only clears
-      // the stale line.
+      // Drop the previous track's on-screen cue on EVERY change. dash.js keeps
+      // per-track cueData and only runs CUE_EXIT for the active track, so after
+      // a language switch the old track's active cue never gets its exit — its
+      // text would linger. The new track's currently-active cue re-fires
+      // CUE_ENTER once it's active, so this only clears the stale line.
       if (this.textContainer) this.textContainer.textContent = "";
-      if (!track) {
-        this.dash.enableText(false);
-        Logger.info(TAG, "Subtitles disabled");
-        return;
-      }
-      const textTracks = this.dash.getTracksFor("text") ?? [];
-      const target = textTracks[track.id];
-      if (!target) return;
-      this.dash.setCurrentTrack(target);
-      this.dash.enableText(true);
+      // setTextTrack is the correct switch API: it sets the chosen track's
+      // manualMode to SHOWING (and the rest to HIDDEN), which is exactly what
+      // dash.js's manual cue processing keys on to decide whose cues to
+      // dispatch. setCurrentTrack only re-picks the ABR text adaptation and
+      // leaves manualMode untouched, so the newly-selected track's cues never
+      // fire — the display stays stuck on the previous language. -1 disables.
+      // track.id is the index into getTracksFor("text"), matching setTextTrack.
+      this.dash.setTextTrack(track ? track.id : -1);
       Logger.info(
         TAG,
-        `Selected subtitle track ${track.id} (${track.language || track.label || ""})`,
+        track
+          ? `Selected subtitle track ${track.id} (${track.language || track.label || ""})`
+          : "Subtitles disabled",
       );
     });
 
