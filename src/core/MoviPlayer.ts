@@ -1422,7 +1422,16 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
       (this.source as { getNetworkStats?: () => { currentSpeed: number } })
         .getNetworkStats?.()
         ?.currentSpeed ?? 0;
-    if (raw > 0) this._lastThroughputBps = raw;
+    // EWMA-smooth the estimate. A single reading is noisy on the premuxed path:
+    // each in-place switch restarts a file download (TCP ramp reads low) and a
+    // full buffer pauses the download (trickle reads low), so an unsmoothed
+    // value swings wildly and drives spurious switches. Smoothing damps that.
+    if (raw > 0) {
+      this._lastThroughputBps =
+        this._lastThroughputBps > 0
+          ? this._lastThroughputBps * 0.7 + raw * 0.3
+          : raw;
+    }
     const bps = this._lastThroughputBps;
     if (bps <= 0) {
       // Never measured throughput yet (e.g. a fully-downloaded single file that
@@ -1435,16 +1444,24 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
 
     const throughputBits = bps * 8;
     const currentRung = activeIdx >= 0 ? rungs[activeIdx] : null;
+    // How many seconds of video are buffered ahead of the playhead — the ground
+    // truth for whether the current rung is actually sustainable.
+    const bufferAhead = Math.max(
+      0,
+      this.getBufferedTime() - this.getCurrentTime(),
+    );
 
-    // DOWNSHIFT — only when the current rung genuinely can't be sustained: its
-    // bitrate exceeds the raw (un-margined) measured throughput. Drop to the
-    // highest rung the throughput does sustain, in one hop. Using raw throughput
-    // for the down threshold but a margin for the up threshold (below) opens a
-    // hysteresis dead-zone between them, so a throughput hovering near a rung
-    // boundary no longer flips the quality up-and-down every cooldown.
+    // DOWNSHIFT — only when the current rung looks unaffordable per throughput
+    // AND the buffer is genuinely draining toward starvation. A healthy, growing
+    // buffer proves the rung is sustainable no matter what the estimate says, so
+    // estimate noise (or an over-estimated bitrate — e.g. AV1 sized with H.264
+    // tiers) never triggers a downshift on its own. That noise-driven downshift
+    // was the 4K↔1440 flip on a link that clearly sustained 4K. Genuine hard
+    // stalls are still caught immediately by the buffering-state path above.
     if (
       currentRung &&
       (currentRung.bandwidth || 0) > throughputBits &&
+      bufferAhead < 5 &&
       activeIdx < rungs.length - 1
     ) {
       let target = rungs[rungs.length - 1];
