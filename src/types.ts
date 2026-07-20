@@ -159,6 +159,15 @@ export interface PlayerConfig {
   drm?: boolean; // Enable DRM mode for HLS (native video element, no canvas)
   licenseUrl?: string; // Widevine/FairPlay license server URL
   licenseHeaders?: Record<string, string>; // Custom headers for license requests (e.g., auth tokens)
+  /**
+   * Selects who renders progressive embedded text subtitles.
+   *
+   * `internal` keeps the built-in renderer (default). `host` keeps track
+   * selection active but does not decode or draw progressive text subtitle
+   * packets. Image subtitles and adaptive-stream subtitles always remain
+   * internally rendered.
+   */
+  embeddedTextSubtitleRenderer?: "internal" | "host";
   lcevc?: boolean; // Enable MPEG-5 Part 2 LCEVC decoding (needs the lcevc_dec.js library)
   lcevcUrl?: string; // Optional URL to lazy-load the lcevc_dec.js decoder library (else expect a global LCEVCdec)
 }
