@@ -6641,7 +6641,15 @@ export class MoviElement extends HTMLElement {
     const recoverable =
       /HTTP \d|Stream (failed|ended)|Failed to fetch|Connection lost|network|does not support range|CORS|corrupt data stream/i.test(
         message,
-      );
+      ) ||
+      // A demux-open failure ("File is corrupted or in an unsupported format")
+      // WHILE we're already recovering is almost always the degrading link
+      // handing back a truncated/garbage file, not a real codec problem — keep
+      // trying a lower rendition (the network may recover). On a first load
+      // (no recovery in progress) it's treated as a genuinely bad file and goes
+      // to the overlay, not retried across every rendition.
+      (this._qualityRecoveryAttempts > 0 &&
+        /Failed to open media|File is corrupted/i.test(message));
     if (!recoverable) return false;
     if (this._qualityRecoveryAttempts >= MoviElement.MAX_QUALITY_RECOVERIES) {
       return false;
@@ -17161,6 +17169,13 @@ export class MoviElement extends HTMLElement {
       // Dispatch load event
       this.dispatchEvent(new Event("loadeddata"));
     } catch (error) {
+      const initMsg = error instanceof Error ? error.message : String(error);
+      // A recovery reload (onto a lower rendition after a source error) can fail
+      // to open on a still-degrading link — retry another rendition instead of
+      // dropping straight to the overlay. Only mid-recovery; a first-load failure
+      // still surfaces normally below.
+      if (this._tryQualityRecovery(initMsg)) return;
+
       this.dispatchEvent(new CustomEvent("error", { detail: error }));
       Logger.error(TAG, "Failed to initialize MoviPlayer", error);
 
@@ -17215,6 +17230,14 @@ export class MoviElement extends HTMLElement {
           // neutral title and let the specific message carry the detail.
           title = "Can't Play Video";
         }
+      }
+
+      // Recovery exhausted (cycled every rendition on a degrading link) — blame
+      // the connection, not the file.
+      if (this._qualityRecoveryAttempts >= MoviElement.MAX_QUALITY_RECOVERIES) {
+        title = "Connection Problem";
+        message =
+          "The network kept returning corrupt data across every quality. Check your connection, then reload.";
       }
 
       this.handleUnsupportedVideo(title, message);
@@ -17677,6 +17700,15 @@ export class MoviElement extends HTMLElement {
         title = "Playback Error";
         message =
           "The decoder ran out of memory while parsing this file. Try software decoding — it uses a different path that handles this case.";
+      }
+
+      // If we got here after cycling every rendition (recovery exhausted), the
+      // real problem is the link handing back bad data, not the video itself —
+      // say so instead of a misleading "corrupt file".
+      if (this._qualityRecoveryAttempts >= MoviElement.MAX_QUALITY_RECOVERIES) {
+        title = "Connection Problem";
+        message =
+          "The network kept returning corrupt data across every quality. Check your connection, then reload.";
       }
 
       this.handleUnsupportedVideo(title, message);
