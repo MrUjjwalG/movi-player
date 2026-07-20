@@ -176,6 +176,10 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
   private _lastAbrSwitchAt: number = Number.NEGATIVE_INFINITY;
   private _abrUpCandidate: string = "";
   private _abrUpConfirms: number = 0;
+  // Previous tick's buffered-ahead seconds, to detect a draining buffer (the
+  // ground-truth "network can't sustain the current rung" signal). Reset on a
+  // switch since the buffer restarts from the resume point.
+  private _lastBufferAhead: number = 0;
   private _activeSubtitleLang: string = "";
   private _externalSubCues: SubtitleCue[] = [];
   private _externalSubTimer: number | null = null;
@@ -1444,36 +1448,42 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
 
     const throughputBits = bps * 8;
     const currentRung = activeIdx >= 0 ? rungs[activeIdx] : null;
-    // How many seconds of video are buffered ahead of the playhead — the ground
-    // truth for whether the current rung is actually sustainable.
+    // How many seconds of video are buffered ahead of the playhead, and whether
+    // that number is shrinking — the ground truth for whether the current rung
+    // is sustainable, independent of any (noisy, often over-estimated) bitrate.
     const bufferAhead = Math.max(
       0,
       this.getBufferedTime() - this.getCurrentTime(),
     );
+    const draining =
+      this._lastBufferAhead > 0 && bufferAhead < this._lastBufferAhead - 1.5;
+    this._lastBufferAhead = bufferAhead;
 
-    // DOWNSHIFT — only when the current rung looks unaffordable per throughput
-    // AND the buffer is genuinely draining toward starvation. A healthy, growing
-    // buffer proves the rung is sustainable no matter what the estimate says, so
-    // estimate noise (or an over-estimated bitrate — e.g. AV1 sized with H.264
-    // tiers) never triggers a downshift on its own. That noise-driven downshift
-    // was the 4K↔1440 flip on a link that clearly sustained 4K. Genuine hard
-    // stalls are still caught immediately by the buffering-state path above.
+    // DOWNSHIFT — the current rung looks unaffordable per throughput AND the
+    // buffer is actually draining toward starvation (or critically low). The
+    // throughput gate keeps a link that clearly sustains the rung (fast demuxer
+    // streams, whose steady buffer is only a few seconds) from ever downshifting.
+    // The buffer trend is the ground truth: a healthy, stable buffer never trips
+    // it, so estimate noise (or AV1 sized with H.264 tiers) can't cause the
+    // phantom 4K↔1440 flip — but acting while the buffer is still draining and
+    // non-empty (< 12s), rather than waiting for a hard < 5s floor, downshifts in
+    // time on a genuine drop instead of stalling. Drop to the highest rung the
+    // measured throughput sustains; the buffering-state path still catches a hard
+    // stall at once.
     if (
       currentRung &&
+      activeIdx < rungs.length - 1 &&
       (currentRung.bandwidth || 0) > throughputBits &&
-      bufferAhead < 5 &&
-      activeIdx < rungs.length - 1
+      ((draining && bufferAhead < 12) || bufferAhead < 5)
     ) {
-      let target = rungs[rungs.length - 1];
-      for (const r of rungs) {
-        if ((r.bandwidth || 0) <= throughputBits) {
-          target = r;
+      let target = rungs[activeIdx + 1];
+      for (let i = activeIdx + 1; i < rungs.length; i++) {
+        if ((rungs[i].bandwidth || 0) <= throughputBits) {
+          target = rungs[i];
           break;
         }
       }
-      if (target.url !== currentRung.url) {
-        await this.abrCommit(target.url, now);
-      }
+      await this.abrCommit(target.url, now);
       return;
     }
 
@@ -1516,6 +1526,7 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
     this._lastAbrSwitchAt = now;
     this._abrUpCandidate = "";
     this._abrUpConfirms = 0;
+    this._lastBufferAhead = 0; // buffer restarts from the resume point post-swap
     await this.abrSwitchTo(url);
   }
 
