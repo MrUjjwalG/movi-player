@@ -18528,7 +18528,12 @@ export class MoviElement extends HTMLElement {
           this.getAttribute("sw") !== "false" &&
           // fallback="native" recovers automatically (native → software) — the
           // manual "Try Software Decoding" prompt is never surfaced.
-          this.getAttribute("fallback") !== "native";
+          this.getAttribute("fallback") !== "native" &&
+          // Adaptive streams (HLS/DASH via Shaka/hls.js/dash.js) decode through
+          // the browser's MSE, NOT movi's own decoder — so forcing software does
+          // nothing, it just re-runs the same stream engine and fails identically
+          // (e.g. Safari MSE rejecting a HE-AAC track). Never offer it for streams.
+          !this.player?.isStreamPlayback?.();
         swFallbackBtn.style.display = shouldShowSwButton ? "flex" : "none";
       }
 
