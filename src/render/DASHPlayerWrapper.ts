@@ -7,10 +7,12 @@ import {
   PlayerConfig,
   Track,
   VideoTrack,
+  SubtitleTrack,
 } from "../types";
 import { CanvasRenderer } from "./CanvasRenderer";
 import { TrackManager } from "../core/TrackManager";
 import { Logger } from "../utils/Logger";
+import { sanitizeVttHtml } from "./sanitizeVttHtml";
 
 const TAG = "DASHPlayerWrapper";
 
@@ -33,6 +35,10 @@ export class DASHPlayerWrapper extends EventEmitter<PlayerEventMap> {
   // Representations from the manifest, indexed to match the VideoTrack ids we
   // hand the TrackManager (track id === array index; -1 is Auto/ABR).
   private representations: Representation[] = [];
+  // Subtitle rendering: dash.js schedules cue timing itself (cueEnter/cueExit)
+  // when dispatchForManualRendering is set — we just paint the given text into
+  // our own overlay, keyed by cue id so cueExit can remove the right element.
+  private textContainer: HTMLDivElement | null = null;
 
   constructor(config: PlayerConfig) {
     super();
@@ -53,6 +59,7 @@ export class DASHPlayerWrapper extends EventEmitter<PlayerEventMap> {
     // access DRM-protected frames (browser blocks VideoFrame copy).
     if (!config.drm && config.renderer === "canvas" && config.canvas) {
       this.canvasRenderer = new CanvasRenderer(config.canvas);
+      this.createTextContainer();
     }
 
     this.setupEventHandlers();
@@ -87,6 +94,55 @@ export class DASHPlayerWrapper extends EventEmitter<PlayerEventMap> {
       );
       Logger.info(TAG, `Requesting representation ${rep.id} (${rep.height}p)`);
     });
+
+    this.trackManager.on("subtitleTrackChange", (track: SubtitleTrack | null) => {
+      if (!this.dash) return;
+      if (!track) {
+        this.dash.enableText(false);
+        if (this.textContainer) this.textContainer.textContent = "";
+        Logger.info(TAG, "Subtitles disabled");
+        return;
+      }
+      const textTracks = this.dash.getTracksFor("text") ?? [];
+      const target = textTracks[track.id];
+      if (!target) return;
+      this.dash.setCurrentTrack(target);
+      this.dash.enableText(true);
+      Logger.info(
+        TAG,
+        `Selected subtitle track ${track.id} (${track.language || track.label || ""})`,
+      );
+    });
+  }
+
+  /**
+   * Own caption-rendering overlay, a sibling of the shared canvas (mirrors
+   * ShakaPlayerWrapper's textContainer). Registered with the SAME
+   * CanvasRenderer instance via setSubtitleOverlay() so its existing
+   * rotation-aware resize() logic (dimension swap for 90/270°, centering,
+   * rotate transform) sizes/positions/rotates it automatically — cueEnter/
+   * cueExit just add/remove text nodes into it.
+   */
+  private createTextContainer(): void {
+    if (this.textContainer || !this.config.canvas) return;
+    const canvas = this.config.canvas as HTMLCanvasElement;
+    const root = canvas.parentNode;
+    if (!root) return;
+    const tc = document.createElement("div");
+    tc.className = "movi-dash-text-container";
+    tc.style.position = "absolute";
+    tc.style.inset = "0";
+    tc.style.pointerEvents = "none";
+    tc.style.zIndex = "2"; // above the canvas, below the controls bar
+    tc.style.textAlign = "center";
+    tc.style.color = "#fff";
+    tc.style.textShadow = "0 1px 3px rgba(0,0,0,0.9), 0 0 2px rgba(0,0,0,0.9)";
+    tc.style.fontFamily = "sans-serif";
+    tc.style.fontSize =
+      "calc(clamp(20px, calc(var(--movi-player-width, 100vw) * 0.032), 40px) * var(--movi-sub-size-mult, 1))";
+    root.appendChild(tc);
+    this.textContainer = tc;
+    this.canvasRenderer?.setSubtitleOverlay(tc);
   }
 
   private setupEventHandlers(): void {
@@ -199,6 +255,14 @@ export class DASHPlayerWrapper extends EventEmitter<PlayerEventMap> {
 
     this.dash = MediaPlayer().create();
 
+    // Text tracks off by default (Movi's UI controls selection) and dispatched
+    // to us as cueEnter/cueExit events instead of being rendered by dash.js's
+    // own (native-video-anchored) caption box — our <video> is hidden, canvas
+    // draws frames, so dash.js's default caption rendering would never be seen.
+    this.dash.updateSettings({
+      streaming: { text: { defaultEnabled: false, dispatchForManualRendering: true } },
+    });
+
     // Custom media headers on every request dash.js makes (manifest + segments).
     // Must be registered before initialize() so the manifest fetch carries them.
     const mediaHeaders = this.config.headers;
@@ -222,6 +286,27 @@ export class DASHPlayerWrapper extends EventEmitter<PlayerEventMap> {
         this.emit("loadEnd", undefined);
         settled = true;
         resolve();
+      });
+
+      // dash.js schedules cue timing itself and dispatches enter/exit — we
+      // just paint the given text into our own overlay, keyed by cue id.
+      this.dash!.on(MediaPlayer.events.CUE_ENTER, (e: any) => {
+        if (!this.textContainer) return;
+        const el = document.createElement("div");
+        el.dataset.cueId = String(e.id);
+        // e.text is a plain string from a remote manifest, not a trusted
+        // VTTCue — sanitize (whitelisted b/i/u/span/ruby/etc.) instead of the
+        // raw innerHTML assignment dash.js's own sample uses, so <b>/<i>
+        // formatting still renders without an XSS hole.
+        el.appendChild(sanitizeVttHtml(e.text || ""));
+        this.textContainer.appendChild(el);
+      });
+      this.dash!.on(MediaPlayer.events.CUE_EXIT, (e: any) => {
+        if (!this.textContainer) return;
+        const el = this.textContainer.querySelector(
+          `[data-cue-id="${CSS.escape(String(e.id))}"]`,
+        );
+        el?.remove();
       });
 
       // ABR / quality switches change the active rendition without changing
@@ -297,6 +382,22 @@ export class DASHPlayerWrapper extends EventEmitter<PlayerEventMap> {
         label,
       };
       tracks.push(videoTrack);
+    });
+
+    // Subtitle/text tracks. id is the index into getTracksFor("text") — the
+    // subtitleTrackChange handler looks the MediaInfo back up by that index.
+    const textTracks = this.dash.getTracksFor("text") ?? [];
+    textTracks.forEach((t, index) => {
+      const lang = t.lang && t.lang !== "und" ? t.lang : "";
+      const label = t.labels?.[0]?.text || lang || `Subtitle ${index + 1}`;
+      tracks.push({
+        id: index,
+        type: "subtitle",
+        codec: "",
+        language: lang,
+        label,
+        subtitleType: "text",
+      } as SubtitleTrack);
     });
 
     this.trackManager.setTracks(tracks);
@@ -506,11 +607,25 @@ export class DASHPlayerWrapper extends EventEmitter<PlayerEventMap> {
   selectAudioTrack(_id: number): boolean {
     return false;
   }
-  getSubtitleTracks() {
-    return [];
+  getSubtitleTracks(): SubtitleTrack[] {
+    return this.trackManager
+      .getTracks()
+      .filter((t) => t.type === "subtitle") as SubtitleTrack[];
   }
-  selectSubtitleTrack(_id: number | null): Promise<boolean> {
-    return Promise.resolve(false);
+  async selectSubtitleTrack(id: number | null): Promise<boolean> {
+    return this.trackManager.selectSubtitleTrack(id);
+  }
+
+  setVideoRotation(deg: number): void {
+    this.canvasRenderer?.setManualRotation(deg);
+  }
+
+  rotateVideo(): number {
+    return this.canvasRenderer?.rotate90() ?? 0;
+  }
+
+  getVideoRotation(): number {
+    return this.canvasRenderer?.getRotation() ?? 0;
   }
 
   setFitMode(mode: any) {
@@ -619,6 +734,12 @@ export class DASHPlayerWrapper extends EventEmitter<PlayerEventMap> {
       }
       this.dash = null;
     }
+
+    this.canvasRenderer?.setSubtitleOverlay(null);
+    if (this.textContainer?.parentNode) {
+      this.textContainer.parentNode.removeChild(this.textContainer);
+    }
+    this.textContainer = null;
 
     this.videoElement.removeAttribute("src");
     this.videoElement.load();

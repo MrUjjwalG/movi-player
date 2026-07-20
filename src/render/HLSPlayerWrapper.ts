@@ -6,6 +6,7 @@ import {
   PlayerConfig,
   Track,
   VideoTrack,
+  SubtitleTrack,
 } from "../types";
 import { CanvasRenderer } from "./CanvasRenderer";
 import { TrackManager } from "../core/TrackManager";
@@ -22,6 +23,14 @@ export class HLSPlayerWrapper extends EventEmitter<PlayerEventMap> {
   public trackManager: TrackManager;
   private frameCallbackId: number | null = null;
   private _framesRendered: number = 0;
+  // Subtitle rendering: hls.js parses cues (renderTextTracksNatively:false, since
+  // the native <video> is hidden — the browser would never paint captions on it)
+  // and hands them to us via CUES_PARSED as real VTTCue objects with no built-in
+  // scheduling. We accumulate them and pick the active one(s) off `timeupdate`,
+  // same as a native <track> element would, painting into our own overlay.
+  private textContainer: HTMLDivElement | null = null;
+  private pendingCues: VTTCue[] = [];
+  private lastActiveCueSignature: string = "";
 
   constructor(config: PlayerConfig) {
     super();
@@ -42,6 +51,7 @@ export class HLSPlayerWrapper extends EventEmitter<PlayerEventMap> {
     // Canvas can't access DRM-protected frames (browser blocks VideoFrame copy)
     if (!config.drm && config.renderer === "canvas" && config.canvas) {
       this.canvasRenderer = new CanvasRenderer(config.canvas);
+      this.createTextContainer();
     }
 
     this.setupEventHandlers();
@@ -84,6 +94,84 @@ export class HLSPlayerWrapper extends EventEmitter<PlayerEventMap> {
         }
       }
     });
+
+    this.trackManager.on("subtitleTrackChange", (track: SubtitleTrack | null) => {
+      if (!this.hls) return;
+      this.hls.subtitleTrack = track ? track.id : -1;
+      // Drop accumulated cues from the previous track so a stale line doesn't
+      // linger on screen after switching languages or turning subtitles off.
+      this.pendingCues = [];
+      this.lastActiveCueSignature = "";
+      if (this.textContainer) this.textContainer.textContent = "";
+      Logger.info(
+        TAG,
+        track
+          ? `Selected subtitle track ${track.id} (${track.language || track.label || ""})`
+          : "Subtitles disabled",
+      );
+    });
+  }
+
+  /**
+   * Own caption-rendering overlay, a sibling of the shared canvas (mirrors
+   * ShakaPlayerWrapper's textContainer). Registered with the SAME
+   * CanvasRenderer instance via setSubtitleOverlay() so its existing
+   * rotation-aware resize() logic (dimension swap for 90/270°, centering,
+   * rotate transform) sizes/positions/rotates it automatically — we only need
+   * to write the active cue's text into it.
+   */
+  private createTextContainer(): void {
+    if (this.textContainer || !this.config.canvas) return;
+    const canvas = this.config.canvas as HTMLCanvasElement;
+    const root = canvas.parentNode;
+    if (!root) return;
+    const tc = document.createElement("div");
+    tc.className = "movi-hls-text-container";
+    tc.style.position = "absolute";
+    tc.style.inset = "0";
+    tc.style.pointerEvents = "none";
+    tc.style.zIndex = "2"; // above the canvas, below the controls bar
+    tc.style.textAlign = "center";
+    tc.style.color = "#fff";
+    tc.style.textShadow = "0 1px 3px rgba(0,0,0,0.9), 0 0 2px rgba(0,0,0,0.9)";
+    tc.style.fontFamily = "sans-serif";
+    tc.style.whiteSpace = "pre-line";
+    tc.style.fontSize =
+      "calc(clamp(20px, calc(var(--movi-player-width, 100vw) * 0.032), 40px) * var(--movi-sub-size-mult, 1))";
+    root.appendChild(tc);
+    this.textContainer = tc;
+    this.canvasRenderer?.setSubtitleOverlay(tc);
+  }
+
+  /** Show whichever accumulated cue(s) are active at the current playhead —
+   *  the browser-native equivalent of a <track> element's cue scheduling,
+   *  which hls.js doesn't do for us in non-native-rendering mode. */
+  private updateActiveCueDisplay(): void {
+    if (!this.textContainer) return;
+    const t = this.videoElement.currentTime;
+    const active = this.pendingCues.filter(
+      (c) => c.startTime <= t && t < c.endTime,
+    );
+    // Bound memory on long streams — drop cues that ended well in the past.
+    if (this.pendingCues.length > 200) {
+      this.pendingCues = this.pendingCues.filter((c) => c.endTime > t - 30);
+    }
+    const signature = active.map((c) => c.text).join("\n");
+    if (signature === this.lastActiveCueSignature) return;
+    this.lastActiveCueSignature = signature;
+
+    this.textContainer.textContent = "";
+    active.forEach((cue, i) => {
+      if (i > 0) this.textContainer!.appendChild(document.createElement("br"));
+      // getCueAsHTML() is the browser's own trusted WebVTT-markup parser — it
+      // returns real DOM nodes for <b>/<i>/<u>/<ruby>/etc., so bold/italic
+      // cues render correctly without us touching innerHTML at all.
+      try {
+        this.textContainer!.appendChild(cue.getCueAsHTML());
+      } catch {
+        this.textContainer!.appendChild(document.createTextNode(cue.text));
+      }
+    });
   }
 
   private setupEventHandlers(): void {
@@ -107,6 +195,7 @@ export class HLSPlayerWrapper extends EventEmitter<PlayerEventMap> {
     );
     this.videoElement.addEventListener("timeupdate", () => {
       this.emit("timeUpdate", this.videoElement.currentTime);
+      this.updateActiveCueDisplay();
     });
     this.videoElement.addEventListener("durationchange", () => {
       this.emit("durationChange", this.videoElement.duration);
@@ -215,6 +304,11 @@ export class HLSPlayerWrapper extends EventEmitter<PlayerEventMap> {
       backBufferLength: 90,
       maxBufferLength: 30,
       maxMaxBufferLength: 600,
+      // The <video> element is hidden (canvas draws frames) so the browser
+      // never paints hls.js's native text tracks. Ask hls.js to hand us
+      // parsed cues via CUES_PARSED instead, and render them ourselves —
+      // see createTextContainer / updateActiveCueDisplay.
+      renderTextTracksNatively: false,
       ...(mediaHeaders && {
         xhrSetup: (xhr: XMLHttpRequest) => {
           for (const [k, v] of Object.entries(mediaHeaders)) {
@@ -260,6 +354,14 @@ export class HLSPlayerWrapper extends EventEmitter<PlayerEventMap> {
           "tracksChange",
           this.trackManager.getTracks(),
         );
+      });
+
+      // Parsed cues (WebVTT sidecar "subtitles" or in-stream CEA-608/708
+      // "captions") for the currently-selected subtitle track — accumulate
+      // for updateActiveCueDisplay's time-based scheduling.
+      this.hls!.on(Hls.Events.CUES_PARSED, (_e, data) => {
+        const cues = Array.isArray((data as any)?.cues) ? (data as any).cues : [];
+        this.pendingCues.push(...cues);
       });
 
       let networkRetries = 0;
@@ -386,6 +488,24 @@ export class HLSPlayerWrapper extends EventEmitter<PlayerEventMap> {
         label: label,
       };
       tracks.push(videoTrack);
+    });
+
+    // Subtitle tracks (the master playlist declares subtitle groups upfront,
+    // so hls.js has already parsed this list by MANIFEST_PARSED time). id is
+    // the index into hls.subtitleTracks — exactly what the `subtitleTrack`
+    // setter expects, so selectSubtitleTrack can pass it straight through.
+    const subs = this.hls?.subtitleTracks ?? [];
+    subs.forEach((t, index) => {
+      const lang = t.lang && t.lang !== "und" ? t.lang : "";
+      const label = t.name || lang || `Subtitle ${index + 1}`;
+      tracks.push({
+        id: index,
+        type: "subtitle",
+        codec: "",
+        language: lang,
+        label,
+        subtitleType: "text",
+      } as SubtitleTrack);
     });
 
     this.trackManager.setTracks(tracks);
@@ -603,11 +723,25 @@ export class HLSPlayerWrapper extends EventEmitter<PlayerEventMap> {
   selectAudioTrack(_id: number): boolean {
     return false;
   }
-  getSubtitleTracks() {
-    return [];
+  getSubtitleTracks(): SubtitleTrack[] {
+    return this.trackManager
+      .getTracks()
+      .filter((t) => t.type === "subtitle") as SubtitleTrack[];
   }
-  selectSubtitleTrack(_id: number | null): Promise<boolean> {
-    return Promise.resolve(false);
+  async selectSubtitleTrack(id: number | null): Promise<boolean> {
+    return this.trackManager.selectSubtitleTrack(id);
+  }
+
+  setVideoRotation(deg: number): void {
+    this.canvasRenderer?.setManualRotation(deg);
+  }
+
+  rotateVideo(): number {
+    return this.canvasRenderer?.rotate90() ?? 0;
+  }
+
+  getVideoRotation(): number {
+    return this.canvasRenderer?.getRotation() ?? 0;
   }
 
   setFitMode(mode: any) {
@@ -732,6 +866,13 @@ export class HLSPlayerWrapper extends EventEmitter<PlayerEventMap> {
       this.hls.destroy();
       this.hls = null;
     }
+
+    this.canvasRenderer?.setSubtitleOverlay(null);
+    if (this.textContainer?.parentNode) {
+      this.textContainer.parentNode.removeChild(this.textContainer);
+    }
+    this.textContainer = null;
+    this.pendingCues = [];
 
     this.videoElement.removeAttribute("src");
     this.videoElement.load();

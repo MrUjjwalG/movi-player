@@ -3892,6 +3892,7 @@ export class MoviElement extends HTMLElement {
         case "S":
           // S: Snapshot
           e.preventDefault();
+          if (!this.isControlAvailable("snapshot")) break;
           this.takeSnapshot();
           this.showOSD(
             OSD.snapshot,
@@ -3920,13 +3921,14 @@ export class MoviElement extends HTMLElement {
         case "T":
           // T: Toggle timeline
           e.preventDefault();
+          if (!this.isControlAvailable("timeline")) break;
           this.toggleTimeline();
           break;
         case "r":
         case "R":
           // R: Rotate video 90° (disabled during PiP)
           e.preventDefault();
-          if (this.player && !this._pipWindow) {
+          if (this.player && !this._pipWindow && this.isControlAvailable("rotate")) {
             const deg = this.player.rotateVideo();
             this.showOSD(
               `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12a9 9 0 1 1-9-9 9.75 9.75 0 0 1 6.74 2.74L21 8"/><path d="M21 3v5h-5"/></svg>`,
@@ -3941,6 +3943,7 @@ export class MoviElement extends HTMLElement {
         case "A":
           // A: Cycle aspect ratio (contain → cover → fill)
           e.preventDefault();
+          if (!this.isControlAvailable("aspect")) break;
           {
             const fits = ["contain", "cover", "fill", "zoom"] as const;
             const current = this._objectFit === "control" ? this._currentFit : this._objectFit;
@@ -4092,8 +4095,7 @@ export class MoviElement extends HTMLElement {
           // H: Toggle HDR mode (only if content is HDR)
           e.preventDefault();
           {
-            const hdrItem = this.contextMenuRoot().querySelector('.movi-context-menu-item[data-action="hdr-toggle"]') as HTMLElement;
-            if (hdrItem && hdrItem.style.display !== "none") {
+            if (this.isControlAvailable("hdr")) {
               this.hdr = !this.hdr;
               this.showOSD(
                 OSD.hdr,
@@ -4106,7 +4108,7 @@ export class MoviElement extends HTMLElement {
         case "U":
           // U: Toggle stable volume
           e.preventDefault();
-          if (this.player) {
+          if (this.player && this.isControlAvailable("stableaudio")) {
             this.stableVolume = !this._stableVolume;
             this.showOSD(
               OSD.stableAudio,
@@ -4118,6 +4120,7 @@ export class MoviElement extends HTMLElement {
         case "G":
           // G: Toggle ambient mode
           e.preventDefault();
+          if (!this.isControlAvailable("ambient")) break;
           this.ambientMode = !this._ambientMode;
           this.updateAmbientUI();
           this.showOSD(
@@ -16498,6 +16501,17 @@ export class MoviElement extends HTMLElement {
         // streams. See updateAmbientUI / updateAudioOutputMenu.
         this.updateAmbientUI();
         this.updateAudioOutputMenu();
+        // Timeline previews come from a manifest thumbnail track on streams; hide
+        // the control for a stream that carries none (getPreviewFrame → null).
+        const timelineItem = this.contextMenuRoot().querySelector(
+          '.movi-context-menu-item[data-action="timeline"]',
+        ) as HTMLElement | null;
+        if (timelineItem) {
+          const timelineBroken =
+            !!this.player.isStreamPlayback?.() &&
+            !this.player.streamHasThumbnails?.();
+          timelineItem.style.display = timelineBroken ? "none" : "";
+        }
         this.detectAndApplyVR360();
       }
       this.updateHDRVisibility();
@@ -19596,6 +19610,48 @@ export class MoviElement extends HTMLElement {
     }
   }
 
+  /**
+   * Public API: whether a given control is usable right now for the current
+   * source, render path, and platform — the single source of truth for both
+   * the visual buttons/menu items (which hide via this same result) and their
+   * keyboard shortcuts (which don't touch the DOM, so they'd otherwise bypass
+   * a hidden button and trigger a no-op or broken control). Host pages can
+   * also call this directly instead of inferring availability from a button's
+   * computed style.
+   */
+  isControlAvailable(
+    action:
+      | "snapshot"
+      | "rotate"
+      | "aspect"
+      | "hdr"
+      | "ambient"
+      | "timeline"
+      | "stableaudio",
+  ): boolean {
+    if (!this.player) return false;
+    // Audio-graph control: no AudioContext path when audio is native.
+    if (action === "stableaudio") return !this.player.usesNativeAudio?.();
+    if (action === "hdr") {
+      // HDR tone-mapping is a Canvas-renderer-only, Chromium-only feature, and
+      // only meaningful when the source itself carries HDR metadata.
+      const isChromium = !!(window as any).chrome;
+      const canSupportHDR = isChromium && this._renderer === "canvas";
+      const isContentHDR = (this.player as any).isHDRSupported?.() || false;
+      return canSupportHDR && isContentHDR;
+    }
+    // Everything else here needs the WASM canvas pipeline.
+    if (this._nativeFallbackActive) return false;
+    const stream = !!this.player.isStreamPlayback?.();
+    // Ambient samples the WASM renderer's 16x16 mirror, never filled for streams.
+    if (action === "ambient") return !stream;
+    // Timeline previews need a manifest thumbnail track on streams.
+    if (action === "timeline")
+      return !(stream && !this.player.streamHasThumbnails?.());
+    // rotate / snapshot / aspect work in WASM + stream canvas modes.
+    return true;
+  }
+
   private updateStableAudioUI(shadowRoot: ShadowRoot | null = this.shadowRoot): void {
     if (!shadowRoot) return;
     const menuRoot = this.contextMenuRoot();
@@ -21464,14 +21520,9 @@ export class MoviElement extends HTMLElement {
   private updateHDRVisibility(): void {
     if (!this.player) return;
 
-    // Check for Chromium-based browser (Chrome, Edge, Opera, Brave, etc.)
-    const isChromium = !!(window as any).chrome;
-
-    // HDR only supported on Chromium with Canvas renderer
-    const canSupportHDR = isChromium && this._renderer === "canvas";
-
-    const isContentHDR = (this.player as any).isHDRSupported?.() || false;
-    const shouldShow = canSupportHDR && isContentHDR;
+    // Single source of truth — see isControlAvailable("hdr") for the
+    // Chromium + canvas-renderer + HDR-content conditions.
+    const shouldShow = this.isControlAvailable("hdr");
 
     const hdrContainer = this.shadowRoot?.querySelector(
       ".movi-hdr-container",
@@ -21511,7 +21562,7 @@ export class MoviElement extends HTMLElement {
 
     Logger.debug(
       TAG,
-      `HDR Visibility updated. Show: ${shouldShow} (Content HDR: ${isContentHDR}, Chromium: ${isChromium}, Renderer: ${this._renderer})`,
+      `HDR Visibility updated. Show: ${shouldShow} (Renderer: ${this._renderer})`,
     );
   }
 

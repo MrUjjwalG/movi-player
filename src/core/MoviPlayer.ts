@@ -4446,6 +4446,14 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
    * Rotate video 90 degrees clockwise
    */
   rotateVideo(): number {
+    // Adaptive streams render via the wrapper's OWN CanvasRenderer on the
+    // shared canvas — MoviPlayer's own videoRenderer never gets frames for a
+    // stream, so its containerWidth stays 0 and rotate90() there is a silent
+    // no-op (the button/shortcut appeared to do nothing / not center). Route
+    // to the wrapper instead, same as setVideoRotation().
+    if (this.streamWrapper) {
+      return (this.streamWrapper as any).rotateVideo?.() ?? 0;
+    }
     if (this.videoRenderer) {
       return this.videoRenderer.rotate90();
     }
@@ -4464,11 +4472,19 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
    * Get current video rotation
    */
   getVideoRotation(): number {
+    if (this.streamWrapper) {
+      return (this.streamWrapper as any).getVideoRotation?.() ?? 0;
+    }
     return this.videoRenderer?.getRotation() ?? 0;
   }
 
   setVideoRotation(deg: number): void {
     this.videoRenderer?.setManualRotation(deg);
+    // Adaptive streams draw through the wrapper's OWN CanvasRenderer on the same
+    // canvas; without routing the rotation there too, its per-frame resize()
+    // resets the canvas to an un-rotated 100% box and clobbers the centering
+    // (the video ends up rotated but pinned to one side). Mirrors setFitMode.
+    (this.streamWrapper as any)?.setVideoRotation?.(deg);
   }
 
   setFitMode(mode: "contain" | "cover" | "fill" | "zoom" | "control"): void {
@@ -5341,6 +5357,16 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
    */
   isStreamPlayback(): boolean {
     return this.streamWrapper !== null;
+  }
+
+  /**
+   * Whether seek-bar preview thumbnails are available for an adaptive stream —
+   * they come from a manifest thumbnail track (DASH-IF tiled thumbnails / HLS
+   * image playlists), which many streams simply don't carry. When false, the
+   * Timeline control can't generate previews and is hidden.
+   */
+  streamHasThumbnails(): boolean {
+    return !!(this.streamWrapper as any)?.hasThumbnails?.();
   }
 
   /** True for a live (dynamic) adaptive stream — drives the LIVE indicator. */
