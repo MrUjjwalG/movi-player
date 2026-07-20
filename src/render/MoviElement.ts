@@ -222,6 +222,10 @@ export class MoviElement extends HTMLElement {
   // switch path) so hosts can remember the settled quality — without spamming a
   // duplicate on every unrelated tracks-change.
   private _lastNotifiedQualityHeight: number = 0;
+  // Highest resolution height reached this session. In Auto we only emit
+  // `qualitychange` when it advances, so a transient downshift never lowers a
+  // persisting host's remembered quality.
+  private _qualityHighWater: number = 0;
   private _audioTracks: { src: string; type?: string; lang: string; label: string }[] = []; // Multi-language audio
   private _subtitleTracks: { src: string; lang: string; label: string; format?: string }[] = []; // External subtitles
   private _autoplay: boolean = false;
@@ -17303,13 +17307,23 @@ export class MoviElement extends HTMLElement {
       // the ABR has to climb back up. Guarded so it only fires on real change.
       const vh =
         this.player?.trackManager?.getActiveVideoTrack?.()?.height || 0;
+      const isAuto = !!this.player?.isAutoQuality?.();
       if (vh > 0 && vh !== this._lastNotifiedQualityHeight) {
-        this._lastNotifiedQualityHeight = vh;
-        this.dispatchEvent(
-          new CustomEvent("qualitychange", {
-            detail: { height: vh, auto: !!this.player?.isAutoQuality?.() },
-          }),
-        );
+        // In Auto, only report a HIGHER quality (a high-water mark). A transient
+        // network downshift (or an error-recovery drop to the lowest rung) must
+        // NOT teach a persisting host to start every future video low — that fed
+        // a loop where one dip to 240p pinned every next video to 240p. The first
+        // report after load establishes the baseline; manual picks report any
+        // change (the user's explicit choice).
+        const isFirst = this._qualityHighWater === 0;
+        const notify = !isAuto || isFirst || vh > this._qualityHighWater;
+        if (notify) {
+          this._lastNotifiedQualityHeight = vh;
+          this.dispatchEvent(
+            new CustomEvent("qualitychange", { detail: { height: vh, auto: isAuto } }),
+          );
+        }
+        this._qualityHighWater = Math.max(this._qualityHighWater, vh);
       }
       this.dispatchEvent(new CustomEvent("trackschange", {
         detail: {

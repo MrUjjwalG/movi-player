@@ -176,6 +176,11 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
   private _lastAbrSwitchAt: number = Number.NEGATIVE_INFINITY;
   private _abrUpCandidate: string = "";
   private _abrUpConfirms: number = 0;
+  // False until the ABR has made its first switch after Auto was enabled. The
+  // first upshift commits without the usual 2-tick confirmation so a fresh (or
+  // host-defaulted-low) start jumps straight to the network-appropriate rung
+  // instead of sitting at a low quality for two ticks.
+  private _abrPrimed: boolean = false;
   // Previous tick's buffered-ahead seconds, to detect a draining buffer (the
   // ground-truth "network can't sustain the current rung" signal). Reset on a
   // switch since the buffer restarts from the resume point.
@@ -1355,6 +1360,7 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
     if (this._autoQuality === enabled) return;
     this._autoQuality = enabled;
     if (enabled) {
+      this._abrPrimed = false; // first upshift jumps without the 2-tick wait
       this.abrTick(); // evaluate immediately
       if (!this._abrTimer) {
         this._abrTimer = setInterval(() => this.abrTick(), 4000);
@@ -1511,7 +1517,10 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
         this._abrUpCandidate = up.url;
         this._abrUpConfirms = 1;
       }
-      if (this._abrUpConfirms >= 2) await this.abrCommit(up.url, now);
+      // First upshift after enabling Auto commits at once (need 1); later ones
+      // wait for 2 consecutive ticks so a lone spike can't bounce quality up.
+      const need = this._abrPrimed ? 2 : 1;
+      if (this._abrUpConfirms >= need) await this.abrCommit(up.url, now);
       return;
     }
 
@@ -1526,6 +1535,7 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
     this._lastAbrSwitchAt = now;
     this._abrUpCandidate = "";
     this._abrUpConfirms = 0;
+    this._abrPrimed = true; // subsequent upshifts use the 2-tick confirmation
     this._lastBufferAhead = 0; // buffer restarts from the resume point post-swap
     await this.abrSwitchTo(url);
   }
