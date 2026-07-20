@@ -107,6 +107,10 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
   private _nativeAudioGateActive: boolean = false;
   private _audioTracks: AudioSourceEntry[] = [];
   private _activeAudioLang: string = "";
+  // Quality-independent HLS subtitle blobs, cached by stream URL so a quality
+  // switch (which rebuilds the player) reuses them instead of re-fetching every
+  // WebVTT segment — the dominant switch-latency cost.
+  private static _hlsSubtitleCache = new Map<string, SubtitleSourceEntry[]>();
 
   // Split (separate-URL) audio, WASM-decoded. A separate audio track (e.g. a
   // YouTube itag-140 fMP4 that Safari's native <audio> can't play) is demuxed by
@@ -824,12 +828,20 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
             }
 
             // Segmented WebVTT subtitle renditions → one concatenated VTT blob
-            // per language, carried as external subtitle tracks.
+            // per language, carried as external subtitle tracks. Cache by stream
+            // URL: the subtitles are quality-independent, so a quality switch
+            // reuses the blobs instead of re-fetching every VTT segment (the
+            // main switch-latency cost).
             if (plan.subtitleRenditions?.length) {
-              const subs = await this.buildHlsSubtitleTracks(
-                plan.subtitleRenditions,
-                src?.headers,
-              );
+              let subs = MoviPlayer._hlsSubtitleCache.get(streamUrl!);
+              if (!subs) {
+                subs = await this.buildHlsSubtitleTracks(
+                  plan.subtitleRenditions,
+                  src?.headers,
+                );
+                if (subs.length)
+                  MoviPlayer._hlsSubtitleCache.set(streamUrl!, subs);
+              }
               if (subs.length) this.config.subtitleTracks = subs;
             }
           } else {

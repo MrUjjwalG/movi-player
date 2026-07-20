@@ -6772,7 +6772,7 @@ export class MoviElement extends HTMLElement {
         this._hideSnapshotPoster();
         this.updatePoster();
       }
-    }, 8000);
+    }, 25000);
 
     // Re-load the same .mpd through the demuxer at the chosen rendition.
     this._forcedDashRendition = url;
@@ -6895,7 +6895,7 @@ export class MoviElement extends HTMLElement {
         this._hideSnapshotPoster();
         this.updatePoster();
       }
-    }, 8000);
+    }, 25000);
 
     // Setting the attribute funnels through the existing observedAttributes
     // path which destroys the player and reinitialises with the new src.
