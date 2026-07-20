@@ -6702,6 +6702,16 @@ export class MoviElement extends HTMLElement {
       label.className = "movi-quality-label";
       label.textContent = r.label;
       wrap.appendChild(label);
+      // Resolution badge (HD / 4K / 8K) next to the label, matching the gear.
+      const badge = this._heightBadge(parseInt(r.label, 10));
+      if (badge) {
+        const b = document.createElement("span");
+        b.className = "movi-quality-item-badge";
+        b.textContent = badge;
+        b.style.cssText =
+          "margin-left:8px;font-size:9px;font-weight:700;letter-spacing:0.5px;padding:1px 5px;border-radius:4px;background:rgba(255,255,255,0.16);color:#fff;vertical-align:middle;";
+        wrap.appendChild(b);
+      }
       item.appendChild(wrap);
       if (isActive) item.appendChild(checkSvg());
       item.addEventListener("click", (e) => {

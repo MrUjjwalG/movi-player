@@ -1254,6 +1254,11 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
     const bindings = newDemuxer.getBindings();
     if (bindings) this.videoDecoder.setBindings(bindings);
 
+    // Set the active rendition BEFORE setTracks: setTracks fires tracksChange,
+    // which re-renders the quality menu + gear badge from getActiveDashRendition
+    // — so this must already point at the new rendition or the UI shows stale.
+    this._activeDashRendition = newRenditionUrl;
+
     // Reflect the new video track (the split-audio demuxer path keeps only the
     // video track in the TrackManager; audio + subtitles live elsewhere).
     this.trackManager.setTracks([newVideoTrack]);
@@ -1279,7 +1284,6 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
       newVideoTrack.pixelFormat,
     );
 
-    this._activeDashRendition = newRenditionUrl;
     // NOTE: deliberately do NOT set seekTargetTime here — it's a shared field
     // the split-audio pump also honors, so setting it would make the untouched
     // audio drop packets and glitch. The video re-syncs to the running clock on
@@ -5784,23 +5788,80 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
     }
     if (lang === this._activeAudioLang && this.audioDemuxer) return true;
 
-    // Keep the volume control (and any hasAudibleSource-gated UI) visible while
-    // the demuxer is briefly torn down below.
-    this._audioSwitchInProgress = true;
-
     const t = this.getCurrentTime();
     const resume =
       this.stateManager.is("playing") || this.stateManager.is("buffering");
 
-    // Stop the audio pump and let any in-flight audio demux settle before we
-    // swap the demuxer out from under it.
+    // --- PREP (old audio keeps playing): build + open + seek the new audio
+    // demuxer on an isolated WASM module. The slow work (open = source measure,
+    // plus the seek) happens here while the current language still plays, so the
+    // silent window shrinks to a buffer flush. Switching LANGUAGE means the old
+    // and new content differ, so the buffered old audio must be dropped — a
+    // small gap is unavoidable (unlike a same-content bitrate switch). Bails
+    // (staying on the current language) if the new one can't be prepared. ---
+    let newSource: SourceAdapter | null = null;
+    let newDemuxer: Demuxer | null = null;
+    let aTrack: AudioTrack | undefined;
+    let newAudioStart = 0;
+    try {
+      newSource =
+        track.adapter ??
+        (await this.createSource({
+          type: "url",
+          url: track.url,
+          headers: this.config.headers,
+        }));
+      newDemuxer = new Demuxer(newSource, this.config.wasmBinary, true);
+      const info = await newDemuxer.open();
+      newAudioStart = info.startTime || 0;
+      aTrack = newDemuxer.getAudioTracks()[0];
+      if (!aTrack) throw new Error("no audio track in the selected language");
+      await newDemuxer.seek(t + newAudioStart);
+    } catch (e) {
+      Logger.warn(
+        TAG,
+        `Audio switch prep failed for ${track.label}: ${(e as any)?.message ?? e}`,
+      );
+      try { newDemuxer?.close(); } catch {}
+      if (newSource && newSource !== track.adapter) {
+        try { newSource.close(); } catch {}
+      }
+      // Single-file (DASH) audio can still fall back to a native <audio> element;
+      // segmented (HLS) audio can't be played that way, so stay on the current
+      // language rather than break it.
+      if (track.adapter) return false;
+      this._audioSwitchInProgress = true;
+      this.stopAudioLoop();
+      let g = 0;
+      while (this.audioDemuxInFlight && g++ < 200) {
+        await new Promise((r) => setTimeout(r, 5));
+      }
+      if (this.audioDemuxer) { try { this.audioDemuxer.close(); } catch {} this.audioDemuxer = null; }
+      if (this.audioSource) { try { this.audioSource.close(); } catch {} this.audioSource = null; }
+      this._splitAudioTrackId = -1;
+      await this.audioDecoder.flush();
+      this.audioRenderer.reset();
+      if (!this.disableAudio) {
+        this.audioRenderer.mute();
+        this.disableAudio = true;
+      }
+      this.setupNativeAudio(track.url);
+      this._activeAudioLang = lang;
+      this._audioSwitchInProgress = false;
+      this.emit("audioTrackChange" as any, { lang, label: track.label });
+      return true;
+    }
+
+    // --- ATOMIC SWAP: stop the audio pump, swap the demuxer/source, reconfigure
+    // the audio decoder, drop the old buffer, resume. ---
+    this._audioSwitchInProgress = true;
     this.stopAudioLoop();
     let guard = 0;
     while (this.audioDemuxInFlight && guard++ < 200) {
       await new Promise((r) => setTimeout(r, 5));
     }
 
-    // Tear down the current audio — a WASM split demuxer, or a legacy native el.
+    // Tear down a legacy native <audio> if one was active.
     if (this.nativeAudioEl) {
       try {
         this.nativeAudioEl.pause();
@@ -5812,53 +5873,36 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
       this.revokeNativeAudioObjectUrl();
       this._nativeAudioLogicalUrl = null;
     }
-    if (this.audioDemuxer) {
-      try {
-        this.audioDemuxer.close();
-      } catch {
-        /* ignore */
-      }
-      this.audioDemuxer = null;
-    }
-    if (this.audioSource) {
-      try {
-        this.audioSource.close();
-      } catch {
-        /* ignore */
-      }
-      this.audioSource = null;
-    }
-    this._splitAudioTrackId = -1;
-    this.audioDecoder.flush();
-    this.audioRenderer.reset();
 
-    // Stand up the new track through the WASM split-audio pipeline.
-    this._activeAudioLang = lang;
+    const oldDemuxer = this.audioDemuxer;
+    const oldSource = this.audioSource;
+
+    this.audioDemuxer = newDemuxer;
+    this.audioSource = newSource;
+    this._splitAudioTrackId = aTrack.id;
+    // Re-derive the PTS-baseline shift for the new audio source.
+    this._splitAudioStartTime = newAudioStart;
+    this._splitAudioPtsDelta = (this.mediaInfo?.startTime || 0) - newAudioStart;
+
+    const bindings = newDemuxer.getBindings();
+    if (bindings) this.audioDecoder.setBindings(bindings);
+    const extradata = newDemuxer.getExtradata(aTrack.id) ?? undefined;
+    await this.audioDecoder.flush();
+    const configured = await this.audioDecoder.configure(aTrack, extradata);
+    if (configured) {
+      const sourceCh = aTrack.channels ?? 2;
+      const maxCh = this.audioRenderer.getMaxChannelCount();
+      if (sourceCh > 2 && maxCh >= sourceCh) {
+        this.audioDecoder.setDownmix(false);
+        this.audioRenderer.setOutputChannelCount(sourceCh);
+      } else {
+        this.audioDecoder.setDownmix(true);
+        this.audioRenderer.setOutputChannelCount(2);
+      }
+    }
+    this.audioRenderer.reset(); // drop the previous language's buffered audio
     this.disableAudio = false;
-    await this.setupSplitAudio(track.adapter ?? track.url);
-    const ad = this.audioDemuxer as Demuxer | null;
-    if (!ad) {
-      // WASM setup failed — last-resort native <audio> element (mute WASM).
-      Logger.warn(
-        TAG,
-        `Audio switch: WASM setup failed for ${track.label}; using native <audio>`,
-      );
-      if (!this.disableAudio) {
-        this.audioRenderer.mute();
-        this.disableAudio = true;
-      }
-      this.setupNativeAudio(track.url);
-      this._audioSwitchInProgress = false;
-      this.emit("audioTrackChange" as any, { lang, label: track.label });
-      return true;
-    }
-
-    // Re-seek the fresh audio demuxer to the current position and resume.
-    try {
-      await ad.seek(t + this.startTime);
-    } catch (e) {
-      Logger.warn(TAG, `Audio switch seek failed: ${(e as any)?.message ?? e}`);
-    }
+    this._activeAudioLang = lang;
     this._splitAudioEof = false;
     this._lastSplitAudioPts = t;
     if (resume) {
@@ -5866,7 +5910,17 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
       this.startAudioLoop();
     }
     this._audioSwitchInProgress = false;
-    Logger.info(TAG, `Audio switched (WASM) to: ${track.label} (${track.lang})`);
+
+    // Tear down the old audio pipeline (video untouched).
+    try { oldDemuxer?.close(); } catch {}
+    if (oldSource && oldSource !== newSource) {
+      try { oldSource.close(); } catch {}
+    }
+
+    Logger.info(
+      TAG,
+      `Audio switched in-place (WASM) to: ${track.label} (${track.lang})`,
+    );
     this.emit("audioTrackChange" as any, { lang, label: track.label });
     return true;
   }
