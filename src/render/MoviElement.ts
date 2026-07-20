@@ -6574,6 +6574,24 @@ export class MoviElement extends HTMLElement {
    * Map a video height to its YouTube-style quality badge (HD/4K/8K) or
    * empty string when the resolution doesn't qualify.
    */
+  /** Persisted "Auto quality" preference. Survives movi-tube's per-video element
+   *  rebuild (localStorage), so once the user picks Auto it stays Auto on the
+   *  next video instead of falling back to a fixed height. */
+  private _readQualityAutoPref(): boolean {
+    try {
+      return localStorage.getItem("movi:quality-auto") === "1";
+    } catch {
+      return false;
+    }
+  }
+  private _writeQualityAutoPref(auto: boolean): void {
+    try {
+      localStorage.setItem("movi:quality-auto", auto ? "1" : "0");
+    } catch {
+      /* private mode / disabled storage — preference just won't persist */
+    }
+  }
+
   /** Rough H.264 bitrate (bps) for a resolution height — used to size premuxed
    *  renditions for the ABR when a source declares no explicit bitrate. */
   private _estimateBitrate(height: number): number {
@@ -6650,6 +6668,11 @@ export class MoviElement extends HTMLElement {
           bandwidth: q.bandwidth || this._estimateBitrate(q.height),
         })),
       );
+      // Re-apply a persisted Auto preference (survives the per-video element
+      // rebuild) before reading isAuto, so a fresh video lands on Auto.
+      if (this._readQualityAutoPref() && !player?.isAutoQuality?.()) {
+        player?.setAutoQuality?.(true);
+      }
     }
     const isAuto = !!player?.isAutoQuality?.();
 
@@ -6665,12 +6688,11 @@ export class MoviElement extends HTMLElement {
     const check = `<svg class="movi-quality-check" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"></polyline></svg>`;
     const rows: string[] = [];
     if (abrCapable) {
-      const cur =
-        isAuto && activeQuality
-          ? `<span class="movi-quality-item-badge" style="margin-left:8px;font-size:9px;font-weight:700;padding:1px 5px;border-radius:4px;background:rgba(255,255,255,0.16);color:#fff;">${activeQuality.label}</span>`
-          : "";
+      // "Auto (1080p)" — show the rung Auto is currently serving (Shaka/YouTube).
+      const autoLabel =
+        isAuto && activeQuality ? `Auto (${activeQuality.label})` : "Auto";
       rows.push(
-        `<div class="movi-quality-item ${isAuto ? "movi-quality-active" : ""}" data-src="__auto__"><span class="movi-quality-label-wrap"><span class="movi-quality-label">Auto</span>${cur}</span>${isAuto ? check : ""}</div>`,
+        `<div class="movi-quality-item ${isAuto ? "movi-quality-active" : ""}" data-src="__auto__"><span class="movi-quality-label-wrap"><span class="movi-quality-label">${autoLabel}</span></span>${isAuto ? check : ""}</div>`,
       );
     }
     rows.push(
@@ -6706,12 +6728,14 @@ export class MoviElement extends HTMLElement {
         const newSrc = (item as HTMLElement).dataset.src;
         if (newSrc === "__auto__") {
           player?.setAutoQuality?.(true);
+          this._writeQualityAutoPref(true);
           this.updateQualityMenu();
           closeMenu();
           return;
         }
         // A specific pick leaves Auto.
         player?.setAutoQuality?.(false);
+        this._writeQualityAutoPref(false);
         if (newSrc && newSrc !== activeSrc) this.switchPremuxedQuality(newSrc);
         else this.updateQualityMenu();
         closeMenu();
@@ -6733,6 +6757,14 @@ export class MoviElement extends HTMLElement {
     qualityContainer.style.display = "flex";
     const player = this.player as any;
     const activeUrl = (player?.getActiveDashRendition?.() as string) || "";
+    // "Auto" needs 2+ renditions with bitrates. Re-apply a persisted Auto
+    // preference (survives movi-tube's per-video element rebuild) before reading
+    // isAuto, so a fresh load lands on Auto instead of a fixed rung.
+    const abrCapable =
+      renditions.filter((r) => (r.bandwidth || 0) > 0).length >= 2;
+    if (abrCapable && this._readQualityAutoPref() && !player?.isAutoQuality?.()) {
+      player?.setAutoQuality?.(true);
+    }
     const isAuto = !!player?.isAutoQuality?.();
     const active = renditions.find((r) => r.url === activeUrl);
     this._updateQualityBtnBadge(
@@ -6762,10 +6794,7 @@ export class MoviElement extends HTMLElement {
 
     const items: HTMLElement[] = [];
 
-    // "Auto" (adaptive) — only when 2+ renditions expose bitrates so ABR can
-    // actually choose. Shows what it's currently serving, e.g. "Auto  720p".
-    const abrCapable =
-      renditions.filter((r) => (r.bandwidth || 0) > 0).length >= 2;
+    // "Auto" (adaptive) — shows the rung it's currently serving, "Auto (720p)".
     if (abrCapable) {
       const item = document.createElement("div");
       item.className = "movi-quality-item" + (isAuto ? " movi-quality-active" : "");
@@ -6773,20 +6802,14 @@ export class MoviElement extends HTMLElement {
       wrap.className = "movi-quality-label-wrap";
       const label = document.createElement("span");
       label.className = "movi-quality-label";
-      label.textContent = "Auto";
+      label.textContent = isAuto && active ? `Auto (${active.label})` : "Auto";
       wrap.appendChild(label);
-      if (isAuto && active) {
-        const cur = document.createElement("span");
-        cur.className = "movi-quality-item-badge";
-        cur.textContent = active.label;
-        cur.style.cssText = BADGE_CSS;
-        wrap.appendChild(cur);
-      }
       item.appendChild(wrap);
       if (isAuto) item.appendChild(checkSvg());
       item.addEventListener("click", (e) => {
         e.stopPropagation();
         player?.setAutoQuality?.(true);
+        this._writeQualityAutoPref(true);
         this.updateQualityMenu();
         closeMenu();
       });
@@ -6819,6 +6842,7 @@ export class MoviElement extends HTMLElement {
         e.stopPropagation();
         // Picking a specific quality leaves Auto.
         player?.setAutoQuality?.(false);
+        this._writeQualityAutoPref(false);
         if (r.url !== activeUrl) this.switchDashRendition(r.url);
         else this.updateQualityMenu(); // was Auto on this rung — just repaint
         closeMenu();
