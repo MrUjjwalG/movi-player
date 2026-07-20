@@ -43,7 +43,12 @@ export interface DashFallbackPlan {
    * demuxer path can surface them as external subtitle tracks — otherwise the
    * manifest's captions would be lost when we leave the MSE engine.
    */
-  subtitles?: { url: string; lang: string; label: string }[];
+  subtitles?: {
+    url: string;
+    lang: string;
+    label: string;
+    format?: "vtt" | "srt" | "ttml";
+  }[];
   /**
    * Every selectable audio Representation (best-first), so the demuxer path can
    * offer the same audio menu the stream engine had — different languages, or
@@ -167,7 +172,12 @@ export async function analyzeDashFallback(
 
   let bestVideo: { url: string; bw: number; muxed: boolean } | null = null;
   let bestAudio: { url: string; bw: number } | null = null;
-  const subtitles: { url: string; lang: string; label: string }[] = [];
+  const subtitles: {
+    url: string;
+    lang: string;
+    label: string;
+    format?: "vtt" | "srt" | "ttml";
+  }[] = [];
   const audioReps: { url: string; lang: string; bw: number; id: string }[] = [];
   const videoReps: {
     url: string;
@@ -211,14 +221,20 @@ export async function analyzeDashFallback(
           audioReps.push({ url, lang, bw, id });
         }
       } else if (type === "text") {
-        // Sidecar caption file — only WebVTT/SRT, which movi's external-subtitle
-        // path renders (segmented / TTML text isn't handled here).
+        // Single-file sidecar caption — WebVTT, SRT, or TTML (all rendered by
+        // movi's external-subtitle path). Segmented text still isn't handled
+        // (isSingleFileRepresentation already excluded it above).
         const mime = (
           adaptation.getAttribute("mimeType") ||
           rep.getAttribute("mimeType") ||
           ""
         ).toLowerCase();
-        if (/\.(vtt|srt)(\?|#|$)/i.test(url) || /vtt/.test(mime)) {
+        let format: "vtt" | "srt" | "ttml" | undefined;
+        if (/\.vtt(\?|#|$)/i.test(url) || /vtt/.test(mime)) format = "vtt";
+        else if (/\.srt(\?|#|$)/i.test(url)) format = "srt";
+        else if (/\.(ttml|dfxp)(\?|#|$)/i.test(url) || /ttml|dfxp/.test(mime))
+          format = "ttml";
+        if (format) {
           const lang =
             adaptation.getAttribute("lang") || rep.getAttribute("lang") || "und";
           const label =
@@ -226,7 +242,7 @@ export async function analyzeDashFallback(
             rep.getAttribute("id") ||
             lang.toUpperCase();
           if (!subtitles.some((s) => s.url === url)) {
-            subtitles.push({ url, lang, label });
+            subtitles.push({ url, lang, label, format });
           }
         }
       }

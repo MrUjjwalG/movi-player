@@ -117,7 +117,7 @@ export interface SubtitleSourceEntry {
   url: string;
   lang: string;       // BCP 47 language code
   label: string;      // Display name
-  format?: "vtt" | "srt"; // Auto-detected from URL extension if omitted
+  format?: "vtt" | "srt" | "ttml"; // Auto-detected from URL extension if omitted
 }
 
 export interface CacheConfig {

@@ -745,6 +745,7 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
                 url: s.url,
                 lang: s.lang,
                 label: s.label,
+                format: s.format,
               }));
             }
           } else {
@@ -824,6 +825,7 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
                   url: s.url,
                   lang: s.lang,
                   label: s.label,
+                  format: s.format,
                 }));
               }
               fellBack = true; // fall through to the demuxer path below
@@ -5667,16 +5669,25 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
       const text = await res.text();
 
       // Detect format
-      const fmt = track.format || (track.url.includes(".srt") ? "srt" : "vtt");
+      const fmt =
+        track.format ||
+        (/\.(ttml|dfxp)(\?|#|$)/i.test(track.url)
+          ? "ttml"
+          : track.url.includes(".srt")
+            ? "srt"
+            : "vtt");
 
       // Tell the renderer which format we're using so it can toggle the
-      // VTT-only backdrop styling.
-      this.videoRenderer?.setSubtitleFormat(fmt);
+      // VTT-only backdrop styling. TTML renders like plain text (VTT path).
+      this.videoRenderer?.setSubtitleFormat(fmt === "ttml" ? "vtt" : fmt);
 
       // Parse into cues
-      this._externalSubCues = fmt === "srt"
-        ? this.parseSRT(text)
-        : this.parseVTT(text);
+      this._externalSubCues =
+        fmt === "srt"
+          ? this.parseSRT(text)
+          : fmt === "ttml"
+            ? this.parseTTML(text)
+            : this.parseVTT(text);
 
       this._activeSubtitleLang = lang;
 
@@ -5721,6 +5732,82 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
   private parseSRT(text: string): SubtitleCue[] {
     // SRT has same timestamp format but with comma instead of dot — parseVTT handles both
     return this.parseVTT(text);
+  }
+
+  /**
+   * Parse TTML (Timed Text Markup Language, application/ttml+xml — what DASH
+   * streams commonly ship, e.g. GPAC test vectors) into SubtitleCue[]. Reads
+   * each <p>'s begin/end (or begin + dur) timing and its text, turning <br/>
+   * into newlines and dropping styling tags. Namespace-agnostic (matches by
+   * localName) so both `<p>` and `<tt:p>` work.
+   */
+  private parseTTML(text: string): SubtitleCue[] {
+    const cues: SubtitleCue[] = [];
+    let doc: Document;
+    try {
+      doc = new DOMParser().parseFromString(text, "application/xml");
+    } catch {
+      return cues;
+    }
+    if (doc.getElementsByTagName("parsererror").length > 0) return cues;
+
+    // "01:02:03.500" / "01:02:03:12" (frames) / "5s" / "1500ms" / "2m" / "1h".
+    const parseTime = (raw: string | null): number => {
+      if (!raw) return NaN;
+      const t = raw.trim();
+      const off = t.match(/^([\d.]+)(ms|h|m|s|f)$/);
+      if (off) {
+        const v = parseFloat(off[1]);
+        return off[2] === "h"
+          ? v * 3600
+          : off[2] === "m"
+            ? v * 60
+            : off[2] === "ms"
+              ? v / 1000
+              : off[2] === "f"
+                ? v / 30 // frames — assume 30fps (no frameRate context here)
+                : v; // "s"
+      }
+      const p = t.split(":");
+      if (p.length >= 3) {
+        let sec = (+p[0] || 0) * 3600 + (+p[1] || 0) * 60 + (parseFloat(p[2]) || 0);
+        if (p.length === 4) sec += (+p[3] || 0) / 30; // HH:MM:SS:frames
+        return sec;
+      }
+      return NaN;
+    };
+
+    const extractText = (el: Element): string => {
+      let out = "";
+      el.childNodes.forEach((n) => {
+        if (n.nodeType === Node.TEXT_NODE) out += n.textContent || "";
+        else if (n.nodeType === Node.ELEMENT_NODE) {
+          if ((n as Element).localName.toLowerCase() === "br") out += "\n";
+          else out += extractText(n as Element);
+        }
+      });
+      return out;
+    };
+
+    const paras = Array.from(doc.getElementsByTagName("*")).filter(
+      (el) => el.localName.toLowerCase() === "p",
+    );
+    for (const p of paras) {
+      const start = parseTime(p.getAttribute("begin"));
+      let end = parseTime(p.getAttribute("end"));
+      if (isNaN(end)) {
+        const dur = parseTime(p.getAttribute("dur"));
+        if (!isNaN(dur) && !isNaN(start)) end = start + dur;
+      }
+      const cueText = extractText(p)
+        .replace(/[ \t]+/g, " ")
+        .replace(/ *\n */g, "\n")
+        .trim();
+      if (cueText && !isNaN(start) && !isNaN(end) && end > start) {
+        cues.push({ start, end, text: cueText });
+      }
+    }
+    return cues;
   }
 
   /** Start rendering external subtitle cues based on playback time */
