@@ -1278,6 +1278,15 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
       this.fileSize = await newSource.getSize();
     } catch {}
 
+    // Reset the buffer-bar bookkeeping for the new source. getBufferedTime()
+    // clamps the buffered-end monotonically (lastBufferedTime) and derives it
+    // from the source's read cursor + fileSize — both of which just changed to a
+    // fresh file that has only buffered from the resume point. Without this the
+    // clamp holds the old rendition's higher, differently-scaled value and the
+    // buffer bar freezes after a quality switch.
+    this.lastBufferedTime = 0;
+    this.bufferedRangeStart = resumeTime;
+
     // The video decoder's software path reads through the demuxer's WASM module.
     const bindings = newDemuxer.getBindings();
     if (bindings) this.videoDecoder.setBindings(bindings);
