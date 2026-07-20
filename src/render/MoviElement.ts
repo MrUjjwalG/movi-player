@@ -6696,6 +6696,9 @@ export class MoviElement extends HTMLElement {
         ".movi-quality-menu",
       ) as HTMLElement;
       if (menu) menu.style.display = "none";
+      // Re-arm auto-hide (menu-open gate blocked it; in-place switch doesn't
+      // reload to reset the timer).
+      this.showControls();
     };
     qualityList.querySelectorAll(".movi-quality-item").forEach((item) => {
       item.addEventListener("click", (e) => {
@@ -6751,6 +6754,10 @@ export class MoviElement extends HTMLElement {
         ".movi-quality-menu",
       ) as HTMLElement;
       if (menu) menu.style.display = "none";
+      // Re-arm the auto-hide timer: while the menu was open showControls()
+      // refused to set it (isAnyMenuOpen gate), and the in-place switch doesn't
+      // reload the player to reset it, so the bar would otherwise stay up.
+      this.showControls();
     };
 
     const items: HTMLElement[] = [];

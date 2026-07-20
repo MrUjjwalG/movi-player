@@ -162,6 +162,10 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
   private _autoQuality: boolean = false;
   private _abrTimer: ReturnType<typeof setInterval> | null = null;
   private _abrSwitchInProgress: boolean = false;
+  // Last non-zero throughput estimate (bytes/s), carried across source swaps and
+  // stale reads. A fully-downloaded single file (premuxed) reports 0 once idle,
+  // so without this the ABR would lose its estimate and freeze at the start rung.
+  private _lastThroughputBps: number = 0;
   private _activeSubtitleLang: string = "";
   private _externalSubCues: SubtitleCue[] = [];
   private _externalSubTimer: number | null = null;
@@ -1376,11 +1380,20 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
       return;
     }
 
-    const bps =
+    const raw =
       (this.source as { getNetworkStats?: () => { currentSpeed: number } })
         .getNetworkStats?.()
         ?.currentSpeed ?? 0;
-    if (bps <= 0) return; // no throughput estimate yet
+    if (raw > 0) this._lastThroughputBps = raw;
+    const bps = this._lastThroughputBps;
+    if (bps <= 0) {
+      // No throughput sample yet (e.g. a fully-downloaded single file that
+      // reports 0 once idle). Probe one rung UP so Auto doesn't sit stuck at a
+      // low starting quality — that switch fetches a file, which measures real
+      // throughput; the buffering downshift undoes it if the link can't cope.
+      if (activeIdx > 0) await this.abrSwitchTo(rungs[activeIdx - 1].url);
+      return;
+    }
 
     const affordableBits = bps * 8 * 0.85; // safety margin
     let pick = rungs[rungs.length - 1]; // lowest by default
