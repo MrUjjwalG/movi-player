@@ -185,6 +185,11 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
   // ground-truth "network can't sustain the current rung" signal). Reset on a
   // switch since the buffer restarts from the resume point.
   private _lastBufferAhead: number = 0;
+  // performance.now() of the last seek. The buffering right after a seek is a
+  // normal re-fill, not a network stall — switching rendition into that (racing
+  // the seek's own re-prime/re-read) is what crashed the demuxer, so the
+  // emergency downshift stands down briefly after a seek.
+  private _lastSeekAt: number = Number.NEGATIVE_INFINITY;
   private _activeSubtitleLang: string = "";
   private _externalSubCues: SubtitleCue[] = [];
   private _externalSubTimer: number | null = null;
@@ -1418,7 +1423,12 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
     // When the video genuinely can't keep up, the throughput-driven path below
     // downshifts on its own; this stays a hard-stall safety net. The settle
     // window keeps a switch's own transient from counting as a stall.
-    const stalling = this.stateManager.is("buffering");
+    // Buffering right after a seek is a normal re-fill, not a network stall —
+    // swapping rendition into it races the seek's own re-prime and crashed the
+    // demuxer ("corrupt data stream"). Stand down for a few seconds post-seek;
+    // the throughput/buffer-trend path still downshifts once playback is stable.
+    const postSeekSettling = now - this._lastSeekAt < 4000;
+    const stalling = this.stateManager.is("buffering") && !postSeekSettling;
     if (
       stalling &&
       sinceSwitch > 5000 &&
@@ -3820,6 +3830,7 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
     this.seekKeyframeOffset = 0;
 
     const mySessionId = ++this.seekSessionId;
+    this._lastSeekAt = performance.now();
     this.stateManager.setState("seeking");
     this.emit("seeking", seconds);
 

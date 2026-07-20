@@ -6632,13 +6632,17 @@ export class MoviElement extends HTMLElement {
    * true when a recovery switch was started (caller then skips the overlay).
    */
   private _tryQualityRecovery(message: string): boolean {
-    // Only worth retrying for network/source failures — a decode/OOM/bad-scheme
-    // error would fail identically on every rendition.
-    const networkish =
-      /HTTP \d|Stream (failed|ended)|Failed to fetch|Connection lost|network|does not support range|CORS/i.test(
+    // Worth retrying for network/source failures — a failure often hits just one
+    // variant. "corrupt data stream" is included: on a degrading link the
+    // demuxer can trap on a bad/short chunk of one rendition, and reloading a
+    // fresh (lower) rendition onto a new WASM instance usually recovers. A plain
+    // decode/OOM/bad-scheme error, which fails identically on every rendition, is
+    // not matched and still goes to the overlay.
+    const recoverable =
+      /HTTP \d|Stream (failed|ended)|Failed to fetch|Connection lost|network|does not support range|CORS|corrupt data stream/i.test(
         message,
       );
-    if (!networkish) return false;
+    if (!recoverable) return false;
     if (this._qualityRecoveryAttempts >= MoviElement.MAX_QUALITY_RECOVERIES) {
       return false;
     }
