@@ -119,6 +119,13 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
   private audioDemuxInFlight: boolean = false;
   private _splitAudioTrackId: number = -1;
   private _splitAudioEof: boolean = false;
+  // A separate audio source can be timed on its own PTS baseline (e.g. an HLS
+  // audio rendition starting at PTS 0 while the video TS starts at ~10s).
+  // `_splitAudioStartTime` is that source's own start; `_splitAudioPtsDelta`
+  // (videoStart − audioStart) is added to each audio packet's PTS so it lands
+  // on the video's timeline. Both are 0 when the two share a baseline (DASH).
+  private _splitAudioStartTime: number = 0;
+  private _splitAudioPtsDelta: number = 0;
   // True while an audio-track switch tears the audio demuxer down and re-stands
   // it up. hasAudibleSource() honors it so the volume control doesn't blink out
   // during the swap (audioDemuxer is briefly null).
@@ -3278,7 +3285,8 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
       this.audioDecoder.flush();
       this.audioRenderer.reset();
       try {
-        await this.audioDemuxer.seek(t + this.startTime);
+        // Seek in the audio source's own PTS baseline (may differ from video's).
+        await this.audioDemuxer.seek(t + this._splitAudioStartTime);
       } catch (e) {
         Logger.warn(TAG, `Split audio-only seek failed: ${(e as any)?.message ?? e}`);
       }
@@ -3448,7 +3456,8 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
           await new Promise((r) => setTimeout(r, 5));
         }
         try {
-          await this.audioDemuxer.seek(seconds + this.startTime);
+          // Seek in the audio source's own PTS baseline (may differ from video's).
+          await this.audioDemuxer.seek(seconds + this._splitAudioStartTime);
         } catch (e) {
           Logger.warn(TAG, `Split audio seek failed: ${(e as any)?.message ?? e}`);
         }
@@ -5152,7 +5161,7 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
         this.config.wasmBinary,
         true,
       );
-      await this.audioDemuxer.open();
+      const audioInfo = await this.audioDemuxer.open();
       const aTrack = this.audioDemuxer.getAudioTracks()[0];
       if (!aTrack) {
         Logger.warn(TAG, "Split audio: no audio track in separate source");
@@ -5161,6 +5170,18 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
         return;
       }
       this._splitAudioTrackId = aTrack.id;
+      // Align this source's PTS baseline with the video's. Use mediaInfo.startTime
+      // (already resolved) rather than this.startTime, which isn't set yet on the
+      // initial-load call path.
+      this._splitAudioStartTime = audioInfo?.startTime || 0;
+      this._splitAudioPtsDelta =
+        (this.mediaInfo?.startTime || 0) - this._splitAudioStartTime;
+      if (this._splitAudioPtsDelta !== 0) {
+        Logger.info(
+          TAG,
+          `Split audio PTS baseline ${this._splitAudioStartTime.toFixed(3)}s vs video ${(this.mediaInfo?.startTime || 0).toFixed(3)}s — shifting audio by ${this._splitAudioPtsDelta.toFixed(3)}s`,
+        );
+      }
       const extradata = this.audioDemuxer.getExtradata(aTrack.id) ?? undefined;
       const bindings = this.audioDemuxer.getBindings();
       if (bindings) this.audioDecoder.setBindings(bindings);
@@ -5284,12 +5305,18 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
         ) {
           continue;
         }
+        // Shift a separately-timed audio rendition onto the video's PTS timeline
+        // (delta is 0 when they share a baseline), so decode timestamps, the
+        // seek-target filter (video-PTS scale) and the clock all agree.
+        const pts = pkt.timestamp + this._splitAudioPtsDelta;
         // Skip packets before an in-flight seek target (mirror the video path).
-        if (this.seekTargetTime !== -1 && pkt.timestamp < this.seekTargetTime) {
+        if (this.seekTargetTime !== -1 && pts < this.seekTargetTime) {
           continue;
         }
-        this.audioDecoder.decode(pkt.data, pkt.timestamp, pkt.keyframe);
-        this._lastSplitAudioPts = pkt.timestamp;
+        this.audioDecoder.decode(pkt.data, pts, pkt.keyframe);
+        // Track the last PTS 0-based (content time) to match the pump's lead
+        // gate, which compares against `mediaNow` (clock − startTime).
+        this._lastSplitAudioPts = pts - this.startTime;
       }
     } catch (e) {
       Logger.warn(TAG, `Split audio demux error: ${(e as any)?.message ?? e}`);
