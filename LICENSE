@@ -206,37 +206,187 @@ THIRD-PARTY LICENSES
 
 ================================================================================
 
-SoundTouch Audio Processing Library
-------------------------------------
+Signalsmith Stretch
+-------------------
 
-Location: src/utils/soundtouch.ts
+Location: wasm/signalsmith/signalsmith-stretch/ and wasm/signalsmith/
+signalsmith-linear/ (compiled to WebAssembly and statically linked into the
+movi WASM module; used for pitch-preserving time-stretching)
 
-Copyright (c) Olli Parviainen
-Copyright (c) Ryan Berdeen
-Copyright (c) Jakub Fiala
-Copyright (c) Steve 'Cutter' Blades
+Copyright (c) 2022 Geraint Luff / Signalsmith Audio Ltd. (signalsmith-stretch)
+Copyright (c) 2025 Signalsmith Audio (signalsmith-linear)
 
-Licensed under the GNU Lesser General Public License, Version 2.1
+Licensed under the MIT License.
 
-This library is free software; you can redistribute it and/or
-modify it under the terms of the GNU Lesser General Public
-License as published by the Free Software Foundation; either
-version 2.1 of the License, or (at your option) any later version.
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
 
-This library is distributed in the hope that it will be useful,
-but WITHOUT ANY WARRANTY; without even the implied warranty of
-MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the GNU
-Lesser General Public License for more details.
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
 
-You should have received a copy of the GNU Lesser General Public
-License along with this library; if not, write to the Free Software
-Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA 02111-1307 USA
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
+
+Project: https://signalsmith-audio.co.uk/code/stretch/
+
+FFmpeg
+------
+
+Location: dist/wasm/ (compiled to WebAssembly and statically linked into the
+movi WASM module; build recipe in docker/build-ffmpeg.sh and docker/Dockerfile)
+
+Copyright (c) the FFmpeg developers
+
+Version: n8.1.2 (https://github.com/FFmpeg/FFmpeg)
+
+Licensed under the GNU Lesser General Public License, Version 2.1 or later.
+
+This project builds FFmpeg as an LGPL library: the FFmpeg configure step
+enables NEITHER --enable-gpl NOR --enable-nonfree, so no GPL-licensed or
+non-free components are included. The libavcodec, libavformat, libavutil,
+libswresample and libswscale libraries are used unmodified from upstream.
+
+FFmpeg is free software; you can redistribute it and/or modify it under the
+terms of the GNU Lesser General Public License as published by the Free
+Software Foundation; either version 2.1 of the License, or (at your option)
+any later version. It is distributed in the hope that it will be useful, but
+WITHOUT ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or
+FITNESS FOR A PARTICULAR PURPOSE. See the GNU Lesser General Public License
+for more details.
+
+The complete corresponding FFmpeg source is available at the URL above, and
+the exact configuration and build steps used to produce the bundled binary
+are in this repository (docker/build-ffmpeg.sh, docker/Dockerfile). Because
+those build scripts allow the FFmpeg component to be rebuilt and re-linked
+from source, the relinking requirement of the LGPL is satisfied.
 
 Full LGPL 2.1 License: https://www.gnu.org/licenses/old-licenses/lgpl-2.1.html
-Original Project: https://www.surina.net/soundtouch/
-JavaScript Port: https://github.com/cutterbl/SoundTouchJS
+FFmpeg Legal / Licensing: https://ffmpeg.org/legal.html
 
-Note: This project uses SoundTouch as a library for audio pitch preservation.
-The TypeScript port in this codebase is a derivative work that maintains
-the original LGPL 2.1 license for that specific component while the rest
-of the project remains under Apache 2.0.
+dav1d
+-----
+
+Location: bundled into the FFmpeg WASM build via --enable-libdav1d (used as the
+AV1 decoder; build recipe in docker/Dockerfile)
+
+Copyright (c) 2018-2024, VideoLAN and dav1d authors
+All rights reserved.
+
+Version: 1.5.3 (https://code.videolan.org/videolan/dav1d)
+
+Licensed under the BSD 2-Clause License.
+
+Redistribution and use in source and binary forms, with or without
+modification, are permitted provided that the following conditions are met:
+
+1. Redistributions of source code must retain the above copyright notice, this
+   list of conditions and the following disclaimer.
+2. Redistributions in binary form must reproduce the above copyright notice,
+   this list of conditions and the following disclaimer in the documentation
+   and/or other materials provided with the distribution.
+
+THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS" AND
+ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE IMPLIED
+WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE
+DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE LIABLE
+FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL
+DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR
+SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER
+CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY,
+OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
+OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+
+zlib
+----
+
+Location: bundled into the FFmpeg WASM build via --enable-zlib / USE_ZLIB
+
+Copyright (c) 1995-2024 Jean-loup Gailly and Mark Adler
+
+Licensed under the zlib License.
+
+This software is provided 'as-is', without any express or implied warranty. In
+no event will the authors be held liable for any damages arising from the use
+of this software. Permission is granted to anyone to use this software for any
+purpose, including commercial applications, and to alter it and redistribute it
+freely, subject to the restrictions stated in the zlib license.
+
+Full zlib License: https://zlib.net/zlib_license.html
+
+hls.js
+------
+
+Location: bundled into the standalone build (used unmodified as the Tier-2 HLS
+stream engine; imported in src/render/HLSPlayerWrapper.ts)
+
+Copyright (c) 2017 Dailymotion (http://www.dailymotion.com)
+
+Licensed under the Apache License, Version 2.0. You may obtain a copy of the
+License at http://www.apache.org/licenses/LICENSE-2.0 (the same license text
+this project is distributed under, reproduced at the top of this file).
+
+Unless required by applicable law or agreed to in writing, software
+distributed under the License is distributed on an "AS IS" BASIS, WITHOUT
+WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+
+Project: https://github.com/video-dev/hls.js
+
+dash.js
+-------
+
+Location: bundled into the standalone build (used unmodified as the Tier-2 DASH
+stream engine; imported in src/render/DASHPlayerWrapper.ts)
+
+Copyright (c) 2015, Dash Industry Forum. All rights reserved.
+
+Licensed under the BSD 3-Clause License.
+
+Redistribution and use in source and binary forms, with or without
+modification, are permitted provided that the following conditions are met:
+
+* Redistributions of source code must retain the above copyright notice, this
+  list of conditions and the following disclaimer.
+* Redistributions in binary form must reproduce the above copyright notice,
+  this list of conditions and the following disclaimer in the documentation
+  and/or other materials provided with the distribution.
+* Neither the name of the Dash Industry Forum nor the names of its contributors
+  may be used to endorse or promote products derived from this software without
+  specific prior written permission.
+
+THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS" AND
+ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE IMPLIED
+WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE
+DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE LIABLE
+FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL
+DAMAGES HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT,
+STRICT LIABILITY, OR TORT ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE,
+EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+
+Project: https://github.com/Dash-Industry-Forum/dash.js
+
+Shaka Player
+------------
+
+Location: bundled into the standalone build (used unmodified as the Tier-1
+HLS/DASH stream engine; imported in src/render/ShakaPlayerWrapper.ts)
+
+Copyright 2016 Google LLC
+
+Licensed under the Apache License, Version 2.0. You may obtain a copy of the
+License at http://www.apache.org/licenses/LICENSE-2.0 (the same license text
+this project is distributed under, reproduced at the top of this file).
+
+Unless required by applicable law or agreed to in writing, software
+distributed under the License is distributed on an "AS IS" BASIS, WITHOUT
+WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+
+Project: https://github.com/shaka-project/shaka-player
