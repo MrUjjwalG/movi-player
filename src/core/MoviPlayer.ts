@@ -1166,6 +1166,11 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
   async switchVideoRenditionInPlace(newRenditionUrl: string): Promise<boolean> {
     if (!this.demuxer || !this.videoDecoder) return false;
     if (newRenditionUrl === this._activeDashRendition) return true;
+    // Only safe when audio is a SEPARATE (split) source: the swap replaces just
+    // the video demuxer/decoder and leaves audio running. If audio is muxed into
+    // the main source, swapping it would drop the audio — let the caller fall
+    // back to a full reload instead.
+    if (!this.audioDemuxer) return false;
 
     const cfgSrc = this.config.source;
     const srcUrl =

@@ -6613,7 +6613,12 @@ export class MoviElement extends HTMLElement {
   ): void {
     qualityContainer.style.display = "flex";
 
-    const activeSrc = typeof this._src === "string" ? this._src : "";
+    // After an in-place swap the src attribute is unchanged (no reload), so the
+    // active quality is tracked by the player's active-rendition url; fall back
+    // to the element src for the reload path / first render.
+    const activeSrc =
+      ((this.player as any)?.getActiveDashRendition?.() as string) ||
+      (typeof this._src === "string" ? this._src : "");
     const activeQuality = this._videoQualities.find((q) => q.src === activeSrc);
     this._updateQualityBtnBadge(activeQuality?.badge || this._heightBadge(activeQuality?.height || 0));
 
@@ -6860,6 +6865,25 @@ export class MoviElement extends HTMLElement {
    * is available on the new instance.
    */
   private switchPremuxedQuality(newSrc: string): void {
+    // Try the in-place video swap first (no reload): keeps the split audio,
+    // subtitles, clock and AudioContext alive; the player bails (→ false) when
+    // audio is muxed or the new video can't be prepared, so we reload only then.
+    // Setups like movi-tube (a video-only file per quality + a separate audio
+    // file) hit this fast path.
+    const p = this.player as any;
+    if (p && typeof p.switchVideoRenditionInPlace === "function") {
+      this._suppressSwReload = true;
+      p.switchVideoRenditionInPlace(newSrc)
+        .then((ok: boolean) => {
+          if (!ok) this._reloadPremuxedQuality(newSrc);
+        })
+        .catch(() => this._reloadPremuxedQuality(newSrc));
+      return;
+    }
+    this._reloadPremuxedQuality(newSrc);
+  }
+
+  private _reloadPremuxedQuality(newSrc: string): void {
     const wasPaused = this.player ? (this.player as any).getState?.() === "paused" : true;
     let resumeTime = 0;
     try {
