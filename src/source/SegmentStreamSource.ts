@@ -37,6 +37,12 @@ export class SegmentStreamSource implements SourceAdapter {
   private cacheOrder: number[] = [];
   private readonly maxCached = 24;
   private _throughputBps = 0; // EWMA download speed (bytes/s) for ABR
+  // Set on close() (e.g. when an in-place quality switch swaps this source out).
+  // Gates *new* fetches so the old rendition stops pulling bytes we no longer
+  // need — without abort()ing in-flight ones, which would surface as red
+  // "(canceled)" rows in the Network tab that read like a failure. Any fetch
+  // already in flight just finishes (one small segment) and is discarded.
+  private _closed = false;
 
   private readonly key: string;
 
@@ -161,6 +167,8 @@ export class SegmentStreamSource implements SourceAdapter {
   private async fetchEntry(entryIdx: number): Promise<ArrayBuffer> {
     const cached = this.cache.get(entryIdx);
     if (cached) return cached;
+    // Source was swapped out — don't start a new segment download.
+    if (this._closed) return new ArrayBuffer(0);
 
     const e = this.entries[entryIdx];
     const reqHeaders: Record<string, string> = { ...(this.headers || {}) };
@@ -249,6 +257,11 @@ export class SegmentStreamSource implements SourceAdapter {
   }
 
   close(): void {
+    // Graceful stop: block *new* segment fetches so a swapped-out rendition
+    // stops pulling data, but don't abort() in-flight ones — that shows up as a
+    // failed "(canceled)" request. The at-most-one in-flight segment just
+    // finishes and is discarded.
+    this._closed = true;
     this.cache.clear();
     this.cacheOrder = [];
   }
