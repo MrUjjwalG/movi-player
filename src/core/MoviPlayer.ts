@@ -25,9 +25,11 @@ import {
   EncryptedHttpSource,
   analyzeDashFallback,
   analyzeHlsFallback,
+  buildVttFromSegments,
   SegmentStreamSource,
   getSourceAdapterFactory,
   type SourceAdapter,
+  type HlsSubtitleRendition,
 } from "../source";
 import { LRUCache } from "../cache";
 import { Demuxer } from "../demux";
@@ -764,22 +766,57 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
       // Force-demux (HLS): both MSE engines failed a codec the browser can't
       // decode. HLS has no single demuxable file, so parse the playlist and
       // present its segments to the FFmpeg-WASM demuxer as one concatenated,
-      // seekable stream (SegmentStreamSource). MVP: the best muxed variant —
-      // separate audio / subtitle renditions are deferred.
+      // seekable stream (SegmentStreamSource). Alternate audio languages become
+      // split-audio tracks (each its own segment stream); segmented WebVTT
+      // subtitle renditions are concatenated into external subtitle tracks.
       if (this.config.forceStreamDemux && isHls && !this.source) {
         try {
           const plan = await analyzeHlsFallback(streamUrl!, src?.headers);
           if (plan) {
             Logger.info(
               TAG,
-              `forceStreamDemux: routing HLS through the FFmpeg demuxer (${plan.segments.length} segments)`,
+              `forceStreamDemux: routing HLS through the FFmpeg demuxer (${plan.segments.length} video segments)`,
             );
+            // Video (or muxed) stream.
             this.source = new SegmentStreamSource(
               plan.segments,
               plan.initSegment,
               streamUrl!,
               src?.headers,
             );
+
+            // Separate audio languages → split-audio tracks, each backed by its
+            // own segment stream (default language first). SegmentStreamSource
+            // is lazy, so building them all costs nothing until one is selected.
+            if (plan.audioRenditions?.length) {
+              const ordered = [...plan.audioRenditions].sort(
+                (a, b) => (b.isDefault ? 1 : 0) - (a.isDefault ? 1 : 0),
+              );
+              this.config.audioTracks = ordered.map((r, i) => {
+                const key = `${streamUrl}#audio-${r.lang}-${i}`;
+                return {
+                  url: key,
+                  lang: r.lang,
+                  label: r.label,
+                  adapter: new SegmentStreamSource(
+                    r.segments,
+                    r.initSegment,
+                    key,
+                    src?.headers,
+                  ),
+                };
+              });
+            }
+
+            // Segmented WebVTT subtitle renditions → one concatenated VTT blob
+            // per language, carried as external subtitle tracks.
+            if (plan.subtitleRenditions?.length) {
+              const subs = await this.buildHlsSubtitleTracks(
+                plan.subtitleRenditions,
+                src?.headers,
+              );
+              if (subs.length) this.config.subtitleTracks = subs;
+            }
           } else {
             Logger.warn(
               TAG,
@@ -948,19 +985,25 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
       // Separate audio source: use native <audio> element (zero WASM overhead)
       // Supports single audioSource or multi-language audioTracks
       let audioUrl: string | null = null;
+      // Pre-built adapter (e.g. an HLS audio rendition's segment stream) — used
+      // instead of opening a URL when the track carries one.
+      let audioAdapter: SourceAdapter | undefined;
 
       if (this.config.audioTracks && this.config.audioTracks.length > 0) {
         // Multi-language mode — store all tracks, pick first as default
         this._audioTracks = [...this.config.audioTracks];
         this._activeAudioLang = this._audioTracks[0].lang;
         audioUrl = this._audioTracks[0].url;
+        audioAdapter = this._audioTracks[0].adapter;
         Logger.info(TAG, `Multi-language audio: ${this._audioTracks.length} tracks, default=${this._activeAudioLang}`);
       } else if (this.config.audioSource?.type === "url" && this.config.audioSource.url) {
         // Single separate audio source
         audioUrl = this.config.audioSource.url;
       }
 
-      if (audioUrl) {
+      if (audioAdapter) {
+        await this.setupSplitAudio(audioAdapter);
+      } else if (audioUrl) {
         await this.setupSplitAudio(audioUrl);
       }
       // A rapid source switch may have destroyed this instance while the second
@@ -5045,14 +5088,55 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
    * clock-master so sync/volume/rate need no extra wiring. Best-effort — on
    * failure it clears the demuxer so playback continues video-only.
    */
-  private async setupSplitAudio(url: string): Promise<void> {
+  /**
+   * Turn HLS segmented-WebVTT subtitle renditions into external subtitle
+   * tracks: fetch every segment, concatenate into one presentation-timed VTT
+   * (via buildVttFromSegments), and hand back blob-URL tracks. Renditions with
+   * no cues are skipped.
+   */
+  private async buildHlsSubtitleTracks(
+    renditions: HlsSubtitleRendition[],
+    headers?: Record<string, string>,
+  ): Promise<SubtitleSourceEntry[]> {
+    const out: SubtitleSourceEntry[] = [];
+    for (const r of renditions) {
+      try {
+        const texts = await Promise.all(
+          r.segments.map((s) =>
+            fetch(s.url, headers ? { headers } : undefined)
+              .then((res) => (res.ok ? res.text() : ""))
+              .catch(() => ""),
+          ),
+        );
+        const vtt = buildVttFromSegments(texts);
+        if (!vtt.includes("-->")) continue; // no cues parsed
+        const url = URL.createObjectURL(
+          new Blob([vtt], { type: "text/vtt" }),
+        );
+        out.push({ url, lang: r.lang, label: r.label, format: "vtt" });
+      } catch (e) {
+        Logger.warn(TAG, `HLS subtitle build failed for ${r.lang}`, e);
+      }
+    }
+    return out;
+  }
+
+  private async setupSplitAudio(
+    source: string | SourceAdapter,
+  ): Promise<void> {
     try {
-      Logger.info(TAG, `Split audio (WASM) setup: ${url}`);
-      this.audioSource = await this.createSource({
-        type: "url",
-        url,
-        headers: this.config.headers,
-      });
+      if (typeof source === "string") {
+        Logger.info(TAG, `Split audio (WASM) setup: ${source}`);
+        this.audioSource = await this.createSource({
+          type: "url",
+          url: source,
+          headers: this.config.headers,
+        });
+      } else {
+        // Pre-built adapter (e.g. an HLS audio rendition's segment stream).
+        Logger.info(TAG, `Split audio (WASM) setup: ${source.getKey()}`);
+        this.audioSource = source;
+      }
       // Isolated WASM instance (3rd arg): a second demuxer MUST NOT share the
       // main module's global read callback — same isolation the thumbnail/cover
       // pipelines use.
@@ -5540,7 +5624,7 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
     // Stand up the new track through the WASM split-audio pipeline.
     this._activeAudioLang = lang;
     this.disableAudio = false;
-    await this.setupSplitAudio(track.url);
+    await this.setupSplitAudio(track.adapter ?? track.url);
     const ad = this.audioDemuxer as Demuxer | null;
     if (!ad) {
       // WASM setup failed — last-resort native <audio> element (mute WASM).

@@ -110,6 +110,12 @@ export interface AudioSourceEntry {
   type?: string;
   lang: string;       // BCP 47 language code (e.g., "en", "hi", "ja")
   label: string;      // Display name (e.g., "English", "Hindi")
+  /**
+   * Pre-built adapter for this track (e.g. an HLS audio rendition presented as
+   * a concatenated segment stream). Opened directly instead of `url` when set;
+   * `url` still serves as the display/cache key.
+   */
+  adapter?: import("./source/SourceAdapter").SourceAdapter;
 }
 
 /** External subtitle source (VTT/SRT) with language metadata */
