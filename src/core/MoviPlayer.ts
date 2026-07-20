@@ -1382,14 +1382,17 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
     const now = performance.now();
     const sinceSwitch = now - this._lastAbrSwitchAt;
 
-    // Emergency downshift: a GENUINE stall (real buffering state or a near-empty
-    // audio buffer). Deliberately does NOT trip on a normally-shallow buffer:
-    // each in-place switch briefly resets the video pipeline (new file, keyframe
-    // wait), and treating that transient as "network too slow" was what made the
-    // controller oscillate down-then-up. A short settle window since the last
-    // switch keeps that transient from counting.
-    const audioBuf = this.audioRenderer?.getBufferedDuration?.() ?? 99;
-    const stalling = this.stateManager.is("buffering") || audioBuf < 0.4;
+    // Emergency downshift: only on a GENUINE playback stall (the real buffering
+    // state). Deliberately NOT keyed on the audio buffer level: with split audio
+    // the audio is a separate, usually fully-cached file, so its renderer buffer
+    // just hovers at the renderer's normal scheduling lead — it is not a signal
+    // of video/network health. Treating a normally-shallow audio buffer as
+    // "network too slow" made the controller cascade a rung at a time all the
+    // way to the bottom (and downshift straight off the start rung on load).
+    // When the video genuinely can't keep up, the throughput-driven path below
+    // downshifts on its own; this stays a hard-stall safety net. The settle
+    // window keeps a switch's own transient from counting as a stall.
+    const stalling = this.stateManager.is("buffering");
     if (
       stalling &&
       sinceSwitch > 5000 &&
