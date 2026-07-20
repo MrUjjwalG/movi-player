@@ -151,8 +151,17 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
   private _subtitleTracks: SubtitleSourceEntry[] = [];
   // DASH-fallback video Representations (best-first) + the one currently playing,
   // for the demuxer-mode quality menu. Populated only in the force-demux path.
-  private _dashRenditions: { url: string; label: string; id: string }[] = [];
+  private _dashRenditions: {
+    url: string;
+    label: string;
+    id: string;
+    bandwidth?: number;
+  }[] = [];
   private _activeDashRendition: string = "";
+  // Adaptive-quality (ABR) state for the demuxer/premuxed in-place switch.
+  private _autoQuality: boolean = false;
+  private _abrTimer: ReturnType<typeof setInterval> | null = null;
+  private _abrSwitchInProgress: boolean = false;
   private _activeSubtitleLang: string = "";
   private _externalSubCues: SubtitleCue[] = [];
   private _externalSubTimer: number | null = null;
@@ -1307,6 +1316,94 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
       `in-place quality switch → ${newVideoTrack.width}x${newVideoTrack.height}`,
     );
     return true;
+  }
+
+  /**
+   * Enable/disable adaptive quality (ABR) on the in-place demuxer/premuxed
+   * switch. When on, a timer estimates download throughput and switches to the
+   * best rendition it can sustain — in-place, so it's smooth. Off pins the
+   * current rendition.
+   */
+  setAutoQuality(enabled: boolean): void {
+    if (this._autoQuality === enabled) return;
+    this._autoQuality = enabled;
+    if (enabled) {
+      this.abrTick(); // evaluate immediately
+      if (!this._abrTimer) {
+        this._abrTimer = setInterval(() => this.abrTick(), 4000);
+      }
+    } else if (this._abrTimer) {
+      clearInterval(this._abrTimer);
+      this._abrTimer = null;
+    }
+  }
+
+  isAutoQuality(): boolean {
+    return this._autoQuality;
+  }
+
+  /**
+   * One ABR decision: pick the best rendition the measured throughput can
+   * sustain and switch to it in-place. Downshifts eagerly when the audio buffer
+   * is starving. No-op while a switch is already running or bitrates are unknown.
+   */
+  private async abrTick(): Promise<void> {
+    if (
+      !this._autoQuality ||
+      this._abrSwitchInProgress ||
+      this._dashRenditions.length < 2 ||
+      !this.source
+    ) {
+      return;
+    }
+    // Best-first: index 0 = highest bitrate.
+    const rungs = this._dashRenditions
+      .filter((r) => (r.bandwidth || 0) > 0)
+      .sort((a, b) => (b.bandwidth || 0) - (a.bandwidth || 0));
+    if (rungs.length < 2) return; // no bitrate info → can't adapt
+
+    const activeIdx = rungs.findIndex(
+      (r) => r.url === this._activeDashRendition,
+    );
+
+    // Emergency downshift: the pipeline is starving (video can't keep up — the
+    // most reliable "network too slow" signal, since a throughput estimate can
+    // be fooled by cache-served segments). Drop one rung immediately.
+    const audioBuf = this.audioRenderer?.getBufferedDuration?.() ?? 99;
+    const starving = this.stateManager.is("buffering") || audioBuf < 1.0;
+    if (starving && activeIdx >= 0 && activeIdx < rungs.length - 1) {
+      await this.abrSwitchTo(rungs[activeIdx + 1].url);
+      return;
+    }
+
+    const bps =
+      (this.source as { getNetworkStats?: () => { currentSpeed: number } })
+        .getNetworkStats?.()
+        ?.currentSpeed ?? 0;
+    if (bps <= 0) return; // no throughput estimate yet
+
+    const affordableBits = bps * 8 * 0.85; // safety margin
+    let pick = rungs[rungs.length - 1]; // lowest by default
+    for (const r of rungs) {
+      if ((r.bandwidth || 0) <= affordableBits) {
+        pick = r;
+        break;
+      }
+    }
+    if (pick.url !== this._activeDashRendition) {
+      await this.abrSwitchTo(pick.url);
+    }
+  }
+
+  private async abrSwitchTo(url: string): Promise<void> {
+    this._abrSwitchInProgress = true;
+    try {
+      await this.switchVideoRenditionInPlace(url);
+    } catch {
+      /* keep the current rendition on failure */
+    } finally {
+      this._abrSwitchInProgress = false;
+    }
   }
 
   private async configureDecoders(): Promise<void> {
@@ -4436,7 +4533,12 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
    * DASH-fallback video Representations for the demuxer-mode quality menu
    * (best-first), and the one currently playing. Empty unless force-demuxing.
    */
-  getDashRenditions(): { url: string; label: string; id: string }[] {
+  getDashRenditions(): {
+    url: string;
+    label: string;
+    id: string;
+    bandwidth?: number;
+  }[] {
     return this._dashRenditions;
   }
   getActiveDashRendition(): string {
@@ -7654,6 +7756,12 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
   destroy(): void {
     Logger.info(TAG, "Destroying player");
     this._destroyed = true;
+
+    // Stop the ABR timer.
+    if (this._abrTimer) {
+      clearInterval(this._abrTimer);
+      this._abrTimer = null;
+    }
 
     // Release WakeLock
     this.releaseWakeLock();

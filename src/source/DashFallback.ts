@@ -63,7 +63,7 @@ export interface DashFallbackPlan {
    * quality re-loads the main source with that Representation's file. Present
    * only when there's more than one.
    */
-  videoTracks?: { url: string; label: string; id: string }[];
+  videoTracks?: { url: string; label: string; id: string; bandwidth?: number }[];
 }
 
 /** BCP-47 code → human language name (viewer's locale), falling back to the code. */
@@ -296,6 +296,7 @@ export async function analyzeDashFallback(
       .map((v) => ({
         url: v.url,
         id: v.id,
+        bandwidth: v.bw,
         label:
           v.height > 0
             ? // Two renditions at the same height → disambiguate with bitrate.

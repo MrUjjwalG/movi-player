@@ -6677,16 +6677,19 @@ export class MoviElement extends HTMLElement {
   private renderDashQualityMenu(
     qualityList: HTMLElement,
     qualityContainer: HTMLElement,
-    renditions: { url: string; label: string; id: string }[],
+    renditions: { url: string; label: string; id: string; bandwidth?: number }[],
   ): void {
     qualityContainer.style.display = "flex";
-    const activeUrl =
-      ((this.player as any)?.getActiveDashRendition?.() as string) || "";
+    const player = this.player as any;
+    const activeUrl = (player?.getActiveDashRendition?.() as string) || "";
+    const isAuto = !!player?.isAutoQuality?.();
     const active = renditions.find((r) => r.url === activeUrl);
     this._updateQualityBtnBadge(
       this._heightBadge(parseInt(active?.label || "0", 10)),
     );
 
+    const BADGE_CSS =
+      "margin-left:8px;font-size:9px;font-weight:700;letter-spacing:0.5px;padding:1px 5px;border-radius:4px;background:rgba(255,255,255,0.16);color:#fff;vertical-align:middle;";
     const checkSvg = () =>
       document.importNode(
         new DOMParser().parseFromString(
@@ -6695,9 +6698,48 @@ export class MoviElement extends HTMLElement {
         ).documentElement,
         true,
       );
+    const closeMenu = () => {
+      const menu = this.shadowRoot?.querySelector(
+        ".movi-quality-menu",
+      ) as HTMLElement;
+      if (menu) menu.style.display = "none";
+    };
 
-    const items = renditions.map((r) => {
-      const isActive = r.url === activeUrl;
+    const items: HTMLElement[] = [];
+
+    // "Auto" (adaptive) — only when 2+ renditions expose bitrates so ABR can
+    // actually choose. Shows what it's currently serving, e.g. "Auto  720p".
+    const abrCapable =
+      renditions.filter((r) => (r.bandwidth || 0) > 0).length >= 2;
+    if (abrCapable) {
+      const item = document.createElement("div");
+      item.className = "movi-quality-item" + (isAuto ? " movi-quality-active" : "");
+      const wrap = document.createElement("span");
+      wrap.className = "movi-quality-label-wrap";
+      const label = document.createElement("span");
+      label.className = "movi-quality-label";
+      label.textContent = "Auto";
+      wrap.appendChild(label);
+      if (isAuto && active) {
+        const cur = document.createElement("span");
+        cur.className = "movi-quality-item-badge";
+        cur.textContent = active.label;
+        cur.style.cssText = BADGE_CSS;
+        wrap.appendChild(cur);
+      }
+      item.appendChild(wrap);
+      if (isAuto) item.appendChild(checkSvg());
+      item.addEventListener("click", (e) => {
+        e.stopPropagation();
+        player?.setAutoQuality?.(true);
+        this.updateQualityMenu();
+        closeMenu();
+      });
+      items.push(item);
+    }
+
+    renditions.forEach((r) => {
+      const isActive = !isAuto && r.url === activeUrl;
       const item = document.createElement("div");
       item.className =
         "movi-quality-item" + (isActive ? " movi-quality-active" : "");
@@ -6713,22 +6755,20 @@ export class MoviElement extends HTMLElement {
         const b = document.createElement("span");
         b.className = "movi-quality-item-badge";
         b.textContent = badge;
-        b.style.cssText =
-          "margin-left:8px;font-size:9px;font-weight:700;letter-spacing:0.5px;padding:1px 5px;border-radius:4px;background:rgba(255,255,255,0.16);color:#fff;vertical-align:middle;";
+        b.style.cssText = BADGE_CSS;
         wrap.appendChild(b);
       }
       item.appendChild(wrap);
       if (isActive) item.appendChild(checkSvg());
       item.addEventListener("click", (e) => {
         e.stopPropagation();
-        if (isActive) return;
-        this.switchDashRendition(r.url);
-        const menu = this.shadowRoot?.querySelector(
-          ".movi-quality-menu",
-        ) as HTMLElement;
-        if (menu) menu.style.display = "none";
+        // Picking a specific quality leaves Auto.
+        player?.setAutoQuality?.(false);
+        if (r.url !== activeUrl) this.switchDashRendition(r.url);
+        else this.updateQualityMenu(); // was Auto on this rung — just repaint
+        closeMenu();
       });
-      return item;
+      items.push(item);
     });
     qualityList.replaceChildren(...items);
   }

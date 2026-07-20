@@ -62,7 +62,7 @@ export interface HlsFallbackPlan {
    * group, best-first). `url` is the variant playlist URL — pass it back as
    * `forceVariantUrl` to switch quality. Present only when there's a choice.
    */
-  videoTracks?: { url: string; label: string; id: string }[];
+  videoTracks?: { url: string; label: string; id: string; bandwidth?: number }[];
   /** The variant playlist URL this plan was built from (the active quality). */
   selectedVariant?: string;
 }
@@ -406,6 +406,7 @@ export async function analyzeHlsFallback(
       plan.videoTracks = uniqueVariants.map((v) => ({
         url: v.url,
         id: v.url,
+        bandwidth: v.bandwidth,
         label: v.height
           ? `${v.height}p`
           : `${Math.round(v.bandwidth / 1000)} kbps`,

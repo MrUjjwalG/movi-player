@@ -36,6 +36,7 @@ export class SegmentStreamSource implements SourceAdapter {
   private cache = new Map<number, ArrayBuffer>();
   private cacheOrder: number[] = [];
   private readonly maxCached = 24;
+  private _throughputBps = 0; // EWMA download speed (bytes/s) for ABR
 
   private readonly key: string;
 
@@ -166,11 +167,25 @@ export class SegmentStreamSource implements SourceAdapter {
     if (e.isRange) {
       reqHeaders["Range"] = `bytes=${e.srcOffset}-${e.srcOffset + e.length - 1}`;
     }
+    const t0 = performance.now();
     const res = await fetch(e.url, { headers: reqHeaders });
     if (!res.ok && res.status !== 206) {
       throw new Error(`segment ${entryIdx} HTTP ${res.status}`);
     }
     let buf = await res.arrayBuffer();
+    // Throughput estimate (bytes/s) for ABR — EWMA over segment downloads.
+    // Floor the elapsed time instead of skipping fast fetches: the lowest
+    // renditions have tiny segments that finish in a few ms, and skipping them
+    // would freeze the estimate and trap the ABR at the bottom rung (unable to
+    // upshift). A fast fetch legitimately signals high bandwidth.
+    if (buf.byteLength > 0) {
+      const elapsed = Math.max((performance.now() - t0) / 1000, 0.004);
+      const bps = buf.byteLength / elapsed;
+      this._throughputBps =
+        this._throughputBps > 0
+          ? this._throughputBps * 0.6 + bps * 0.4
+          : bps;
+    }
     // Server ignored the Range and returned the whole resource — slice it.
     if (e.isRange && res.status === 200 && buf.byteLength > e.length) {
       buf = buf.slice(e.srcOffset, e.srcOffset + e.length);
@@ -240,5 +255,11 @@ export class SegmentStreamSource implements SourceAdapter {
 
   getKey(): string {
     return this.key;
+  }
+
+  /** Download-speed estimate (bytes/s) for the ABR controller. Shape mirrors
+   *  HttpSource.getNetworkStats() so the caller can duck-type either source. */
+  getNetworkStats(): { currentSpeed: number } {
+    return { currentSpeed: this._throughputBps };
   }
 }
