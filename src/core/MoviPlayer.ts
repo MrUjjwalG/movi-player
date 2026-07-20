@@ -7167,6 +7167,18 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
     // EncryptedHttpSource now extends HttpSource, so the branch above
     // handles its buffered-end reporting too.
 
+    // HLS demuxer fallback: the SegmentStreamSource fetches segments on demand,
+    // so its read cursor (getPosition = furthest byte read) sits ahead of the
+    // playhead by the demuxer's prebuffer. Estimate the playhead's byte position
+    // linearly and report the gap as buffered-ahead time.
+    if (this.source instanceof SegmentStreamSource && this.fileSize > 0 && duration > 0) {
+      const frontier = this.source.getPosition();
+      const playheadBytes = (this.getCurrentTime() / duration) * this.fileSize;
+      const forwardBytes = Math.max(0, frontier - playheadBytes);
+      const forwardTime = (forwardBytes / this.fileSize) * duration;
+      return Math.min(this.getCurrentTime() + forwardTime, duration);
+    }
+
     return 0;
   }
 
