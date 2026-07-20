@@ -217,6 +217,11 @@ export class MoviElement extends HTMLElement {
   // data-height / data-label. Lets the player drive a YouTube-style quality
   // menu for plain MP4 sources (where there's no HLS manifest to enumerate).
   private _videoQualities: { src: string; type?: string; height: number; label: string; fps?: number; badge?: string; bandwidth?: number }[] = [];
+  // Last resolution height we emitted a `qualitychange` for. Lets us fire the
+  // event on an ABR/in-place switch (which doesn't route through the manual
+  // switch path) so hosts can remember the settled quality — without spamming a
+  // duplicate on every unrelated tracks-change.
+  private _lastNotifiedQualityHeight: number = 0;
   private _audioTracks: { src: string; type?: string; lang: string; label: string }[] = []; // Multi-language audio
   private _subtitleTracks: { src: string; lang: string; label: string; format?: string }[] = []; // External subtitles
   private _autoplay: boolean = false;
@@ -17172,6 +17177,22 @@ export class MoviElement extends HTMLElement {
       this.updateSubtitleTrackMenu();
       this.updateQualityMenu();
       this.renderChapterMarkers();
+      // Notify hosts when the active video resolution changes — including from
+      // an ABR/in-place quality switch, which bypasses the manual switch path
+      // that normally fires `qualitychange`. Without this a host that persists
+      // the picked quality (e.g. movi-tube's stored height) never learns what
+      // Auto settled on, so every next video restarts at the old default and
+      // the ABR has to climb back up. Guarded so it only fires on real change.
+      const vh =
+        this.player?.trackManager?.getActiveVideoTrack?.()?.height || 0;
+      if (vh > 0 && vh !== this._lastNotifiedQualityHeight) {
+        this._lastNotifiedQualityHeight = vh;
+        this.dispatchEvent(
+          new CustomEvent("qualitychange", {
+            detail: { height: vh, auto: !!this.player?.isAutoQuality?.() },
+          }),
+        );
+      }
       this.dispatchEvent(new CustomEvent("trackschange", {
         detail: {
           audio: this.player?.getAudioTracks() || [],
