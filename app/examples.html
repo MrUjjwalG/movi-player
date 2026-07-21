@@ -556,6 +556,29 @@ registerSourceAdapter([<span class="tok-str">'s3'</span>, <span class="tok-str">
           </div>
         </div>
 
+        <!-- ASS/SSA subtitles: pluggable renderer -->
+        <div class="card recipe">
+          <div class="card-head">
+            <div class="card-cat">Subtitles<span class="tag-new">NEW</span></div>
+            <h3>ASS/SSA subtitles</h3>
+            <p>MoviPlayer decodes to a canvas, so styled ASS/SSA (positioning, karaoke, embedded fonts) can't ride a native <code class="inline">&lt;track&gt;</code>. Register a <code class="inline">SubtitleRenderer</code> — back it with libass-wasm / jassub — and the player routes the embedded subtitle stream to it: header + fonts on <code class="inline">configure</code>, each dialogue line on <code class="inline">pushPacket</code>, a frame on <code class="inline">render</code>.</p>
+          </div>
+          <div class="code">
+            <button class="copy-btn" type="button">Copy</button>
+            <pre><code><span class="tok-com">// Adapt any ASS engine (libass-wasm / jassub) to the interface.</span>
+<span class="tok-kw">class</span> AssRenderer {           <span class="tok-com">// implements SubtitleRenderer</span>
+  mount(overlay)              { <span class="tok-com">/* append your &lt;canvas&gt; here */</span> }
+  configure(track, extradata) { <span class="tok-com">/* init libass w/ the ASS header */</span> }
+  pushPacket(pkt)             { <span class="tok-com">/* feed one dialogue line */</span> }
+  render(time, w, h)          { <span class="tok-com">/* draw the frame at w×h */</span> }
+  setDelay(s) {} clear() {} destroy() {}
+}
+
+document.querySelector(<span class="tok-str">'movi-player'</span>)
+  .setSubtitleRenderer(<span class="tok-kw">new</span> AssRenderer());</code></pre>
+          </div>
+        </div>
+
         <!-- Install & embed -->
         <div class="card recipe">
           <div class="card-head">
