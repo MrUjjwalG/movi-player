@@ -262,6 +262,53 @@ export interface Packet {
   disposable: boolean;
 }
 
+/**
+ * Pluggable subtitle renderer. movi-player decodes video to its own WebGL canvas
+ * (no HTMLVideoElement), so a native `<track>` overlay can't be used — and full
+ * ASS/SSA styling (positioning, karaoke, embedded fonts) is beyond the built-in
+ * text/bitmap path. Register one of these via `player.setSubtitleRenderer()` (or
+ * `<movi-player>.setSubtitleRenderer()`) to take over an embedded subtitle track
+ * with your own renderer — e.g. jassub (libass-wasm) for pixel-accurate ASS —
+ * without the core taking that dependency.
+ *
+ * When a renderer is set, the player stops feeding the selected subtitle stream
+ * to its internal decoder and drives this instead: `configure` on track select,
+ * `pushPacket` for each demuxed subtitle packet, `render` every frame with the
+ * current media time and the video's native dimensions, `setDelay` on a subtitle
+ * offset change, `clear` on seek/track change, and `destroy` on teardown/swap.
+ * If `mount` is present the player calls it with an overlay element already sized
+ * and positioned over the visible video (letterbox-aware) for the renderer to
+ * draw into.
+ */
+export interface SubtitleRenderer {
+  /** Called on track selection. `extradata` is the codec header (the ASS
+   *  `[Script Info]`/`[V4+ Styles]` block for ass/ssa). `fonts` are embedded
+   *  font attachments when available (may be undefined). */
+  configure(
+    track: SubtitleTrack,
+    extradata?: Uint8Array,
+    fonts?: Uint8Array[],
+  ): Promise<void> | void;
+  /** One demuxed subtitle packet for the active track. */
+  pushPacket(packet: Packet): Promise<void> | void;
+  /** Draw the state for `mediaTime` (seconds). `videoWidth`/`videoHeight` are the
+   *  source frame dimensions the subtitle coordinates are authored against. */
+  render(
+    mediaTime: number,
+    videoWidth: number,
+    videoHeight: number,
+  ): Promise<void> | void;
+  /** Optional: receive the player's subtitle overlay element (absolutely
+   *  positioned over the visible video) to append a canvas/DOM into. */
+  mount?(container: HTMLElement): void;
+  /** Subtitle timing offset in seconds (positive = later). */
+  setDelay(seconds: number): void;
+  /** Drop all pending state — called on seek and track change. */
+  clear(): void;
+  /** Release resources — called on teardown or when swapped out. */
+  destroy(): Promise<void> | void;
+}
+
 // ============================================================================
 // Frame Types
 // ============================================================================

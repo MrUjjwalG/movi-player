@@ -18,6 +18,7 @@ import type {
   VideoTrack,
   AudioTrack,
   SubtitleTrack,
+  SubtitleRenderer,
   DecoderType,
   PlayerState,
 } from "../types";
@@ -284,6 +285,9 @@ export class MoviElement extends HTMLElement {
   // SettingsStorage — sync drift is per-source, so a global value would
   // mis-shift unrelated videos.
   private _subtitleDelay: number = 0;
+  // Host-supplied pluggable subtitle renderer (e.g. jassub/libass). Stored so it
+  // survives a source change: re-applied to each fresh player instance.
+  private _subtitleRenderer: SubtitleRenderer | null = null;
   // User-customizable subtitle appearance. Applied as CSS variables on the
   // host element so the shadow-DOM subtitle CSS can read them. Persisted
   // to localStorage so the user's choice survives reloads.
@@ -16035,6 +16039,16 @@ export class MoviElement extends HTMLElement {
       this._connectionRetryTimer = null;
     }
 
+    // The element owns the host subtitle renderer's lifecycle — destroy it now.
+    if (this._subtitleRenderer) {
+      try {
+        void this._subtitleRenderer.destroy();
+      } catch {
+        /* ignore */
+      }
+      this._subtitleRenderer = null;
+    }
+
     // Cleanup player when element is removed
     if (this.player) {
       this.player.destroy();
@@ -17234,6 +17248,12 @@ export class MoviElement extends HTMLElement {
       const mode = playerConfig.drm ? "DRM/Native Video" : "Canvas Renderer";
       Logger.info(TAG, `Initializing MoviPlayer (${mode} Mode)`);
       this.player = new MoviPlayer(playerConfig);
+
+      // Re-apply a host subtitle renderer to the fresh player (it's registered on
+      // the element, which outlives per-source player recreates).
+      if (this._subtitleRenderer) {
+        this.player.setSubtitleRenderer(this._subtitleRenderer);
+      }
 
       // Bind device enumeration + apply any pending `audiooutput` selection
       // now that the audio engine exists.
@@ -21568,6 +21588,29 @@ export class MoviElement extends HTMLElement {
   /** VLC-style API alias from the feature request issue. */
   setSubtitleDelay(seconds: number): void {
     this.subtitleDelay = seconds;
+  }
+
+  /**
+   * Register a pluggable subtitle renderer (or clear it with null) — e.g. jassub
+   * (libass-wasm) for full ASS/SSA styling. The element owns its lifecycle: it
+   * re-applies the renderer to the player after a source change / recreate, and
+   * destroys it when a different renderer is set or the element is removed. See
+   * SubtitleRenderer.
+   */
+  setSubtitleRenderer(renderer: SubtitleRenderer | null): void {
+    if (this._subtitleRenderer === renderer) return;
+    const prev = this._subtitleRenderer;
+    this._subtitleRenderer = renderer;
+    // The player only DRIVES the renderer (it never destroys it), so tearing down
+    // the swapped-out one is the element's responsibility.
+    this.player?.setSubtitleRenderer(renderer);
+    if (prev && prev !== renderer) {
+      try {
+        void prev.destroy();
+      } catch {
+        /* ignore */
+      }
+    }
   }
 
   /** VLC-style API alias from the feature request issue. */
