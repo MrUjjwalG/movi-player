@@ -6635,6 +6635,13 @@ export class MoviElement extends HTMLElement {
   private _decodeDownshifts = 0;
   private static readonly MAX_DECODE_DOWNSHIFTS = 3;
   private _decodeMaxHeight = Number.POSITIVE_INFINITY;
+  // Self-healing retry after recovery is exhausted: on a flaky/slow link the
+  // failures are usually transient, so instead of a dead-end "Connection Problem"
+  // we auto-retry with backoff (a "Reconnecting…" that resumes once the link
+  // steadies). Bounded; only after these also fail is the permanent error shown.
+  private _connectionRetries = 0;
+  private static readonly MAX_CONNECTION_RETRIES = 4;
+  private _connectionRetryTimer: ReturnType<typeof setTimeout> | null = null;
   // Set only by the decode-downshift recreate so its own load() keeps the ceiling
   // (every other load clears it, so the next source re-attempts its top rung).
   private _preserveDecodeCapOnce = false;
@@ -6758,6 +6765,40 @@ export class MoviElement extends HTMLElement {
    * instance, which recovers where the reload can't. Bounded; returns false once
    * exhausted so the caller falls through to the overlay.
    */
+  /**
+   * Recovery ran out of in-place recreates. On a flaky/slow link the failures (a
+   * dropped fetch, a demux hiccup on a slow read) are usually transient, so rather
+   * than dead-end at "Connection Problem" on every slow patch, show a
+   * "Reconnecting…" and auto-retry with backoff — a fresh recreate once the link
+   * has had a moment to steady. Bounded: returns false once the retries are spent,
+   * so the caller surfaces the permanent error.
+   */
+  private _scheduleConnectionRetry(): boolean {
+    if (this._connectionRetries >= MoviElement.MAX_CONNECTION_RETRIES) return false;
+    this._connectionRetries++;
+    const delay = Math.min(3000 * this._connectionRetries, 15000); // 3s,6s,9s,12s
+    Logger.warn(
+      TAG,
+      `Recovery exhausted — auto-retry ${this._connectionRetries}/${MoviElement.MAX_CONNECTION_RETRIES} in ${(delay / 1000).toFixed(0)}s`,
+    );
+    // A gentler, self-healing message than the permanent "Connection Problem".
+    this.handleUnsupportedVideo(
+      "Reconnecting…",
+      "Your connection dropped — retrying automatically…",
+    );
+    if (this._connectionRetryTimer) clearTimeout(this._connectionRetryTimer);
+    this._connectionRetryTimer = setTimeout(() => {
+      this._connectionRetryTimer = null;
+      // Fresh recovery budget — the link may have steadied while we waited.
+      this._fullRecreates = 0;
+      this._qualityRecoveryAttempts = 0;
+      this._isUnsupported = false;
+      if (this.brokenIndicator) this.brokenIndicator.style.display = "none";
+      this._recreatePlayerFresh();
+    }, delay);
+    return true;
+  }
+
   private _recreatePlayerFresh(): boolean {
     if (this._fullRecreates >= MoviElement.MAX_FULL_RECREATES) return false;
     this._fullRecreates++;
@@ -15918,6 +15959,13 @@ export class MoviElement extends HTMLElement {
       this._pipWindow = null;
     }
 
+    // Drop any pending self-healing reconnect so a stale timer can't recreate a
+    // player after the element is gone.
+    if (this._connectionRetryTimer) {
+      clearTimeout(this._connectionRetryTimer);
+      this._connectionRetryTimer = null;
+    }
+
     // Cleanup player when element is removed
     if (this.player) {
       this.player.destroy();
@@ -17402,6 +17450,11 @@ export class MoviElement extends HTMLElement {
         this._qualityRecoveryAttempts >= MoviElement.MAX_QUALITY_RECOVERIES ||
         this._fullRecreates >= MoviElement.MAX_FULL_RECREATES
       ) {
+        // Recovery exhausted, but on a flaky/slow link these failures are usually
+        // transient — auto-retry with backoff (a self-healing "Reconnecting…")
+        // instead of a dead-end "Connection Problem" on every slow patch. Only
+        // once the backed-off retries also fail do we surface the permanent error.
+        if (this._scheduleConnectionRetry()) return;
         title = "Connection Problem";
         message =
           "The network kept returning corrupt data across every quality. Check your connection, then reload.";
@@ -17787,6 +17840,7 @@ export class MoviElement extends HTMLElement {
         this._qualityRecoveryAttempts = 0;
         this._fullRecreates = 0;
         this._decodeDownshifts = 0; // fresh budget for a later, unrelated decode error
+        this._connectionRetries = 0; // link steadied — reset the reconnect budget
         this._recoveryResumeTime = -1;
       }
       this.updateLiveState();
@@ -17889,6 +17943,11 @@ export class MoviElement extends HTMLElement {
         this._qualityRecoveryAttempts >= MoviElement.MAX_QUALITY_RECOVERIES ||
         this._fullRecreates >= MoviElement.MAX_FULL_RECREATES
       ) {
+        // Recovery exhausted, but on a flaky/slow link these failures are usually
+        // transient — auto-retry with backoff (a self-healing "Reconnecting…")
+        // instead of a dead-end "Connection Problem" on every slow patch. Only
+        // once the backed-off retries also fail do we surface the permanent error.
+        if (this._scheduleConnectionRetry()) return;
         title = "Connection Problem";
         message =
           "The network kept returning corrupt data across every quality. Check your connection, then reload.";
@@ -17975,6 +18034,15 @@ export class MoviElement extends HTMLElement {
     } else {
       this._decodeMaxHeight = Number.POSITIVE_INFINITY;
       this._decodeDownshifts = 0;
+      // Cancel a PENDING reconnect wait (a genuinely new source supersedes it),
+      // but do NOT reset _connectionRetries here — the self-healing retry itself
+      // reaches load() via _recreatePlayerFresh, and zeroing the counter on its
+      // own load would defeat the bound and loop forever. The counter is reset on
+      // sustained playback (link steadied) and on the per-video element rebuild.
+      if (this._connectionRetryTimer) {
+        clearTimeout(this._connectionRetryTimer);
+        this._connectionRetryTimer = null;
+      }
     }
 
     // Drop any stale cover art from the previous source. The reference is
