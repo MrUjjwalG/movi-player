@@ -6627,6 +6627,17 @@ export class MoviElement extends HTMLElement {
   // Full player recreations attempted on the current video (premuxed path).
   private _fullRecreates = 0;
   private static readonly MAX_FULL_RECREATES = 2;
+  // Decode-error downshifts on the current video: on a hardware "Decoding error"
+  // under Auto, drop to a lower rung (the GPU can't decode this one — e.g. 8K
+  // AV1) instead of the slow software path. Bounded so a codec the GPU can't do
+  // at any size still escalates to software. _decodeMaxHeight caps the ABR ladder
+  // so Auto can't climb back into the undecodable rung and re-crash.
+  private _decodeDownshifts = 0;
+  private static readonly MAX_DECODE_DOWNSHIFTS = 3;
+  private _decodeMaxHeight = Number.POSITIVE_INFINITY;
+  // Set only by the decode-downshift recreate so its own load() keeps the ceiling
+  // (every other load clears it, so the next source re-attempts its top rung).
+  private _preserveDecodeCapOnce = false;
   // currentTime at the last recovery/recreate; once playback advances well past
   // it, the video is clearly fine again and the budgets reset (loop-safe: a
   // failing recreate never progresses, so it can't reset itself).
@@ -6750,6 +6761,23 @@ export class MoviElement extends HTMLElement {
   private _recreatePlayerFresh(): boolean {
     if (this._fullRecreates >= MoviElement.MAX_FULL_RECREATES) return false;
     this._fullRecreates++;
+    this._qualityRecoveryAttempts = 0; // fresh player earns a fresh recovery budget
+    Logger.warn(TAG, `Source error — full fresh recreate (attempt ${this._fullRecreates})`);
+    // null target → LOWEST rendition: its tiny file is the likeliest to load
+    // cleanly on a link that just failed; the ABR upshifts from there once
+    // playback is healthy again (the full ladder stays available for it).
+    this._recreateAt(null);
+    return true;
+  }
+
+  /**
+   * Tear the current player down and re-initialise from the <source> children at
+   * `targetSrc` (or the lowest rung when null), preserving the playback position.
+   * Shared by the source-error recreate (lowest rung) and the decode-error
+   * downshift (one rung lower). Clears any stuck error/unsupported state — load()
+   * re-inits on a fresh WASM instance.
+   */
+  private _recreateAt(targetSrc: string | null): void {
     let resumeTime = 0;
     try {
       resumeTime =
@@ -6758,11 +6786,6 @@ export class MoviElement extends HTMLElement {
     } catch {
       /* crashed player — resume from 0 */
     }
-    Logger.warn(
-      TAG,
-      `Source error — full fresh recreate (attempt ${this._fullRecreates}), resuming at ${resumeTime.toFixed(0)}s`,
-    );
-    this._qualityRecoveryAttempts = 0; // fresh player earns a fresh recovery budget
     this._isUnsupported = false;
     this.isLoading = false; // don't let initializePlayer's guard bail early
     this._recoveryResumeTime = resumeTime;
@@ -6771,22 +6794,56 @@ export class MoviElement extends HTMLElement {
       this._pendingSeek = resumeTime;
     }
     // The <source> children are only parsed when `_src` is unset (a bare `src`
-    // would win and hide them), so clear it, then rebuild the FULL rendition
-    // ladder + split audio from the children.
+    // would win and hide them), so clear it, then rebuild the ladder + split
+    // audio from the children.
     if (this.hasAttribute("src")) this.removeAttribute("src");
     this._src = null;
     this._suppressSwReload = true;
     this._parseChildSources();
-    // Recreate at the LOWEST rendition — its tiny file is the likeliest to load
-    // cleanly on a link that just failed; the ABR upshifts from there once
-    // playback is healthy again (the full ladder above stays available for it).
-    if (this._videoQualities.length > 0) {
+    if (targetSrc) {
+      this._src = targetSrc;
+    } else if (this._videoQualities.length > 0) {
       this._src = this._videoQualities[this._videoQualities.length - 1].src;
     }
-    // load() tears the crashed player down and re-inits on a fresh WASM
-    // instance — clearing the stuck "error" state (the state machine only allows
-    // error→idle) and resuming at _startAt/_pendingSeek set above.
+    const h = this._videoQualities.find((q) => q.src === this._src)?.height;
+    Logger.warn(
+      TAG,
+      `Recreating player at ${h ? h + "p" : "lowest"}, resuming at ${resumeTime.toFixed(0)}s`,
+    );
+    // load() tears the old player down and re-inits on a fresh WASM instance,
+    // clearing any stuck error state and resuming at _startAt/_pendingSeek.
     this.load();
+  }
+
+  /**
+   * Decode-error recovery for a multi-quality Auto source: the hardware decoder
+   * can't handle the CURRENT rung (e.g. an 8K AV1 that exceeds the GPU), so drop
+   * to the next rung down — the GPU can almost always decode a lower resolution —
+   * on a fresh player, preserving position. Caps the ABR ladder at the new rung
+   * so Auto can't climb straight back into the undecodable one and re-crash (a
+   * loop). Returns false once at the lowest rung or after MAX_DECODE_DOWNSHIFTS,
+   * so the caller falls through to the software fallback.
+   */
+  private _recreateAtLowerQuality(): boolean {
+    if (this._decodeDownshifts >= MoviElement.MAX_DECODE_DOWNSHIFTS) return false;
+    const sorted = [...this._videoQualities].sort((a, b) => b.height - a.height);
+    if (sorted.length < 2) return false;
+    const curH =
+      this.player?.trackManager?.getActiveVideoTrack?.()?.height || sorted[0].height;
+    let idx = sorted.findIndex((q) => q.height === curH);
+    if (idx < 0) idx = 0;
+    if (idx >= sorted.length - 1) return false; // already lowest — can't drop
+    const target = sorted[idx + 1];
+    this._decodeDownshifts++;
+    // Cap Auto at the new rung so it can't upshift back into the rung the GPU
+    // just failed to decode (that would loop: upshift → decode error → downshift).
+    this._decodeMaxHeight = target.height;
+    Logger.warn(
+      TAG,
+      `Decoder error at ${curH}p — dropping to ${target.height}p and capping Auto there`,
+    );
+    this._preserveDecodeCapOnce = true; // this recreate's load() keeps the cap
+    this._recreateAt(target.src);
     return true;
   }
 
@@ -6956,12 +7013,17 @@ export class MoviElement extends HTMLElement {
       this._videoQualities.filter((q) => (q.bandwidth || 0) > 0).length >= 2;
     if (abrCapable) {
       player?.setDashRenditions?.(
-        this._videoQualities.map((q) => ({
-          url: q.src,
-          id: q.src,
-          label: q.label,
-          bandwidth: q.bandwidth || this._estimateBitrate(q.height),
-        })),
+        // Exclude rungs above the decode ceiling — after a hardware "Decoding
+        // error" the ABR must not offer/climb back to a rung the GPU can't decode
+        // (e.g. 8K AV1). No cap by default (_decodeMaxHeight = Infinity).
+        this._videoQualities
+          .filter((q) => q.height <= this._decodeMaxHeight)
+          .map((q) => ({
+            url: q.src,
+            id: q.src,
+            label: q.label,
+            bandwidth: q.bandwidth || this._estimateBitrate(q.height),
+          })),
         activeSrc,
       );
       // Seed the ABR with the throughput carried from the previous video so its
@@ -17724,6 +17786,7 @@ export class MoviElement extends HTMLElement {
       ) {
         this._qualityRecoveryAttempts = 0;
         this._fullRecreates = 0;
+        this._decodeDownshifts = 0; // fresh budget for a later, unrelated decode error
         this._recoveryResumeTime = -1;
       }
       this.updateLiveState();
@@ -17900,6 +17963,19 @@ export class MoviElement extends HTMLElement {
     // Reset auto-loaded title flag and duration tracker for new video
     this._titleAutoLoaded = false;
     this._lastDuration = 0;
+
+    // Clear the hardware-decode ceiling on a genuinely new load so the NEXT
+    // source (a reused-element host swapping videos; movi-tube rebuilds the whole
+    // element, which resets these to their field defaults anyway) starts fresh
+    // and re-attempts its top rung — a decode limit is specific to one file's
+    // codec/resolution, not the element. The decode-downshift recreate is the one
+    // load that must KEEP its cap, so it sets _preserveDecodeCapOnce first.
+    if (this._preserveDecodeCapOnce) {
+      this._preserveDecodeCapOnce = false;
+    } else {
+      this._decodeMaxHeight = Number.POSITIVE_INFINITY;
+      this._decodeDownshifts = 0;
+    }
 
     // Drop any stale cover art from the previous source. The reference is
     // owned by MoviPlayer; we just clear our own pointer and hide the
@@ -19185,6 +19261,23 @@ export class MoviElement extends HTMLElement {
     ) {
       this._nativeFallbackAttempted = true;
       this.engageNativeFallback(this._src, title, message);
+      return;
+    }
+
+    // Decoder error on a multi-quality source under Auto: the hardware can't
+    // decode the CURRENT rung (e.g. an 8K AV1 that exceeds the GPU). Since quality
+    // is on Auto, drop to a lower rung the GPU CAN decode — a far better outcome
+    // than the slow software path or a dead-end overlay. Falls through (returns
+    // false) once at the lowest rung or after MAX_DECODE_DOWNSHIFTS, at which
+    // point the software fallback below runs (the codec is undecodable at any
+    // size). Streams decode via MSE, not our decoder, so they're excluded.
+    if (
+      isDecoderError &&
+      this._sw !== "software" &&
+      !this.player?.isStreamPlayback?.() &&
+      this.player?.isAutoQuality?.() &&
+      this._recreateAtLowerQuality()
+    ) {
       return;
     }
 
