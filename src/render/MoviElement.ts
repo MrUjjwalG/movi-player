@@ -6624,6 +6624,171 @@ export class MoviElement extends HTMLElement {
   // ends at the error overlay instead of cycling renditions forever.
   private _qualityRecoveryAttempts = 0;
   private static readonly MAX_QUALITY_RECOVERIES = 3;
+  // Full player recreations attempted on the current video (premuxed path).
+  private _fullRecreates = 0;
+  private static readonly MAX_FULL_RECREATES = 2;
+  // currentTime at the last recovery/recreate; once playback advances well past
+  // it, the video is clearly fine again and the budgets reset (loop-safe: a
+  // failing recreate never progresses, so it can't reset itself).
+  private _recoveryResumeTime = -1;
+  // One failed load fires TWO error paths in the same tick — MoviPlayer's
+  // "error" event AND initializePlayer's init-catch. This same-tick latch makes
+  // them consume ONE recovery attempt between them, so a single failure can't
+  // burn the whole recreate budget (which would collapse the 2-attempt design
+  // to one real try). Released on the next macrotask, before any genuinely new
+  // failure (a fresh load involves async fetches) can arrive.
+  private _recoveryDedup = false;
+
+  /**
+   * Parse the declarative <source> children (Video.js-style) into the quality
+   * ladder (`_videoQualities`), the initial `_src`, and any split / multi-
+   * language audio (`_audioSrc` / `_audioTracks`). Only runs when `_src` is
+   * unset (a bare `src` attribute wins and hides the children). Idempotent —
+   * every field is a fresh assignment — so it's safe to re-run on a fresh
+   * recreate after clearing `_src`.
+   */
+  private _parseChildSources(): void {
+    if (!this._src && !this._encrypted) {
+      const sourceEls = this.querySelectorAll("source");
+      if (sourceEls.length > 0) {
+        const allSources = Array.from(sourceEls).map((el) => ({
+          src: el.getAttribute("src") || "",
+          type: el.getAttribute("type") || undefined,
+          kind: el.getAttribute("kind") || undefined,
+          height: parseInt(el.getAttribute("data-height") || "", 10) || 0,
+          label: el.getAttribute("data-label") || el.getAttribute("label") || "",
+          fps: parseInt(el.getAttribute("data-fps") || "", 10) || 0,
+          badge: el.getAttribute("data-badge") || "",
+          bandwidth:
+            parseInt(
+              el.getAttribute("data-bandwidth") ||
+                el.getAttribute("data-bitrate") ||
+                "",
+              10,
+            ) || 0,
+          srclang: el.getAttribute("srclang") || el.getAttribute("lang") || "",
+          isDefault: el.hasAttribute("data-default") || el.hasAttribute("default"),
+        })).filter((s) => s.src);
+
+        // Separate audio sources (kind="audio") from video sources
+        const audioSources = allSources.filter((s) => s.kind === "audio");
+        const videoSources = allSources.filter((s) => s.kind !== "audio");
+
+        if (videoSources.length > 0) {
+          // Capture quality metadata for non-HLS quality menu
+          this._videoQualities = videoSources
+            .filter((s) => s.height > 0 || s.label)
+            .map((s) => ({
+              src: s.src,
+              type: s.type,
+              height: s.height,
+              label: s.label || (s.height ? `${s.height}p` : ""),
+              fps: s.fps || undefined,
+              badge: s.badge || undefined,
+              // Real bitrate if declared, else estimated from height so the ABR
+              // ("Auto") can size these premuxed renditions.
+              bandwidth: s.bandwidth || this._estimateBitrate(s.height),
+            }))
+            .sort((a, b) => b.height - a.height);
+
+          // Prefer explicit data-default, otherwise pickSource heuristic
+          const defaultSource = videoSources.find((s) => s.isDefault);
+          if (defaultSource) {
+            this._src = defaultSource.src;
+          } else {
+            const picked = this.pickSource(videoSources);
+            this._src = picked ? picked.src : videoSources[0].src;
+          }
+        }
+
+        // Multi-language audio: when more than one <source kind="audio"> is
+        // declared with `srclang`/`label`, treat them as parallel language
+        // tracks so the player surfaces the audio-language menu. Otherwise
+        // fall back to the legacy single split-audio source path.
+        if (audioSources.length > 0) {
+          const langed = audioSources.filter((s) => s.srclang || s.label);
+          if (audioSources.length > 1 && langed.length >= 2) {
+            this._audioTracks = audioSources.map((s, i) => ({
+              src: s.src,
+              type: s.type,
+              lang: s.srclang || `track-${i}`,
+              label: s.label || s.srclang || `Track ${i + 1}`,
+            }));
+            // Pick a default for initial playback. Honour `default` /
+            // `data-default` attributes; otherwise prefer the first track
+            // matching the page locale, else the first one.
+            const explicitDefault = audioSources.findIndex((s) => s.isDefault);
+            const localePrefix = (navigator.language || "en").slice(0, 2).toLowerCase();
+            const localeMatch = audioSources.findIndex(
+              (s) => s.srclang && s.srclang.toLowerCase().startsWith(localePrefix),
+            );
+            const idx =
+              explicitDefault >= 0
+                ? explicitDefault
+                : localeMatch >= 0
+                  ? localeMatch
+                  : 0;
+            this._audioSrc = audioSources[idx].src;
+          } else {
+            this._audioSrc = audioSources[0].src;
+          }
+        }
+      }
+    }
+  }
+
+  /**
+   * Recover from a fatal source error on a premuxed multi-source setup (e.g.
+   * movi-tube) by re-initialising the WHOLE player from the <source> children,
+   * preserving the playback position. Unlike a single-src quality reload — which
+   * sets `src`, so the children (every other rendition AND the separate audio
+   * track) are never parsed, pinning playback to one possibly-corrupt URL with no
+   * audio — this rebuilds the full rendition list + split audio on a fresh WASM
+   * instance, which recovers where the reload can't. Bounded; returns false once
+   * exhausted so the caller falls through to the overlay.
+   */
+  private _recreatePlayerFresh(): boolean {
+    if (this._fullRecreates >= MoviElement.MAX_FULL_RECREATES) return false;
+    this._fullRecreates++;
+    let resumeTime = 0;
+    try {
+      resumeTime =
+        (this.player as { getCurrentTime?: () => number } | null)?.getCurrentTime?.() ||
+        0;
+    } catch {
+      /* crashed player — resume from 0 */
+    }
+    Logger.warn(
+      TAG,
+      `Source error — full fresh recreate (attempt ${this._fullRecreates}), resuming at ${resumeTime.toFixed(0)}s`,
+    );
+    this._qualityRecoveryAttempts = 0; // fresh player earns a fresh recovery budget
+    this._isUnsupported = false;
+    this.isLoading = false; // don't let initializePlayer's guard bail early
+    this._recoveryResumeTime = resumeTime;
+    if (resumeTime > 1) {
+      this._startAt = resumeTime;
+      this._pendingSeek = resumeTime;
+    }
+    // The <source> children are only parsed when `_src` is unset (a bare `src`
+    // would win and hide them), so clear it, then rebuild the FULL rendition
+    // ladder + split audio from the children.
+    if (this.hasAttribute("src")) this.removeAttribute("src");
+    this._src = null;
+    this._suppressSwReload = true;
+    this._parseChildSources();
+    // Recreate at the LOWEST rendition — its tiny file is the likeliest to load
+    // cleanly on a link that just failed; the ABR upshifts from there once
+    // playback is healthy again (the full ladder above stays available for it).
+    if (this._videoQualities.length > 0) {
+      this._src = this._videoQualities[this._videoQualities.length - 1].src;
+    }
+    // load() tears the crashed player down and re-inits on a fresh WASM
+    // instance — clearing the stuck "error" state (the state machine only allows
+    // error→idle) and resuming at _startAt/_pendingSeek set above.
+    this.load();
+    return true;
+  }
 
   /**
    * On a network/source error, switch to a different (lower) rendition instead
@@ -6645,12 +6810,25 @@ export class MoviElement extends HTMLElement {
       // A demux-open failure ("File is corrupted or in an unsupported format")
       // WHILE we're already recovering is almost always the degrading link
       // handing back a truncated/garbage file, not a real codec problem — keep
-      // trying a lower rendition (the network may recover). On a first load
-      // (no recovery in progress) it's treated as a genuinely bad file and goes
-      // to the overlay, not retried across every rendition.
-      (this._qualityRecoveryAttempts > 0 &&
+      // trying (a fresh recreate / lower rendition; the network may recover). On
+      // a first load (no recovery in progress) it's treated as a genuinely bad
+      // file and goes to the overlay, not retried across every rendition.
+      // NOTE: check BOTH budgets — a fresh recreate resets _qualityRecovery-
+      // Attempts to 0, so on the premuxed path "mid-recovery" is tracked by
+      // _fullRecreates instead. Without this, the recreated player's open-fail
+      // looked like a first-load bad file and the retry chain died after one
+      // recreate (never reaching attempt 2 or the "Connection Problem" overlay).
+      ((this._qualityRecoveryAttempts > 0 || this._fullRecreates > 0) &&
         /Failed to open media|File is corrupted/i.test(message));
     if (!recoverable) return false;
+    // Collapse the same failure's error-event + init-catch double-fire into one
+    // attempt (see _recoveryDedup). Return true so the duplicate caller still
+    // skips the overlay — the first fire is already handling this failure.
+    if (this._recoveryDedup) return true;
+    this._recoveryDedup = true;
+    setTimeout(() => {
+      this._recoveryDedup = false;
+    }, 0);
     if (this._qualityRecoveryAttempts >= MoviElement.MAX_QUALITY_RECOVERIES) {
       return false;
     }
@@ -6659,31 +6837,17 @@ export class MoviElement extends HTMLElement {
       getDashRenditions?: () => { url: string; bandwidth?: number }[];
     } | null;
 
-    // IMPORTANT: recover via the full RELOAD path, not the in-place swap. A fatal
-    // error leaves the player in the "error" state, and the state machine only
-    // permits error→idle — an in-place swap keeps the error state, so canPlay()
-    // stays false and the play button dies with "Cannot play in current state"
-    // (exactly the "can't play" the user hit). The reload re-inits from scratch
-    // (clearing the error) and re-reads the <source> children, so the separate
-    // audio/subtitle tracks survive.
+    // IMPORTANT: recover via a full player RE-INIT, not an in-place swap or a
+    // single-src reload. A fatal error leaves the player in the "error" state
+    // (the state machine only permits error→idle), and — on the premuxed path —
+    // setting a bare `src` hides the <source> children (every other rendition AND
+    // the split-audio track), pinning to one possibly-corrupt URL with no audio.
+    // A fresh re-init clears the error and rebuilds the whole thing on a new WASM
+    // instance while preserving the position.
 
-    // Premuxed multi-source (e.g. movi-tube): reload onto the lowest OTHER
-    // quality — the smallest file, likeliest to fetch on a degraded link.
+    // Premuxed multi-source (e.g. movi-tube): recreate the player fresh.
     if (this._videoQualities.length >= 2) {
-      const activeSrc =
-        player?.getActiveDashRendition?.() ||
-        (typeof this._src === "string" ? this._src : "");
-      const target = [...this._videoQualities]
-        .sort((a, b) => a.height - b.height)
-        .find((q) => q.src && q.src !== activeSrc);
-      if (!target) return false;
-      this._qualityRecoveryAttempts++;
-      Logger.warn(
-        TAG,
-        `Source error — recovering onto ${target.label || target.height + "p"} (attempt ${this._qualityRecoveryAttempts})`,
-      );
-      this._reloadPremuxedQuality(target.src);
-      return true;
+      return this._recreatePlayerFresh();
     }
 
     // Demuxer fallback (DASH/HLS): reload onto the lowest OTHER rendition.
@@ -6695,6 +6859,13 @@ export class MoviElement extends HTMLElement {
         .find((r) => r.url && r.url !== activeUrl);
       if (!target) return false;
       this._qualityRecoveryAttempts++;
+      try {
+        this._recoveryResumeTime =
+          (this.player as { getCurrentTime?: () => number } | null)?.getCurrentTime?.() ??
+          -1;
+      } catch {
+        /* ignore */
+      }
       Logger.warn(
         TAG,
         `Source error — recovering onto a lower rendition (attempt ${this._qualityRecoveryAttempts})`,
@@ -15503,93 +15674,7 @@ export class MoviElement extends HTMLElement {
     this._audioOnly = this.hasAttribute("audioonly");
 
     // If no src attribute, check for <source> child elements (Video.js-style)
-    if (!this._src && !this._encrypted) {
-      const sourceEls = this.querySelectorAll("source");
-      if (sourceEls.length > 0) {
-        const allSources = Array.from(sourceEls).map((el) => ({
-          src: el.getAttribute("src") || "",
-          type: el.getAttribute("type") || undefined,
-          kind: el.getAttribute("kind") || undefined,
-          height: parseInt(el.getAttribute("data-height") || "", 10) || 0,
-          label: el.getAttribute("data-label") || el.getAttribute("label") || "",
-          fps: parseInt(el.getAttribute("data-fps") || "", 10) || 0,
-          badge: el.getAttribute("data-badge") || "",
-          bandwidth:
-            parseInt(
-              el.getAttribute("data-bandwidth") ||
-                el.getAttribute("data-bitrate") ||
-                "",
-              10,
-            ) || 0,
-          srclang: el.getAttribute("srclang") || el.getAttribute("lang") || "",
-          isDefault: el.hasAttribute("data-default") || el.hasAttribute("default"),
-        })).filter((s) => s.src);
-
-        // Separate audio sources (kind="audio") from video sources
-        const audioSources = allSources.filter((s) => s.kind === "audio");
-        const videoSources = allSources.filter((s) => s.kind !== "audio");
-
-        if (videoSources.length > 0) {
-          // Capture quality metadata for non-HLS quality menu
-          this._videoQualities = videoSources
-            .filter((s) => s.height > 0 || s.label)
-            .map((s) => ({
-              src: s.src,
-              type: s.type,
-              height: s.height,
-              label: s.label || (s.height ? `${s.height}p` : ""),
-              fps: s.fps || undefined,
-              badge: s.badge || undefined,
-              // Real bitrate if declared, else estimated from height so the ABR
-              // ("Auto") can size these premuxed renditions.
-              bandwidth: s.bandwidth || this._estimateBitrate(s.height),
-            }))
-            .sort((a, b) => b.height - a.height);
-
-          // Prefer explicit data-default, otherwise pickSource heuristic
-          const defaultSource = videoSources.find((s) => s.isDefault);
-          if (defaultSource) {
-            this._src = defaultSource.src;
-          } else {
-            const picked = this.pickSource(videoSources);
-            this._src = picked ? picked.src : videoSources[0].src;
-          }
-        }
-
-        // Multi-language audio: when more than one <source kind="audio"> is
-        // declared with `srclang`/`label`, treat them as parallel language
-        // tracks so the player surfaces the audio-language menu. Otherwise
-        // fall back to the legacy single split-audio source path.
-        if (audioSources.length > 0) {
-          const langed = audioSources.filter((s) => s.srclang || s.label);
-          if (audioSources.length > 1 && langed.length >= 2) {
-            this._audioTracks = audioSources.map((s, i) => ({
-              src: s.src,
-              type: s.type,
-              lang: s.srclang || `track-${i}`,
-              label: s.label || s.srclang || `Track ${i + 1}`,
-            }));
-            // Pick a default for initial playback. Honour `default` /
-            // `data-default` attributes; otherwise prefer the first track
-            // matching the page locale, else the first one.
-            const explicitDefault = audioSources.findIndex((s) => s.isDefault);
-            const localePrefix = (navigator.language || "en").slice(0, 2).toLowerCase();
-            const localeMatch = audioSources.findIndex(
-              (s) => s.srclang && s.srclang.toLowerCase().startsWith(localePrefix),
-            );
-            const idx =
-              explicitDefault >= 0
-                ? explicitDefault
-                : localeMatch >= 0
-                  ? localeMatch
-                  : 0;
-            this._audioSrc = audioSources[idx].src;
-          } else {
-            this._audioSrc = audioSources[0].src;
-          }
-        }
-      }
-    }
+    this._parseChildSources();
 
     // Parse <track> child elements (Video.js / standard <video>-style) into
     // external subtitle tracks. Lets integrators declare captions
@@ -17234,7 +17319,10 @@ export class MoviElement extends HTMLElement {
 
       // Recovery exhausted (cycled every rendition on a degrading link) — blame
       // the connection, not the file.
-      if (this._qualityRecoveryAttempts >= MoviElement.MAX_QUALITY_RECOVERIES) {
+      if (
+        this._qualityRecoveryAttempts >= MoviElement.MAX_QUALITY_RECOVERIES ||
+        this._fullRecreates >= MoviElement.MAX_FULL_RECREATES
+      ) {
         title = "Connection Problem";
         message =
           "The network kept returning corrupt data across every quality. Check your connection, then reload.";
@@ -17609,6 +17697,18 @@ export class MoviElement extends HTMLElement {
 
     const timeUpdateHandler = (time: number) => {
       this.dispatchEvent(new CustomEvent("timeupdate", { detail: time }));
+      // Playback has advanced well past the last recovery/recreate → the video
+      // is clearly healthy again, so refill the recovery budgets for any future
+      // error. Loop-safe: a failing recovery never progresses, so it can't reset
+      // its own budget.
+      if (
+        this._recoveryResumeTime >= 0 &&
+        time - this._recoveryResumeTime > 20
+      ) {
+        this._qualityRecoveryAttempts = 0;
+        this._fullRecreates = 0;
+        this._recoveryResumeTime = -1;
+      }
       this.updateLiveState();
       // Keep the seek slider's screen-reader ARIA current even while the visual
       // chrome is auto-hidden (updateTimeDisplay is gated on visible controls).
@@ -17705,7 +17805,10 @@ export class MoviElement extends HTMLElement {
       // If we got here after cycling every rendition (recovery exhausted), the
       // real problem is the link handing back bad data, not the video itself —
       // say so instead of a misleading "corrupt file".
-      if (this._qualityRecoveryAttempts >= MoviElement.MAX_QUALITY_RECOVERIES) {
+      if (
+        this._qualityRecoveryAttempts >= MoviElement.MAX_QUALITY_RECOVERIES ||
+        this._fullRecreates >= MoviElement.MAX_FULL_RECREATES
+      ) {
         title = "Connection Problem";
         message =
           "The network kept returning corrupt data across every quality. Check your connection, then reload.";
