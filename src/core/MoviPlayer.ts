@@ -185,11 +185,29 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
   // ground-truth "network can't sustain the current rung" signal). Reset on a
   // switch since the buffer restarts from the resume point.
   private _lastBufferAhead: number = 0;
+  // Asymmetric hysteresis: when a buffer-trend downshift leaves a rung because it
+  // couldn't be sustained, that rung's bandwidth is "penalized" for a hold
+  // window. The upshift path won't climb back to it (or higher) until the window
+  // expires — otherwise a bursty link that momentarily reads fast re-upshifts
+  // into the very rung that just drained, and the two ping-pong (the 240⇄360 /
+  // 4K⇄1440 flapping). 0 = no active penalty.
+  private _abrPenalizedBandwidth: number = 0;
+  private _abrPenaltyUntil: number = 0;
+  private static readonly ABR_PENALTY_MS = 30000;
   // performance.now() of the last seek. The buffering right after a seek is a
   // normal re-fill, not a network stall — switching rendition into that (racing
   // the seek's own re-prime/re-read) is what crashed the demuxer, so the
   // emergency downshift stands down briefly after a seek.
   private _lastSeekAt: number = Number.NEGATIVE_INFINITY;
+  // Black-frame recovery: a seek can force-complete with no decodable video frame
+  // (the demuxer runs a GOP to EOF without a keyframe the decoder accepts —
+  // open-GOP / a bad seek point), then the audio-driven buffering→resume flips to
+  // "playing" over a BLACK screen while audio plays. A manual seek elsewhere fixes
+  // it, so we automate that: a watchdog nudges the playhead to the next GOP when
+  // no frame lands. Bounded so a genuinely undecodable stream can't seek forever.
+  private _blackFrameWatchdog: ReturnType<typeof setTimeout> | null = null;
+  private _blackRecoverySeeks: number = 0;
+  private static readonly MAX_BLACK_RECOVERY_SEEKS = 3;
   private _activeSubtitleLang: string = "";
   private _externalSubCues: SubtitleCue[] = [];
   private _externalSubTimer: number | null = null;
@@ -444,11 +462,16 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
         }
 
         // When the renderer decides the device can't hold the source frame
-        // rate and caps presentation, let the decoder shed load too: on the
-        // software path, skip non-reference frames to cut CPU. No-op on
-        // hardware — the present-side cap is the only lever there.
+        // rate and caps presentation, shed load two ways:
+        //   1) Software decode: skip non-reference frames to cut CPU (no-op on
+        //      hardware — the present-side cap is the only lever there).
+        //   2) Under Auto quality: drop a resolution rung. This is the real
+        //      relief for a device that simply can't decode the current
+        //      resolution (network fine, buffer full, frames dropping) — the
+        //      plain ABR is network-only and never reacts to a decode bottleneck.
         this.videoRenderer.setOnPerformanceDegrade(() => {
           this.videoDecoder?.setPerformanceSkip(true);
+          this.abrDeviceDownshift();
         });
 
         Logger.info(
@@ -1366,6 +1389,8 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
     this._autoQuality = enabled;
     if (enabled) {
       this._abrPrimed = false; // first upshift jumps without the 2-tick wait
+      this._abrPenalizedBandwidth = 0; // fresh Auto session — no stale penalty
+      this._abrPenaltyUntil = 0;
       this.abrTick(); // evaluate immediately
       if (!this._abrTimer) {
         this._abrTimer = setInterval(() => this.abrTick(), 4000);
@@ -1437,7 +1462,18 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
     // into it races the seek's own re-prime and crashed the demuxer.
     const postSeekSettling = now - this._lastSeekAt < 4000;
     const stalling = this.stateManager.is("buffering");
-    const bufferLow = (draining && bufferAhead < 10) || bufferAhead < 4;
+    // An in-place quality switch resets the buffered range to ~0 at the current
+    // playhead, so bufferAhead reads low for the first several seconds while the
+    // new rendition re-primes — that's a REFILL, not the network failing to
+    // sustain the rung. Gate the absolute-low check on a longer post-switch
+    // settle (matching the upshift cooldown) so the refill dip can't be misread
+    // as "can't cope" and fire a downshift — which resets the buffer again and
+    // self-sustains a 240⇄360 oscillation on a perfectly fine link. A genuine
+    // hard stall (buffering) or a sustained DRAIN — buffer actively shrinking,
+    // which never happens while it's refilling — still downshifts responsively.
+    const settledSinceSwitch = sinceSwitch > 12000;
+    const bufferLow =
+      (draining && bufferAhead < 10) || (bufferAhead < 4 && settledSinceSwitch);
     if (
       (stalling || bufferLow) &&
       !postSeekSettling &&
@@ -1466,6 +1502,12 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
           break;
         }
       }
+      // Penalize the rung we're leaving: it just failed to sustain, so the
+      // upshift path must not climb straight back into it (or higher) on a
+      // transient throughput spike for the next hold window. This is what breaks
+      // the adjacent-rung ping-pong on a bursty link.
+      this._abrPenalizedBandwidth = rungs[activeIdx].bandwidth || 0;
+      this._abrPenaltyUntil = now + MoviPlayer.ABR_PENALTY_MS;
       await this.abrCommit(target.url, now);
       return;
     }
@@ -1499,12 +1541,20 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
       return;
     }
     const throughputBits = bps * 8;
-    const currentRung = activeIdx >= 0 ? rungs[activeIdx] : null;
 
     // UPSHIFT — only to a higher rung that fits with a safety margin, and only
     // after it holds for two consecutive ticks so a lone spike (a cache-served
     // burst, one fast chunk) doesn't bounce quality up then straight back down.
-    const affordableBits = throughputBits * 0.85;
+    let affordableBits = throughputBits * 0.85;
+    // Honour an active penalty: a rung that recently drained is off-limits (and
+    // so is anything above it) until the hold window passes, so a bursty spike
+    // can't re-upshift into the same rung that just failed. Cleared once expired.
+    if (now < this._abrPenaltyUntil && this._abrPenalizedBandwidth > 0) {
+      affordableBits = Math.min(affordableBits, this._abrPenalizedBandwidth - 1);
+    } else if (this._abrPenaltyUntil !== 0 && now >= this._abrPenaltyUntil) {
+      this._abrPenaltyUntil = 0;
+      this._abrPenalizedBandwidth = 0;
+    }
     let up = rungs[rungs.length - 1];
     for (const r of rungs) {
       if ((r.bandwidth || 0) <= affordableBits) {
@@ -1513,10 +1563,6 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
       }
     }
     const upIdx = rungs.indexOf(up);
-    Logger.info(
-      TAG,
-      `ABR: ${(throughputBits / 1e6).toFixed(1)}Mbps affordable → ${up.label} (idx ${upIdx}); current idx ${activeIdx} (${currentRung?.label ?? "?"})`,
-    );
     if (activeIdx < 0) {
       // Current rung unknown (unseeded) — establish the affordable one at once.
       await this.abrCommit(up.url, now);
@@ -1561,6 +1607,41 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
     } finally {
       this._abrSwitchInProgress = false;
     }
+  }
+
+  /**
+   * Relieve a DECODE/render bottleneck — the device can't sustain the CURRENT
+   * rung's resolution even though the network is fine (buffer full, throughput
+   * healthy), so frames are being dropped and playback stutters. The plain ABR
+   * never sees this because it reads only network signals; this is driven off
+   * the renderer's sustained frame-deficit detector instead. Drops ONE rung and
+   * penalizes the one it leaves so the ABR won't climb straight back into a
+   * resolution the device just proved it can't decode. A no-op unless Auto is on
+   * and a lower rung exists — at the lowest rung (or with Auto off) the renderer's
+   * FPS cap + software frame-skip remain the only levers. Re-fires naturally if
+   * the lower rung is still too heavy: switchVideoRenditionInPlace reconfigures
+   * the renderer, which re-arms its perf window for a fresh measurement.
+   */
+  private abrDeviceDownshift(): void {
+    if (!this._autoQuality || this._abrSwitchInProgress) return;
+    const rungs = this._dashRenditions
+      .filter((r) => (r.bandwidth || 0) > 0)
+      .sort((a, b) => (b.bandwidth || 0) - (a.bandwidth || 0));
+    if (rungs.length < 2) return;
+    const activeIdx = rungs.findIndex((r) => r.url === this._activeDashRendition);
+    if (activeIdx < 0 || activeIdx >= rungs.length - 1) return; // already lowest
+    const now = performance.now();
+    // Don't stack a device-downshift onto a just-made switch — the renderer needs
+    // a fresh perf window on the new rung before the next decision is meaningful.
+    if (now - this._lastAbrSwitchAt < 3000) return;
+    const target = rungs[activeIdx + 1];
+    this._abrPenalizedBandwidth = rungs[activeIdx].bandwidth || 0;
+    this._abrPenaltyUntil = now + MoviPlayer.ABR_PENALTY_MS;
+    Logger.info(
+      TAG,
+      `ABR: device decode-bound at ${rungs[activeIdx].label || rungs[activeIdx].bandwidth + "bps"} — dropping to ${target.label || target.bandwidth + "bps"} to relieve stutter`,
+    );
+    void this.abrCommit(target.url, now);
   }
 
   private async configureDecoders(): Promise<void> {
@@ -2302,6 +2383,61 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
    * Internal handler for seek completion when first target frame is found.
    * Clears the seek flag, synchronizes clock, and transitions to final state.
    */
+  private cancelBlackFrameWatchdog(): void {
+    if (this._blackFrameWatchdog !== null) {
+      clearTimeout(this._blackFrameWatchdog);
+      this._blackFrameWatchdog = null;
+    }
+  }
+
+  /**
+   * After a seek force-completes with no decodable video frame, watch for one to
+   * actually land. If none does within a short window — the decoder can't produce
+   * a picture at this point (open-GOP / a bad seek target), and the audio-driven
+   * resume has flipped to "playing" over a BLACK screen — nudge the playhead onto
+   * the next GOP by seeking a little forward. Escalates the jump each attempt and
+   * stops after MAX_BLACK_RECOVERY_SEEKS so a genuinely undecodable stream doesn't
+   * seek forever. This automates the manual seek users do to unstick a black
+   * screen. Superseded silently if a newer seek (incl. the user's own) intervenes.
+   */
+  private armBlackFrameWatchdog(seekTarget: number): void {
+    this.cancelBlackFrameWatchdog();
+    const session = this.seekSessionId;
+    const baseFrames = this.videoRenderer?.getStats?.().framesPresented ?? 0;
+    this._blackFrameWatchdog = setTimeout(() => {
+      this._blackFrameWatchdog = null;
+      if (this.seekSessionId !== session) return; // a newer seek owns recovery
+      const nowFrames = this.videoRenderer?.getStats?.().framesPresented ?? 0;
+      if (nowFrames > baseFrames) {
+        this._blackRecoverySeeks = 0; // a frame decoded on its own — recovered
+        return;
+      }
+      const st = this.stateManager.getState();
+      if (st !== "playing" && st !== "buffering") return; // user paused — leave it
+      if (this._blackRecoverySeeks >= MoviPlayer.MAX_BLACK_RECOVERY_SEEKS) {
+        Logger.warn(
+          TAG,
+          "Black-frame recovery exhausted — no decodable frame after nudges",
+        );
+        return;
+      }
+      this._blackRecoverySeeks++;
+      // Escalate the jump so a whole bad GOP run is cleared: 2s → 6s → 10s.
+      const jump = 2 + (this._blackRecoverySeeks - 1) * 4;
+      const duration = this.getDuration() || 0;
+      const from = Math.max(seekTarget, this.clock.getTime());
+      let target = from + jump;
+      if (duration > 1 && target > duration - 0.5) {
+        target = Math.max(0, duration - 1);
+      }
+      Logger.info(
+        TAG,
+        `Black-frame recovery #${this._blackRecoverySeeks}: no frame at ${from.toFixed(1)}s — nudging to ${target.toFixed(1)}s`,
+      );
+      void this.seek(target);
+    }, 2500);
+  }
+
   private notifySeekCompletion(time: number, forced: boolean = false): void {
     Logger.debug(TAG, `notifySeekCompletion called: time=${time.toFixed(3)}s, waitingForVideoSync=${this.waitingForVideoSync}, seekTargetTime=${this.seekTargetTime.toFixed(3)}s, forced=${forced}`);
     if (!this.waitingForVideoSync) {
@@ -2318,6 +2454,14 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
         `notifySeekCompletion: stale session ${this.seekArmedSessionId} != ${this.seekSessionId} — ignoring`,
       );
       return;
+    }
+
+    // A genuine frame-driven completion (forced=false) means a real picture
+    // decoded — cancel any pending black-frame watchdog and refill its budget so
+    // a later, unrelated black event gets fresh recovery attempts.
+    if (!forced) {
+      this.cancelBlackFrameWatchdog();
+      this._blackRecoverySeeks = 0;
     }
 
     // Forced completion (safety timeout) with no decoded video frame yet: the
@@ -2449,6 +2593,12 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
       if (this._playStartTime === 0) {
         this._playStartTime = performance.now();
       }
+      // Waiting for the first frame can hang forever when the decoder simply
+      // can't produce one at this seek point (open-GOP / bad keyframe), while the
+      // audio-driven resume flips to "playing" over black. Arm a watchdog to nudge
+      // the playhead onto the next GOP if no frame lands — the automated form of
+      // the manual seek that recovers it.
+      this.armBlackFrameWatchdog(seekTarget);
     } else if (this.wasPlayingBeforeSeek || this.wasPlayingBeforeRebuffer) {
       // Consume the resume intent so it doesn't leak into the next seek. It's
       // never reset elsewhere, so a stale `true` would make a later paused
@@ -3318,7 +3468,17 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
               TAG,
               "EOF reached while waiting for seek sync, forcing completion",
             );
-            this.notifySeekCompletion(this.seekTargetTime);
+            // forced=true: this is a no-frame forced completion (the decoder
+            // exhausted the stream without a decodable frame — e.g. an open-GOP
+            // 4K AV1 whose keyframes the HW decoder keeps rejecting). Without the
+            // flag, notifySeekCompletion advances the clock straight into
+            // "playing" over a BLACK screen (framesPresented=0) that only a
+            // manual seek recovers. With it, the forcedWithoutFrame path resumes
+            // into "buffering" with play intent latched, so the first frame that
+            // actually decodes — e.g. after the ABR downshifts to a rendition the
+            // decoder CAN handle — auto-flips to "playing". Matches the seek-
+            // timeout path, which already passes forced=true.
+            this.notifySeekCompletion(this.seekTargetTime, true);
           }
 
           Logger.debug(TAG, "EOF reached");
@@ -7980,6 +8140,7 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
       clearInterval(this._abrTimer);
       this._abrTimer = null;
     }
+    this.cancelBlackFrameWatchdog();
 
     // Release WakeLock
     this.releaseWakeLock();
