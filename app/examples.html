@@ -774,11 +774,12 @@ el.player.trackManager.getActiveVideoTrack();   <span class="tok-com">// active 
           <div class="card-head">
             <div class="card-cat">Frameworks</div>
             <h3>React · Vue · Svelte</h3>
-            <p>First-party wrappers pass props straight through to the element, so every attribute above works as a prop.</p>
+            <p>First-party scoped wrappers pass props straight through to the element, so every attribute above works as a prop.</p>
           </div>
           <div class="code">
             <button class="copy-btn" type="button">Copy</button>
-            <pre><code><span class="tok-kw">import</span> { MoviPlayer } <span class="tok-kw">from</span> <span class="tok-str">'movi-player/react'</span>;  <span class="tok-com">// + /vue, /svelte</span>
+            <pre><code><span class="tok-com">// npm i @movi-player/react   (also @movi-player/vue, /svelte)</span>
+<span class="tok-kw">import</span> { MoviPlayer } <span class="tok-kw">from</span> <span class="tok-str">'@movi-player/react'</span>;
 
 <span class="tok-tag">&lt;MoviPlayer</span> <span class="tok-attr">src</span>=<span class="tok-str">"video.mkv"</span> <span class="tok-attr">controls</span> <span class="tok-attr">thumb</span> <span class="tok-tag">/&gt;</span></code></pre>
           </div>
