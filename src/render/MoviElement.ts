@@ -15839,6 +15839,23 @@ export class MoviElement extends HTMLElement {
     // Stop ambient mode color sampling
     this.stopAmbientColorSampling();
 
+    // If removed while a Document-PiP window is open — e.g. the host rebuilds the
+    // element to switch videos — that window holds our canvas in a separate
+    // document, so tearing the element down here would strand it: the player that
+    // painted it is gone, leaving a black orphan PiP window while the rebuilt
+    // element opens a fresh canvas in the page. Close it so PiP doesn't linger
+    // dead. (Continuity across a rebuild isn't possible — the new element is a
+    // different instance; a host that wants PiP to survive must reuse the element
+    // and swap sources instead of recreating it.)
+    if (this._pipWindow) {
+      try {
+        this._pipWindow.close();
+      } catch {
+        /* window already gone */
+      }
+      this._pipWindow = null;
+    }
+
     // Cleanup player when element is removed
     if (this.player) {
       this.player.destroy();
