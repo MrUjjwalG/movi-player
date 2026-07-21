@@ -25,9 +25,9 @@ app component; drop it into a Vite project and install the deps shown.
 
 | Framework | Example | Install |
 | --- | --- | --- |
-| React | [`react/App.tsx`](./react/App.tsx) | `npm i movi-player @movi-player/react` |
-| Vue 3 | [`vue/App.vue`](./vue/App.vue) | `npm i movi-player @movi-player/vue` |
-| Svelte | [`svelte/App.svelte`](./svelte/App.svelte) | `npm i movi-player @movi-player/svelte` |
+| React | [`react/App.tsx`](./react/App.tsx) | `npm i movi-player` → `movi-player/react` |
+| Vue 3 | [`vue/App.vue`](./vue/App.vue) | `npm i movi-player` → `movi-player/vue` |
+| Svelte | [`svelte/App.svelte`](./svelte/App.svelte) | `npm i movi-player` → `movi-player/svelte` |
 
 All three surface the same things: declarative attributes, the `movi-qoe`
 analytics stream, a ref/bind to the underlying `MoviElement`, and 200% audio

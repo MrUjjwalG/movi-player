@@ -33,7 +33,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Volume boost to 200%**: the volume slider now reaches 200% (VLC-style) with a tinted boost zone above the unity mark, for quiet sources.
 - **Screen-reader accessibility**: an off-screen `aria-live` region announces captions, and the seek/volume controls are now real `role="slider"` widgets with spoken position text.
 - **QoE analytics (`movi-qoe`)**: a versioned QoE event stream (startup, rebuffering, bitrate switches, decode-fallback, errors, heartbeats) via a DOM event, `addQoeSink()` / `getQoeSession()`, and a built-in `beaconSink(url)`.
-- **Framework wrappers + typed element**: official typed `@movi-player/react` / `vue` / `svelte` wrappers, plus `HTMLElementTagNameMap` typing for `<movi-player>`.
+- **Framework wrappers + typed element**: official typed `movi-player/react` / `vue` / `svelte` wrappers (subpaths of the one package — no extra install), plus `HTMLElementTagNameMap` typing for `<movi-player>`.
 - **Embed / headless bare player + `noerrorscreen`**: no `controls` attribute makes `<movi-player>` a pure display surface (no resume dialog, empty state, spinner, or mouse interaction); `noerrorscreen` also suppresses the built-in error overlays.
 - **Number-key seeking (`1`–`9`)**: `1`–`9` jump to 10%–90% of the timeline (YouTube-style), alongside `0` / `Home`.
 - **Swipe-to-dismiss touch menu**: the gear-opened context menu is a right-side drawer on touch — drag it toward the right edge to close it. Vertical scrolling and taps inside the menu are unaffected.

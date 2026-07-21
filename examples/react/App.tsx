@@ -1,7 +1,7 @@
-// Minimal React example for @movi-player/react.
-// Run inside any Vite/CRA/Next React app:  npm i movi-player @movi-player/react
+// Minimal React example for movi-player/react.
+// Run inside any Vite/CRA/Next React app:  npm i movi-player
 import { useRef, useState } from "react";
-import { MoviPlayer, type MoviElement, type QoEEvent } from "@movi-player/react";
+import { MoviPlayer, type MoviElement, type QoEEvent } from "movi-player/react";
 
 export default function App() {
   const playerRef = useRef<MoviElement>(null);

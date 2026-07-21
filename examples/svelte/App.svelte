@@ -1,7 +1,7 @@
-<!-- Minimal Svelte example for @movi-player/svelte.
-     Run inside any Vite Svelte app:  npm i movi-player @movi-player/svelte -->
+<!-- Minimal Svelte example for movi-player/svelte.
+     Run inside any Vite Svelte app:  npm i movi-player -->
 <script lang="ts">
-  import MoviPlayer from "@movi-player/svelte";
+  import MoviPlayer from "movi-player/svelte";
   import type { MoviElement, QoEEvent } from "movi-player/element";
 
   let player: MoviElement | null = null;

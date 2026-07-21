@@ -1,9 +1,10 @@
 /**
- * @movi-player/react — a thin, typed React wrapper around the <movi-player>
+ * movi-player/react — a thin, typed React wrapper around the <movi-player>
  * web component. Reflects props → attributes/properties, wires the player's
  * events to React callbacks, and forwards a ref to the underlying element.
+ * Ships as a subpath of the main package: `npm i movi-player`, no extra install.
  *
- *   import { MoviPlayer } from "@movi-player/react";
+ *   import { MoviPlayer } from "movi-player/react";
  *   <MoviPlayer src="video.mkv" controls autoplay onQoe={console.log} />
  */
 import * as React from "react";

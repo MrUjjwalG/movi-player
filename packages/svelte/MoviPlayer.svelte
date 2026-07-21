@@ -1,10 +1,11 @@
 <!--
-  @movi-player/svelte — a thin Svelte wrapper around the <movi-player> web
+  movi-player/svelte — a thin Svelte wrapper around the <movi-player> web
   component. Svelte forwards attributes and events to custom elements natively,
   so this mostly registers the element, binds a ref, and re-forwards events.
+  Ships as a subpath of the main package: `npm i movi-player`, no extra install.
 
     <script>
-      import MoviPlayer from "@movi-player/svelte";
+      import MoviPlayer from "movi-player/svelte";
     </script>
     <MoviPlayer src="video.mkv" controls autoplay on:movi-qoe={(e) => console.log(e.detail)} />
 -->

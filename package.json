@@ -26,6 +26,21 @@
       "import": "./dist/element.js",
       "require": "./dist/element.cjs",
       "types": "./dist/element.d.ts"
+    },
+    "./react": {
+      "types": "./dist/react/index.tsx",
+      "import": "./dist/react/index.js",
+      "default": "./dist/react/index.js"
+    },
+    "./vue": {
+      "types": "./dist/vue/index.ts",
+      "import": "./dist/vue/index.js",
+      "default": "./dist/vue/index.js"
+    },
+    "./svelte": {
+      "types": "./dist/svelte/MoviPlayer.svelte",
+      "svelte": "./dist/svelte/MoviPlayer.svelte",
+      "default": "./dist/svelte/MoviPlayer.svelte"
     }
   },
   "files": [
@@ -34,9 +49,19 @@
     "AGENTS.md",
     "LICENSE"
   ],
+  "peerDependencies": {
+    "react": ">=17",
+    "vue": ">=3.3",
+    "svelte": ">=4"
+  },
+  "peerDependenciesMeta": {
+    "react": { "optional": true },
+    "vue": { "optional": true },
+    "svelte": { "optional": true }
+  },
   "scripts": {
     "build": "npm run build:wasm && npm run build:ts",
-    "build:ts": "node scripts/check-wasm.js && tsc && node scripts/build-standalone.js",
+    "build:ts": "node scripts/check-wasm.js && tsc && node scripts/build-standalone.js && node scripts/build-wrappers.mjs",
     "release": "node scripts/release.mjs",
     "build:wasm": "mkdir -p dist/wasm && docker compose run --rm build",
     "build:wasm:force": "mkdir -p dist/wasm && docker compose run --rm -e FORCE_FFMPEG=true -e FORCE_DAV1D=true build",

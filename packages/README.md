@@ -5,16 +5,20 @@ player into React, Vue, or Svelte with real prop/event typing instead of an
 untyped custom element. Every wrapper is a shim over the same engine — the
 codec/VR/encrypted feature set is identical; only the ergonomics change.
 
-| Package | Import |
+They ship inside the main package as subpath entries — `npm i movi-player` and
+import from `movi-player/<framework>`. No extra package to install; your own
+`react` / `vue` / `svelte` (declared optional peers) is the only other dep.
+
+| Framework | Import |
 | --- | --- |
-| [`@movi-player/react`](./react) | `import { MoviPlayer } from "@movi-player/react"` |
-| [`@movi-player/vue`](./vue) | `import { MoviPlayer } from "@movi-player/vue"` |
-| [`@movi-player/svelte`](./svelte) | `import MoviPlayer from "@movi-player/svelte"` |
+| React | `import { MoviPlayer } from "movi-player/react"` |
+| Vue 3 | `import { MoviPlayer } from "movi-player/vue"` |
+| Svelte | `import MoviPlayer from "movi-player/svelte"` |
 
 ## React
 
 ```tsx
-import { MoviPlayer } from "@movi-player/react";
+import { MoviPlayer } from "movi-player/react";
 
 <MoviPlayer
   src="video.mkv"
@@ -33,7 +37,7 @@ import { MoviPlayer } from "@movi-player/react";
 
 ```vue
 <script setup lang="ts">
-import { MoviPlayer } from "@movi-player/vue";
+import { MoviPlayer } from "movi-player/vue";
 </script>
 
 <template>
@@ -45,7 +49,7 @@ import { MoviPlayer } from "@movi-player/vue";
 
 ```svelte
 <script>
-  import MoviPlayer from "@movi-player/svelte";
+  import MoviPlayer from "movi-player/svelte";
   let player;
 </script>
 

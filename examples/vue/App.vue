@@ -1,8 +1,8 @@
-<!-- Minimal Vue 3 example for @movi-player/vue.
-     Run inside any Vite Vue app:  npm i movi-player @movi-player/vue -->
+<!-- Minimal Vue 3 example for movi-player/vue.
+     Run inside any Vite Vue app:  npm i movi-player -->
 <script setup lang="ts">
 import { ref } from "vue";
-import { MoviPlayer, type MoviElement, type QoEEvent } from "@movi-player/vue";
+import { MoviPlayer, type MoviElement, type QoEEvent } from "movi-player/vue";
 
 const player = ref<{ element: MoviElement | null }>();
 const qoe = ref<QoEEvent[]>([]);
