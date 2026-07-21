@@ -2,7 +2,7 @@
   "manifest_version": 3,
   "name": "Movi Player",
   "version": "0.3.5",
-  "description": "A modern video player that handles formats and codecs your browser can't play natively — right in your browser.",
+  "description": "Play MKV, HEVC, AV1, WebM & 4K HDR videos your browser can't open natively — no upload, no conversion, right in your browser.",
   "icons": {
     "16": "icons/icon16.png",
     "48": "icons/icon48.png",

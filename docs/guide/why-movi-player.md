@@ -16,6 +16,17 @@ See how Movi-Player compares to other popular video players.
 | HLS/DASH             | ✅          | ✅       | ✅      | ✅   |
 | Custom UI            | ✅          | ✅       | ❌      | ✅   |
 
+## Alternatives
+
+Which player fits your use case?
+
+- **[video.js](https://videojs.com/), [Plyr](https://plyr.io/), [Vidstack](https://vidstack.io/), [Media Chrome](https://www.media-chrome.org/)** — polished UI players for browser-**native** formats (MP4/WebM) and HLS/DASH streams. They can't open a raw MKV, HEVC or AV1 file. Use Movi-Player instead when your source isn't a format the browser already decodes.
+- **[hls.js](https://github.com/video-dev/hls.js), [dash.js](https://github.com/Dash-Industry-Forum/dash.js), [Shaka Player](https://github.com/shaka-project/shaka-player)** — streaming *engines* for adaptive HLS/DASH; they need content pre-packaged server-side and don't play arbitrary local files. Movi-Player plays those streams **and** raw files through one canvas pipeline.
+- **[ffmpeg.wasm](https://github.com/ffmpegwasm/ffmpeg.wasm)** — an FFmpeg-in-WASM *transcode/processing library*, not a player: it CPU-decodes (heavy, no GPU) and ships no UI. Movi-Player uses WebCodecs for **GPU-accelerated** decode and gives you a finished player. Reach for it when you want playback, not a transcoding toolkit.
+- **[libmedia](https://github.com/zhaohappy/libmedia)** — the closest peer: a WASM + WebCodecs media SDK that also plays many formats. Movi-Player's difference is packaging — a drop-in `<movi-player>` web component with a batteries-included UI (HDR, chapters, multi-audio, subtitles, ambient mode, Document PiP, encrypted playback) rather than a lower-level toolkit.
+
+In short, Movi-Player is a practical **alternative to video.js / hls.js / Shaka Player** for non-native files, and a friendlier, GPU-accelerated **alternative to ffmpeg.wasm / libmedia** when you want a player rather than a library.
+
 ## Bundle Size
 
 | Player          | Full Bundle | Minimal |

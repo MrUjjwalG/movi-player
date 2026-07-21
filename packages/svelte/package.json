@@ -6,7 +6,7 @@
   "svelte": "MoviPlayer.svelte",
   "main": "MoviPlayer.svelte",
   "files": ["MoviPlayer.svelte", "README.md"],
-  "keywords": ["movi-player", "svelte", "video", "player", "webcodecs", "mkv", "hevc", "av1", "hdr"],
+  "keywords": ["movi-player", "svelte", "svelte-video-player", "sveltekit", "video", "player", "video-player", "webcodecs", "webcodecs-player", "wasm", "mkv", "mkv-player", "hevc", "av1", "hdr", "browser-video-player"],
   "license": "Apache-2.0",
   "peerDependencies": {
     "movi-player": ">=0.3.0",

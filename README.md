@@ -43,21 +43,29 @@
 
 ### vs. Other Players
 
-| | Movi Player | video.js | hls.js | Plyr |
-|---|---|---|---|---|
-| MKV / HEVC / AV1 | Yes | No | No | No |
-| HDR rendering | Yes | No | No | No |
-| No server transcoding | Yes | No | No | No |
-| Canvas rendering (no `<video>`) | Yes | No | No | No |
-| Encrypted playback | Yes | No | No | No |
-| Audio-only mode (cover art + strip UI) | Yes | No | No | No |
-| Built-in subtitle rendering | Yes | Plugin | No | No |
-| Multi-audio track switching | Yes | Plugin | Yes | No |
-| Chapters on progress bar | Yes | Plugin | No | No |
-| Picture-in-Picture | Document PiP | Basic | No | No |
-| DRM (Widevine/FairPlay) | Optional | Plugin | Yes | No |
-| Custom SourceAdapter (any protocol) | Yes | No | No | No |
-| Bundle size | 50-410KB | 500KB+ | 60KB | 25KB |
+|  | Movi Player | video.js | hls.js | dash.js | Shaka Player | Plyr |
+|---|---|---|---|---|---|---|
+| Raw MKV / HEVC / AV1 file | Yes | No | No | No | No | No |
+| HDR (BT.2020 / PQ / HLG) | Yes | No | No | No | Native | No |
+| Adaptive HLS / DASH | Yes | Plugin | HLS only | DASH only | Yes | No |
+| Canvas render (no `<video>`) | Yes | No | No | No | No | No |
+| Encrypted playback (built-in AES) | Yes | No | No | No | EME/DRM | No |
+| Multi-audio track switching | Yes | Plugin | Yes | Yes | Yes | No |
+| Built-in subtitle rendering | Yes | Plugin | No | No | Yes | No |
+| Chapters on progress bar | Yes | Plugin | No | No | No | No |
+| Document Picture-in-Picture | Yes | Basic | No | No | No | Basic |
+| Drop-in web component | Yes | No | No | No | No | No |
+| Bundle size (JS) | 50-410KB | 500KB+ | 60KB | 200KB+ | 400KB+ | 25KB |
+
+### Alternatives
+
+Evaluating Movi Player against the ecosystem:
+
+- **[video.js](https://videojs.com/), [Plyr](https://plyr.io/), [Vidstack](https://vidstack.io/) and [Media Chrome](https://www.media-chrome.org/)** are UI players for browser-**native** formats (MP4/WebM) and HLS/DASH — they can't open a raw MKV, HEVC or AV1 file.
+- **[hls.js](https://github.com/video-dev/hls.js) and [dash.js](https://github.com/Dash-Industry-Forum/dash.js)** are streaming *engines* (no arbitrary-file playback); **[Shaka Player](https://github.com/shaka-project/shaka-player)** is the DASH/HLS heavyweight. All three need content pre-packaged into adaptive streams server-side.
+- For playing an **arbitrary file** (MKV / AV1 / HEVC / 4K HDR) with **zero server work**, the closest peers are **[ffmpeg.wasm](https://github.com/ffmpegwasm/ffmpeg.wasm)** — a transcode/processing *library*, not a player, that CPU-decodes (heavy, no GPU) — and **[libmedia](https://github.com/zhaohappy/libmedia)**, a WASM + WebCodecs media SDK.
+
+Movi Player's niche is that same WebCodecs + FFmpeg-WASM playback, delivered as a **drop-in `<movi-player>` web component** with a batteries-included UI — HDR, chapters, multi-audio, built-in subtitles, ambient mode, Document PiP and encrypted playback — so it's a practical **alternative to video.js / hls.js / Shaka Player** when your files aren't browser-native, and a friendlier, GPU-accelerated **alternative to ffmpeg.wasm / libmedia** when you want a player, not a toolkit.
 
 ## Install
 
