@@ -469,7 +469,7 @@
         </div>
 
         <!-- Music / audio -->
-        <div class="card" data-src="https://www.soundhelix.com/examples/mp3/SoundHelix-Song-1.mp3" data-proxy="true" data-title="Audio playback">
+        <div class="card" data-src="https://www.soundhelix.com/examples/mp3/SoundHelix-Song-1.mp3" data-proxy="true" data-poster="/sample-cover.svg" data-title="Audio playback">
           <div class="card-head">
             <div class="card-cat">Audio</div>
             <h3>Music &amp; cover art</h3>
@@ -695,6 +695,9 @@ npm install movi-player</code></pre>
           const s = card.dataset.proxy === "true" ? proxied(card.dataset.src) : card.dataset.src;
           player.setAttribute("src", s);
           player.setAttribute("thumb", "");
+          // Cover art for audio-only sources without embedded artwork (e.g. the
+          // plain MP3 demo) — feeds the same cover-art / ambient canvas.
+          if (card.dataset.poster) player.setAttribute("poster", card.dataset.poster);
           // Per-card extras, e.g. data-attrs="vr vrpad" for the 360° demo.
           for (const a of (card.dataset.attrs || "").split(/\s+/).filter(Boolean)) {
             player.setAttribute(a, "");
