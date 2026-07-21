@@ -20,6 +20,8 @@ export type { MoviElement, QoEEvent };
 export interface MoviPlayerProps extends MoviPlayerAttributes {
   className?: string;
   style?: React.CSSProperties;
+  /** `<source>` / `<track>` children for multi-quality, external audio, or subtitles. */
+  children?: React.ReactNode;
   /** Fires once the element is mounted, with the element instance. */
   onReady?: (el: MoviElement) => void;
   onQoe?: (event: QoEEvent) => void;
@@ -40,6 +42,7 @@ const EVENT_PROPS = new Set([
   "onError",
   "className",
   "style",
+  "children",
 ]);
 
 export const MoviPlayer = React.forwardRef<MoviElement, MoviPlayerProps>(
@@ -96,10 +99,16 @@ export const MoviPlayer = React.forwardRef<MoviElement, MoviPlayerProps>(
 
     // createElement avoids needing a JSX.IntrinsicElements augmentation for the
     // custom tag; React passes unknown props straight through as attributes.
-    return React.createElement("movi-player", {
-      ref: elRef,
-      className: props.className,
-      style: props.style,
-    });
+    // Children (<source>/<track>) are rendered into the element so they're
+    // present when the player's connectedCallback parses them.
+    return React.createElement(
+      "movi-player",
+      {
+        ref: elRef,
+        className: props.className,
+        style: props.style,
+      },
+      props.children,
+    );
   },
 );

@@ -22702,7 +22702,15 @@ export class MoviElement extends HTMLElement {
 }
 
 // Register the custom element
-// Note: Custom element names must contain a hyphen per HTML spec
-if (typeof customElements !== "undefined") {
+// Note: Custom element names must contain a hyphen per HTML spec.
+// Guard the define: the element ships behind several entry points
+// ('movi-player', 'movi-player/element', and the framework wrappers, which
+// import 'movi-player/element'). An app that pulls in more than one — e.g.
+// `import 'movi-player'` plus `movi-player/react` — would otherwise call
+// define() twice and throw "the name 'movi-player' has already been used".
+if (
+  typeof customElements !== "undefined" &&
+  !customElements.get("movi-player")
+) {
   customElements.define("movi-player", MoviElement);
 }

@@ -17,6 +17,8 @@
   export let element: MoviElement | null = null;
 </script>
 
+<!-- The default slot forwards <source>/<track> children to the element for
+     multi-quality, external audio, and subtitles. -->
 <movi-player
   bind:this={element}
   {...$$restProps}
@@ -26,4 +28,6 @@
   on:ended
   on:error
   on:movi-qoe
-/>
+>
+  <slot />
+</movi-player>

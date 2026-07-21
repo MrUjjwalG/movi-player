@@ -42,7 +42,7 @@ export const MoviPlayer = defineComponent({
     playsinline: { type: Boolean, default: undefined },
   },
   emits: ["ready", "qoe", "timeupdate", "play", "pause", "ended", "error"],
-  setup(props, { attrs, emit, expose }) {
+  setup(props, { attrs, emit, expose, slots }) {
     const elRef = ref<MoviElement | null>(null);
     expose({ element: elRef });
 
@@ -85,7 +85,9 @@ export const MoviPlayer = defineComponent({
       listeners.forEach(([n, l]) => el?.removeEventListener(n, l));
     });
 
-    return () => h("movi-player", { ref: elRef });
+    // Forward the default slot so <source>/<track> children reach the element
+    // (multi-quality, external audio, subtitles) before it parses them.
+    return () => h("movi-player", { ref: elRef }, slots.default?.());
   },
 });
 
