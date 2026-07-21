@@ -443,6 +443,7 @@ export default {
     if (path === "/badge/chrome.svg") return handleBadge("chrome");
     if (path === "/badge/vscode.svg") return handleBadge("vscode");
     if (path === "/badge/npm.svg") return handleBadge("npm");
+    if (path === "/badge/jsdelivr.svg") return handleBadge("jsdelivr");
 
     // --- Serve static assets from R2 (favicons, etc.) ---
     if (path.startsWith("/favicon") || path === "/apple-touch-icon.png" || path === "/og-image.png") {
@@ -831,9 +832,15 @@ const BADGE_SOURCES = {
 };
 
 async function handleBadge(which) {
-  const src = BADGE_SOURCES[which];
-  if (!src) return new Response("Not Found", { status: 404 });
+  if (which !== "jsdelivr" && !BADGE_SOURCES[which]) {
+    return new Response("Not Found", { status: 404 });
+  }
   try {
+    // jsDelivr's own shields badge bakes "/year" into the value; we want the
+    // yearly hit count with no period wording, so resolve it to a static
+    // shields badge ("jsDelivr | 9.5k"). Everything else proxies directly.
+    const src =
+      which === "jsdelivr" ? await jsdelivrBadgeUrl() : BADGE_SOURCES[which];
     // cf.cacheEverything caches the upstream SVG at the edge for 12h so
     // we don't hit the badge service on every page view. Bound the fetch:
     // a slow badge service (vsmarketplacebadges.dev has stalled 100s+) must
@@ -857,7 +864,7 @@ async function handleBadge(which) {
     // Upstream down/changed → serve a static badge so the <img> never
     // renders broken. Short cache so it self-heals when upstream returns.
     const label =
-      { chrome: "Chrome Web Store", vscode: "VS Code", npm: "npm downloads" }[which] ||
+      { chrome: "Chrome Web Store", vscode: "VS Code", npm: "npm downloads", jsdelivr: "jsDelivr" }[which] ||
       "extension";
     const w = Math.max(60, label.length * 7 + 16);
     const fallback =
@@ -873,6 +880,32 @@ async function handleBadge(which) {
       },
     });
   }
+}
+
+// jsDelivr's yearly hit count, resolved to a static shields badge URL so the
+// value renders as "9.5k" instead of shields' built-in "9.5k/year" wording.
+// Throws on any upstream trouble so handleBadge falls back to a static badge.
+async function jsdelivrBadgeUrl() {
+  const stats = await fetch(
+    "https://data.jsdelivr.com/v1/stats/packages/npm/movi-player?period=year",
+    {
+      cf: { cacheTtl: 43200, cacheEverything: true },
+      headers: { "User-Agent": "movi-app-badge-proxy" },
+      signal: AbortSignal.timeout(4000),
+    },
+  );
+  if (!stats.ok) throw new Error("jsdelivr stats " + stats.status);
+  const data = await stats.json();
+  const value = humanizeCount(data?.hits?.total ?? 0);
+  return `https://img.shields.io/badge/jsDelivr-${encodeURIComponent(value)}-7c6cf0?labelColor=23232e`;
+}
+
+// 9455 → "9.5k", 1_200_000 → "1.2M". Mirrors how shields humanizes counts so
+// the jsDelivr badge sits consistently next to the npm one.
+function humanizeCount(n) {
+  if (n >= 1e6) return (n / 1e6).toFixed(1).replace(/\.0$/, "") + "M";
+  if (n >= 1e3) return (n / 1e3).toFixed(1).replace(/\.0$/, "") + "k";
+  return String(n);
 }
 
 async function handleStaticAsset(env, key) {
