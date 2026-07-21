@@ -184,6 +184,14 @@
         display: flex; align-items: center; gap: 0.6rem;
       }
       .section-head p { color: var(--text-secondary); font-size: 0.95rem; margin-top: 0.35rem; }
+      /* Sub-section headers inside Recipes — divider + a notch smaller than the
+         top-level section heads, so the themed groups read as one family. */
+      .recipe-group {
+        margin: 2.75rem 0 1.25rem; padding-top: 1.75rem;
+        border-top: 1px solid var(--border);
+      }
+      .recipe-group h2 { font-size: 1.12rem; }
+      .recipe-group p { font-size: 0.875rem; }
 
       /* ---- Card grid ---- */
       .grid {
@@ -469,7 +477,7 @@
         </div>
 
         <!-- Music / audio -->
-        <div class="card" data-src="https://www.soundhelix.com/examples/mp3/SoundHelix-Song-1.mp3" data-proxy="true" data-poster="/sample-cover.svg" data-title="Audio playback">
+        <div class="card" data-src="https://www.soundhelix.com/examples/mp3/SoundHelix-Song-1.mp3" data-proxy="true" data-audio-cover="1" data-title="Audio playback">
           <div class="card-head">
             <div class="card-cat">Audio</div>
             <h3>Music &amp; cover art</h3>
@@ -515,24 +523,121 @@
       <!-- ============ RECIPES ============ -->
       <div class="section-head">
         <h2>Recipes</h2>
-        <p>Copy-paste patterns for the setups that need a source you supply.</p>
+        <p>Copy-paste patterns — same one tag, wired for the setups you supply a source for.</p>
       </div>
 
+      <!-- ---- Quality & tracks ---- -->
+      <div class="section-head recipe-group">
+        <h2>Quality &amp; tracks</h2>
+        <p>Premuxed renditions and multi-language audio, declared as <code class="inline">&lt;source&gt;</code> children.</p>
+      </div>
       <div class="grid">
-        <!-- Graceful native fallback -->
+        <!-- Multi-quality premuxed -->
         <div class="card recipe">
           <div class="card-head">
-            <div class="card-cat">Resilience</div>
-            <h3>Graceful native fallback</h3>
-            <p>If Movi's WASM pipeline can't read a source (CORS-blocked, opaque, no range support), <code class="inline">fallback="native"</code> degrades to a native <code class="inline">&lt;video&gt;</code> under Movi's own controls instead of erroring out.</p>
+            <div class="card-cat">Adaptive</div>
+            <h3>Multi-quality (Auto)</h3>
+            <p>List renditions as <code class="inline">&lt;source&gt;</code> children with <code class="inline">data-height</code> / <code class="inline">data-bandwidth</code> — the player builds a YouTube-style quality menu plus an <b>Auto</b> that adapts to bandwidth. Split audio rides along via <code class="inline">kind="audio"</code>.</p>
           </div>
           <div class="code">
             <button class="copy-btn" type="button">Copy</button>
-            <pre><code><span class="tok-tag">&lt;movi-player</span> <span class="tok-attr">src</span>=<span class="tok-str">"https://cdn.example.com/clip.mp4"</span>
-             <span class="tok-attr">fallback</span>=<span class="tok-str">"native"</span> <span class="tok-attr">controls</span><span class="tok-tag">&gt;&lt;/movi-player&gt;</span></code></pre>
+            <pre><code><span class="tok-tag">&lt;movi-player</span> <span class="tok-attr">controls</span><span class="tok-tag">&gt;</span>
+  <span class="tok-tag">&lt;source</span> <span class="tok-attr">src</span>=<span class="tok-str">"4k.mp4"</span>    <span class="tok-attr">data-height</span>=<span class="tok-str">"2160"</span> <span class="tok-attr">data-bandwidth</span>=<span class="tok-str">"18000000"</span><span class="tok-tag">&gt;</span>
+  <span class="tok-tag">&lt;source</span> <span class="tok-attr">src</span>=<span class="tok-str">"1080p.mp4"</span> <span class="tok-attr">data-height</span>=<span class="tok-str">"1080"</span> <span class="tok-attr">data-bandwidth</span>=<span class="tok-str">"5000000"</span> <span class="tok-attr">data-default</span><span class="tok-tag">&gt;</span>
+  <span class="tok-tag">&lt;source</span> <span class="tok-attr">src</span>=<span class="tok-str">"720p.mp4"</span>  <span class="tok-attr">data-height</span>=<span class="tok-str">"720"</span>  <span class="tok-attr">data-bandwidth</span>=<span class="tok-str">"2500000"</span><span class="tok-tag">&gt;</span>
+  <span class="tok-tag">&lt;source</span> <span class="tok-attr">src</span>=<span class="tok-str">"audio.m4a"</span> <span class="tok-attr">kind</span>=<span class="tok-str">"audio"</span><span class="tok-tag">&gt;</span>
+<span class="tok-tag">&lt;/movi-player&gt;</span></code></pre>
           </div>
         </div>
 
+        <!-- Multi-language audio -->
+        <div class="card recipe">
+          <div class="card-head">
+            <div class="card-cat">Audio tracks</div>
+            <h3>Multi-language audio</h3>
+            <p>Two or more <code class="inline">kind="audio"</code> sources with <code class="inline">srclang</code> / <code class="inline">label</code> surface an audio-language menu; <code class="inline">default</code> (or the page locale) picks the first track.</p>
+          </div>
+          <div class="code">
+            <button class="copy-btn" type="button">Copy</button>
+            <pre><code><span class="tok-tag">&lt;movi-player</span> <span class="tok-attr">controls</span><span class="tok-tag">&gt;</span>
+  <span class="tok-tag">&lt;source</span> <span class="tok-attr">src</span>=<span class="tok-str">"video.mp4"</span><span class="tok-tag">&gt;</span>
+  <span class="tok-tag">&lt;source</span> <span class="tok-attr">src</span>=<span class="tok-str">"en.m4a"</span> <span class="tok-attr">kind</span>=<span class="tok-str">"audio"</span> <span class="tok-attr">srclang</span>=<span class="tok-str">"en"</span> <span class="tok-attr">label</span>=<span class="tok-str">"English"</span> <span class="tok-attr">default</span><span class="tok-tag">&gt;</span>
+  <span class="tok-tag">&lt;source</span> <span class="tok-attr">src</span>=<span class="tok-str">"hi.m4a"</span> <span class="tok-attr">kind</span>=<span class="tok-str">"audio"</span> <span class="tok-attr">srclang</span>=<span class="tok-str">"hi"</span> <span class="tok-attr">label</span>=<span class="tok-str">"Hindi"</span><span class="tok-tag">&gt;</span>
+<span class="tok-tag">&lt;/movi-player&gt;</span></code></pre>
+          </div>
+        </div>
+      </div>
+
+      <!-- ---- Subtitles ---- -->
+      <div class="section-head recipe-group">
+        <h2>Subtitles</h2>
+        <p>Sidecar tracks, styling, and a hook for full ASS/SSA rendering.</p>
+      </div>
+      <div class="grid">
+        <!-- External subtitle tracks -->
+        <div class="card recipe">
+          <div class="card-head">
+            <div class="card-cat">Captions</div>
+            <h3>External VTT / SRT</h3>
+            <p>Declare sidecar subtitles the standard way — <code class="inline">&lt;track&gt;</code> children (VTT, SRT, TTML). They join any embedded subtitle streams in the ⚙ menu.</p>
+          </div>
+          <div class="code">
+            <button class="copy-btn" type="button">Copy</button>
+            <pre><code><span class="tok-tag">&lt;movi-player</span> <span class="tok-attr">src</span>=<span class="tok-str">"movie.mp4"</span> <span class="tok-attr">controls</span><span class="tok-tag">&gt;</span>
+  <span class="tok-tag">&lt;track</span> <span class="tok-attr">kind</span>=<span class="tok-str">"subtitles"</span> <span class="tok-attr">src</span>=<span class="tok-str">"en.vtt"</span> <span class="tok-attr">srclang</span>=<span class="tok-str">"en"</span> <span class="tok-attr">label</span>=<span class="tok-str">"English"</span> <span class="tok-attr">default</span><span class="tok-tag">&gt;</span>
+  <span class="tok-tag">&lt;track</span> <span class="tok-attr">kind</span>=<span class="tok-str">"subtitles"</span> <span class="tok-attr">src</span>=<span class="tok-str">"es.srt"</span> <span class="tok-attr">srclang</span>=<span class="tok-str">"es"</span> <span class="tok-attr">label</span>=<span class="tok-str">"Español"</span><span class="tok-tag">&gt;</span>
+<span class="tok-tag">&lt;/movi-player&gt;</span></code></pre>
+          </div>
+        </div>
+
+        <!-- Subtitle styling + delay -->
+        <div class="card recipe">
+          <div class="card-head">
+            <div class="card-cat">Styling</div>
+            <h3>Subtitle look &amp; timing</h3>
+            <p>Tune size, colour, background, and edge, and nudge timing with <code class="inline">subtitledelay</code> (seconds; positive = later). All live-updatable at runtime.</p>
+          </div>
+          <div class="code">
+            <button class="copy-btn" type="button">Copy</button>
+            <pre><code><span class="tok-tag">&lt;movi-player</span> <span class="tok-attr">src</span>=<span class="tok-str">"movie.mkv"</span> <span class="tok-attr">controls</span>
+  <span class="tok-attr">subtitlesize</span>=<span class="tok-str">"1.3"</span>
+  <span class="tok-attr">subtitlecolor</span>=<span class="tok-str">"#ffffff"</span>
+  <span class="tok-attr">subtitlebg</span>=<span class="tok-str">"rgba(0,0,0,.6)"</span>
+  <span class="tok-attr">subtitleedge</span>=<span class="tok-str">"drop-shadow"</span>
+  <span class="tok-attr">subtitledelay</span>=<span class="tok-str">"0.5"</span><span class="tok-tag">&gt;&lt;/movi-player&gt;</span></code></pre>
+          </div>
+        </div>
+
+        <!-- ASS/SSA subtitles: pluggable renderer -->
+        <div class="card recipe">
+          <div class="card-head">
+            <div class="card-cat">Advanced<span class="tag-new">NEW</span></div>
+            <h3>ASS/SSA subtitles</h3>
+            <p>MoviPlayer decodes to a canvas, so styled ASS/SSA (positioning, karaoke, embedded fonts) can't ride a native <code class="inline">&lt;track&gt;</code>. Register a <code class="inline">SubtitleRenderer</code> — back it with libass-wasm / jassub — and the player routes the embedded subtitle stream to it: header on <code class="inline">configure</code>, each line on <code class="inline">pushPacket</code>, a frame on <code class="inline">render</code>.</p>
+          </div>
+          <div class="code">
+            <button class="copy-btn" type="button">Copy</button>
+            <pre><code><span class="tok-com">// Adapt any ASS engine (libass-wasm / jassub) to the interface.</span>
+<span class="tok-kw">class</span> AssRenderer {           <span class="tok-com">// implements SubtitleRenderer</span>
+  mount(overlay)              { <span class="tok-com">/* append your &lt;canvas&gt; here */</span> }
+  configure(track, extradata) { <span class="tok-com">/* init libass w/ the ASS header */</span> }
+  pushPacket(pkt)             { <span class="tok-com">/* feed one dialogue line */</span> }
+  render(time, w, h)          { <span class="tok-com">/* draw the frame at w×h */</span> }
+  setDelay(s) {} clear() {} destroy() {}
+}
+
+document.querySelector(<span class="tok-str">'movi-player'</span>)
+  .setSubtitleRenderer(<span class="tok-kw">new</span> AssRenderer());</code></pre>
+          </div>
+        </div>
+      </div>
+
+      <!-- ---- Sources & protection ---- -->
+      <div class="section-head recipe-group">
+        <h2>Sources &amp; protection</h2>
+        <p>Custom byte sources, authenticated requests, and graceful degradation.</p>
+      </div>
+      <div class="grid">
         <!-- Custom source scheme -->
         <div class="card recipe">
           <div class="card-head">
@@ -556,35 +661,141 @@ registerSourceAdapter([<span class="tok-str">'s3'</span>, <span class="tok-str">
           </div>
         </div>
 
-        <!-- ASS/SSA subtitles: pluggable renderer -->
+        <!-- Auth headers -->
         <div class="card recipe">
           <div class="card-head">
-            <div class="card-cat">Subtitles<span class="tag-new">NEW</span></div>
-            <h3>ASS/SSA subtitles</h3>
-            <p>MoviPlayer decodes to a canvas, so styled ASS/SSA (positioning, karaoke, embedded fonts) can't ride a native <code class="inline">&lt;track&gt;</code>. Register a <code class="inline">SubtitleRenderer</code> — back it with libass-wasm / jassub — and the player routes the embedded subtitle stream to it: header + fonts on <code class="inline">configure</code>, each dialogue line on <code class="inline">pushPacket</code>, a frame on <code class="inline">render</code>.</p>
+            <div class="card-cat">Auth</div>
+            <h3>Authenticated requests</h3>
+            <p>Attach headers (bearer token, signed cookie) to <em>every</em> media request — the manifest and segments of an HLS/DASH stream and progressive downloads alike. Pass a JSON object as <code class="inline">headers</code>.</p>
           </div>
           <div class="code">
             <button class="copy-btn" type="button">Copy</button>
-            <pre><code><span class="tok-com">// Adapt any ASS engine (libass-wasm / jassub) to the interface.</span>
-<span class="tok-kw">class</span> AssRenderer {           <span class="tok-com">// implements SubtitleRenderer</span>
-  mount(overlay)              { <span class="tok-com">/* append your &lt;canvas&gt; here */</span> }
-  configure(track, extradata) { <span class="tok-com">/* init libass w/ the ASS header */</span> }
-  pushPacket(pkt)             { <span class="tok-com">/* feed one dialogue line */</span> }
-  render(time, w, h)          { <span class="tok-com">/* draw the frame at w×h */</span> }
-  setDelay(s) {} clear() {} destroy() {}
-}
-
-document.querySelector(<span class="tok-str">'movi-player'</span>)
-  .setSubtitleRenderer(<span class="tok-kw">new</span> AssRenderer());</code></pre>
+            <pre><code><span class="tok-tag">&lt;movi-player</span> <span class="tok-attr">controls</span>
+  <span class="tok-attr">src</span>=<span class="tok-str">"https://cdn.example.com/private/clip.mkv"</span>
+  <span class="tok-attr">headers</span>=<span class="tok-str">'{"Authorization": "Bearer &lt;token&gt;"}'</span><span class="tok-tag">&gt;&lt;/movi-player&gt;</span></code></pre>
           </div>
         </div>
 
-        <!-- Install & embed -->
+        <!-- Graceful native fallback -->
+        <div class="card recipe">
+          <div class="card-head">
+            <div class="card-cat">Resilience</div>
+            <h3>Graceful native fallback</h3>
+            <p>If Movi's WASM pipeline can't read a source (CORS-blocked, opaque, no range support), <code class="inline">fallback="native"</code> degrades to a native <code class="inline">&lt;video&gt;</code> under Movi's own controls instead of erroring out.</p>
+          </div>
+          <div class="code">
+            <button class="copy-btn" type="button">Copy</button>
+            <pre><code><span class="tok-tag">&lt;movi-player</span> <span class="tok-attr">src</span>=<span class="tok-str">"https://cdn.example.com/clip.mp4"</span>
+             <span class="tok-attr">fallback</span>=<span class="tok-str">"native"</span> <span class="tok-attr">controls</span><span class="tok-tag">&gt;&lt;/movi-player&gt;</span></code></pre>
+          </div>
+        </div>
+      </div>
+
+      <!-- ---- Behavior & polish ---- -->
+      <div class="section-head recipe-group">
+        <h2>Behavior &amp; polish</h2>
+        <p>Attributes that shape playback, look, and controls. Mix and match.</p>
+      </div>
+      <div class="grid">
+        <!-- Playback -->
+        <div class="card recipe">
+          <div class="card-head">
+            <div class="card-cat">Playback</div>
+            <h3>Resume, seek, thumbnails</h3>
+            <p><code class="inline">thumb</code> scrub-bar previews · <code class="inline">resume</code> remembers &amp; restores position · <code class="inline">startat</code> opens at a time · <code class="inline">fastseek</code> snappier scrubbing.</p>
+          </div>
+          <div class="code">
+            <button class="copy-btn" type="button">Copy</button>
+            <pre><code><span class="tok-tag">&lt;movi-player</span> <span class="tok-attr">src</span>=<span class="tok-str">"movie.mkv"</span> <span class="tok-attr">controls</span>
+  <span class="tok-attr">thumb</span> <span class="tok-attr">resume</span> <span class="tok-attr">startat</span>=<span class="tok-str">"90"</span> <span class="tok-attr">fastseek</span><span class="tok-tag">&gt;&lt;/movi-player&gt;</span></code></pre>
+          </div>
+        </div>
+
+        <!-- Appearance -->
+        <div class="card recipe">
+          <div class="card-head">
+            <div class="card-cat">Appearance</div>
+            <h3>Ambient, poster, theme</h3>
+            <p><code class="inline">ambientmode</code> glow that samples the frame · <code class="inline">poster</code>/<code class="inline">postertime</code> a still or a frame · <code class="inline">theme</code>+<code class="inline">themecolor</code> chrome &amp; accent · <code class="inline">objectfit</code> scaling.</p>
+          </div>
+          <div class="code">
+            <button class="copy-btn" type="button">Copy</button>
+            <pre><code><span class="tok-tag">&lt;movi-player</span> <span class="tok-attr">src</span>=<span class="tok-str">"movie.mkv"</span> <span class="tok-attr">controls</span>
+  <span class="tok-attr">ambientmode</span> <span class="tok-attr">ambientwrapper</span>=<span class="tok-str">"glow-box"</span>
+  <span class="tok-attr">poster</span>=<span class="tok-str">"cover.jpg"</span> <span class="tok-attr">postertime</span>=<span class="tok-str">"12"</span>
+  <span class="tok-attr">theme</span>=<span class="tok-str">"dark"</span> <span class="tok-attr">themecolor</span>=<span class="tok-str">"#ff0033"</span>
+  <span class="tok-attr">objectfit</span>=<span class="tok-str">"contain"</span><span class="tok-tag">&gt;&lt;/movi-player&gt;</span></code></pre>
+          </div>
+        </div>
+
+        <!-- Controls & decode -->
+        <div class="card recipe">
+          <div class="card-head">
+            <div class="card-cat">Controls</div>
+            <h3>Gestures &amp; decode</h3>
+            <p><code class="inline">gesturefs</code>+<code class="inline">doubletap</code> swipe-fullscreen / double-tap seek · <code class="inline">sw="auto"</code> silent software-decode fallback · <code class="inline">buffersize</code> cache window (MB) · <code class="inline">nohotkeys</code> off.</p>
+          </div>
+          <div class="code">
+            <button class="copy-btn" type="button">Copy</button>
+            <pre><code><span class="tok-tag">&lt;movi-player</span> <span class="tok-attr">src</span>=<span class="tok-str">"movie.mkv"</span> <span class="tok-attr">controls</span>
+  <span class="tok-attr">gesturefs</span> <span class="tok-attr">doubletap</span> <span class="tok-attr">sw</span>=<span class="tok-str">"auto"</span>
+  <span class="tok-attr">buffersize</span>=<span class="tok-str">"256"</span> <span class="tok-attr">nohotkeys</span><span class="tok-tag">&gt;&lt;/movi-player&gt;</span></code></pre>
+          </div>
+        </div>
+      </div>
+
+      <!-- ---- API & frameworks ---- -->
+      <div class="section-head recipe-group">
+        <h2>API &amp; frameworks</h2>
+        <p>Drive it from JavaScript, or drop the wrapper into React / Vue / Svelte.</p>
+      </div>
+      <div class="grid">
+        <!-- Programmatic API -->
+        <div class="card recipe">
+          <div class="card-head">
+            <div class="card-cat">JavaScript</div>
+            <h3>Programmatic control</h3>
+            <p>The element mirrors the <code class="inline">&lt;video&gt;</code> API and adds media events and accessors — tracks, chapters, cover art, quality.</p>
+          </div>
+          <div class="code">
+            <button class="copy-btn" type="button">Copy</button>
+            <pre><code><span class="tok-kw">const</span> el = document.querySelector(<span class="tok-str">'movi-player'</span>);
+
+el.play(); el.pause(); el.currentTime = <span class="tok-str">90</span>;       <span class="tok-com">// playback</span>
+el.addEventListener(<span class="tok-str">'qualitychange'</span>, e =&gt; …);  <span class="tok-com">// + ended, timeupdate, error</span>
+el.player.getChapters();                        <span class="tok-com">// embedded chapters</span>
+el.player.getCoverArt();                        <span class="tok-com">// album-art bitmap</span>
+el.player.trackManager.getActiveVideoTrack();   <span class="tok-com">// active tracks</span></code></pre>
+          </div>
+        </div>
+
+        <!-- Framework wrappers -->
+        <div class="card recipe">
+          <div class="card-head">
+            <div class="card-cat">Frameworks</div>
+            <h3>React · Vue · Svelte</h3>
+            <p>First-party wrappers pass props straight through to the element, so every attribute above works as a prop.</p>
+          </div>
+          <div class="code">
+            <button class="copy-btn" type="button">Copy</button>
+            <pre><code><span class="tok-kw">import</span> { MoviPlayer } <span class="tok-kw">from</span> <span class="tok-str">'movi-player/react'</span>;  <span class="tok-com">// + /vue, /svelte</span>
+
+<span class="tok-tag">&lt;MoviPlayer</span> <span class="tok-attr">src</span>=<span class="tok-str">"video.mkv"</span> <span class="tok-attr">controls</span> <span class="tok-attr">thumb</span> <span class="tok-tag">/&gt;</span></code></pre>
+          </div>
+        </div>
+      </div>
+
+      <!-- ---- Install & embed ---- -->
+      <div class="section-head recipe-group">
+        <h2>Install &amp; embed</h2>
+        <p>Bundle with npm, or drop a single module script from a CDN — no build step.</p>
+      </div>
+      <div class="grid">
         <div class="card recipe">
           <div class="card-head">
             <div class="card-cat">Getting started</div>
-            <h3>Install &amp; embed</h3>
-            <p>Bundle it with npm, or drop in a single module script from a CDN — no build step. Importing the element registers the <code class="inline">&lt;movi-player&gt;</code> custom element.</p>
+            <h3>npm or CDN</h3>
+            <p>Importing the element registers the <code class="inline">&lt;movi-player&gt;</code> custom element.</p>
           </div>
           <div class="code">
             <button class="copy-btn" type="button">Copy</button>
@@ -693,6 +904,23 @@ npm install movi-player</code></pre>
       // seeking still works. Same-origin URLs (/samples/…) never need it.
       const proxied = (u) => "/proxy?url=" + encodeURIComponent(u);
 
+      // Self-contained album cover for the audio demo (the plain MP3 ships no
+      // embedded artwork). A data-URI SVG — no separate file for the Worker to
+      // route — that's CORS-clean, so MoviPlayer's createImageBitmap accepts it
+      // and paints it as the cover / ambient backdrop.
+      const AUDIO_COVER = "data:image/svg+xml," + encodeURIComponent(
+        "<svg xmlns='http://www.w3.org/2000/svg' width='600' height='600'>" +
+        "<defs><linearGradient id='g' x1='0' y1='0' x2='1' y2='1'>" +
+        "<stop offset='0' stop-color='#6c5dd3'/><stop offset='1' stop-color='#00d4ff'/>" +
+        "</linearGradient></defs>" +
+        "<rect width='600' height='600' fill='url(#g)'/>" +
+        "<circle cx='300' cy='300' r='172' fill='#0b0b10' opacity='0.9'/>" +
+        "<circle cx='300' cy='300' r='150' fill='none' stroke='#fff' stroke-opacity='0.1' stroke-width='1.5'/>" +
+        "<circle cx='300' cy='300' r='120' fill='none' stroke='#fff' stroke-opacity='0.08' stroke-width='1.5'/>" +
+        "<circle cx='300' cy='300' r='48' fill='url(#g)'/>" +
+        "<circle cx='300' cy='300' r='12' fill='#0b0b10'/></svg>"
+      );
+
       const openModal = (card) => {
         // Build via the parser, NOT document.createElement: MoviElement's
         // constructor sets attributes on itself, which makes createElement throw
@@ -719,8 +947,10 @@ npm install movi-player</code></pre>
           player.setAttribute("src", s);
           player.setAttribute("thumb", "");
           // Cover art for audio-only sources without embedded artwork (e.g. the
-          // plain MP3 demo) — feeds the same cover-art / ambient canvas.
-          if (card.dataset.poster) player.setAttribute("poster", card.dataset.poster);
+          // plain MP3 demo). A self-contained data-URI (no separate asset the
+          // Worker would have to route) that MoviPlayer feeds into the same
+          // cover-art / ambient canvas when a source ships no embedded picture.
+          if (card.dataset.audioCover) player.setAttribute("poster", AUDIO_COVER);
           // Per-card extras, e.g. data-attrs="vr vrpad" for the 360° demo.
           for (const a of (card.dataset.attrs || "").split(/\s+/).filter(Boolean)) {
             player.setAttribute(a, "");
