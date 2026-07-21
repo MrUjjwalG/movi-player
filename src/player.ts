@@ -24,6 +24,7 @@ export type {
   VideoTrack,
   AudioTrack,
   SubtitleTrack,
+  SubtitleRenderer,
   SubtitleCue,
   SourceConfig,
   CacheConfig,

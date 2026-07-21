@@ -15,6 +15,7 @@ import type {
   SubtitleTrack,
   SubtitleSourceEntry,
   SubtitleCue,
+  SubtitleRenderer,
   Packet,
 } from "../types";
 import { EventEmitter } from "../events/EventEmitter";
@@ -274,6 +275,11 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
   private videoDecoder: MoviVideoDecoder;
   private audioDecoder: MoviAudioDecoder;
   private subtitleDecoder: SubtitleDecoder | null = null;
+  // Host-supplied subtitle renderer (e.g. jassub/libass for ASS). When set, the
+  // active subtitle stream is routed to it instead of the internal decoder.
+  private _customSubtitleRenderer: SubtitleRenderer | null = null;
+  private _subtitleRenderRAF: number | null = null;
+  private _subtitleDelaySec = 0;
   private videoRenderer: CanvasRenderer | null = null;
 
   // Stream id of the subtitle track whose entire cue list has already been
@@ -1755,7 +1761,10 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
 
     // Configure subtitle decoder
     const subtitleTrack = this.trackManager.getActiveSubtitleTrack();
-    if (subtitleTrack && this.subtitleDecoder) {
+    if (subtitleTrack && this._customSubtitleRenderer) {
+      // A host renderer owns subtitles — configure it and skip the internal path.
+      await this._configureCustomSubtitleRenderer();
+    } else if (subtitleTrack && this.subtitleDecoder) {
       const extradata =
         this.demuxer.getExtradata(subtitleTrack.id) ?? undefined;
       const configured = await this.subtitleDecoder.configure(
@@ -3675,6 +3684,18 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
             if (
               activeSubtitle &&
               activeSubtitle.id === packet.streamIndex &&
+              this._customSubtitleRenderer
+            ) {
+              // A host renderer (e.g. jassub/libass) owns this track — hand it the
+              // raw packet and skip the internal decoder entirely.
+              try {
+                void this._customSubtitleRenderer.pushPacket(packet);
+              } catch (e) {
+                Logger.error(TAG, "Custom subtitle renderer pushPacket failed", e);
+              }
+            } else if (
+              activeSubtitle &&
+              activeSubtitle.id === packet.streamIndex &&
               this.subtitleDecoder
             ) {
               let duration = packet.duration;
@@ -4030,6 +4051,15 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
       await this.videoDecoder.flush();
       Logger.info(TAG, `seek: flushing audio decoder...`);
       await this.audioDecoder.flush();
+      // Drop the host subtitle renderer's pending state — its cues are for the
+      // position we're leaving; fresh packets stream in after the seek.
+      if (this._customSubtitleRenderer) {
+        try {
+          this._customSubtitleRenderer.clear();
+        } catch {
+          /* ignore */
+        }
+      }
       // Drop any audio collected for the current tick's batch — it belongs to
       // the position we're leaving. The decoder has just been flushed, and the
       // batch is submitted from processLoop's finally AFTER this, so keeping it
@@ -5009,6 +5039,25 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
         this.subtitleDecoder.close();
         Logger.debug(TAG, "Closed subtitle decoder");
       }
+      if (this._customSubtitleRenderer) {
+        try {
+          this._customSubtitleRenderer.clear();
+        } catch {
+          /* ignore */
+        }
+      }
+      return result;
+    }
+
+    // A host renderer owns subtitles — reset it and configure for the new track,
+    // skipping the internal decoder path entirely.
+    if (this._customSubtitleRenderer && !this.streamWrapper) {
+      try {
+        this._customSubtitleRenderer.clear();
+      } catch {
+        /* ignore */
+      }
+      await this._configureCustomSubtitleRenderer();
       return result;
     }
 
@@ -6780,6 +6829,14 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
    * frame-rate conversions.
    */
   setSubtitleDelay(seconds: number): void {
+    this._subtitleDelaySec = seconds;
+    if (this._customSubtitleRenderer) {
+      try {
+        this._customSubtitleRenderer.setDelay(seconds);
+      } catch {
+        /* ignore */
+      }
+    }
     if (this.videoRenderer) {
       this.videoRenderer.setSubtitleDelay(seconds);
     }
@@ -6796,6 +6853,84 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
   /** Get current subtitle delay in seconds. */
   getSubtitleDelay(): number {
     return this.videoRenderer ? this.videoRenderer.getSubtitleDelay() : 0;
+  }
+
+  /**
+   * Register a pluggable subtitle renderer (or clear it with null) — e.g. jassub
+   * (libass-wasm) for full ASS/SSA styling. While set, the active embedded
+   * subtitle stream is routed to it (configure/pushPacket/render/…) instead of
+   * the internal decoder, and its cues are suppressed. See SubtitleRenderer.
+   */
+  setSubtitleRenderer(renderer: SubtitleRenderer | null): void {
+    if (this._customSubtitleRenderer === renderer) return;
+    this._customSubtitleRenderer = renderer;
+    this._stopSubtitleRenderLoop();
+    // NB: the player never destroys the renderer — the registrar owns its
+    // lifecycle (the element re-applies the same instance to a fresh player on a
+    // source change, so destroying it here would kill it mid-swap).
+    // Handing over or back: drop the internal decoder's cues so the two paths
+    // never draw at once.
+    this.videoRenderer?.setSubtitleCues([]);
+    if (renderer) {
+      const overlay = this.videoRenderer?.getSubtitleOverlay?.() ?? null;
+      if (overlay && renderer.mount) {
+        try {
+          renderer.mount(overlay);
+        } catch {
+          /* ignore */
+        }
+      }
+      try {
+        renderer.setDelay(this._subtitleDelaySec);
+      } catch {
+        /* ignore */
+      }
+      void this._configureCustomSubtitleRenderer();
+      this._startSubtitleRenderLoop();
+    }
+  }
+
+  /** (Re)configure the custom renderer for the active subtitle track. */
+  private async _configureCustomSubtitleRenderer(): Promise<void> {
+    const r = this._customSubtitleRenderer;
+    const track = this.trackManager.getActiveSubtitleTrack();
+    if (!r || !track || !this.demuxer) return;
+    const extradata = this.demuxer.getExtradata(track.id) ?? undefined;
+    // Embedded font attachments aren't surfaced yet (Matroska ATTACHMENT streams
+    // need a C-side hook — tracked separately); pass undefined for now, so the
+    // renderer falls back to its default/system fonts.
+    try {
+      await r.configure(track, extradata, undefined);
+    } catch (e) {
+      Logger.error(TAG, "Custom subtitle renderer configure failed", e);
+    }
+  }
+
+  private _startSubtitleRenderLoop(): void {
+    if (this._subtitleRenderRAF !== null || typeof requestAnimationFrame === "undefined") {
+      return;
+    }
+    const tick = () => {
+      this._subtitleRenderRAF = null;
+      const r = this._customSubtitleRenderer;
+      if (!r) return;
+      const vt = this.trackManager.getActiveVideoTrack();
+      // Raw media time — the renderer applies its own offset via setDelay().
+      try {
+        void r.render(this.clock.getTime(), vt?.width || 0, vt?.height || 0);
+      } catch {
+        /* a renderer hiccup shouldn't kill the loop */
+      }
+      this._subtitleRenderRAF = requestAnimationFrame(tick);
+    };
+    this._subtitleRenderRAF = requestAnimationFrame(tick);
+  }
+
+  private _stopSubtitleRenderLoop(): void {
+    if (this._subtitleRenderRAF !== null) {
+      cancelAnimationFrame(this._subtitleRenderRAF);
+      this._subtitleRenderRAF = null;
+    }
   }
 
   /**
@@ -8153,6 +8288,13 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
   destroy(): void {
     Logger.info(TAG, "Destroying player");
     this._destroyed = true;
+
+    // Stop driving a host subtitle renderer, but DON'T destroy it — the renderer
+    // is owned by whoever registered it (the element re-applies it to the fresh
+    // player after a source change, so destroying it here would kill it mid-swap).
+    // The registrar owns destroy(): the element does it on disconnect / on swap.
+    this._stopSubtitleRenderLoop();
+    this._customSubtitleRenderer = null;
 
     // Stop the ABR timer.
     if (this._abrTimer) {

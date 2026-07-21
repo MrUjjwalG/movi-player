@@ -237,6 +237,11 @@ export class CanvasRenderer {
   private _subtitleRerenderRafId: number | null = null;
   private subtitleCues: SubtitleCue[] = [];
   private subtitleOverlay: HTMLElement | null = null;
+  /** The subtitle overlay element — absolutely positioned over the visible video
+   *  (letterbox-aware). Handed to a host SubtitleRenderer as a mount point. */
+  getSubtitleOverlay(): HTMLElement | null {
+    return this.subtitleOverlay;
+  }
   private subtitleControlsPadding: number = 0; // Extra padding when controls visible
   // Subtitle delay in seconds. VLC/mpv convention: positive = subs appear
   // later, negative = earlier. Applied at the active-cue check so it works
