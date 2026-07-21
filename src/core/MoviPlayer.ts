@@ -1517,6 +1517,16 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
     // noisy right after a swap (it reflects the new file's fresh download).
     if (sinceSwitch < 12000) return;
 
+    // Hold voluntary UPSHIFT while the tab is hidden. The video isn't rendered in
+    // a background tab (its decode is skipped), so climbing to a higher rung just
+    // burns bandwidth on a stream nobody can see — and the throughput estimate is
+    // stale anyway, since sampleThroughput() rides the rAF UI loop, which the
+    // browser throttles/stops when hidden. The protective downshift above still
+    // runs off the download-range buffer signal (fed by the un-throttled
+    // background timer), so audio stays safe on a degrading link. PiP is exempt —
+    // there the video IS visible, so ABR should keep adapting normally.
+    if (this.isBackgrounded && !this.isPiPActive) return;
+
     const netStats = (
       this.source as {
         getNetworkStats?: () => { currentSpeed: number; lastSpeed?: number };
