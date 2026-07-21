@@ -44,7 +44,7 @@ import { SubtitleDecoder } from "../decode/SubtitleDecoder";
 import { CanvasRenderer, type VRView } from "../render/CanvasRenderer";
 import { AudioRenderer } from "../render/AudioRenderer";
 import { updateAllBindingsLogLevel, ThumbnailBindings } from "../wasm/bindings";
-import { loadWasmModuleNew } from "../wasm/FFmpegLoader";
+import { loadWasmModuleNew, resetWasmModule } from "../wasm/FFmpegLoader";
 import { ShakaPlayerWrapper } from "../render/ShakaPlayerWrapper";
 import { HLSPlayerWrapper } from "../render/HLSPlayerWrapper";
 import { DASHPlayerWrapper } from "../render/DASHPlayerWrapper";
@@ -3738,6 +3738,15 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
         errorMessage.includes("Failed to fetch video resource") ||
         errorMessage.includes("Stream failed after") ||
         errorMessage.includes("Server does not support range requests");
+
+      if (isWasmFatal) {
+        // The abort left the SHARED cached WASM module permanently dead — the
+        // main demuxer reuses that singleton, so without this every later open
+        // (a new video, a quality switch) fails "File is corrupted" until a page
+        // reload. Drop the cached module so the recovery reload — and the next
+        // source — instantiates a fresh one instead of reusing the corpse.
+        resetWasmModule();
+      }
 
       if (isCorruptError || isSourceError) {
         Logger.error(

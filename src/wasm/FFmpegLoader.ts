@@ -23,6 +23,21 @@ export interface LoaderOptions {
 }
 
 /**
+ * Discard the cached main-playback module so the next loadWasmModule() builds a
+ * fresh one. Emscripten's abort() (a WASM trap / OOB in an FFmpeg call) leaves
+ * the module PERMANENTLY dead: every later avformat_open_input on it fails with
+ * "File is corrupted or in an unsupported format". Because the main demuxer uses
+ * this cached singleton, that error then repeats for EVERY source — a new video,
+ * a quality switch, anything — until a full page reload rebuilds the JS context.
+ * Calling this on a fatal WASM error makes the next load recover in-page, exactly
+ * as a reload would.
+ */
+export function resetWasmModule(): void {
+  loadedModule = null;
+  modulePromise = null;
+}
+
+/**
  * Load the WASM module (cached singleton for main playback)
  */
 export async function loadWasmModule(options: LoaderOptions = {}): Promise<MoviWasmModule> {
@@ -57,7 +72,15 @@ export async function loadWasmModule(options: LoaderOptions = {}): Promise<MoviW
             // Map to debug to avoid flooding console with "errors"
             Logger.debug('WASM', text);
           }
-        }
+        },
+        // Emscripten calls this the instant the module traps (abort()). This is
+        // the CACHED singleton the main demuxer reuses, so once it's dead every
+        // later open fails "File is corrupted" until a page reload — drop it from
+        // the cache here so the next loadWasmModule() rebuilds a live one in-page.
+        onAbort: (what: unknown) => {
+          Logger.error(TAG, `WASM aborted — discarding dead cached module: ${what}`);
+          resetWasmModule();
+        },
       };
       if (wasmBinary) {
         moduleOptions.wasmBinary = wasmBinary;
