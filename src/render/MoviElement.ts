@@ -6642,6 +6642,17 @@ export class MoviElement extends HTMLElement {
   private _connectionRetries = 0;
   private static readonly MAX_CONNECTION_RETRIES = 4;
   private _connectionRetryTimer: ReturnType<typeof setTimeout> | null = null;
+  // Frozen-video watchdog: the clock/audio keeps advancing but no new video frame
+  // is presented (audio ran ahead over a stale/black frame — e.g. after a long
+  // background spell, or a seek that force-completed without a decodable frame).
+  // A corrective seek to the current position re-primes the decode. Driven off the
+  // rAF UI loop, which the browser throttles/stops when hidden, so it only judges
+  // a FOREGROUND tab (background legitimately skips video decode).
+  private _frozenLastTime = -1;
+  private _frozenLastFrames = -1;
+  private _frozenSince = 0;
+  private _frozenRecoveries = 0;
+  private static readonly MAX_FROZEN_RECOVERIES = 3;
   // Set only by the decode-downshift recreate so its own load() keeps the ceiling
   // (every other load clears it, so the next source re-attempts its top rung).
   private _preserveDecodeCapOnce = false;
@@ -9960,11 +9971,69 @@ export class MoviElement extends HTMLElement {
           this.updateProgressBar();
           this.updateVolumeIcon();
         }
+        this._checkFrozenVideo(timestamp);
       }
 
       requestAnimationFrame(updateUI);
     };
     requestAnimationFrame(updateUI);
+  }
+
+  /**
+   * Detect a frozen video: state is "playing" and the clock/audio is advancing,
+   * but no new frame is being presented — audio ran ahead over a stale/black
+   * frame (after a long background spell, or a seek that force-completed with no
+   * decodable frame; the case users unstick with a manual seek). A corrective
+   * seek to the current position re-flushes and re-decodes from there, re-aligning
+   * video to audio. Bounded; only judges a foreground tab (this rides the rAF UI
+   * loop, which is throttled when hidden — background legitimately skips decode).
+   */
+  private _checkFrozenVideo(now: number): void {
+    const p = this.player;
+    if (
+      !p ||
+      p.getState?.() !== "playing" ||
+      this._audioOnly ||
+      !(p.getVideoTracks?.().length)
+    ) {
+      this._frozenSince = 0;
+      return;
+    }
+    const t = p.getCurrentTime?.() ?? 0;
+    const frames = p.getRenderHealth?.()?.framesPresented ?? 0;
+    const clockAdvancing = this._frozenLastTime >= 0 && t > this._frozenLastTime + 0.05;
+    const framesAdvancing = frames > this._frozenLastFrames;
+    this._frozenLastTime = t;
+    this._frozenLastFrames = frames;
+    if (framesAdvancing) {
+      // Frames ARE being presented — healthy. Clear the streak + refill the budget.
+      this._frozenSince = 0;
+      this._frozenRecoveries = 0;
+      return;
+    }
+    if (!clockAdvancing) {
+      this._frozenSince = 0; // a held clock isn't a frozen video
+      return;
+    }
+    // Clock/audio moving, no new frame → frozen. Let a brief hitch self-resolve,
+    // then corrective-seek to where the audio actually is.
+    if (this._frozenSince === 0) {
+      this._frozenSince = now;
+      return;
+    }
+    if (now - this._frozenSince < 2500) return;
+    if (this._frozenRecoveries >= MoviElement.MAX_FROZEN_RECOVERIES) return;
+    this._frozenRecoveries++;
+    this._frozenSince = 0;
+    Logger.warn(
+      TAG,
+      `Video frozen while audio plays (${t.toFixed(1)}s) — corrective seek to re-prime decode`,
+    );
+    try {
+      p.seek?.(t);
+    } catch {
+      /* seek rejected — the next tick re-evaluates */
+    }
   }
 
   private addStyles(shadowRoot: ShadowRoot): void {
