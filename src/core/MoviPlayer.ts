@@ -1413,36 +1413,66 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
     const now = performance.now();
     const sinceSwitch = now - this._lastAbrSwitchAt;
 
-    // Emergency downshift: only on a GENUINE playback stall (the real buffering
-    // state). Deliberately NOT keyed on the audio buffer level: with split audio
-    // the audio is a separate, usually fully-cached file, so its renderer buffer
-    // just hovers at the renderer's normal scheduling lead — it is not a signal
-    // of video/network health. Treating a normally-shallow audio buffer as
-    // "network too slow" made the controller cascade a rung at a time all the
-    // way to the bottom (and downshift straight off the start rung on load).
-    // When the video genuinely can't keep up, the throughput-driven path below
-    // downshifts on its own; this stays a hard-stall safety net. The settle
-    // window keeps a switch's own transient from counting as a stall.
-    // Buffering right after a seek is a normal re-fill, not a network stall —
-    // swapping rendition into it races the seek's own re-prime and crashed the
-    // demuxer ("corrupt data stream"). Stand down for a few seconds post-seek;
-    // the throughput/buffer-trend path still downshifts once playback is stable.
+    // How many seconds of video are buffered ahead of the playhead, and whether
+    // that number is shrinking — the GROUND TRUTH for whether the current rung is
+    // sustainable, independent of the throughput estimate. That estimate LAGS on
+    // the premuxed path: while we coast on a filling buffer the source isn't
+    // downloading, so its last-measured speed stays stale-high and would wrongly
+    // report the rung as affordable (that's exactly how a 4K buffer drained to
+    // zero on a throttled link without ever downshifting).
+    const bufferAhead = Math.max(
+      0,
+      this.getBufferedTime() - this.getCurrentTime(),
+    );
+    const draining =
+      this._lastBufferAhead > 0 && bufferAhead < this._lastBufferAhead - 1.5;
+    this._lastBufferAhead = bufferAhead;
+
+    // DOWNSHIFT (responsive) — a hard buffering stall OR a draining/low buffer
+    // means the current rung can't be sustained; act fast and WITHOUT a
+    // throughput gate (the gate, fed a stale-high estimate, was what blocked the
+    // downshift). Paced by a short 5s settle rather than the 12s voluntary
+    // cooldown so it responds before the buffer empties, and stood down for a few
+    // seconds after a seek — that buffering is a normal re-fill, and swapping
+    // into it races the seek's own re-prime and crashed the demuxer.
     const postSeekSettling = now - this._lastSeekAt < 4000;
-    const stalling = this.stateManager.is("buffering") && !postSeekSettling;
+    const stalling = this.stateManager.is("buffering");
+    const bufferLow = (draining && bufferAhead < 10) || bufferAhead < 4;
     if (
-      stalling &&
+      (stalling || bufferLow) &&
+      !postSeekSettling &&
       sinceSwitch > 5000 &&
       activeIdx >= 0 &&
       activeIdx < rungs.length - 1
     ) {
-      await this.abrCommit(rungs[activeIdx + 1].url, now);
+      // Drop to the highest rung the freshly-measured throughput sustains — once
+      // the buffer is low the source IS actively downloading again, so its speed
+      // is a real reading — but always at least one step down.
+      const ns = (
+        this.source as {
+          getNetworkStats?: () => { currentSpeed: number; lastSpeed?: number };
+        }
+      ).getNetworkStats?.();
+      const downBits = ((ns?.lastSpeed ?? ns?.currentSpeed ?? 0) || 0) * 8;
+      // Default to the LOWEST rung: if the link can't sustain even the smallest
+      // bitrate, jump straight there — its tiny file also preps fastest, so
+      // playback resumes soonest (cascading one rung at a time means several slow
+      // switches while the buffer sits empty). When some higher rung does fit the
+      // measured rate, use the highest such rung instead.
+      let target = rungs[rungs.length - 1];
+      for (let i = activeIdx + 1; i < rungs.length; i++) {
+        if ((rungs[i].bandwidth || 0) <= downBits) {
+          target = rungs[i];
+          break;
+        }
+      }
+      await this.abrCommit(target.url, now);
       return;
     }
 
-    // Voluntary (throughput-driven) changes hold for a cooldown after any switch
-    // so a single change can't cascade into a rung-by-rung oscillation — the
-    // throughput estimate is noisy right after a swap (it reflects the new file's
-    // fresh download), so give it time to settle before trusting it again.
+    // Voluntary UPSHIFT holds for a cooldown after any switch so a single change
+    // can't cascade into a rung-by-rung oscillation — the throughput estimate is
+    // noisy right after a swap (it reflects the new file's fresh download).
     if (sinceSwitch < 12000) return;
 
     const netStats = (
@@ -1454,10 +1484,7 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
     // currentSpeed (0 once a small file finishes caching) so Auto keeps a real
     // estimate to size the rung from.
     const raw = netStats?.lastSpeed ?? netStats?.currentSpeed ?? 0;
-    // EWMA-smooth the estimate. A single reading is noisy on the premuxed path:
-    // each in-place switch restarts a file download (TCP ramp reads low) and a
-    // full buffer pauses the download (trickle reads low), so an unsmoothed
-    // value swings wildly and drives spurious switches. Smoothing damps that.
+    // EWMA-smooth the estimate so a single noisy reading doesn't drive a switch.
     if (raw > 0) {
       this._lastThroughputBps =
         this._lastThroughputBps > 0
@@ -1466,54 +1493,13 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
     }
     const bps = this._lastThroughputBps;
     if (bps <= 0) {
-      // Never measured throughput yet (e.g. a fully-downloaded single file that
-      // reports 0 once idle). Probe one rung UP so Auto doesn't sit stuck at a
-      // low starting quality — that switch fetches a file, which measures real
-      // throughput; the emergency downshift undoes it if the link can't cope.
+      // Never measured throughput yet — probe one rung UP so Auto doesn't sit
+      // stuck at a low starting quality; the downshift undoes it if it can't cope.
       if (activeIdx > 0) await this.abrCommit(rungs[activeIdx - 1].url, now);
       return;
     }
-
     const throughputBits = bps * 8;
     const currentRung = activeIdx >= 0 ? rungs[activeIdx] : null;
-    // How many seconds of video are buffered ahead of the playhead, and whether
-    // that number is shrinking — the ground truth for whether the current rung
-    // is sustainable, independent of any (noisy, often over-estimated) bitrate.
-    const bufferAhead = Math.max(
-      0,
-      this.getBufferedTime() - this.getCurrentTime(),
-    );
-    const draining =
-      this._lastBufferAhead > 0 && bufferAhead < this._lastBufferAhead - 1.5;
-    this._lastBufferAhead = bufferAhead;
-
-    // DOWNSHIFT — the current rung looks unaffordable per throughput AND the
-    // buffer is actually draining toward starvation (or critically low). The
-    // throughput gate keeps a link that clearly sustains the rung (fast demuxer
-    // streams, whose steady buffer is only a few seconds) from ever downshifting.
-    // The buffer trend is the ground truth: a healthy, stable buffer never trips
-    // it, so estimate noise (or AV1 sized with H.264 tiers) can't cause the
-    // phantom 4K↔1440 flip — but acting while the buffer is still draining and
-    // non-empty (< 12s), rather than waiting for a hard < 5s floor, downshifts in
-    // time on a genuine drop instead of stalling. Drop to the highest rung the
-    // measured throughput sustains; the buffering-state path still catches a hard
-    // stall at once.
-    if (
-      currentRung &&
-      activeIdx < rungs.length - 1 &&
-      (currentRung.bandwidth || 0) > throughputBits &&
-      ((draining && bufferAhead < 12) || bufferAhead < 5)
-    ) {
-      let target = rungs[activeIdx + 1];
-      for (let i = activeIdx + 1; i < rungs.length; i++) {
-        if ((rungs[i].bandwidth || 0) <= throughputBits) {
-          target = rungs[i];
-          break;
-        }
-      }
-      await this.abrCommit(target.url, now);
-      return;
-    }
 
     // UPSHIFT — only to a higher rung that fits with a safety margin, and only
     // after it holds for two consecutive ticks so a lone spike (a cache-served
