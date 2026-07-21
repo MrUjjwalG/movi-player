@@ -38,6 +38,7 @@ The `<movi-player>` custom element is a drop-in replacement for the native `<vid
 | Attribute     | Type                | Values                             | Description                                       |
 | ------------- | ------------------- | ---------------------------------- | ------------------------------------------------- |
 | `objectfit`   | `string`            | `contain`, `cover`, `fill`, `zoom` | Video scaling mode                                |
+| `rotate`      | `number`            | `0`, `90`, `180`, `270`            | Rotate video, in degrees (snaps to a quarter-turn) |
 | `theme`       | `string`            | `dark`, `light`                    | UI theme                                          |
 | `hdr`         | `boolean`           | -                                  | Enable HDR rendering                              |
 | `ambientmode` | `boolean`           | -                                  | Ambient background effects                        |

@@ -286,6 +286,7 @@ Use cases: video validators, asset management, HDR detection pipelines, search i
   theme="dark"              <!-- dark | light -->
   themecolor="#ff5722"      <!-- Custom primary color (hex/rgb) -->
   objectfit="contain"       <!-- contain | cover | fill | zoom | control -->
+  rotate="90"               <!-- Rotate video: 0 | 90 | 180 | 270 (degrees) -->
   hdr                       <!-- Enable HDR rendering -->
   ambientmode               <!-- Ambient background glow -->
   ambientwrapper="wrapper"  <!-- External element id for ambient glow -->

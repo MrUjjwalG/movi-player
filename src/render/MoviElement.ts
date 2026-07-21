@@ -306,6 +306,9 @@ export class MoviElement extends HTMLElement {
   private _renderer: RendererType = "canvas";
   private _objectFit: "contain" | "cover" | "fill" | "zoom" | "control" =
     "contain"; // Configuration mode
+  // Declarative rotation from the `rotate` attribute (0/90/180/270), re-applied
+  // to each fresh player instance.
+  private _rotate = 0;
   private _currentFit: "contain" | "cover" | "fill" | "zoom" = "contain"; // Actual fit being applied
   private _thumb: boolean = false;
   // True once the source falls back to linear (forward-only) playback: server
@@ -509,6 +512,7 @@ export class MoviElement extends HTMLElement {
       "ambientwrapper",
       "renderer",
       "objectfit",
+      "rotate",
       "thumb",
       "hdr",
       "theme",
@@ -16420,6 +16424,19 @@ export class MoviElement extends HTMLElement {
           this.updateFitMode();
         }
         break;
+      case "rotate": {
+        // Declarative rotation in degrees, snapped to 0 / 90 / 180 / 270. Applied
+        // live and re-applied on load (see initializePlayer). Rotates on top of
+        // any rotation the container metadata already carries.
+        const raw = ((parseInt(newValue || "0", 10) || 0) % 360 + 360) % 360;
+        const snapped = (Math.round(raw / 90) * 90) % 360;
+        if (this._rotate !== snapped) {
+          this._rotate = snapped;
+          this.player?.setVideoRotation(snapped);
+          this.syncThumbnailRotation?.(snapped);
+        }
+        break;
+      }
       case "sw":
         if (newValue === "auto") {
           this._sw = "auto";
@@ -17342,6 +17359,11 @@ export class MoviElement extends HTMLElement {
       this.updateCanvasSize(); // Ensure canvas size is synced after load overwrites
       this.updateFitMode();
       if (this.player) {
+        // Re-apply a declarative `rotate` to the fresh player.
+        if (this._rotate) {
+          this.player.setVideoRotation(this._rotate);
+          this.syncThumbnailRotation?.(this._rotate);
+        }
         this.player.setHDREnabled(this._hdr);
         this.player.setStableAudio(this._stableVolume);
         this.updateStableAudioUI();
@@ -22270,6 +22292,18 @@ export class MoviElement extends HTMLElement {
 
   set objectFit(value: "contain" | "cover" | "fill" | "zoom" | "control") {
     this.setAttribute("objectfit", value);
+  }
+
+  /** Video rotation in degrees (0 / 90 / 180 / 270). Reflects the `rotate`
+   *  attribute; setting it snaps to the nearest quarter-turn. */
+  get rotate(): number {
+    return this._rotate;
+  }
+
+  set rotate(deg: number) {
+    const snapped = (Math.round(((((deg || 0) % 360) + 360) % 360) / 90) * 90) % 360;
+    if (snapped) this.setAttribute("rotate", String(snapped));
+    else this.removeAttribute("rotate");
   }
 
   get thumb(): boolean {
