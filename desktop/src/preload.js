@@ -20,8 +20,15 @@ contextBridge.exposeInMainWorld("movi", {
   // Menu "Open URL…" asks the renderer to focus its URL field.
   onFocusUrl: (cb) => ipcRenderer.on("focus-url", () => cb()),
 
-  // OS window fullscreen toggled (used to drop the macOS titlebar inset).
+  // OS window fullscreen toggled (used to drop the macOS titlebar inset AND to
+  // sync the player's own fullscreen UI — see renderer).
   onFullscreen: (cb) => ipcRenderer.on("window-fullscreen", (_e, on) => cb(on)),
+
+  // Toggle the OS window fullscreen. The player's own fullscreen button / F key /
+  // double-click routes here so it drives the SAME OS fullscreen as the macOS
+  // green button, instead of a separate HTML element-fullscreen the two paths
+  // would fight over.
+  toggleFullscreen: () => ipcRenderer.send("window:toggle-fullscreen"),
 
   // Recent files (path-based opens only).
   getRecents: () => ipcRenderer.invoke("recents:get"),

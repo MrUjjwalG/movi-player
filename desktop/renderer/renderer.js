@@ -335,7 +335,27 @@ player.addEventListener("error", (e) => {
 
 // ---------- Wires from main ----------
 window.movi.onLoadPaths(loadPaths);
-window.movi.onFullscreen((on) => document.body.classList.toggle("osfs", on));
+window.movi.onFullscreen((on) => {
+  document.body.classList.toggle("osfs", on);
+  // Sync the player's own fullscreen UI (icon, context-menu label, auto-hide /
+  // cursor behaviour) to the OS window fullscreen. The macOS green button and the
+  // menu toggle only move the OS window — without this the player never learns it
+  // went fullscreen, so its state stays out of sync.
+  try {
+    player.setHostFullscreen(on);
+  } catch {}
+});
+
+// Route the player's own fullscreen button / F key / double-click to the OS
+// window fullscreen (same as the green button) instead of HTML element
+// fullscreen — the two would otherwise fight (after a green-button fullscreen,
+// document.fullscreenElement is null, so the player's button would ENTER element
+// fullscreen instead of exiting). The resulting window-fullscreen event drives
+// setHostFullscreen above to keep the UI in sync.
+player.addEventListener("movi-fullscreen-request", (e) => {
+  e.preventDefault();
+  window.movi.toggleFullscreen();
+});
 
 // ---------- Open-URL modal (works during playback; the welcome URL bar is hidden then) ----------
 function playUrl(u) {

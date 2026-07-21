@@ -220,6 +220,12 @@ ipcMain.on("renderer-ready", () => {
     foreground();
   }
 });
+// The player's own fullscreen button/F key routes here so it drives OS window
+// fullscreen (matching the green button). The enter/leave-full-screen listeners
+// above then send window-fullscreen back to sync the player UI.
+ipcMain.on("window:toggle-fullscreen", () => {
+  if (mainWindow) mainWindow.setFullScreen(!mainWindow.isFullScreen());
+});
 ipcMain.handle("dialog:open", () => openViaDialog());
 ipcMain.handle("recents:get", () => listRecents());
 ipcMain.handle("recents:clear", () => writeRecents([]));
