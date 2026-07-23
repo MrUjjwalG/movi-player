@@ -182,6 +182,11 @@ export class MoviElement extends HTMLElement {
   private _stutterSeconds: number = 0;
   private _stutterCooldown: boolean = false;
   private _stutterCooldownTimer: number | null = null;
+  // Warm-up deadline after a rate change: the decoder needs a moment to ramp
+  // its frame queue to the new rate, so stutter sampling is skipped until now
+  // passes this to avoid a false "Play at 1x" nag on the ramp-up frames.
+  private _stutterGraceUntil: number = 0;
+  private static readonly STUTTER_GRACE_MS = 2500;
   private static readonly GRAPH_MAX_SAMPLES = 60; // 30 seconds of data (500ms interval)
 
   // Internal state
@@ -4258,10 +4263,13 @@ export class MoviElement extends HTMLElement {
       }
     });
 
-    // Make element focusable for keyboard shortcuts
-    if (!this.hasAttribute("tabindex")) {
-      this.setAttribute("tabindex", "0");
-    }
+    // NOTE: focusability (tabindex) is set in connectedCallback, NOT here.
+    // setupKeyboardShortcuts() runs during construction (createControls calls
+    // it), and a custom-element constructor must not gain attributes — else
+    // `document.createElement("movi-player")` (what React and any programmatic
+    // creation use) throws "NotSupportedError: The result must not have
+    // attributes". The old `this.setAttribute("tabindex", "0")` here was the
+    // same issue-#9 bug that was already fixed in the constructor body. (issue #9)
 
     // Record every touch on the player so the synthetic mouse events the
     // browser fires right after a tap (mouseenter/mousemove/mousedown/...)
@@ -7638,10 +7646,16 @@ export class MoviElement extends HTMLElement {
    * Called on every playback-rate change — each new speed the user picks gets a
    * fresh chance to warn if it stutters (instead of showing only once per
    * source). The 3-second sustained requirement still prevents instant spam.
+   *
+   * Also opens a short warm-up grace window: right after a speed change the
+   * decoder is still ramping its frame queue to the new rate, so those first
+   * seconds legitimately present few frames. Sampling ignores them until the
+   * grace passes, giving the pipeline headroom to settle before we judge it.
    */
   private resetStutterHint(): void {
     this._stutterSeconds = 0;
     this._stutterCooldown = false;
+    this._stutterGraceUntil = performance.now() + MoviElement.STUTTER_GRACE_MS;
     if (this._stutterCooldownTimer !== null) {
       clearTimeout(this._stutterCooldownTimer);
       this._stutterCooldownTimer = null;
@@ -7669,6 +7683,14 @@ export class MoviElement extends HTMLElement {
     }
     const h = this.player?.getRenderHealth?.();
     if (!h) return;
+    // Warm-up grace after a rate change: keep advancing the baseline but don't
+    // count these ramp-up windows, so a fresh speed gets headroom to settle
+    // before the "Play at 1x" heuristic can judge it.
+    if (performance.now() < this._stutterGraceUntil) {
+      this._stutterLastPresented = h.framesPresented;
+      this._stutterSeconds = 0;
+      return;
+    }
     const presented = h.framesPresented - this._stutterLastPresented;
     this._stutterLastPresented = h.framesPresented;
     // framesPresented resets to 0 on seek → negative delta; skip that sample.
