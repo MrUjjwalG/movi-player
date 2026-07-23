@@ -1208,6 +1208,15 @@ export class MoviElement extends HTMLElement {
                   <div class="movi-track-menu-footer movi-audio-track-footer"></div>
                 </div>
               </div>
+              <div class="movi-hdr-container">
+                <button class="movi-btn movi-hdr-btn" aria-label="Toggle HDR">
+                  <svg class="movi-icon-hdr" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                    <path d="M5 7v10M5 12h5M10 7v10M14 7h6a3 3 0 0 1 0 6h-6M17 13l3 4"></path>
+                  </svg>
+                  <span class="movi-hdr-label">HDR</span>
+                </button>
+              </div>
+
               <div class="movi-subtitle-track-container">
                 <button class="movi-btn movi-subtitle-track-btn" aria-label="Subtitles/Captions">
                   <svg class="movi-icon-subtitle" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
@@ -1264,15 +1273,6 @@ export class MoviElement extends HTMLElement {
                 <div class="movi-quality-menu" style="display: none;">
                   <div class="movi-quality-list"></div>
                 </div>
-              </div>
-
-              <div class="movi-hdr-container">
-                <button class="movi-btn movi-hdr-btn" aria-label="Toggle HDR">
-                  <svg class="movi-icon-hdr" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-                    <path d="M5 7v10M5 12h5M10 7v10M14 7h6a3 3 0 0 1 0 6h-6M17 13l3 4"></path>
-                  </svg>
-                  <span class="movi-hdr-label">HDR</span>
-                </button>
               </div>
 
               <div class="movi-speed-container">
@@ -10016,6 +10016,15 @@ export class MoviElement extends HTMLElement {
 
       if (timestamp - lastRun >= UI_UPDATE_MIN_MS) {
         lastRun = timestamp;
+        // tracksChange can land BEFORE the renderer's configure() has applied the
+        // new rung's colour metadata, so the read there can still be the old
+        // value. Watch the flag instead and re-sync whenever it actually flips —
+        // self-correcting whenever detection settles, and free until it does.
+        const hdrSupported = !!this.player.isHDRSupported?.();
+        if (hdrSupported !== this._lastHdrSupported) {
+          this._lastHdrSupported = hdrSupported;
+          this.updateHDRVisibility();
+        }
         // When the controls *bar* is auto-hidden, progress bar / time /
         // volume icon are invisible — skip those DOM writes. Play/pause
         // icon stays out of the gate because its update ALSO drives the
@@ -17062,6 +17071,18 @@ export class MoviElement extends HTMLElement {
     this._autoMutedForAutoplay = true;
     this._muted = true;
     this.updateMuted(); // pushes mute to player + surfaces the pill
+    // Announce the state change. `updateMuted()` only refreshes our own
+    // chrome (volume icon + pill), so without this an integrator's custom
+    // controls listening for `volumechange` never learn we auto-muted and
+    // keep rendering an "unmuted" speaker while the pill says "Tap to
+    // unmute". Emitted directly rather than via the `muted` setter so we
+    // still avoid latching `_userHasUnmuted` and don't persist this
+    // internal mute to SettingsStorage as if it were a user preference.
+    this.dispatchEvent(
+      new CustomEvent("volumechange", {
+        detail: { volume: this._volume, muted: this._muted },
+      }),
+    );
   }
 
   private updateMuted() {
@@ -17821,6 +17842,14 @@ export class MoviElement extends HTMLElement {
       this.updateSubtitleTrackMenu();
       this.updateQualityMenu();
       this.renderChapterMarkers();
+      // A quality change swaps the active video track, and rungs of the same
+      // ladder do not have to share a transfer function — a 4K rung can be
+      // PQ/HLG BT.2020 while the 1080p rung below it is plain SDR. HDR support
+      // was only evaluated at load, so the button kept the state of whatever
+      // rung happened to load first: it stayed visible on an SDR rung, or never
+      // appeared when Auto climbed into an HDR one. The renderer re-runs its own
+      // detection in configure(); this re-reads the result.
+      this.updateHDRVisibility();
       // Notify hosts when the active video resolution changes — including from
       // an ABR/in-place quality switch, which bypasses the manual switch path
       // that normally fires `qualitychange`. Without this a host that persists
@@ -19014,6 +19043,8 @@ export class MoviElement extends HTMLElement {
    *  then jump to the target once it lands. Showing the target throughout is
    *  what the viewer asked for. */
   private _uiSeekTarget = -1;
+  /** Last observed isHDRSupported(), so the UI tick can notice a flip. */
+  private _lastHdrSupported: boolean | null = null;
   /** Ownership token for _uiSeekTarget. Value equality is NOT enough: a single
    *  click fires BOTH the document-mouseup and the bar-click handler with the
    *  SAME target, so the first one's finally cleared the second one's still-live
