@@ -97,10 +97,21 @@ export class CanvasRenderer {
   private _perfWindowStart: number = 0; // performance.now() of the current window, 0 = not started
   private _perfWindowBaseCount: number = 0; // framesPresented at window start
   private _perfDeficitWindows: number = 0; // consecutive struggling windows
+  // Decode-bound (STUCK) detector — a separate, TIME-based window so it works
+  // even when the frame-warmup gate never clears: a near-frozen decoder barely
+  // advances framesPresented, so it would sit under PERF_WARMUP_FRAMES forever
+  // and the slow-path deficit check would never run. Audio-gated so a network
+  // stall (audio starves too) isn't blamed on the video pipeline.
+  private _perfStuckWindows: number = 0;
+  private _stuckWindowStart: number = 0;
+  private _stuckBaseCount: number = 0;
   private _onPerformanceDegrade: ((targetFps: number) => void) | null = null;
   private static readonly PERF_WINDOW_MS = 1000;
   private static readonly PERF_DEFICIT_RATIO = 0.7; // achieved < 70% of source rate = struggling
   private static readonly PERF_DEFICIT_WINDOWS = 2; // consecutive bad windows before engaging
+  // ~4s of near-zero video with healthy audio = decode-bound, not transient
+  // recovery (a keyframe hunt restores frames within ~1-2s).
+  private static readonly PERF_STUCK_WINDOWS = 4;
   private static readonly PERF_WARMUP_FRAMES = 60; // skip startup / post-seek ramp
   private static readonly PERF_MIN_CAP_FPS = 24; // never cap below this
   // Below this achieved rate the pipeline is STUCK (decoder error / recovering /
@@ -113,6 +124,7 @@ export class CanvasRenderer {
   // Audio time provider for A/V sync
   private getAudioTime: (() => number) | null = null;
   private _isAudioHealthy: (() => boolean) | null = null;
+  private _shouldMeasurePerf: (() => boolean) | null = null;
 
   // Presentation timing
   private presentationStartTime: number = 0;
@@ -359,11 +371,14 @@ export class CanvasRenderer {
       this.videoFrameRate = 60;
     }
 
-    // Fresh source: re-arm the adaptive-FPS detector and clear any prior cap.
+    // Fresh source / rendition switch: re-arm the adaptive-FPS + decode-bound
+    // detectors and clear any prior cap so the new rung gets a fresh judgment.
     this._presentFpsCap = 0;
     this._perfDegradeChecked = false;
     this._perfWindowStart = 0;
     this._perfDeficitWindows = 0;
+    this._perfStuckWindows = 0;
+    this._stuckWindowStart = 0;
 
     // Set rotation from metadata
     if (rotation !== undefined) {
@@ -1056,19 +1071,74 @@ export class CanvasRenderer {
     this._onPerformanceDegrade = cb;
   }
 
+  /** Gate perf sampling. The host passes false while the tab is backgrounded
+   *  (and not in PiP): rAF is throttled there, so framesPresented stalls even
+   *  though audio keeps flowing — which would false-fire the decode-bound
+   *  detector and needlessly cap resolution on a perfectly capable device. */
+  setShouldMeasurePerf(cb: () => boolean): void {
+    this._shouldMeasurePerf = cb;
+  }
+
   /** Roll the achieved-present-rate window and engage the adaptive FPS cap on a
    *  sustained deficit. Called once per presentation cycle, before the
    *  empty-queue bail, so a starving (decode-bound) pipeline still advances the
    *  window clock and registers its low present count. */
   private samplePerformance(): void {
-    if (this._perfDegradeChecked || !this.isPlaying) return;
+    if (this._perfDegradeChecked) return;
+    if (!this.isPlaying) {
+      this._perfWindowStart = 0;
+      this._stuckWindowStart = 0;
+      this._perfStuckWindows = 0;
+      return;
+    }
+    // Skip while backgrounded (and not in PiP): the throttled rAF stalls
+    // framesPresented even though audio flows, which would false-fire the
+    // decode-bound detector and cap resolution on a capable device. Reset so
+    // returning to the foreground starts clean windows (no stale accumulation).
+    if (this._shouldMeasurePerf && !this._shouldMeasurePerf()) {
+      this._perfWindowStart = 0;
+      this._perfDeficitWindows = 0;
+      this._stuckWindowStart = 0;
+      this._perfStuckWindows = 0;
+      return;
+    }
     // Off-speed playback changes distinct-frames-per-wall-second on its own
     // (2x can't show every frame on a 60Hz panel; slow-mo shows fewer) — that's
     // not the device struggling. Only measure at normal speed.
     if (Math.abs(this.playbackRate - 1.0) > 0.05) {
       this._perfWindowStart = 0;
+      this._stuckWindowStart = 0;
       return;
     }
+
+    // Decode-bound (STUCK) detector — runs BEFORE the frame-warmup gate on its
+    // own time-based window, because a near-frozen decoder never advances
+    // framesPresented past the warmup count (so the slow-path check below would
+    // never even start). Audio healthy = playback is genuinely running, so
+    // sustained near-zero video = the device can't decode this rung → tell ABR
+    // to drop. A rendition switch re-arms us via configure().
+    const nowStuck = performance.now();
+    if (this._stuckWindowStart === 0) {
+      this._stuckWindowStart = nowStuck;
+      this._stuckBaseCount = this.framesPresented;
+    } else if (nowStuck - this._stuckWindowStart >= CanvasRenderer.PERF_WINDOW_MS) {
+      const stuckFps =
+        (this.framesPresented - this._stuckBaseCount) /
+        ((nowStuck - this._stuckWindowStart) / 1000);
+      const audioFlowing = this._isAudioHealthy ? this._isAudioHealthy() : true;
+      if (audioFlowing && stuckFps < CanvasRenderer.PERF_MIN_ACHIEVED_FPS) {
+        this._perfStuckWindows++;
+        if (this._perfStuckWindows >= CanvasRenderer.PERF_STUCK_WINDOWS) {
+          this.engageDecodeBound(stuckFps);
+          return;
+        }
+      } else {
+        this._perfStuckWindows = 0;
+      }
+      this._stuckWindowStart = nowStuck;
+      this._stuckBaseCount = this.framesPresented;
+    }
+
     // framesPresented resets to 0 on start/seek, so a low count during the
     // ramp is expected — not a deficit. Reset the window and wait it out.
     if (this.framesPresented <= CanvasRenderer.PERF_WARMUP_FRAMES) {
@@ -1087,7 +1157,14 @@ export class CanvasRenderer {
 
     const achieved = this.framesPresented - this._perfWindowBaseCount;
     const achievedFps = achieved / (elapsed / 1000);
-    const expected = this.videoFrameRate * (elapsed / 1000);
+    // Judge against the CAPPED rate once a present cap is active, so a source
+    // holding steady at the cap (e.g. 4K sustaining 30 of its 60fps) reads as
+    // healthy instead of a deficit that would needlessly drop resolution.
+    const targetFps =
+      this._presentFpsCap > 0
+        ? Math.min(this.videoFrameRate, this._presentFpsCap)
+        : this.videoFrameRate;
+    const expected = targetFps * (elapsed / 1000);
     // A network stall starves audio too — don't blame the video pipeline for
     // it. Only count a window when audio is flowing.
     const audioHealthy = this._isAudioHealthy ? this._isAudioHealthy() : true;
@@ -1114,21 +1191,51 @@ export class CanvasRenderer {
   }
 
   private engagePresentCap(achievedFps: number): void {
-    this._perfDegradeChecked = true; // one-way: decide once per source
     const cap = Math.max(
       CanvasRenderer.PERF_MIN_CAP_FPS,
       Math.round(this.videoFrameRate / 2),
     );
-    // Already low enough that halving would drop under the floor — nothing to
-    // gain, and dropping a 30fps source to 24 isn't worth the judder.
-    if (cap >= this.videoFrameRate) return;
-    this._presentFpsCap = cap;
+    // Can't cap any lower (source already ≤2× the floor) → the frame-rate lever
+    // is spent; resolution downshift is all that's left.
+    if (cap >= this.videoFrameRate) {
+      this.engageDecodeBound(achievedFps);
+      return;
+    }
+    if (this._presentFpsCap === 0) {
+      // FIRST sign of trouble: cap the present rate and RE-ARM to re-judge
+      // against the cap. Give the rung a chance to hold at the reduced frame
+      // rate before dropping resolution — a 4K/1440p source the GPU can do at
+      // 30 but not 60 keeps its resolution instead of stepping down (which is
+      // what made it flap: it never got to try the current rung at half rate).
+      this._presentFpsCap = cap;
+      this._perfDeficitWindows = 0;
+      this._perfWindowStart = 0;
+      Logger.info(
+        TAG,
+        `Adaptive FPS: sustained ~${achievedFps.toFixed(0)}/${this.videoFrameRate}fps — capping presentation to ${cap}fps before any resolution drop`,
+      );
+      return;
+    }
+    // Already capped and STILL short of the cap → the rung is too heavy even at
+    // the reduced rate. Now drop resolution.
     Logger.info(
       TAG,
-      `Adaptive FPS: sustained ~${achievedFps.toFixed(0)}/${this.videoFrameRate}fps — capping presentation to ${cap}fps`,
+      `Adaptive FPS: still ~${achievedFps.toFixed(0)}/${this._presentFpsCap}fps after the cap — dropping resolution`,
+    );
+    this.engageDecodeBound(achievedFps);
+  }
+
+  /** Decode-bound catastrophe: the decoder can't produce frames at all (near
+   *  zero) while audio flows. Present-capping can't help a decoder that isn't
+   *  producing — signal ABR to drop a rung instead (pass 0, no cap). */
+  private engageDecodeBound(achievedFps: number): void {
+    this._perfDegradeChecked = true; // one-way until configure() re-arms on the switch
+    Logger.warn(
+      TAG,
+      `Decode-bound: only ~${achievedFps.toFixed(1)}/${this.videoFrameRate}fps presented with healthy audio — signalling ABR to drop a rung`,
     );
     try {
-      this._onPerformanceDegrade?.(cap);
+      this._onPerformanceDegrade?.(0);
     } catch {
       /* ignore */
     }

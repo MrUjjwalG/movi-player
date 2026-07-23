@@ -2036,6 +2036,7 @@ export class MoviElement extends HTMLElement {
       if (this.isLoading || this._isUnsupported || !this.player) return;
       e.stopPropagation();
       this.isDragging = true;
+      this._seekHandledOnRelease = false;
       this.showControls();
       updateScrubbingUI(e.clientX);
       // Don't seek yet, standard practice is to seek on release or drag depending on config
@@ -2057,6 +2058,9 @@ export class MoviElement extends HTMLElement {
       // showControls) is only meaningful at the end of a scrub.
       if (!this.isDragging) return;
       this.isDragging = false; // Stop immediately so the seek's UI updates aren't competing
+      // Claim the gesture BEFORE awaiting: the "click" event lands ~1ms from now,
+      // long before this seek resolves.
+      this._seekHandledOnRelease = true;
       await this.seekFromEvent(e); // Actual seek on release
       const controlsContainer = shadowRoot.querySelector(
         ".movi-controls-container",
@@ -2147,6 +2151,12 @@ export class MoviElement extends HTMLElement {
       }, 500); // 500ms deadzone
 
       hideThumbnail(0); // Hide immediately on click
+      if (this._seekHandledOnRelease) {
+        // The release handler already seeked for this very gesture.
+        this._seekHandledOnRelease = false;
+        this.showControls();
+        return;
+      }
       await this.seekFromEvent(e);
       this.showControls();
     });
@@ -2795,7 +2805,6 @@ export class MoviElement extends HTMLElement {
     if (
       !progressBar ||
       !this.player ||
-      this.isSeeking ||
       this.isLoading ||
       this._isUnsupported
     )
@@ -2830,6 +2839,7 @@ export class MoviElement extends HTMLElement {
     const wasPlaying = state === "playing";
 
     this.isSeeking = true;
+    const uiSeekSeq = this._armUiSeekTarget(time);
     try {
       await this.player.seek(time);
 
@@ -2853,6 +2863,10 @@ export class MoviElement extends HTMLElement {
       // Don't show alert for seek errors - they're usually recoverable
     } finally {
       this.isSeeking = false;
+      // Retire only OUR target. Rapid scrubbing supersedes seeks, and a stale
+      // one finishing must not clear the target of the seek still in flight —
+      // that is what snapped the readout/scrubber back to the old position.
+      this._retireUiSeekTarget(uiSeekSeq);
     }
   }
 
@@ -2863,7 +2877,6 @@ export class MoviElement extends HTMLElement {
     if (
       !progressBar ||
       !this.player ||
-      this.isSeeking ||
       this.isLoading ||
       this._isUnsupported
     )
@@ -2902,6 +2915,7 @@ export class MoviElement extends HTMLElement {
     const wasPlaying = state === "playing";
 
     this.isSeeking = true;
+    const uiSeekSeq = this._armUiSeekTarget(time);
     try {
       await this.player.seek(time);
 
@@ -2922,6 +2936,10 @@ export class MoviElement extends HTMLElement {
       Logger.error(TAG, "Touch seek error", error);
     } finally {
       this.isSeeking = false;
+      // Retire only OUR target. Rapid scrubbing supersedes seeks, and a stale
+      // one finishing must not clear the target of the seek still in flight —
+      // that is what snapped the readout/scrubber back to the old position.
+      this._retireUiSeekTarget(uiSeekSeq);
     }
   }
 
@@ -6669,6 +6687,14 @@ export class MoviElement extends HTMLElement {
   private _frozenSince = 0;
   private _frozenRecoveries = 0;
   private static readonly MAX_FROZEN_RECOVERIES = 3;
+  // Companion watchdog for the NON-playing stuck case (a seek/rebuffer that
+  // never completes) — the frozen-video watchdog only covers "playing".
+  private _stuckRecoverySince = 0;
+  private _stuckRecoveryLastTime = -1;
+  private _stuckLastBuffered = -1;
+  private _stuckLastBytes = -1;
+  private _stuckRecoveries = 0;
+  private static readonly MAX_STUCK_RECOVERIES = 3;
   // Set only by the decode-downshift recreate so its own load() keeps the ceiling
   // (every other load clears it, so the next source re-attempts its top rung).
   private _preserveDecodeCapOnce = false;
@@ -6846,6 +6872,18 @@ export class MoviElement extends HTMLElement {
    * re-inits on a fresh WASM instance.
    */
   private _recreateAt(targetSrc: string | null): void {
+    // Pin the last visible frame as an overlay so the recreate doesn't flash the
+    // static poster + 00:00 while the fresh player re-primes — same cover the
+    // quality switch uses. Hidden once the resume-seek lands (see the "playing"
+    // handler). Best-effort: a tainted/lost canvas falls back to any earlier
+    // snapshot, or (if none) the static poster.
+    try {
+      const dataUrl = this.canvas?.toDataURL("image/jpeg", 0.85);
+      if (dataUrl && dataUrl.length > 32) this._lastFrameSnapshot = dataUrl;
+    } catch {
+      /* tainted / lost canvas — keep whatever snapshot we already had */
+    }
+    this._showSnapshotPoster();
     let resumeTime = 0;
     try {
       resumeTime =
@@ -7091,6 +7129,7 @@ export class MoviElement extends HTMLElement {
             id: q.src,
             label: q.label,
             bandwidth: q.bandwidth || this._estimateBitrate(q.height),
+            height: q.height,
           })),
         activeSrc,
       );
@@ -10002,6 +10041,7 @@ export class MoviElement extends HTMLElement {
           this.updateVolumeIcon();
         }
         this._checkFrozenVideo(timestamp);
+        this._checkStuckPlayback(timestamp);
       }
 
       requestAnimationFrame(updateUI);
@@ -10030,6 +10070,17 @@ export class MoviElement extends HTMLElement {
       return;
     }
     const t = p.getCurrentTime?.() ?? 0;
+    // Only a DECODE stall earns a corrective seek. With no buffered data ahead
+    // the video isn't "frozen" — it's STARVED (link too slow to sustain even the
+    // lowest rung), and seeking there just resets the pipeline: the seek
+    // force-completes with no frame, black-frame recovery burns its nudges, the
+    // buffer refills, playback resumes, and it freezes again — a loop that never
+    // settles. Let it buffer instead.
+    const bufferedAhead = (p.getBufferedTime?.() ?? 0) - t;
+    if (bufferedAhead < 0.5) {
+      this._frozenSince = 0;
+      return;
+    }
     const frames = p.getRenderHealth?.()?.framesPresented ?? 0;
     const clockAdvancing = this._frozenLastTime >= 0 && t > this._frozenLastTime + 0.05;
     const framesAdvancing = frames > this._frozenLastFrames;
@@ -10063,6 +10114,103 @@ export class MoviElement extends HTMLElement {
       p.seek?.(t);
     } catch {
       /* seek rejected — the next tick re-evaluates */
+    }
+  }
+
+  /** Companion to _checkFrozenVideo for the NON-playing case: a seek or rebuffer
+   *  that never completes. On a slow link the byte range being waited on may
+   *  simply never arrive ("waitForData returned false"), which strands the
+   *  player in seeking/buffering with the spinner up — after an ABR downshift,
+   *  after a recovery recreate's resume-seek, or after any seek. The frozen
+   *  watchdog only runs while "playing", so nothing caught this and the user had
+   *  to seek manually to unstick it. Nudge forward onto data that IS arriving
+   *  and (re)request play. Bounded, and inert while the buffer is still growing
+   *  (a slow-but-working rebuffer must be left alone). */
+  private _checkStuckPlayback(now: number): void {
+    const p = this.player;
+    const st = p?.getState?.();
+    // Only when the player is TRYING to reach playback but isn't getting there:
+    // a seek or rebuffer that never completes (slow link, data that never
+    // arrives — "waitForData returned false"). Skip paused/ready/idle/error
+    // (nothing to unstick), "loading" (setup still in flight — its split-audio
+    // demuxer is opening, and a nudge now would seek the video past an audio
+    // demuxer that doesn't exist yet), and "playing" (the frozen-video watchdog
+    // owns that case).
+    if (!p || (st !== "seeking" && st !== "buffering")) {
+      this._stuckRecoverySince = 0;
+      this._stuckRecoveryLastTime = -1;
+      this._stuckLastBuffered = -1;
+      this._stuckLastBytes = -1;
+      if (st === "playing") this._stuckRecoveries = 0;
+      return;
+    }
+    // NEVER fight a seek this element deliberately started. "No playhead
+    // progress" is the DEFINING condition of an in-flight seek, not evidence of
+    // a stuck pipeline — so the nudge below used to fire mid-seek and re-seek to
+    // (old clock + 2s), superseding the user's seek and yanking the position
+    // back to where they seeked FROM. The bar then showed the old spot until the
+    // real target finally landed. The seek has its own (adaptive) timeout in
+    // MoviPlayer; this watchdog only owns the rebuffer case.
+    if (this.isSeeking || this._uiSeekTarget >= 0) {
+      this._stuckRecoverySince = 0;
+      this._stuckRecoveryLastTime = -1;
+      this._stuckLastBuffered = -1;
+      this._stuckLastBytes = -1;
+      return;
+    }
+    const t = p.getCurrentTime?.() ?? 0;
+    const buffered = p.getBufferedTime?.() ?? 0;
+    const bytes = p.getBufferEndBytes?.() ?? -1;
+    // Progress = the playhead OR the buffered end moved. A slow-but-working
+    // rebuffer still grows the buffer, so it is NOT stuck — only a pipeline
+    // where neither advances needs a nudge.
+    const progressing =
+      (this._stuckRecoveryLastTime >= 0 &&
+        t > this._stuckRecoveryLastTime + 0.05) ||
+      (this._stuckLastBuffered >= 0 && buffered > this._stuckLastBuffered + 0.05) ||
+      // Real bytes landing. Right after a seek the TIME-based signals are both
+      // flat by construction — the playhead is parked and the buffered END is
+      // computed as (currentTime + forward), so a trickle of arriving data
+      // doesn't move it. Judging on those alone declared a perfectly healthy
+      // slow rebuffer "stuck" and nudged the position forward, skipping seconds
+      // the viewer had just seeked to. The byte cursor has no such blind spot.
+      (this._stuckLastBytes >= 0 && bytes > this._stuckLastBytes);
+    this._stuckRecoveryLastTime = t;
+    this._stuckLastBuffered = buffered;
+    this._stuckLastBytes = bytes;
+    if (progressing) {
+      this._stuckRecoverySince = 0;
+      return;
+    }
+    if (this._stuckRecoverySince === 0) {
+      this._stuckRecoverySince = now;
+      return;
+    }
+    // A seek is allowed to take a LOT longer than a rebuffer before it counts as
+    // stuck: on a throttled link a legitimate seek into unbuffered territory
+    // measured ~30s end to end (blocking demuxer.seek + keyframe hunt). Judging
+    // it at the rebuffer's 6s just interrupted seeks that were working.
+    const stuckBudget = st === "seeking" ? 30000 : 6000;
+    if (now - this._stuckRecoverySince < stuckBudget) return;
+    if (this._stuckRecoveries >= MoviElement.MAX_STUCK_RECOVERIES) return;
+    this._stuckRecoveries++;
+    this._stuckRecoverySince = 0;
+    // Nudge forward onto data that IS arriving — a bit further each attempt.
+    const base = t > 0 ? t : Math.max(0, this._recoveryResumeTime);
+    const target = base + 2 * this._stuckRecoveries;
+    Logger.warn(
+      TAG,
+      `Playback stuck in "${st}" ${this._stuckRecoveries}× (no playhead/buffer progress) — nudging seek to ${target.toFixed(1)}s + play`,
+    );
+    try {
+      // Re-read the player: a recreate can null it (or swap in a fresh one)
+      // between entry and here, and nudging a half-torn-down instance threw
+      // "Cannot read properties of null (reading 'seek')" from inside seek().
+      if (this.player !== p) return;
+      void Promise.resolve(p.seek?.(target)).catch(() => {});
+      p.play?.();
+    } catch {
+      /* next tick re-evaluates */
     }
   }
 
@@ -17716,6 +17864,12 @@ export class MoviElement extends HTMLElement {
     // Forward player events to element
     const stateChangeHandler = (state: PlayerState) => {
       Logger.info(TAG, `stateChange: ${state}`);
+      // Re-sync the enabled/disabled chrome on every state change. It used to
+      // run only on loadEnd/preloadcomplete, so a recovery path that reached a
+      // playable state without a fresh loadEnd (the recreate calls load()
+      // un-awaited) left every control greyed out and unclickable over video
+      // that was actually playing fine.
+      this.updateControlsState();
       // QoE: track stalls. Entering "buffering" starts a rebuffer timer; any
       // other state ends it (the first stall, before first frame, is startup).
       if (state === "buffering") this._qoe.bufferingStartNow();
@@ -17757,7 +17911,19 @@ export class MoviElement extends HTMLElement {
             this._startAt = this._startAtBeforeSwitch;
             this.posterElement.style.display = "none";
           }
+        } else if (this._snapshotPosterActive && this._recoveryResumeTime >= 0) {
+          // Recovery recreate: same as a quality switch — hold the last-frame
+          // cover until the resume-seek has actually moved the playhead, so it
+          // doesn't flash the poster + 00:00 for a frame at playback start.
+          const at = this.player?.getCurrentTime?.() ?? 0;
+          const resumed =
+            this._recoveryResumeTime <= 0 || at >= this._recoveryResumeTime - 1;
+          if (resumed) {
+            this._hideSnapshotPoster();
+            this.posterElement.style.display = "none";
+          }
         } else {
+          this._hideSnapshotPoster();
           this.posterElement.style.display = "none";
         }
       }
@@ -18841,6 +19007,60 @@ export class MoviElement extends HTMLElement {
     }
   }
 
+  /** Target of the seek currently in flight, or -1. The player only moves its
+   *  clock AFTER `demuxer.seek()` returns, which on a slow link blocks for as
+   *  long as the byte range takes — so until then getCurrentTime() still reports
+   *  the OLD position and the readout/scrubber snap backwards during loading,
+   *  then jump to the target once it lands. Showing the target throughout is
+   *  what the viewer asked for. */
+  private _uiSeekTarget = -1;
+  /** Ownership token for _uiSeekTarget. Value equality is NOT enough: a single
+   *  click fires BOTH the document-mouseup and the bar-click handler with the
+   *  SAME target, so the first one's finally cleared the second one's still-live
+   *  target and the readout/scrubber snapped back to the old position. */
+  private _uiSeekSeq = 0;
+  /** A plain click on the progress bar fires BOTH the document "mouseup"
+   *  handler (mousedown already set isDragging) AND the bar's own "click"
+   *  handler, so ONE click issued TWO identical seeks. The first is instantly
+   *  superseded and resolves in ~15ms; its teardown then stomped the live
+   *  seek's UI state and the bar snapped back to the old position for the
+   *  rest of the (multi-second) real seek. Release-seek claims the gesture
+   *  here so the click handler skips it. */
+  private _seekHandledOnRelease = false;
+
+  /** Current time for the UI:
+   *  - a seek is in flight  → its target (don't snap back to the old position)
+   *  - a recovery recreate  → the resume target (the fresh player reads 0 until
+   *    its resume-seek lands, which would flash 00:00 and then jump forward) */
+  private _uiCurrentTime(): number {
+    if (this._uiSeekTarget >= 0) return this._uiSeekTarget;
+    const ct = this.currentTime;
+    if (this._recoveryResumeTime >= 0 && ct < this._recoveryResumeTime - 2) {
+      return this._recoveryResumeTime;
+    }
+    return ct;
+  }
+
+  /**
+   * Arm the UI's seek target AND repaint straight away. Letting the next UI
+   * tick pick it up left the time readout on the OLD position for ~200ms while
+   * the scrubber had already jumped to the target — a visible mismatch on the
+   * one interaction users watch most closely.
+   */
+  private _armUiSeekTarget(time: number): number {
+    this._uiSeekTarget = time;
+    const seq = ++this._uiSeekSeq;
+    this.updateTimeDisplay();
+    this.updateProgressBar();
+    this.updateSeekAria();
+    return seq;
+  }
+
+  /** Retire the target only if OUR arming is still the live one. */
+  private _retireUiSeekTarget(seq: number): void {
+    if (this._uiSeekSeq === seq) this._uiSeekTarget = -1;
+  }
+
   private updateTimeDisplay(): void {
     const currentTimeEl = this.shadowRoot?.querySelector(
       ".movi-current-time",
@@ -18852,7 +19072,7 @@ export class MoviElement extends HTMLElement {
     // During the postertime poster seek the clock transiently sits at the
     // poster timestamp before being reset to 0 — show 0 so the time doesn't
     // flicker to ~2s and back.
-    const ct = this._posterSeekActive ? 0 : this.currentTime;
+    const ct = this._posterSeekActive ? 0 : this._uiCurrentTime();
 
     if (currentTimeEl) {
       currentTimeEl.textContent = this.formatTime(ct);
@@ -18881,7 +19101,7 @@ export class MoviElement extends HTMLElement {
       ".movi-progress-bar",
     ) as HTMLElement | null;
     if (!bar) return;
-    const ct = this._posterSeekActive ? 0 : this.currentTime;
+    const ct = this._posterSeekActive ? 0 : this._uiCurrentTime();
     const live = this.player?.isLiveStream?.();
     const dur =
       Number.isFinite(this.duration) && this.duration > 0 ? this.duration : 0;
@@ -19021,7 +19241,12 @@ export class MoviElement extends HTMLElement {
 
   private updateProgressBar(): void {
     // Don't update visuals if user is scrubbing or seeking
-    if (this.isDragging || this.isTouchDragging || this.isSeeking) return;
+    // Only a live drag suppresses the visual update — the user owns the handle
+    // then. Do NOT gate on isSeeking: a seek can take a long time on a slow link
+    // (the demuxer blocks on the byte range it needs), and freezing the bar for
+    // its whole duration is what made the scrubber look dead while the time kept
+    // ticking. The bar should keep showing the real position throughout.
+    if (this.isDragging || this.isTouchDragging) return;
 
     const progressFilled = this.shadowRoot?.querySelector(
       ".movi-progress-filled",
@@ -19061,7 +19286,7 @@ export class MoviElement extends HTMLElement {
     if (this.duration > 0) {
       // Clamp to 0 during the postertime poster seek (clock transiently parked
       // at the poster timestamp) so the filled bar/handle don't flick to ~2s.
-      const ct = this._posterSeekActive ? 0 : this.currentTime;
+      const ct = this._posterSeekActive ? 0 : this._uiCurrentTime();
       const percent = (ct / this.duration) * 100;
       if (progressFilled) {
         progressFilled.style.width = `${percent}%`;
@@ -19738,8 +19963,22 @@ export class MoviElement extends HTMLElement {
     if (!shadowRoot) return;
 
     // Initial state: No player, or currently loading
-    // But don't treat it as initial if it's already unsupported
-    const isInitial = (!this.player || this.isLoading) && !this._isUnsupported;
+    // But don't treat it as initial if it's already unsupported.
+    //
+    // The player's OWN state overrides a stale isLoading flag. Recovery paths
+    // (recreate-at-lower-quality, decode-error rebuild) fire load() without
+    // awaiting it, so isLoading can stay true even after the fresh player has
+    // reached a playable state — which pinned every control at opacity 0.4 /
+    // pointer-events:none over video that was playing normally. Once the player
+    // reports anything past idle/loading it is genuinely interactive.
+    const playerState = this.player?.getState?.();
+    const playerReady =
+      !!this.player &&
+      playerState !== undefined &&
+      playerState !== "idle" &&
+      playerState !== "loading";
+    const isInitial =
+      (!this.player || (this.isLoading && !playerReady)) && !this._isUnsupported;
     const isUnsupported = this._isUnsupported;
 
     // Controls to disable (everything except volume)
@@ -21752,6 +21991,7 @@ export class MoviElement extends HTMLElement {
     }
 
     this.isSeeking = true;
+    const uiSeekSeq = this._armUiSeekTarget(value);
     this.player
       .seek(value)
       .then(() => {
@@ -21765,7 +22005,9 @@ export class MoviElement extends HTMLElement {
         if (this.pendingSeekTarget !== null) {
           const next = this.pendingSeekTarget;
           this.pendingSeekTarget = null;
-          this.currentTime = next;
+          this.currentTime = next; // re-arms _uiSeekTarget for the tail seek
+        } else {
+          this._retireUiSeekTarget(uiSeekSeq);
         }
       });
   }
@@ -21884,10 +22126,11 @@ export class MoviElement extends HTMLElement {
       this.posterElement.style.display = "none";
       return;
     }
-    // While a quality switch is in flight the snapshot-poster mechanism owns
-    // the overlay (it's pinned to the last canvas frame). Bail out so we
-    // don't overwrite its src with the static thumbnail.
-    if (this._qualitySwitchInProgress && this._snapshotPosterActive) {
+    // While a quality switch OR a recovery recreate is in flight the snapshot-
+    // poster mechanism owns the overlay (it's pinned to the last canvas frame).
+    // Bail so we don't overwrite it with the static thumbnail — otherwise the
+    // recreate flashes the poster + 00:00 before playback re-primes.
+    if (this._snapshotPosterActive) {
       return;
     }
     if (this._poster) {

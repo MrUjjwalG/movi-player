@@ -61,6 +61,15 @@ type StreamWrapper =
 
 const TAG = "MoviPlayer";
 
+// Module-level device decode-capability cache — survives player/element
+// recreates for the whole page session, so a fresh MoviPlayer (per video, or
+// after a recovery) doesn't re-learn the same limit and re-stutter. Keyed by
+// rung HEIGHT (device-meaningful and stable across sources, unlike bandwidth).
+// A height lands here the FIRST time it goes decode-bound — which, because the
+// renderer tries an FPS cap first, means "can't sustain even at half rate": a
+// device limit, not a transient. Cleared only on a full page reload.
+const deviceDecodeBoundHeights = new Set<number>();
+
 export class MoviPlayer extends EventEmitter<PlayerEventMap> {
   // One-shot UA classification: mobile devices get the same conservative
   // decode/render budgets as 4K+ desktop, since mobile GPUs and Chrome's
@@ -157,6 +166,7 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
     label: string;
     id: string;
     bandwidth?: number;
+    height?: number;
   }[] = [];
   private _activeDashRendition: string = "";
   // Adaptive-quality (ABR) state for the demuxer/premuxed in-place switch.
@@ -195,6 +205,23 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
   private _abrPenalizedBandwidth: number = 0;
   private _abrPenaltyUntil: number = 0;
   private static readonly ABR_PENALTY_MS = 30000;
+  // Decode-bound is a DEVICE limit, not a transient network dip — back off much
+  // harder than a throughput drain so ABR doesn't re-climb into a rung the GPU
+  // can't decode and re-stutter every ~40s. Base, doubled per repeat.
+  private static readonly ABR_DECODE_PENALTY_MS = 120000; // 2 min
+  private static readonly ABR_PENALTY_MAX_MS = 300000; // escalation ceiling (5 min)
+  private static readonly ABR_STRIKE_DECAY_MS = 180000; // forget strikes after 3 min clean
+  // bandwidth → consecutive "couldn't sustain this rung" strikes + when the last
+  // one hit. Each strike doubles the re-climb penalty (30s → 1m → 2m … capped),
+  // so a rung the link keeps failing to hold is backed off harder and harder
+  // instead of ping-ponging back into it every ~40s. Decays after a clean spell
+  // so a genuinely improved link gets a fresh shot at the higher rung.
+  private _abrDrainStrikes: Map<number, { count: number; at: number }> = new Map();
+  // True while the video decoder is holding on the last frame mid-playback,
+  // waiting for the next keyframe (clock/audio keep running). The video buffer
+  // drains during this hold even though the network is fine, so ABR must NOT
+  // read it as the rung failing and downshift.
+  private _videoHoldingForKeyframe: boolean = false;
   // performance.now() of the last seek. The buffering right after a seek is a
   // normal re-fill, not a network stall — switching rendition into that (racing
   // the seek's own re-prime/re-read) is what crashed the demuxer, so the
@@ -345,6 +372,19 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
   private seekingToKeyframe: boolean = false;
   private seekingToKeyframeStartTime: number = 0;
   private static readonly KEYFRAME_SEEK_TIMEOUT = 5000; // 5 seconds timeout
+  /**
+   * Video packets that must have been scanned before the wall-clock timeout is
+   * allowed to give up and accept a non-keyframe. The timeout exists for long-GOP
+   * content where a keyframe is genuinely far away — a condition measured in
+   * PACKETS, not seconds. On a slow link only a handful of packets arrive in 5s,
+   * so the pure wall-clock check fired while the demuxer was merely starved,
+   * handing the decoder a non-keyframe and painting black video. Below this
+   * count the seek is waiting on bytes, not on a keyframe, so keep waiting.
+   */
+  private static readonly SEEK_KEYFRAME_MIN_SCAN = 120;
+  /** Absolute ceiling so a permanently starved seek can still bail out. */
+  private static readonly KEYFRAME_SEEK_HARD_TIMEOUT = 20000;
+  private seekKeyframeScanned: number = 0;
   // After a seek we prefer a true IDR to restart cleanly (avoids the open-GOP
   // CRA-as-key HW rejection on mixed-keyframe HEVC). But some streams only have
   // CRA keyframes for long stretches (e.g. seeking deep into a DoVi P8 .ts whose
@@ -479,6 +519,13 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
           this.videoDecoder?.setPerformanceSkip(true);
           this.abrDeviceDownshift();
         });
+        // Don't let the perf/decode-bound detector run while backgrounded — a
+        // throttled rAF stalls framesPresented and would false-fire a downshift
+        // (and, worse, a session resolution cap) on a capable device. PiP still
+        // measures: there the video is actually visible and rendering.
+        this.videoRenderer.setShouldMeasurePerf(
+          () => !(this.isBackgrounded && !this.isPiPActive),
+        );
 
         Logger.info(
           TAG,
@@ -577,8 +624,11 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
       // here via the state/sync guard).
       this.videoDecoder.onKeyframeWaitChange = (waiting) => {
         const state = this.stateManager.getState();
+        // Track the hold so ABR doesn't misread the draining video buffer
+        // (clock advancing, video frozen on last frame) as the rung failing.
+        this._videoHoldingForKeyframe = waiting && state === "playing";
         if (state === "seeking" || this.waitingForVideoSync) return;
-        if (waiting && state === "playing") {
+        if (this._videoHoldingForKeyframe) {
           Logger.debug(
             TAG,
             "Decoder waiting for keyframe mid-playback — staying in playing (audio/clock continue, video holds until next keyframe)",
@@ -1444,6 +1494,29 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
     const now = performance.now();
     const sinceSwitch = now - this._lastAbrSwitchAt;
 
+    // Capped-start correction: a new video (or a recreate) can start on the
+    // source's default rung even though this device has already proven — this
+    // session — it can't decode that height (e.g. it settled at 2160p last
+    // video, so this one defaults to 2160p, which is session-capped). Drop
+    // straight to the highest decodable rung instead of stuttering through the
+    // whole decode-bound dance again.
+    if (activeIdx >= 0 && deviceDecodeBoundHeights.size > 0 && now - this._lastAbrSwitchAt > 3000) {
+      const active = rungs[activeIdx];
+      if (active.height != null && deviceDecodeBoundHeights.has(active.height)) {
+        const ok = rungs.find(
+          (r) => r.height == null || !deviceDecodeBoundHeights.has(r.height),
+        );
+        if (ok && ok.url !== this._activeDashRendition) {
+          Logger.info(
+            TAG,
+            `ABR: started on decode-capped ${active.height}p — correcting to ${ok.label || ok.bandwidth}`,
+          );
+          await this.abrCommit(ok.url, now);
+          return;
+        }
+      }
+    }
+
     // How many seconds of video are buffered ahead of the playhead, and whether
     // that number is shrinking — the GROUND TRUTH for whether the current rung is
     // sustainable, independent of the throughput estimate. That estimate LAGS on
@@ -1477,9 +1550,22 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
     // self-sustains a 240⇄360 oscillation on a perfectly fine link. A genuine
     // hard stall (buffering) or a sustained DRAIN — buffer actively shrinking,
     // which never happens while it's refilling — still downshifts responsively.
-    const settledSinceSwitch = sinceSwitch > 12000;
+    // "Settled" = 12s clear of the last quality switch AND the last seek. Both
+    // reset the buffered range to ~0 at the new playhead, so the absolute-low
+    // clause below must not fire on that refill dip — a seek makes bufferAhead
+    // low INSTANTLY, and downshifting then is wrong (it just needs to refill).
+    const settledSinceSwitch =
+      sinceSwitch > 12000 && now - this._lastSeekAt > 12000;
+    // While the video is holding for a keyframe (or just recovered), the video
+    // buffer drains even though the network is fine — the clock advances but the
+    // frozen frame doesn't. Don't let that phantom drain trigger a downshift; a
+    // genuine network stall still fires via `stalling` (buffering state).
+    const videoRecovering =
+      this._videoHoldingForKeyframe ||
+      !!this.videoDecoder?.isRecentlyRecovering?.();
     const bufferLow =
-      (draining && bufferAhead < 10) || (bufferAhead < 4 && settledSinceSwitch);
+      !videoRecovering &&
+      ((draining && bufferAhead < 6) || (bufferAhead < 4 && settledSinceSwitch));
     if (
       (stalling || bufferLow) &&
       !postSeekSettling &&
@@ -1496,6 +1582,23 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
         }
       ).getNetworkStats?.();
       const downBits = ((ns?.lastSpeed ?? ns?.currentSpeed ?? 0) || 0) * 8;
+      // A soft bufferLow (not a hard stall) is only a real "can't sustain the
+      // rung" signal when the source is ACTIVELY downloading and STILL can't
+      // keep up. Two cases must HOLD the rung and just let it refill instead of
+      // dropping quality:
+      //   1) Coasting — the buffer filled up so the source paused fetching
+      //      (currentSpeed ~0); the drain toward the buffer end is normal and it
+      //      resumes on the SAME rung. This is the "1440p playing fine, buffer
+      //      hit the end → keep buffering 1440p, don't drop" case.
+      //   2) Live download already carries the rung (rate ≥ bitrate + margin).
+      // Only an active-but-too-slow link, or a hard stall (playback actually
+      // stopped, buffer truly empty), drops quality.
+      const liveBits = (ns?.currentSpeed || 0) * 8;
+      const currentRungBits = rungs[activeIdx].bandwidth || 0;
+      if (!stalling) {
+        if (liveBits <= 0) return; // coasting on a full buffer — it will refill
+        if (currentRungBits > 0 && liveBits >= currentRungBits * 1.15) return;
+      }
       // Default to the LOWEST rung: if the link can't sustain even the smallest
       // bitrate, jump straight there — its tiny file also preps fastest, so
       // playback resumes soonest (cascading one rung at a time means several slow
@@ -1508,12 +1611,32 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
           break;
         }
       }
-      // Penalize the rung we're leaving: it just failed to sustain, so the
-      // upshift path must not climb straight back into it (or higher) on a
-      // transient throughput spike for the next hold window. This is what breaks
-      // the adjacent-rung ping-pong on a bursty link.
-      this._abrPenalizedBandwidth = rungs[activeIdx].bandwidth || 0;
-      this._abrPenaltyUntil = now + MoviPlayer.ABR_PENALTY_MS;
+      // Penalize the rung we're leaving so the upshift path can't climb straight
+      // back into it (or higher) on a transient spike. ESCALATE the hold each
+      // repeat — a rung the link keeps failing to sustain gets 30s, then 1m, 2m,
+      // … (capped) — so a borderline rung (throughput ≈ its bitrate) settles on
+      // the lower one instead of ping-ponging every ~40s. Strikes decay after a
+      // clean spell so an improved link still gets another shot.
+      const leavingBw = rungs[activeIdx].bandwidth || 0;
+      const prevStrike = this._abrDrainStrikes.get(leavingBw);
+      const strikes =
+        (prevStrike && now - prevStrike.at < MoviPlayer.ABR_STRIKE_DECAY_MS
+          ? prevStrike.count
+          : 0) + 1;
+      this._abrDrainStrikes.set(leavingBw, { count: strikes, at: now });
+      this._abrPenalizedBandwidth = leavingBw;
+      this._abrPenaltyUntil = Math.max(
+        this._abrPenaltyUntil,
+        now +
+          Math.min(
+            MoviPlayer.ABR_PENALTY_MS * 2 ** (strikes - 1),
+            MoviPlayer.ABR_PENALTY_MAX_MS,
+          ),
+      );
+      Logger.info(
+        TAG,
+        `ABR downshift ${rungs[activeIdx].label || rungs[activeIdx].bandwidth} → ${target.label || target.bandwidth}: reason=${stalling ? "stall" : "bufferLow"}, bufferAhead=${bufferAhead.toFixed(1)}s, draining=${draining}, sinceSwitch=${(sinceSwitch / 1000).toFixed(0)}s`,
+      );
       await this.abrCommit(target.url, now);
       return;
     }
@@ -1562,6 +1685,25 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
     // after it holds for two consecutive ticks so a lone spike (a cache-served
     // burst, one fast chunk) doesn't bounce quality up then straight back down.
     let affordableBits = throughputBits * 0.85;
+    // Never climb into a resolution this device has proven (twice) it can't
+    // decode. The cap lives at module level (survives player recreates), so it
+    // holds across every video this session — convert the capped heights to a
+    // bandwidth ceiling here (higher resolution ⇒ higher bandwidth on any sane
+    // ladder, so this also excludes anything above them).
+    if (deviceDecodeBoundHeights.size > 0) {
+      let heightCapBits = Number.POSITIVE_INFINITY;
+      for (const r of rungs) {
+        if (r.height != null && deviceDecodeBoundHeights.has(r.height)) {
+          heightCapBits = Math.min(
+            heightCapBits,
+            r.bandwidth || Number.POSITIVE_INFINITY,
+          );
+        }
+      }
+      if (heightCapBits < Number.POSITIVE_INFINITY) {
+        affordableBits = Math.min(affordableBits, heightCapBits - 1);
+      }
+    }
     // Honour an active penalty: a rung that recently drained is off-limits (and
     // so is anything above it) until the hold window passes, so a bursty spike
     // can't re-upshift into the same rung that just failed. Cleared once expired.
@@ -1594,7 +1736,13 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
       // First upshift after enabling Auto commits at once (need 1); later ones
       // wait for 2 consecutive ticks so a lone spike can't bounce quality up.
       const need = this._abrPrimed ? 2 : 1;
-      if (this._abrUpConfirms >= need) await this.abrCommit(up.url, now);
+      if (this._abrUpConfirms >= need) {
+        Logger.info(
+          TAG,
+          `ABR upshift ${rungs[activeIdx].label || rungs[activeIdx].bandwidth} → ${up.label || up.bandwidth}: throughput=${(throughputBits / 1e6).toFixed(1)}Mbps affordable, bufferAhead=${bufferAhead.toFixed(1)}s`,
+        );
+        await this.abrCommit(up.url, now);
+      }
       return;
     }
 
@@ -1651,11 +1799,25 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
     // a fresh perf window on the new rung before the next decision is meaningful.
     if (now - this._lastAbrSwitchAt < 3000) return;
     const target = rungs[activeIdx + 1];
-    this._abrPenalizedBandwidth = rungs[activeIdx].bandwidth || 0;
-    this._abrPenaltyUntil = now + MoviPlayer.ABR_PENALTY_MS;
+    const failing = rungs[activeIdx];
+    const failingBw = failing.bandwidth || 0;
+    this._abrPenalizedBandwidth = failingBw;
+    // Cap this HEIGHT for the session on the FIRST decode-bound. The renderer
+    // has already tried an FPS cap by now, so this means the device can't
+    // sustain the resolution even at half rate — a device limit, not a
+    // transient. Barring it (module-level, survives recreates) stops throughput
+    // from re-climbing into it and re-stuttering (the log showed 4K re-tried 3×
+    // before the old 2-fail cap engaged). Reload re-learns.
+    const failH = failing.height ?? 0;
+    const capped = failH > 0;
+    if (capped) deviceDecodeBoundHeights.add(failH);
+    this._abrPenaltyUntil = Math.max(
+      this._abrPenaltyUntil,
+      now + MoviPlayer.ABR_DECODE_PENALTY_MS,
+    );
     Logger.info(
       TAG,
-      `ABR: device decode-bound at ${rungs[activeIdx].label || rungs[activeIdx].bandwidth + "bps"} — dropping to ${target.label || target.bandwidth + "bps"} to relieve stutter`,
+      `ABR: device decode-bound at ${failing.label || failingBw + "bps"}${failH ? " (" + failH + "p)" : ""} — dropping to ${target.label || target.bandwidth + "bps"}${capped ? ` and capping ${failH}p+ for this session` : " to relieve stutter"}`,
     );
     void this.abrCommit(target.url, now);
   }
@@ -2432,7 +2594,23 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
         return;
       }
       const st = this.stateManager.getState();
-      if (st !== "playing" && st !== "buffering") return; // user paused — leave it
+      // Also act while still "seeking": on open-GOP content the seek can sit
+      // there with every keyframe a CRA the decoder rejects, so no frame ever
+      // decodes and the seek never completes — the black screen the nudges exist
+      // to clear. Only paused/ready/idle/error are left alone. The session check
+      // above already prevents fighting a newer seek, and we only nudge when
+      // ZERO frames decoded since arming, so a slow-but-working seek is safe.
+      if (st !== "playing" && st !== "buffering" && st !== "seeking") return;
+      // Starved, not stuck: with no buffered data ahead there is nothing to
+      // decode at ANY position, so nudging forward only burns the budget and
+      // resets the pipeline. These nudges exist to clear a bad GOP run, not a
+      // slow link — re-arm and let it buffer, so the budget is still there if a
+      // genuine undecodable run shows up once data flows again.
+      const from0 = Math.max(seekTarget, this.clock.getTime());
+      if (this.getBufferedTime() - from0 < 0.5) {
+        this.armBlackFrameWatchdog(seekTarget);
+        return;
+      }
       if (this._blackRecoverySeeks >= MoviPlayer.MAX_BLACK_RECOVERY_SEEKS) {
         Logger.warn(
           TAG,
@@ -3022,9 +3200,17 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
           // through the runway — looks like 1s of "desync" but isn't.
           const audioBufferEnd = this.audioRenderer.getMaxScheduledMediaTime();
           if (audioBufferEnd < videoTime - 0.1) {
-            Logger.warn(TAG, `Audio desync detected: video=${videoTime.toFixed(2)}s, audio=${audioTime.toFixed(2)}s, behind=${(audioBehind * 1000).toFixed(0)}ms — resyncing`);
+            // Resync FORWARD, to where the video (what the viewer is actually
+            // watching) already is — never to getCurrentTime(), which the audio
+            // drives: with the audio 100s behind that would rewind the whole
+            // playback 100s, throwing away progress the viewer already saw.
+            // Pull the audio up to the video instead. If that position isn't
+            // buffered yet the seek simply waits (loading) — acceptable — but
+            // the position must not go backwards.
+            const resyncTo = Math.max(videoTime, this.getCurrentTime());
+            Logger.warn(TAG, `Audio desync detected: video=${videoTime.toFixed(2)}s, audio=${audioTime.toFixed(2)}s, behind=${(audioBehind * 1000).toFixed(0)}ms — pulling audio forward to ${resyncTo.toFixed(2)}s`);
             this._lastDesyncSeekTime = performance.now();
-            this.seek(this.getCurrentTime()).catch(() => {});
+            this.seek(resyncTo).catch(() => {});
           }
         }
       }
@@ -3565,6 +3751,7 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
               // Check timeout - if we've been waiting too long, give up and accept any frame
               const elapsed =
                 performance.now() - this.seekingToKeyframeStartTime;
+              this.seekKeyframeScanned++;
               // Prefer a true IDR to restart: on mixed-keyframe HEVC a CRA sent
               // as `key` is rejected by the HW decoder (open-GOP) and forces a
               // software fallback, while an IDR restarts cleanly. But accept a
@@ -3587,10 +3774,20 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
                 packet.timestamp <= this.seekTargetTime + 0.05;
               const acceptThisKeyframe =
                 packet.keyframe && (packet.isIdr || idrWaitElapsed || isTargetCra);
-              if (elapsed > MoviPlayer.KEYFRAME_SEEK_TIMEOUT) {
+              // Starved (few packets scanned) means we're waiting on the network,
+              // not on a distant keyframe — extend to the hard ceiling instead of
+              // feeding the decoder a non-keyframe and painting black.
+              const starved =
+                this.seekKeyframeScanned < MoviPlayer.SEEK_KEYFRAME_MIN_SCAN;
+              const timedOut =
+                elapsed >
+                (starved
+                  ? MoviPlayer.KEYFRAME_SEEK_HARD_TIMEOUT
+                  : MoviPlayer.KEYFRAME_SEEK_TIMEOUT);
+              if (timedOut) {
                 Logger.warn(
                   TAG,
-                  `Keyframe seek timeout after ${elapsed}ms, accepting any frame`,
+                  `Keyframe seek timeout after ${elapsed.toFixed(0)}ms (scanned=${this.seekKeyframeScanned}, starved=${starved}), accepting any frame`,
                 );
                 this.seekingToKeyframe = false;
               } else if (!acceptThisKeyframe) {
@@ -4020,6 +4217,18 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
     this.stateManager.setState("seeking");
     this.emit("seeking", seconds);
 
+    // Re-anchor the buffer bar's START to the target NOW, not after the
+    // (blocking, potentially multi-second) demuxer.seek below. The scrubber
+    // handle jumps to the target the instant the user releases, so leaving the
+    // range anchored at the old position strands the buffered segment far
+    // behind the handle — or, once the handle passes it, collapses the segment
+    // to zero width. Either way the user sees "no buffer". Anchored here the
+    // segment sits under the handle and grows forward as bytes actually land.
+    // UI-only field (getBufferedRangeStart has no other consumer); the
+    // lastBufferedTime monotonic clamp is deliberately left to reset after the
+    // demuxer lands so ABR's bufferAhead isn't zeroed mid-seek.
+    this.bufferedRangeStart = seconds;
+
     // CRITICAL: Cancel any running processLoop immediately to prevent WASM async conflicts
     // This must happen before waiting for demuxInFlight, otherwise processLoop may start new async operations
     if (this.animationFrameId !== null) {
@@ -4128,6 +4337,7 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
       // This prevents decoder errors from non-keyframe packets after seek
       this.seekingToKeyframe = true;
       this.seekingToKeyframeStartTime = performance.now();
+      this.seekKeyframeScanned = 0;
       this.seekCraSeen = 0;
       // A seek is a fresh keyframe-anchored start; any pending starve-induced
       // chain break is moot.
@@ -4925,9 +5135,18 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
    * by a later menu re-render passing the unchanged element src).
    */
   setDashRenditions(
-    renditions: { url: string; label: string; id: string; bandwidth?: number }[],
+    renditions: {
+      url: string;
+      label: string;
+      id: string;
+      bandwidth?: number;
+      height?: number;
+    }[],
     activeUrl?: string,
   ): void {
+    // NOTE: the device decode cap is deliberately NOT reset here — it lives at
+    // module level and must persist across sources (a device that can't decode
+    // 8K can't decode it for the next video either).
     this._dashRenditions = renditions;
     if (activeUrl && !this._activeDashRendition) {
       this._activeDashRendition = activeUrl;
@@ -5938,6 +6157,24 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
       }
       this._splitAudioEof = false;
       this._lastSplitAudioPts = 0;
+      // Sync the freshly-opened audio demuxer to where the player ACTUALLY is.
+      // This setup is async: a recovery recreate's resume-seek (or any seek that
+      // lands while it's still in flight) moves the video but can't seek an
+      // audio demuxer that doesn't exist yet. Without this the audio starts at 0
+      // and runs tens of seconds behind — which the desync detector then
+      // "fixes" by dragging the VIDEO backwards to meet it.
+      const playhead = this.getCurrentTime();
+      if (playhead > 0.5) {
+        try {
+          await this.audioDemuxer.seek(playhead + this._splitAudioStartTime);
+          Logger.info(
+            TAG,
+            `Split audio synced to playhead ${playhead.toFixed(1)}s after setup`,
+          );
+        } catch {
+          /* best-effort — the next seek/resync corrects it */
+        }
+      }
       Logger.info(
         TAG,
         `Split audio (WASM) ready: ${aTrack.codec} ${aTrack.sampleRate}Hz ${aTrack.channels}ch`,
@@ -7733,6 +7970,7 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
             this.seekTargetTime = Math.max(audioTime + this.startTime, audioBufferEnd);
             this.seekingToKeyframe = true;
             this.seekingToKeyframeStartTime = performance.now();
+            this.seekKeyframeScanned = 0;
             this.seekCraSeen = 0;
             this.videoChainBrokenUntilKeyframe = false;
 
