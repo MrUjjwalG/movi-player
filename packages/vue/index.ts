@@ -53,6 +53,9 @@ export const MoviPlayer = defineComponent({
       const all: Record<string, unknown> = { ...attrs, ...props };
       for (const [key, value] of Object.entries(all)) {
         if (value === undefined || value === null) continue;
+        // Reflect only primitives — a fallthrough event listener (onFoo) or an
+        // object/array would otherwise be String()'d into a bogus attribute.
+        if (typeof value === "function" || typeof value === "object") continue;
         const attr = key.toLowerCase();
         if (typeof value === "boolean") {
           if (value) el.setAttribute(attr, "");
