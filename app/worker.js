@@ -841,13 +841,18 @@ async function handleBadge(which) {
     // shields badge ("jsDelivr | 9.5k"). Everything else proxies directly.
     const src =
       which === "jsdelivr" ? await jsdelivrBadgeUrl() : BADGE_SOURCES[which];
-    // cf.cacheEverything caches the upstream SVG at the edge for 12h so
-    // we don't hit the badge service on every page view. Bound the fetch:
-    // a slow badge service (vsmarketplacebadges.dev has stalled 100s+) must
-    // never hold the request — and thus the page's <img> and the tab's load
-    // spinner — open. On timeout we fall through to the static fallback.
-    const upstream = await fetch(src, {
-      cf: { cacheTtl: 43200, cacheEverything: true },
+    // `_v` (the deploy timestamp) busts Cloudflare's subrequest cache on every
+    // deploy so a redeploy refreshes every badge's count — the upstream badge
+    // services ignore the extra param. (jsdelivrBadgeUrl already busts its own
+    // stats fetch; this covers the store/npm counts too.)
+    const bustedSrc = src + (src.includes("?") ? "&" : "?") + "_v=" + BUILD_VERSION;
+    // cf.cacheEverything caches the upstream SVG at the edge for 1h so we don't
+    // hit the badge service on every page view. Bound the fetch: a slow badge
+    // service (vsmarketplacebadges.dev has stalled 100s+) must never hold the
+    // request — and thus the page's <img> and the tab's load spinner — open.
+    // On timeout we fall through to the static fallback.
+    const upstream = await fetch(bustedSrc, {
+      cf: { cacheTtl: 3600, cacheEverything: true },
       headers: { "User-Agent": "movi-app-badge-proxy" },
       signal: AbortSignal.timeout(4000),
     });
@@ -856,7 +861,7 @@ async function handleBadge(which) {
     return new Response(svg, {
       headers: {
         "Content-Type": "image/svg+xml;charset=utf-8",
-        "Cache-Control": "public, max-age=21600, s-maxage=43200",
+        "Cache-Control": "public, max-age=3600, s-maxage=3600",
         "Cross-Origin-Resource-Policy": "cross-origin",
       },
     });
@@ -886,10 +891,13 @@ async function handleBadge(which) {
 // value renders as "9.5k" instead of shields' built-in "9.5k/year" wording.
 // Throws on any upstream trouble so handleBadge falls back to a static badge.
 async function jsdelivrBadgeUrl() {
+  // `_v` (the deploy timestamp) busts Cloudflare's subrequest cache on every
+  // deploy, so a redeploy always refreshes the count. The 1h cacheTtl keeps it
+  // reasonably fresh between deploys (jsDelivr's own stats update ~daily).
   const stats = await fetch(
-    "https://data.jsdelivr.com/v1/stats/packages/npm/movi-player?period=year",
+    `https://data.jsdelivr.com/v1/stats/packages/npm/movi-player?period=year&_v=${BUILD_VERSION}`,
     {
-      cf: { cacheTtl: 43200, cacheEverything: true },
+      cf: { cacheTtl: 3600, cacheEverything: true },
       headers: { "User-Agent": "movi-app-badge-proxy" },
       signal: AbortSignal.timeout(4000),
     },
