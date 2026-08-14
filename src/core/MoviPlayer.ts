@@ -842,6 +842,9 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
   // from competing with the main decode during the startup grace.
   private _previewWarmTimer: ReturnType<typeof setTimeout> | null = null;
   private static readonly PREVIEW_WARM_DELAY_MS = 12000;
+  // How long to wait before re-asking when the warm-up came due while playback
+  // was still young, or while the pipeline was busy seeking/rebuffering.
+  private static readonly PREVIEW_WARM_RETRY_MS = 2000;
   private previewInitGaveUp: boolean = false; // Stop retrying once init has failed too often
 
   // Debug flag to disable audio processing
@@ -901,6 +904,9 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
    *  over it; a picture that has actually stopped presents nothing at all. */
   private static readonly STALL_MOVING_FPS = 5;
   private _bufferingEntryTime: number = 0; // When we entered buffering state
+  // True while the current buffering spell is the post-seek wait for the frame
+  // queue rather than a real stall — see needsSeekResumeQueue().
+  private _seekResumeQueueWait: boolean = false;
   // True when the current buffering state was entered because of something WE
   // just did — a rate change's audio re-anchor, or a seek resuming on the thin
   // buffer it left behind — rather than a real data/decode stall. Those resume
@@ -929,6 +935,17 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
    * whole grace that follows.
    */
   private static readonly BOUND_RESUME_CUSHION_S = 0.2;
+  // Lossless/complex codecs whose WASM decode is genuinely sub-realtime from
+  // cold. See activeAudioIsHeavySoftware().
+  private static readonly HEAVY_SOFTWARE_AUDIO = /truehd|mlp|dts|dca/;
+  // Hard cap on the post-seek wait for the frame queue. The wait is only ever
+  // worth having while it is shorter than the hitching it replaces, so it is
+  // deliberately far below every other escape in this file — and matched to
+  // MoviElement.SEEK_SPINNER_GRACE_MS, which is how long a seek (and the
+  // buffering that follows it, counted as one run) is given before it earns a
+  // spinner. Inside that window this wait is invisible; past it, it would be
+  // trading a stutter for a flash of spinner, which is not a trade.
+  private static readonly SEEK_RESUME_QUEUE_ESCAPE_MS = 400;
   /** The stall-detection grace given to a resume that came out of a stall
    *  rather than out of a cold start. Long enough for the queue we just waited
    *  for to start playing, short enough that the sound cannot walk. */
@@ -1144,10 +1161,11 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
           this.videoRenderer.setAudioTimeProvider(
             () => this.audioRenderer.getAudioClock(),
             () => this.audioRenderer.hasHealthyBuffer(),
+            () => this.audioRenderer.secondsUntilAudible(),
           );
         } else {
           // When audio is disabled, video runs independently without A/V sync overhead
-          this.videoRenderer.setAudioTimeProvider(null, null);
+          this.videoRenderer.setAudioTimeProvider(null, null, null);
           Logger.info(
             TAG,
             "Video renderer running independently (audio disabled)",
@@ -1807,18 +1825,7 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
       // then, the seek path lazy-inits it on demand (initPreviewPipeline is
       // idempotent), so previews still work — they just don't steal decode
       // headroom from a struggling startup.
-      if (this.previewsAllowed()) {
-        this._previewWarmTimer = setTimeout(() => {
-          this._previewWarmTimer = null;
-          if (this._destroyed || this.previewInitPromise || this.thumbnailBindings) {
-            return;
-          }
-          this.previewInitPromise = this.initPreviewPipeline().catch((e) => {
-            Logger.warn(TAG, "Preview pipeline init failed (non-critical)", e);
-            this.previewInitPromise = null;
-          });
-        }, MoviPlayer.PREVIEW_WARM_DELAY_MS);
-      }
+      this.schedulePreviewWarm(MoviPlayer.PREVIEW_WARM_DELAY_MS);
 
       Logger.info(
         TAG,
@@ -4067,6 +4074,7 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
     if (this.stateManager.getState() === "seeking") {
       this.wasPlayingBeforeSeek = false;
       this.wasPlayingBeforeRebuffer = false;
+      this._seekResumeQueueWait = false;
       this.releaseWakeLock();
       this.clock.pause();
       if (!this.disableAudio) this.audioRenderer.pause();
@@ -4079,6 +4087,7 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
     // During buffering, transition to paused and stop auto-resume
     if (this.stateManager.getState() === "buffering") {
       this.wasPlayingBeforeRebuffer = false;
+      this._seekResumeQueueWait = false;
       if (!this.disableAudio) this.audioRenderer.pause();
       if (this.videoRenderer) this.videoRenderer.stopPresentationLoop();
       this.stateManager.setState("paused");
@@ -4485,6 +4494,41 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
         return;
       }
 
+      // The same argument, for the picture.
+      //
+      // A seek flushes the video decoder and clears the renderer queue, and
+      // this branch runs on the FIRST frame back — so the clock starts against
+      // a queue of exactly one, and the queue then has to be built from nothing
+      // while playback is already running at realtime. Every seek in a capture
+      // shows it: `Initial A/V sync … framesPresented=0`, `First frame`,
+      // `framesPresented=1`, and then a visible half-second of hitching before
+      // the decoder is far enough ahead to be smooth. The rebuffer gate below
+      // has asked for a real cushion (fps × BOUND_RESUME_CUSHION_S) for exactly
+      // this reason since bindav landed; the seek path never did.
+      //
+      // Route it through the same machinery, marked self-inflicted so it serves
+      // no dwell floor and no 2s audio cushion — the decoder is warm and
+      // running, the frames are already on their way, and the only thing being
+      // waited on is the queue filling. SEEK_RESUME_QUEUE_ESCAPE_MS caps it
+      // hard: this wait exists to be shorter than the stutter it replaces, so
+      // if the frames are not there in a beat it starts anyway.
+      if (this.needsSeekResumeQueue()) {
+        this._seekResumeQueueWait = true;
+        this.holdAudioForBuffering();
+        this.wasPlayingBeforeRebuffer = true; // resume intent for buffering→play
+        this._bufferingEntryTime = performance.now();
+        this._bufferingSelfInflicted = true;
+        // Stamp it here as well as on the direct resume below: an underrun in
+        // the moment after this wait ends is still the seek's flush working
+        // through, not a starving link (see SELF_INFLICTED_STALL_WINDOW_MS).
+        this._lastSeekResumeAt = performance.now();
+        this.stateManager.setState("buffering");
+        this.clock.pause();
+        if (this.videoRenderer) this.videoRenderer.stopPresentationLoop();
+        Logger.debug(TAG, "Post-seek: buffering until the frame queue fills");
+        return;
+      }
+
       Logger.info(TAG, "Resuming playback after seek");
       // Playback is starting; if the tab is hidden this is the only thing that
       // will feed the renderer.
@@ -4552,9 +4596,6 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
    * cold and don't need it. (issue #11)
    */
   private activeAudioNeedsColdPrime(): boolean {
-    const codec = (
-      this.trackManager.getActiveAudioTrack()?.codec ?? ""
-    ).toLowerCase();
     return (
       !this.disableAudio &&
       // Nothing to prime when the audio is being discarded: muted with a
@@ -4562,9 +4603,72 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
       // prime waits for can never appear, so it would only freeze the picture
       // for the full max-dwell before starting anyway.
       !this.audioRenderer.isDroppingAudio() &&
-      this.audioDecoder.usesSoftware &&
-      /truehd|mlp|dts|dca/.test(codec)
+      this.activeAudioIsHeavySoftware()
     );
+  }
+
+  /**
+   * Should a post-seek resume hold for the frame queue to refill first?
+   *
+   * Only where there is a picture that is actually being decoded and presented:
+   * data-saver audio-only and a hidden tab both skip video on purpose, so the
+   * queue is empty for a reason that has nothing to do with the seek, and
+   * waiting on it would hold the sound for a picture nobody asked for. Same
+   * carve-outs the rebuffer gate's `pictureRunning` makes.
+   */
+  private needsSeekResumeQueue(): boolean {
+    if (!this.videoRenderer || this._audioOnly) return false;
+    if (this.isBackgrounded && !this.isPiPActive) return false;
+    if (!this.trackManager.getActiveVideoTrack()) return false;
+    // On a high-latency output the renderer is going to hold the picture
+    // anyway while the first audio buffer travels to the speakers
+    // (CanvasRenderer.audioStartLeadMs), and the presentation loop runs
+    // through that hold with the queue filling behind it — which is exactly
+    // what this wait is for. Stacking the two would add a wait on top of a
+    // delay that already covers it: on Bluetooth, ~400ms of buffering ahead of
+    // a ~600ms lead, for a full second of frozen picture after every seek.
+    if (
+      !this.disableAudio &&
+      this.audioRenderer.expectedStartLead() * 1000 >=
+        MoviPlayer.SEEK_RESUME_QUEUE_ESCAPE_MS
+    ) {
+      return false;
+    }
+    return this.videoRenderer.getQueueSize() < this.seekResumeQueueTarget();
+  }
+
+  /** Frames the renderer should hold before playback restarts after a seek. */
+  private seekResumeQueueTarget(): number {
+    const fps =
+      this.trackManager.getActiveVideoTrack()?.frameRate ||
+      (this.mediaInfo as any)?.videoFrameRate ||
+      24;
+    return Math.max(2, Math.round(fps * MoviPlayer.BOUND_RESUME_CUSHION_S));
+  }
+
+  /**
+   * The active audio is one of the codecs that genuinely decodes sub-realtime
+   * from cold — the ones the prime and the 2s rebuffer cushion were built for.
+   *
+   * This used to be spelled `audioDecoder.usesSoftware && /truehd|mlp|dts|dca/`
+   * in one place and plain `audioDecoder.usesSoftware` in the other, and the
+   * two meant the same thing back when only the heavy codecs took the software
+   * path. AudioDecoder.needsSoftwareDecoding() now returns true for everything
+   * (see its note — one decoder, so the bitrate ladder isn't also a decoder
+   * ladder), which silently turned the second spelling into "always". The
+   * consequence was measurable: a plain 8-channel AAC file underran once, and
+   * the buffering exit gate then demanded a 2s cushion — the TrueHD number —
+   * before it would resume. It never got there, and the recovery came from
+   * MoviElement's stuck watchdog seeking out of it rather than from the player.
+   *
+   * So ask the codec, not the code path, and ask it from one place.
+   */
+  private activeAudioIsHeavySoftware(): boolean {
+    if (!this.audioDecoder.usesSoftware) return false;
+    const codec = (
+      this.trackManager.getActiveAudioTrack()?.codec ?? ""
+    ).toLowerCase();
+    return MoviPlayer.HEAVY_SOFTWARE_AUDIO.test(codec);
   }
 
   /**
@@ -4598,12 +4702,28 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
    * (2s) rather than the thin 0.1s default before resuming.
    */
   private beginAudioPrime(): void {
+    this.holdAudioForBuffering();
+    this._primingAudio = true;
+  }
+
+  /**
+   * The mechanical half of a prime, without the 2s cushion demand: hold the
+   * context suspended and hand the stashed post-seek packets to the decoder so
+   * the buffer fills against a frozen clock.
+   *
+   * Any seek-completion branch that holds the picture back has to do this. The
+   * packets are stashed precisely BECAUSE the renderer isn't playing yet
+   * (render() drops AudioData while isPlaying is false), so a branch that
+   * returns without calling this leaves the audio buffer at zero — and the
+   * resume gate it just handed control to reads that as "audio not ready" and
+   * waits out its escape every single time.
+   */
+  private holdAudioForBuffering(): void {
     this.audioRenderer.primeForBuffering();
     if (this.pendingAudioPackets.length > 0) {
       this.submitAudioPackets(this.pendingAudioPackets);
       this.pendingAudioPackets = [];
     }
-    this._primingAudio = true;
   }
 
   /**
@@ -4729,7 +4849,19 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
       // ping-pongs every couple of seconds. A decoder running ~8% behind drains
       // 0.1s in ~1s but 2s in ~25s — same deficit, a totally different
       // experience. Rebuild a real cushion for the software path.
-      const softwareAudioStall =
+      //
+      // …but only for the codecs that are actually sub-realtime. Every codec
+      // now decodes in WASM, so `usesSoftware` alone reads "always" and handed
+      // plain AAC the TrueHD cushion — see activeAudioIsHeavySoftware().
+      const heavyAudioStall =
+        !this.disableAudio && this.activeAudioIsHeavySoftware();
+      // Light software audio (AAC/Opus/FLAC/AC-3) still decodes faster than
+      // realtime, but it is no longer the browser's own decoder either: it is
+      // WASM on the same thread as demux and render, so the 0.1s that was
+      // chosen for a hardware decoder is thinner than it used to be and a
+      // rebuffer resuming on it can stall straight back. Half a second is
+      // enough to play through the next hitch without being felt as a wait.
+      const lightSoftwareAudio =
         !this.disableAudio && this.audioDecoder.usesSoftware;
       // The 2s cushion is for a decoder that fell BEHIND realtime — rebuilding
       // a real buffer is the only way out of that. A rate change is the
@@ -4740,10 +4872,13 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
       // it on every speed change). Use the light threshold; if the new rate
       // genuinely can't be sustained, the stall detector re-enters buffering
       // and the full cushion applies then.
-      const audioTargetS =
-        (this._primingAudio || softwareAudioStall) && !this._bufferingSelfInflicted
+      const audioTargetS = this._bufferingSelfInflicted
+        ? 0.1
+        : this._primingAudio || heavyAudioStall
           ? 2.0
-          : 0.1;
+          : lightSoftwareAudio
+            ? 0.5
+            : 0.1;
       const audioReady =
         this.disableAudio ||
         !hasAudioTrack ||
@@ -4780,9 +4915,15 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
         this.trackManager.getActiveVideoTrack()?.frameRate ||
         (this.mediaInfo as any)?.videoFrameRate ||
         24;
-      const videoTargetFrames = bound
-        ? Math.max(2, Math.round(fps * MoviPlayer.BOUND_RESUME_CUSHION_S))
-        : 1;
+      // The post-seek queue wait asks for the same cushion whether or not the
+      // two are bound: it is not there to keep them in step, it is there so the
+      // picture that comes back has something behind it (see the entry point in
+      // notifySeekCompletion). Falling back to `1` would satisfy it with the
+      // single frame it was entered on.
+      const videoTargetFrames =
+        bound || this._seekResumeQueueWait
+          ? Math.max(2, Math.round(fps * MoviPlayer.BOUND_RESUME_CUSHION_S))
+          : 1;
       const videoReady =
         !this.videoRenderer ||
         this.videoRenderer.getQueueSize() >= videoTargetFrames;
@@ -4821,7 +4962,16 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
       // So when the two are bound, resuming needs both. The escape is far
       // longer (see BOUND_RESUME_ESCAPE_MS): a bound wait costs nothing but
       // the wait, since the picture is frozen throughout it either way.
-      const escapeMs = bound ? MoviPlayer.BOUND_RESUME_ESCAPE_MS : maxDwell;
+      //
+      // The post-seek queue wait is the exception in both directions: it is our
+      // own doing, the decoder is warm and already producing, and its whole
+      // value is being shorter than the stutter it stands in for. It gets its
+      // own tight cap whether or not the two are bound.
+      const escapeMs = this._seekResumeQueueWait
+        ? MoviPlayer.SEEK_RESUME_QUEUE_ESCAPE_MS
+        : bound
+          ? MoviPlayer.BOUND_RESUME_ESCAPE_MS
+          : maxDwell;
       // The escape is for a picture that is BEHIND, not one that is absent.
       // With nothing at all in the renderer, resuming is not "letting go on
       // what we have" — it is starting the sound over a still frame, which is
@@ -4843,7 +4993,12 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
         (!bound && audioReady && dwellMs >= 3000) ||
         (dwellMs >= escapeMs && mayEscape)
       );
-      if (canResume && bound && !(audioReady && videoReady)) {
+      if (
+        canResume &&
+        bound &&
+        !this._seekResumeQueueWait &&
+        !(audioReady && videoReady)
+      ) {
         Logger.warn(
           TAG,
           `Bound stall gave up after ${Math.round(dwellMs)}ms — audioReady=${audioReady} videoReady=${videoReady}`,
@@ -4852,6 +5007,7 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
       if (canResume) {
         this._primingAudio = false;
         this._bufferingSelfInflicted = false;
+        this._seekResumeQueueWait = false;
         // Stamp the resume so the stall detector can tell this — a warm
         // pipeline picking back up — from a cold first play, and not hand it
         // the full three-second grace (see playGraceMs).
@@ -6482,6 +6638,9 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
       // consume wasPlayingBeforeSeek out from under the live seek — which
       // intermittently left rapid seeks stuck paused.
       this.seekArmedSessionId = mySessionId;
+      // Any post-seek queue wait belonged to the seek this one supersedes; its
+      // tight escape must not be left armed over an unrelated stall.
+      this._seekResumeQueueWait = false;
       this.pendingAudioPackets = [];
       // Stashed prebuffer packets are pre-seek and now stale
       this.pendingPrebufferPackets = [];
@@ -7279,6 +7438,55 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
       );
     }
     return pick;
+  }
+
+  /**
+   * Arm the deferred preview warm-up, and keep re-arming it until playback has
+   * actually settled.
+   *
+   * The delay exists to keep the second WASM module + WebCodecs decoder out of
+   * the first seconds of PLAYBACK. It used to be a single timer started when
+   * load() finished, which quietly assumes play() follows immediately — and on
+   * a local file it does not. A FileSource preload reads 20×2MB before play()
+   * is even reachable, so on an 11 GB MKV the 12s grace was already spent by
+   * the time the first frame went up: the warm-up landed ~4.5s into playback,
+   * stood a second isolated WASM instance up, re-opened the same 11 GB file
+   * through the same main-thread Asyncify reads, and the audio cushion the
+   * (all-software) decoder was holding collapsed into a stall that then made
+   * no progress at all for six seconds, until MoviElement's stuck watchdog
+   * seeked out of it.
+   *
+   * So measure the grace against playback, not load, and never start the
+   * warm-up while the pipeline is already struggling — buffering and seeking
+   * are precisely when the competing decode is least affordable. A source that
+   * is simply sitting paused is not competing with anything, so it still warms
+   * on schedule; if the user scrubs before any of that, the seek path lazy-inits
+   * on demand (initPreviewPipeline is idempotent).
+   */
+  private schedulePreviewWarm(delayMs: number): void {
+    if (this._previewWarmTimer) return;
+    if (!this.previewsAllowed()) return;
+    this._previewWarmTimer = setTimeout(() => {
+      this._previewWarmTimer = null;
+      if (this._destroyed || this.previewInitPromise || this.thumbnailBindings) {
+        return;
+      }
+      const state = this.stateManager.getState();
+      const busy =
+        state === "loading" || state === "seeking" || state === "buffering";
+      const playbackYoung =
+        this._playStartTime > 0 &&
+        performance.now() - this._playStartTime <
+          MoviPlayer.PREVIEW_WARM_DELAY_MS;
+      if (busy || playbackYoung) {
+        this.schedulePreviewWarm(MoviPlayer.PREVIEW_WARM_RETRY_MS);
+        return;
+      }
+      this.previewInitPromise = this.initPreviewPipeline().catch((e) => {
+        Logger.warn(TAG, "Preview pipeline init failed (non-critical)", e);
+        this.previewInitPromise = null;
+      });
+    }, delayMs);
   }
 
   private async initPreviewPipeline() {

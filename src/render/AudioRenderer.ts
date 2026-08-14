@@ -1658,6 +1658,66 @@ export class AudioRenderer {
   }
 
   /**
+   * How long from now until the audio we have scheduled is actually HEARD —
+   * i.e. how long getAudioClock() will keep returning firstBufferMediaTime
+   * unchanged before it starts advancing. Zero once sound is playing out, and
+   * on every device whose latency is small enough not to matter.
+   *
+   * Two separate delays stack up at the start of every playback run, and both
+   * are deliberate:
+   *
+   *  - the first buffer is placed one output-latency ahead (`deviceLead`, see
+   *    render()) so the scheduler has a window to queue the buffers behind it
+   *    instead of handing a deep device a single buffer and starving it;
+   *  - and what is scheduled at context time T is heard at T + outputLatency,
+   *    which getAudioClock() subtracts so video syncs to what is HEARD.
+   *
+   * On a wired or built-in output that is ~5-25ms twice over and nobody can
+   * tell. On Bluetooth it is ~305ms twice over: for the first ~600ms after a
+   * seek there is no sound yet, and the audio clock is flat by construction.
+   *
+   * The video side has to know that, because its own clock is wall-clock based
+   * and would otherwise start advancing immediately from an anchor taken off
+   * that flat value — running ~600ms ahead of the sound, until the drift
+   * correction notices and yanks the presentation anchor backwards, which is
+   * seen as the picture freezing a moment after every seek. Bluetooth only,
+   * because on anything else the number is too small to cross the threshold.
+   */
+  /**
+   * What secondsUntilAudible() will report once the next run's first buffer is
+   * scheduled — the deviceLead render() is about to apply, plus the latency it
+   * will then take to be heard.
+   *
+   * Callers that have to decide whether to hold playback need the figure BEFORE
+   * any buffer exists: right after a seek the flush has cleared hasFirstBuffer,
+   * so secondsUntilAudible() honestly reports zero and would talk them out of a
+   * wait that is coming regardless.
+   */
+  expectedStartLead(): number {
+    if (!this.audioContext) return 0;
+    const ctx = this.audioContext as AudioContext & {
+      outputLatency?: number;
+      baseLatency?: number;
+    };
+    const latency = ctx.outputLatency || ctx.baseLatency || 0;
+    return Math.min(0.5, latency) + latency;
+  }
+
+  secondsUntilAudible(): number {
+    if (!this.audioContext || !this.hasFirstBuffer) return 0;
+    if (this.audioContext.state !== "running") return 0;
+    const ctx = this.audioContext as AudioContext & {
+      outputLatency?: number;
+      baseLatency?: number;
+    };
+    const latency = ctx.outputLatency || ctx.baseLatency || 0;
+    return Math.max(
+      0,
+      this.firstBufferScheduledAt + latency - ctx.currentTime,
+    );
+  }
+
+  /**
    * Get the audio clock - THE MASTER TIME SOURCE FOR A/V SYNC
    * Returns accurate time based on when audio actually started playing
    * Returns -1 if audio hasn't started yet

@@ -81,6 +81,16 @@ export class CanvasRenderer {
   // Base size of 120 provides ~2s at 60fps, ~4s at 30fps
   private static readonly MAX_FRAME_QUEUE = 120;
 
+  // Ceiling on how long the presentation anchor may be pushed into the future
+  // to wait for a high-latency audio output. See audioStartLeadMs().
+  //
+  // Set above a real Bluetooth lead (~305ms of device lead plus ~305ms of
+  // output latency) on purpose: capping BELOW it doesn't avoid the wait, it
+  // splits it — the picture starts early by the remainder and the drift
+  // correction still has to claw that back, which is the stutter this is here
+  // to remove. It is a guard against a nonsense reading, not a budget.
+  private static readonly MAX_AUDIO_START_LEAD_S = 0.7;
+
   private hdrEnabled: boolean = true;
   private isHDRSource: boolean = false;
   private isHighBitDepth: boolean = false; // 12-bit+ content needs RGBA16F texture
@@ -192,6 +202,10 @@ export class CanvasRenderer {
   // Audio time provider for A/V sync
   private getAudioTime: (() => number) | null = null;
   private _isAudioHealthy: (() => boolean) | null = null;
+  // Seconds until scheduled audio is actually audible — see
+  // AudioRenderer.secondsUntilAudible(). Non-zero only on a high-latency
+  // output (Bluetooth), and only for the moment after a start or a seek.
+  private _audioStartLead: (() => number) | null = null;
   private _shouldMeasurePerf: (() => boolean) | null = null;
 
   // Presentation timing
@@ -2370,9 +2384,11 @@ export class CanvasRenderer {
   setAudioTimeProvider(
     getAudioTime: (() => number) | null,
     isAudioHealthy?: (() => boolean) | null,
+    audioStartLead?: (() => number) | null,
   ): void {
     this.getAudioTime = getAudioTime;
     this._isAudioHealthy = isAudioHealthy || null;
+    this._audioStartLead = audioStartLead || null;
     if (getAudioTime) {
       Logger.debug(TAG, "Audio time provider set");
     } else {
@@ -2500,7 +2516,13 @@ export class CanvasRenderer {
     } else {
       // Resuming with frames: the stream is already playing, so start the wall
       // clock now and anchor it to the last presented time to prevent a jump.
-      this.presentationStartTime = performance.now();
+      //
+      // "Now", unless the sound for this run hasn't reached the speakers yet —
+      // an ordinary unpause never waits (the audio anchor is long past, so the
+      // lead reads zero), but a resume out of the post-seek queue wait is a
+      // fresh audio run whose first buffer is still in flight. See
+      // audioStartLeadMs().
+      this.presentationStartTime = performance.now() + this.audioStartLeadMs();
       if (this.lastPresentedPts >= 0) {
         this.presentationStartPts = this.lastPresentedPts;
       } else {
@@ -2668,10 +2690,17 @@ export class CanvasRenderer {
       return -1;
     }
     // Always use wall clock for video timing (smooth 60fps)
+    //
+    // The anchor can sit in the FUTURE: on a high-latency output the sound for
+    // this run is not audible yet, so the anchor is placed at the moment it
+    // will be (see audioStartLeadMs). Floor the elapsed at zero exactly as the
+    // audio clock floors its own — the picture holds on the anchor frame until
+    // the sound reaches it, rather than running backwards from it.
     let videoTime = -1;
     if (this.presentationStartTime > 0) {
       const elapsed = (performance.now() - this.presentationStartTime) / 1000;
-      videoTime = this.presentationStartPts + elapsed * this.playbackRate;
+      videoTime =
+        this.presentationStartPts + Math.max(0, elapsed) * this.playbackRate;
     }
 
     // Check audio for drift correction (but don't block video)
@@ -2696,7 +2725,8 @@ export class CanvasRenderer {
           //    This gives Bluetooth audio time to stabilize before hard sync
           // 3. Drift is very large (> 400ms) - critical desync recovery
           if (videoTime < 0 || (isVeryEarlyPlayback && drift > 0.03) || drift > 0.4) {
-            this.presentationStartTime = performance.now();
+            this.presentationStartTime =
+              performance.now() + this.audioStartLeadMs();
             this.presentationStartPts = audioTime;
             this.syncedToAudio = true;
             Logger.debug(TAG, `Initial A/V sync: audioTime=${audioTime.toFixed(3)}s, framesPresented=${this.framesPresented}, drift=${(drift * 1000).toFixed(0)}ms, early=${isVeryEarlyPlayback}`);
@@ -2713,7 +2743,22 @@ export class CanvasRenderer {
         // video racing ahead of audio due to backpressure-induced audio gaps.
         const isSlowHighFps = this.playbackRate < 0.99 && this.videoFrameRate >= 50;
 
-        if (videoTime >= 0 && this.framesPresented > 30) {
+        // …but not against a clock that has not started yet. Before the first
+        // scheduled buffer is audible the audio clock is flat at the run's
+        // starting media time by construction, so `drift` here is not drift at
+        // all — it is the lead itself, read as error. On Bluetooth that is
+        // ~600ms, far past the 150ms threshold, so this fired every frame and
+        // walked presentationStartPts backwards ~600ms over a handful of ticks:
+        // the picture stopped dead until the wall clock caught up with where
+        // the anchor had been dragged to. That is the freeze a moment after
+        // every seek that only ever showed up on Bluetooth. The anchor is
+        // already placed for the lead above; there is nothing to correct until
+        // sound is actually coming out.
+        if (
+          videoTime >= 0 &&
+          this.framesPresented > 30 &&
+          this.audioStartLeadMs() <= 0
+        ) {
           const drift = videoTime - audioTime;
           const threshold = isSlowHighFps ? 0.05 : 0.15;
           const strength = isSlowHighFps ? 0.5 : 0.25;
@@ -2724,7 +2769,9 @@ export class CanvasRenderer {
         }
 
         const elapsed = (performance.now() - this.presentationStartTime) / 1000;
-        return this.presentationStartPts + elapsed * this.playbackRate;
+        return (
+          this.presentationStartPts + Math.max(0, elapsed) * this.playbackRate
+        );
       }
     }
 
@@ -2734,6 +2781,23 @@ export class CanvasRenderer {
       return Math.min(videoTime, this.lastKnownAudioTime + 0.15);
     }
     return videoTime >= 0 ? videoTime : -1;
+  }
+
+  /**
+   * How far in the future to place a fresh presentation anchor so the picture
+   * starts moving with the sound rather than ahead of it, in ms.
+   *
+   * Zero on every ordinary output — the provider reports the real figure and it
+   * is a handful of milliseconds there. Capped so a device reporting something
+   * absurd (or a stale reading taken across a route change) can't park the
+   * picture: past a third of a second the honest thing is to start the picture
+   * and let the drift correction close the rest.
+   */
+  private audioStartLeadMs(): number {
+    if (!this._audioStartLead) return 0;
+    const lead = this._audioStartLead();
+    if (!(lead > 0)) return 0;
+    return Math.min(lead, CanvasRenderer.MAX_AUDIO_START_LEAD_S) * 1000;
   }
 
   /**
@@ -2779,8 +2843,15 @@ export class CanvasRenderer {
       this.framesPresented = 1; // First frame presented
       this._lastPresentAt = performance.now();
 
-      // Initialize presentation timing
-      this.presentationStartTime = performance.now();
+      // Initialize presentation timing.
+      //
+      // This frame goes up now — it is the picture at the seek target and the
+      // viewer should see it immediately — but the clock that walks FORWARD
+      // from it starts when the sound does. On a normal output that is the same
+      // instant; on Bluetooth the audio for this run is ~600ms from being
+      // audible, and starting the wall clock now would run the picture that far
+      // ahead of it. See audioStartLeadMs().
+      this.presentationStartTime = performance.now() + this.audioStartLeadMs();
       this.presentationStartPts = this.lastPresentedPts;
       this.syncedToAudio = false;
 
