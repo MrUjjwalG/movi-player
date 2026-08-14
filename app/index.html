@@ -3922,9 +3922,13 @@
 
         <!-- Install/usage badges, proxied same-origin from /badge/*.svg (worker.js) -->
         <div class="hero-badges" aria-label="Extension stats">
-          <a href="https://chromewebstore.google.com/detail/movi-player/ckleeigcopjnpehkjokijokjegknfgej" rel="noopener" target="_blank" title="MoviPlayer on the Chrome Web Store">
-            <img src="/badge/chrome.svg" height="20" loading="lazy" decoding="async" alt="Chrome Web Store users" />
-          </a>
+          <!-- No Chrome badge here. The store publishes a "users" figure, not
+               installs, and it does not track them: the dashboard showed 197
+               installs over four weeks and climbing while the public number
+               read 5. Standing next to real download counts it read as a dead
+               extension. The verified-publisher item above carries the trust
+               this was meant to; /badge/chrome.svg still exists if a metric
+               worth showing ever appears (ratings, once there are some). -->
           <a href="https://marketplace.visualstudio.com/items?itemName=mrujjwalg.movi-player-vscode" rel="noopener" target="_blank" title="Movi Player on the VS Code Marketplace">
             <img src="/badge/vscode.svg" height="20" loading="lazy" decoding="async" alt="VS Code Marketplace downloads" />
           </a>
