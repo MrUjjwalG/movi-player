@@ -179,13 +179,67 @@ int movi_seek_to(MoviContext *ctx, double timestamp, int stream_index,
     seek_flags |= AVSEEK_FLAG_BACKWARD;
   }
 
+  // Anchor the seek on the VIDEO stream, and forbid landing past the target.
+  //
+  // This used to pass stream_index = -1 with max_ts = INT64_MAX — the caller's
+  // stream_index was accepted and then dropped on the floor. Both halves of
+  // that hurt, and together they produce a seek that lands SECONDS late, but
+  // only sometimes:
+  //
+  //  - With -1, FFmpeg picks its own default stream to seek by (and reads the
+  //    timestamp in AV_TIME_BASE). On a Matroska file that is routinely the
+  //    audio stream, whose packets sit on a much finer grid than the video
+  //    GOP — so the position it settles on is an audio boundary, and the video
+  //    keyframe belonging to it has already gone past.
+  //  - With max_ts = INT64_MAX, avformat_seek_file is explicitly permitted to
+  //    satisfy the request with a position AFTER the target, so nothing stops
+  //    it choosing the next index entry.
+  //
+  // Captured on Chromium mobile, a 1080p H.264 WEB-DL, 15 seeks: 12 landed
+  // within 40ms of the target and 3 landed +2.87s, +6.13s and +6.46s late —
+  // each one logging "Found IDR keyframe after seek (craSkipped=0)", i.e. the
+  // player's keyframe filter had skipped nothing and the demuxer's own first
+  // video keyframe really was a whole GOP past where it was asked to go. The
+  // giveaway is that AUDIO arrived at the right timestamp on all three, so
+  // the container position was fine and only the video anchor was wrong:
+  // "Video-audio gap 6121ms exceeds 200ms; syncing clock to video". What the
+  // viewer sees is a seek that hangs and then resumes several seconds ahead of
+  // where they put the playhead.
+  //
+  // So: seek by the video stream in its own time base, with max_ts pinned to
+  // the target. The permissive form is kept as a fallback, because the comment
+  // it replaces recorded a real failure — some files have no usable index at
+  // or before the target and the strict call returns an error rather than
+  // landing early. Falling back reproduces exactly the old behaviour, so the
+  // worst case here is what shipped before.
+  int anchor = stream_index;
+  if (anchor < 0 || anchor >= (int)ctx->fmt_ctx->nb_streams ||
+      ctx->fmt_ctx->streams[anchor]->codecpar->codec_type !=
+          AVMEDIA_TYPE_VIDEO) {
+    anchor = av_find_best_stream(ctx->fmt_ctx, AVMEDIA_TYPE_VIDEO, -1, -1, NULL,
+                                 0);
+  }
+
+  int ret = -1;
+  if (anchor >= 0) {
+    // avformat_seek_file reads min/ts/max in the ANCHOR stream's time base
+    // once a stream index is given — not AV_TIME_BASE.
+    AVRational tb = ctx->fmt_ctx->streams[anchor]->time_base;
+    int64_t stream_target =
+        (int64_t)(timestamp / (av_q2d(tb) > 0 ? av_q2d(tb) : 1.0));
+    ret = avformat_seek_file(ctx->fmt_ctx, anchor, INT64_MIN, stream_target,
+                             stream_target, seek_flags);
+  }
+
   int64_t seek_target = (int64_t)(timestamp * AV_TIME_BASE);
-  // Use INT64_MAX for max_ts to allow FFmpeg to find the nearest keyframe
-  // The BACKWARD flag ensures we prefer positions at or before seek_target
-  // Using seek_target as max_ts was too restrictive and caused seeks to fail
-  // or jump to EOF when no keyframe exactly matched the target position
-  int ret = avformat_seek_file(ctx->fmt_ctx, -1, INT64_MIN, seek_target,
-                               INT64_MAX, seek_flags);
+  if (ret < 0) {
+    // Use INT64_MAX for max_ts to allow FFmpeg to find the nearest keyframe
+    // The BACKWARD flag ensures we prefer positions at or before seek_target
+    // Using seek_target as max_ts was too restrictive and caused seeks to fail
+    // or jump to EOF when no keyframe exactly matched the target position
+    ret = avformat_seek_file(ctx->fmt_ctx, -1, INT64_MIN, seek_target,
+                             INT64_MAX, seek_flags);
+  }
   if (ret < 0) {
     // Fallback to av_seek_frame if avformat_seek_file fails
     ret = av_seek_frame(ctx->fmt_ctx, -1, seek_target, seek_flags);

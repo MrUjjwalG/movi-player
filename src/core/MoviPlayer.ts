@@ -5940,6 +5940,23 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
               const elapsed =
                 performance.now() - this.seekingToKeyframeStartTime;
               this.seekKeyframeScanned++;
+              // Where the demuxer actually landed, once per seek.
+              //
+              // "First frame arrived N seconds past the target" has two very
+              // different causes and the completion log cannot tell them apart:
+              // the seek went back to the keyframe before the target and the
+              // GOP is simply long (fine — the pre-target frames are decoded
+              // and dropped), or the seek landed mid-GOP and the next keyframe
+              // is a whole GOP ahead (not fine — that is content the viewer
+              // asked for and will never see). The first packet after the seek
+              // separates them: at/before the target means the former, at the
+              // target means the latter.
+              if (this.seekKeyframeScanned === 1) {
+                Logger.debug(
+                  TAG,
+                  `Post-seek first packet: pts=${packet.timestamp.toFixed(3)}s keyframe=${packet.keyframe} idr=${packet.isIdr} (target=${this.seekTargetTime.toFixed(3)}s, delta=${(packet.timestamp - this.seekTargetTime).toFixed(3)}s)`,
+                );
+              }
               // Prefer a true IDR to restart: on mixed-keyframe HEVC a CRA sent
               // as `key` is rejected by the HW decoder (open-GOP) and forces a
               // software fallback, while an IDR restarts cleanly. But accept a
