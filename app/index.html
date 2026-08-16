@@ -3392,7 +3392,10 @@
       .dev-log-header {
         display: flex;
         align-items: center;
-        gap: 0.6rem;
+        /* Wraps rather than overflows — the row carries a search box, a level
+           picker and four buttons, which is more than a phone width holds. */
+        flex-wrap: wrap;
+        gap: 0.45rem;
         padding: 0.5rem 0.85rem;
         background: rgba(255, 255, 255, 0.04);
         border-bottom: 1px solid rgba(255, 255, 255, 0.08);
@@ -3445,6 +3448,74 @@
         background: rgba(0, 0, 0, 0.05);
         border-color: rgba(0, 0, 0, 0.3);
       }
+      .dev-log-search {
+        width: 150px;
+        appearance: none;
+        background: rgba(255, 255, 255, 0.06);
+        border: 1px solid rgba(255, 255, 255, 0.15);
+        border-radius: 6px;
+        color: rgba(255, 255, 255, 0.9);
+        font: inherit;
+        font-size: 0.72rem;
+        padding: 0.2rem 0.5rem;
+        transition: width 0.15s, border-color 0.15s;
+      }
+      .dev-log-search::placeholder { color: rgba(255, 255, 255, 0.35); }
+      .dev-log-search:focus {
+        outline: none;
+        width: 220px;
+        border-color: rgba(255, 255, 255, 0.4);
+      }
+      [data-theme="light"] .dev-log-search {
+        background: rgba(0, 0, 0, 0.04);
+        border-color: rgba(0, 0, 0, 0.15);
+        color: rgba(0, 0, 0, 0.85);
+      }
+      [data-theme="light"] .dev-log-search::placeholder { color: rgba(0, 0, 0, 0.35); }
+      /* Level picker, DevTools-style: one button summarising the selection,
+         with the levels themselves behind it. */
+      .dev-log-levels { position: relative; }
+      .dev-log-levels > button { display: inline-flex; align-items: center; gap: 0.3rem; }
+      .dev-log-levels > button .caret { font-size: 0.6rem; opacity: 0.7; }
+      .dev-log-levels .menu {
+        position: absolute;
+        top: calc(100% + 6px);
+        right: 0;
+        z-index: 5;
+        min-width: 150px;
+        padding: 0.25rem;
+        /* Surface tokens, not a hand-picked black — the menu should read as
+           part of the page, not as a hole punched through it. */
+        background: var(--bg-elevated);
+        border: 1px solid var(--border-subtle);
+        border-radius: 8px;
+        box-shadow: 0 10px 28px rgba(0, 0, 0, 0.28);
+        color: var(--text-primary);
+      }
+      .dev-log-levels .menu label {
+        display: flex;
+        align-items: center;
+        gap: 0.45rem;
+        padding: 0.25rem 0.45rem;
+        border-radius: 5px;
+        font-size: 0.72rem;
+        cursor: pointer;
+      }
+      .dev-log-levels .menu label:hover { background: var(--btn-ghost-bg); }
+      .dev-log-levels .menu .sep {
+        height: 1px;
+        margin: 0.25rem 0.2rem;
+        background: var(--border-subtle);
+      }
+      /* The tick carries the level's colour; the label stays plain text. Tinting
+         the words too turned the menu into a paint chart, and the warn yellow in
+         particular is unreadable on the light surface. */
+      .dev-log-levels .menu input { margin: 0; accent-color: var(--accent); }
+      .dev-log-levels .menu input[data-level="log"]   { accent-color: #8b93a1; }
+      .dev-log-levels .menu input[data-level="info"]  { accent-color: #3aa6e0; }
+      .dev-log-levels .menu input[data-level="warn"]  { accent-color: #d99b1f; }
+      .dev-log-levels .menu input[data-level="error"] { accent-color: #e14b4b; }
+      .dev-log-levels .menu input[data-level="debug"] { accent-color: #8a63e0; }
       .dev-log-body {
         max-height: 240px;
         overflow-y: auto;
@@ -4024,6 +4095,21 @@
           <span class="title">Console</span>
           <span class="count" id="dev-log-count">0</span>
           <span class="spacer"></span>
+          <input type="search" class="dev-log-search" id="dev-log-search" placeholder="Filter…" aria-label="Filter log messages" autocomplete="off" spellcheck="false" />
+          <div class="dev-log-levels" id="dev-log-levels">
+            <button type="button" id="dev-log-levels-btn" aria-haspopup="true" aria-expanded="false" title="Choose which levels to show">
+              <span id="dev-log-levels-label">All levels</span><span class="caret" aria-hidden="true">▾</span>
+            </button>
+            <div class="menu" id="dev-log-levels-menu" hidden>
+              <label><input type="checkbox" data-level="log" checked /><span>Log</span></label>
+              <label><input type="checkbox" data-level="info" checked /><span>Info</span></label>
+              <label><input type="checkbox" data-level="warn" checked /><span>Warnings</span></label>
+              <label><input type="checkbox" data-level="error" checked /><span>Errors</span></label>
+              <label><input type="checkbox" data-level="debug" checked /><span>Debug</span></label>
+              <div class="sep"></div>
+              <label><input type="checkbox" id="dev-log-levels-all" checked /><span>All levels</span></label>
+            </div>
+          </div>
           <button type="button" id="dev-log-autoscroll" aria-pressed="true" title="Toggle autoscroll">Autoscroll: on</button>
           <button type="button" id="dev-log-copy" title="Copy logs to clipboard">Copy</button>
           <button type="button" id="dev-log-download" title="Download logs as a .log file">Download</button>
@@ -4367,53 +4453,177 @@
       const devLogCopy = document.getElementById("dev-log-copy");
       const devLogDownload = document.getElementById("dev-log-download");
       const devLogAutoscroll = document.getElementById("dev-log-autoscroll");
+      const devLogSearch = document.getElementById("dev-log-search");
+      const devLogLevelsBtn = document.getElementById("dev-log-levels-btn");
+      const devLogLevelsLabel = document.getElementById("dev-log-levels-label");
+      const devLogLevelsMenu = document.getElementById("dev-log-levels-menu");
+      const devLogLevelsAll = document.getElementById("dev-log-levels-all");
       let devLogAutoscrollOn = true;
       let devLogUnsub = null;
       let devLogHydrated = false;
       const DEV_LOG_MAX_ROWS = 5000;
+
+      // Filter state. Levels start all-on, so the panel looks exactly as it did
+      // until someone narrows it.
+      const DEV_LOG_LEVELS = ["log", "info", "warn", "error", "debug"];
+      const devLogLevelsOn = new Set(DEV_LOG_LEVELS);
+      let devLogQuery = "";
+      // How many buffered entries pass the filter. Tracked incrementally rather
+      // than recomputed, so appending one row stays O(1) against a buffer that
+      // no longer has a ceiling.
+      let devLogShown = 0;
+      const devLogIsFiltered = () =>
+        devLogQuery !== "" || devLogLevelsOn.size !== DEV_LOG_LEVELS.length;
+      const devLogMatches = (e) =>
+        !!e &&
+        devLogLevelsOn.has(e.level) &&
+        (devLogQuery === "" || e.text.toLowerCase().includes(devLogQuery));
 
       const formatTs = (t) => {
         const d = new Date(t);
         const pad = (n, w = 2) => String(n).padStart(w, "0");
         return pad(d.getHours()) + ":" + pad(d.getMinutes()) + ":" + pad(d.getSeconds()) + "." + pad(d.getMilliseconds(), 3);
       };
-      const appendDevLogRow = (entry) => {
-        if (!entry || !devLogBody) return;
-        if (devLogEmpty && devLogEmpty.parentNode === devLogBody) devLogBody.removeChild(devLogEmpty);
+      const updateDevLogCount = () => {
+        if (!devLogCount) return;
+        const total = window.__moviDevLog?.buffer?.length ?? 0;
+        devLogCount.textContent = devLogIsFiltered()
+          ? `${devLogShown} / ${total}`
+          : String(total);
+      };
+      const devLogRow = (entry) => {
         const row = document.createElement("div");
         row.className = "dev-log-row " + entry.level;
         const ts = document.createElement("span"); ts.className = "ts"; ts.textContent = formatTs(entry.t);
         const lvl = document.createElement("span"); lvl.className = "lvl"; lvl.textContent = entry.level;
         const msg = document.createElement("span"); msg.className = "msg"; msg.textContent = entry.text;
         row.appendChild(ts); row.appendChild(lvl); row.appendChild(msg);
-        devLogBody.appendChild(row);
-        // The buffer keeps everything; the DOM is only a window onto it. Rows
-        // are real elements in a scrolling container, so an unbounded panel
-        // turns into a layout stall on a long session — and nothing is lost by
-        // trimming here, because Copy and Download both read the buffer.
-        while (devLogBody.childElementCount > DEV_LOG_MAX_ROWS) devLogBody.removeChild(devLogBody.firstElementChild);
-        if (devLogCount) devLogCount.textContent = String(window.__moviDevLog?.buffer?.length ?? 0);
-        if (devLogAutoscrollOn) devLogBody.scrollTop = devLogBody.scrollHeight;
+        return row;
+      };
+      const appendDevLogRow = (entry) => {
+        if (!entry || !devLogBody) return;
+        // A filtered-out entry still lands in the buffer, so the total moves
+        // even when nothing new appears on screen.
+        if (devLogMatches(entry)) {
+          devLogShown++;
+          if (devLogEmpty && devLogEmpty.parentNode === devLogBody) devLogBody.removeChild(devLogEmpty);
+          devLogBody.appendChild(devLogRow(entry));
+          // The buffer keeps everything; the DOM is only a window onto it. Rows
+          // are real elements in a scrolling container, so an unbounded panel
+          // turns into a layout stall on a long session — and nothing is lost by
+          // trimming here, because Copy and Download both read the buffer.
+          while (devLogBody.childElementCount > DEV_LOG_MAX_ROWS) devLogBody.removeChild(devLogBody.firstElementChild);
+          if (devLogAutoscrollOn) devLogBody.scrollTop = devLogBody.scrollHeight;
+        }
+        updateDevLogCount();
       };
       const clearDevLogDom = () => {
         if (!devLogBody) return;
         devLogBody.innerHTML = "";
+        devLogShown = 0;
         if (devLogEmpty) { devLogEmpty.textContent = "No logs yet."; devLogBody.appendChild(devLogEmpty); }
-        if (devLogCount) devLogCount.textContent = "0";
+        updateDevLogCount();
+      };
+      // Rebuild the visible rows from the buffer. Only the tail is built —
+      // slicing before touching the DOM means a filter change over a large
+      // buffer never creates nodes it is about to throw away.
+      const renderDevLog = () => {
+        if (!devLogBody || !devLogHydrated) return;
+        const matches = (window.__moviDevLog?.buffer || []).filter(devLogMatches);
+        devLogShown = matches.length;
+        devLogBody.innerHTML = "";
+        if (!matches.length) {
+          if (devLogEmpty) {
+            devLogEmpty.textContent = devLogIsFiltered() ? "No logs match the filter." : "No logs yet.";
+            devLogBody.appendChild(devLogEmpty);
+          }
+          updateDevLogCount();
+          return;
+        }
+        const frag = document.createDocumentFragment();
+        for (const e of matches.slice(-DEV_LOG_MAX_ROWS)) frag.appendChild(devLogRow(e));
+        devLogBody.appendChild(frag);
+        updateDevLogCount();
+        if (devLogAutoscrollOn) devLogBody.scrollTop = devLogBody.scrollHeight;
       };
       const hydrateDevLog = () => {
         if (devLogHydrated || !window.__moviDevLog) return;
         devLogHydrated = true;
-        clearDevLogDom();
-        for (const e of window.__moviDevLog.buffer) appendDevLogRow(e);
+        renderDevLog();
         devLogUnsub = window.__moviDevLog.subscribe((e) => {
           if (e === null) { clearDevLogDom(); return; }
           appendDevLogRow(e);
         });
       };
-      // The whole buffer as plain text — what both Copy and Download hand over.
+
+      if (devLogSearch) {
+        // Debounced: each keystroke re-filters the whole buffer, and the buffer
+        // is unbounded.
+        let searchTimer = null;
+        devLogSearch.addEventListener("input", () => {
+          clearTimeout(searchTimer);
+          searchTimer = setTimeout(() => {
+            devLogQuery = devLogSearch.value.trim().toLowerCase();
+            renderDevLog();
+          }, 120);
+        });
+      }
+      if (devLogLevelsMenu && devLogLevelsBtn) {
+        const levelBoxes = [...devLogLevelsMenu.querySelectorAll("input[data-level]")];
+        // Summarise the selection on the button, so the panel says what it's
+        // showing without the menu being open.
+        const syncLevelsUi = () => {
+          const n = devLogLevelsOn.size;
+          if (devLogLevelsLabel) {
+            devLogLevelsLabel.textContent =
+              n === DEV_LOG_LEVELS.length ? "All levels"
+              : n === 0 ? "No levels"
+              : n === 1 ? levelBoxes.find((b) => devLogLevelsOn.has(b.dataset.level))?.nextElementSibling.textContent
+              : `${n} levels`;
+          }
+          if (devLogLevelsAll) {
+            devLogLevelsAll.checked = n === DEV_LOG_LEVELS.length;
+            devLogLevelsAll.indeterminate = n > 0 && n < DEV_LOG_LEVELS.length;
+          }
+        };
+        const openLevels = (open) => {
+          devLogLevelsMenu.hidden = !open;
+          devLogLevelsBtn.setAttribute("aria-expanded", open ? "true" : "false");
+        };
+        devLogLevelsBtn.addEventListener("click", (e) => {
+          e.stopPropagation();
+          openLevels(devLogLevelsMenu.hidden);
+        });
+        // Clicks inside the menu must not reach the document handler below, or
+        // ticking one box would close the menu before ticking a second.
+        devLogLevelsMenu.addEventListener("click", (e) => e.stopPropagation());
+        document.addEventListener("click", () => openLevels(false));
+        document.addEventListener("keydown", (e) => {
+          if (e.key === "Escape" && !devLogLevelsMenu.hidden) openLevels(false);
+        });
+        devLogLevelsMenu.addEventListener("change", (e) => {
+          const box = e.target;
+          if (box === devLogLevelsAll) {
+            devLogLevelsOn.clear();
+            if (box.checked) DEV_LOG_LEVELS.forEach((l) => devLogLevelsOn.add(l));
+            levelBoxes.forEach((b) => (b.checked = box.checked));
+          } else if (box.dataset.level) {
+            if (box.checked) devLogLevelsOn.add(box.dataset.level);
+            else devLogLevelsOn.delete(box.dataset.level);
+          } else {
+            return;
+          }
+          syncLevelsUi();
+          renderDevLog();
+        });
+        syncLevelsUi();
+      }
+
+      // What's on screen, as plain text — so Copy and Download hand over exactly
+      // what the filter says you're looking at, not the whole buffer behind it.
       const devLogText = () =>
         (window.__moviDevLog?.buffer || [])
+          .filter(devLogMatches)
           .map((e) => `[${formatTs(e.t)}] ${e.level.toUpperCase()} ${e.text}`)
           .join("\n");
 
