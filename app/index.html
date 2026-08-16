@@ -3502,7 +3502,11 @@
          this buffer once dev mode is on and the DOM is ready. -->
     <script>
       (function () {
-        var MAX = 500;
+        // The buffer is deliberately unbounded. It used to keep only the last
+        // 500 entries, which quietly ate the beginning of every session — and
+        // the beginning is where load, probe and decoder-setup failures live,
+        // so the one part worth reading was the part being dropped. It's the
+        // record the Download button writes out, so it has to be complete.
         var buf = [];
         var listeners = [];
         // We intentionally do NOT keep references to the originals —
@@ -3528,7 +3532,6 @@
           var text = Array.prototype.map.call(args, fmt).join(" ");
           var entry = { level: level, text: text, t: Date.now() };
           buf.push(entry);
-          if (buf.length > MAX) buf.splice(0, buf.length - MAX);
           for (var i = 0; i < listeners.length; i++) {
             try { listeners[i](entry); } catch { /* noop */ }
           }
@@ -4023,6 +4026,7 @@
           <span class="spacer"></span>
           <button type="button" id="dev-log-autoscroll" aria-pressed="true" title="Toggle autoscroll">Autoscroll: on</button>
           <button type="button" id="dev-log-copy" title="Copy logs to clipboard">Copy</button>
+          <button type="button" id="dev-log-download" title="Download logs as a .log file">Download</button>
           <button type="button" id="dev-log-clear" title="Clear logs">Clear</button>
         </div>
         <div class="dev-log-body" id="dev-log-body" role="log" aria-live="polite">
@@ -4361,10 +4365,12 @@
       const devLogCount = document.getElementById("dev-log-count");
       const devLogClear = document.getElementById("dev-log-clear");
       const devLogCopy = document.getElementById("dev-log-copy");
+      const devLogDownload = document.getElementById("dev-log-download");
       const devLogAutoscroll = document.getElementById("dev-log-autoscroll");
       let devLogAutoscrollOn = true;
       let devLogUnsub = null;
       let devLogHydrated = false;
+      const DEV_LOG_MAX_ROWS = 5000;
 
       const formatTs = (t) => {
         const d = new Date(t);
@@ -4381,8 +4387,11 @@
         const msg = document.createElement("span"); msg.className = "msg"; msg.textContent = entry.text;
         row.appendChild(ts); row.appendChild(lvl); row.appendChild(msg);
         devLogBody.appendChild(row);
-        // Cap rendered rows to keep the DOM small even if the buffer is full.
-        while (devLogBody.childElementCount > 500) devLogBody.removeChild(devLogBody.firstElementChild);
+        // The buffer keeps everything; the DOM is only a window onto it. Rows
+        // are real elements in a scrolling container, so an unbounded panel
+        // turns into a layout stall on a long session — and nothing is lost by
+        // trimming here, because Copy and Download both read the buffer.
+        while (devLogBody.childElementCount > DEV_LOG_MAX_ROWS) devLogBody.removeChild(devLogBody.firstElementChild);
         if (devLogCount) devLogCount.textContent = String(window.__moviDevLog?.buffer?.length ?? 0);
         if (devLogAutoscrollOn) devLogBody.scrollTop = devLogBody.scrollHeight;
       };
@@ -4402,10 +4411,53 @@
           appendDevLogRow(e);
         });
       };
+      // The whole buffer as plain text — what both Copy and Download hand over.
+      const devLogText = () =>
+        (window.__moviDevLog?.buffer || [])
+          .map((e) => `[${formatTs(e.t)}] ${e.level.toUpperCase()} ${e.text}`)
+          .join("\n");
+
+      // Name the file after whatever is loaded, so a log can be matched back to
+      // the video that produced it. `player.src` is the one place that knows:
+      // the element keeps a File as-is and a URL as a string. For URLs prefer
+      // currentVideoUrl — a cross-origin source is rewritten to /proxy?url=…,
+      // whose basename is the useless word "proxy".
+      const devLogFileName = () => {
+        const src = player?.src;
+        let name = "";
+        if (src instanceof File) {
+          name = src.name || "";
+        } else if (typeof src === "string" && src) {
+          const url = currentVideoUrl || src;
+          try {
+            name = decodeURIComponent(new URL(url, location.href).pathname.split("/").pop() || "");
+          } catch {
+            name = url.split(/[?#]/)[0].split("/").pop() || "";
+          }
+        }
+        // Drop the media extension and anything a filesystem would object to.
+        name = name.replace(/\.[^.]+$/, "").replace(/[\\/:*?"<>|]+/g, "_").trim();
+        return (name || "movi") + ".log";
+      };
+
       if (devLogClear) devLogClear.addEventListener("click", () => window.__moviDevLog?.clear());
+      if (devLogDownload) devLogDownload.addEventListener("click", () => {
+        const blob = new Blob([devLogText() + "\n"], { type: "text/plain;charset=utf-8" });
+        const href = URL.createObjectURL(blob);
+        const a = document.createElement("a");
+        a.href = href;
+        a.download = devLogFileName();
+        document.body.appendChild(a);
+        a.click();
+        a.remove();
+        // Revoke late — Safari reads the blob after the click returns.
+        setTimeout(() => URL.revokeObjectURL(href), 10000);
+        const original = devLogDownload.textContent;
+        devLogDownload.textContent = "Saved!";
+        setTimeout(() => { devLogDownload.textContent = original; }, 1200);
+      });
       if (devLogCopy) devLogCopy.addEventListener("click", async () => {
-        const buf = window.__moviDevLog?.buffer || [];
-        const text = buf.map((e) => `[${formatTs(e.t)}] ${e.level.toUpperCase()} ${e.text}`).join("\n");
+        const text = devLogText();
         const original = devLogCopy.textContent;
         try {
           await navigator.clipboard.writeText(text);
