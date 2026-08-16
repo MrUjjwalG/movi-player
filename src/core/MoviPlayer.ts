@@ -913,6 +913,10 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
   // the moment the pipeline is ready instead of serving the stall floor.
   private _bufferingSelfInflicted: boolean = false;
   private _lastRateChangeAt: number = 0;
+  /** When audio last changed language in place. A stall in the moments after
+   *  belongs to that swap — the renderer was reset and the decoder is cold —
+   *  not to the link, and the ABR must not read it as the rung failing. */
+  private _lastAudioSwitchAt: number = 0;
   private _lastSeekResumeAt: number = 0;
   /** How long after a rate change or a seek's resume an audio stall is still
    *  attributable to the flush/re-anchor that operation performed itself. */
@@ -5266,10 +5270,15 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
           // the picture sat frozen for a further 1516ms serving the floor
           // alone. The readiness checks below are the right gate for both.
           const now = performance.now();
+          // …and an in-place AUDIO switch is a third: it resets the renderer
+          // and starts a decoder cold, so the buffer it stalls on is the one
+          // this player just emptied.
           this._bufferingSelfInflicted =
             now - this._lastRateChangeAt <
               MoviPlayer.SELF_INFLICTED_STALL_WINDOW_MS ||
             now - this._lastSeekResumeAt <
+              MoviPlayer.SELF_INFLICTED_STALL_WINDOW_MS ||
+            now - this._lastAudioSwitchAt <
               MoviPlayer.SELF_INFLICTED_STALL_WINDOW_MS;
           this.stateManager.setState("buffering");
           this.clock.pause();
@@ -9250,8 +9259,6 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
     if (lang === this._activeAudioLang && this.audioDemuxer) return true;
 
     const t = this.getCurrentTime();
-    const resume =
-      this.stateManager.is("playing") || this.stateManager.is("buffering");
 
     // --- PREP (old audio keeps playing): build + open + seek the new audio
     // demuxer on an isolated WASM module. The slow work (open = source measure,
@@ -9339,10 +9346,36 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
     this._activeAudioLang = lang;
     this._splitAudioEof = false;
     this._lastSplitAudioPts = t;
-    if (resume) {
+    // Restart the pump on the state AS IT IS NOW, and count a seek in flight
+    // as live.
+    //
+    // This used to read the state from BEFORE the swap — before an open, a
+    // seek and a decoder reconfigure, any of which can outlast the state that
+    // was current when the switch was asked for. Restoring a remembered
+    // language is the case that proves it: the element asks as the media
+    // loads, so the answer was taken during the opening seek ("seeking", which
+    // counted as neither playing nor buffering), the swap landed into a
+    // playing player, and the pump was never started again. Nothing decoded a
+    // single audio packet after that — the stall detector found the buffer
+    // empty, buffering held the full fifteen seconds of the bound escape, and
+    // playback resumed with audioReady=false. Measured on a dubbed video: 15s
+    // silent, then a 2.6s desync seek to catch the sound up.
+    //
+    // Safe to start whenever: pumpSplitAudio has its own state guard and idles
+    // if it should not be running.
+    if (
+      this.stateManager.is("playing") ||
+      this.stateManager.is("buffering") ||
+      this.waitingForVideoSync
+    ) {
       if (!this.audioRenderer.isAudioPlaying()) this.audioRenderer.play();
       this.startAudioLoop();
     }
+    // A stall in the next moment belongs to this switch, not to the link: the
+    // renderer was just reset and the new decoder is starting cold. Without
+    // this the ABR reads it as the rung failing — measured on the same
+    // session, 720p to 144p on the tick after a dub was selected.
+    this._lastAudioSwitchAt = performance.now();
     this._audioSwitchInProgress = false;
 
     // Tear down the old audio pipeline (video untouched).
