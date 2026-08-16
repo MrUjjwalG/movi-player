@@ -84,6 +84,21 @@ export class AudioRenderer {
   private volume: number = 1.0;
   private _playbackRate: number = 1.0;
   private activeSources: AudioBufferSourceNode[] = [];
+  /**
+   * What each live source was made from, and when it is due.
+   *
+   * A scheduled source is a finished thing — post-stretch PCM with a start time
+   * the audio thread already owns — and there is no reading back out of it. A
+   * rate change needs to do exactly that: everything scheduled ahead of the
+   * playhead is at the old rate and has to go, and up to SCHEDULE_LOOKAHEAD
+   * seconds of media goes with it unless the buffer it was made from can be put
+   * back. Keyed weakly so a source that has played out is collectable with its
+   * entry.
+   */
+  private sourceOrigin = new WeakMap<
+    AudioBufferSourceNode,
+    { buffer: AudioBuffer; audioTime: number; when: number; endsAt: number }
+  >();
   private _muted: boolean = false;
   // Set while frames are being thrown away because the context is suspended
   // and we are muted (autoplay-blocked). Tells the recovery path that the
@@ -903,6 +918,16 @@ export class AudioRenderer {
     this.scheduledTime = when + (usedStretcher
       ? processedBuffer.duration
       : audioBuffer.duration / this._playbackRate);
+    // The buffer this was made from, kept so a rate change can hand back the
+    // part nobody has heard yet — see setPlaybackRate. The ORIGINAL, not the
+    // stretched one: the stretched copy is at the rate being left behind, and
+    // re-stretching it would apply the tempo shift twice.
+    this.sourceOrigin.set(source, {
+      buffer: audioBuffer,
+      audioTime,
+      when,
+      endsAt: this.scheduledTime,
+    });
 
     // Once a second, what the output actually has in hand.
     //
@@ -1398,16 +1423,34 @@ export class AudioRenderer {
       );
     }
 
-    // Re-anchor the audio→media clock at the CURRENT play position, then drop
-    // the stale old-rate audio that's still scheduled ahead of `now` so the
-    // rate change is heard immediately instead of after a multi-second tail.
+    // Re-anchor the audio→media clock at the CURRENT play position, then take
+    // back the stale old-rate audio scheduled ahead of `now` so the rate change
+    // is heard immediately instead of after a multi-second tail.
     //
-    // The scheduled read-ahead (each chunk queued at `scheduledTime`, which
-    // runs up to ~maxAudioBuffered seconds past `now`) is all old-rate audio.
-    // If we leave it playing (the old "do nothing" path) the audible rate
-    // change lags video by that whole span. So we stop the active sources and
-    // pull scheduledTime back to `now` — the next decoded chunk then plays at
-    // `now` at the new rate.
+    // TAKE BACK, not throw away — that distinction is the whole second of
+    // silence this used to cost.
+    //
+    // Everything scheduled ahead is old-rate and cannot stay. It used to be
+    // stopped and forgotten, with scheduledTime pulled to `now` on the reasoning
+    // that the next decoded chunk would then play immediately. It does not: that
+    // chunk's media time is a full SCHEDULE_LOOKAHEAD past the playhead, because
+    // that is precisely the span just discarded, and the scheduler honours the
+    // media timeline — it puts the chunk where its PTS says it belongs and fills
+    // the space in front with silence. One second of scheduled audio dropped is
+    // therefore one second of hole, and the picture, which follows the audio
+    // clock, stops with it. That is the interruption on every speed change.
+    //
+    // Nothing about that audio was wrong except its rate, and the buffers it was
+    // built from are still to hand (see sourceOrigin). So the sources that have
+    // not begun are stopped and their ORIGINAL buffers pushed back onto the
+    // pending queue, in order, to be stretched again at the new rate and
+    // rescheduled behind whatever is playing right now. No media is skipped, so
+    // there is no hole to fill; the seam is a buffer boundary that was never
+    // heard.
+    //
+    // The one source already playing is left alone. It finishes at the old rate
+    // — a chunk, tens of milliseconds — and is the bridge across the change
+    // rather than a click to be faded over.
     //
     // Crucially we do NOT clear firstBufferMediaTime / hasFirstBuffer the way
     // reset() does. Keeping the anchor (mapped through the OLD rate up to now)
@@ -1427,52 +1470,59 @@ export class AudioRenderer {
       this.firstBufferScheduledAt = now;
       this.firstBufferMediaTime = currentMediaTime;
 
-      // Stop the stale old-rate sources scheduled ahead of now. Fade the gain
-      // briefly first (stable audio) to avoid a click at the cut.
-      if (this._stableAudio && this.gainNode && this.activeSources.length > 0) {
-        try {
-          this.gainNode.gain.cancelScheduledValues(now);
-          this.gainNode.gain.setValueAtTime(this.gainNode.gain.value, now);
-          this.gainNode.gain.linearRampToValueAtTime(
-            0,
-            now + AudioRenderer.FADE_OUT_TIME,
-          );
-        } catch {
-          /* ignore ramp errors */
+      // A hair of slack on "has it begun": a source due within a few
+      // milliseconds is already the audio thread's, and stopping it is a cut in
+      // sound that is on its way out of the speaker.
+      const started = now + 0.005;
+      const reclaimed: { buffer: AudioBuffer; audioTime: number }[] = [];
+      // The context time the retained audio runs out at, which is where the
+      // new-rate audio has to begin. `now` when nothing is playing.
+      let seam = now;
+      // Over a copy: stop() fires onended, which splices activeSources.
+      for (const source of [...this.activeSources]) {
+        const origin = this.sourceOrigin.get(source);
+        // Playing right now: leave it, and start the new rate where it ends.
+        if (origin && origin.when <= started) {
+          seam = Math.max(seam, origin.endsAt);
+          continue;
         }
-      }
-      for (const source of this.activeSources) {
+        // Everything else goes. With an origin it comes back below; without one
+        // it can only be dropped — but it still has to be stopped, or old-rate
+        // audio would play over what is scheduled in its place.
         try {
           source.stop();
           source.disconnect();
         } catch {
           /* ignore */
         }
-      }
-      this.activeSources = [];
-      // Next chunk schedules from now (its expectedTime, via the preserved
-      // anchor, lands just after now — the small forward gap is the buffered
-      // span we just discarded, not a clock leap). Stretcher ring already
-      // cleared above.
-      this.scheduledTime = now;
-
-      // Restore gain after the fade-out for the new-rate sources.
-      if (this._stableAudio && this.gainNode) {
-        try {
-          const restoreTime = now + AudioRenderer.FADE_OUT_TIME + 0.005;
-          this.gainNode.gain.linearRampToValueAtTime(
-            this._muted ? 0 : this.perceptualGain(this.volume),
-            restoreTime,
-          );
-        } catch {
-          this.gainNode.gain.value = this._muted
-            ? 0
-            : this.perceptualGain(this.volume);
+        const idx = this.activeSources.indexOf(source);
+        if (idx !== -1) this.activeSources.splice(idx, 1);
+        if (origin) {
+          reclaimed.push({ buffer: origin.buffer, audioTime: origin.audioTime });
         }
       }
+
+      // Back at the FRONT of the queue and in schedule order: this is the media
+      // immediately after what is playing, and everything already waiting comes
+      // after it.
+      if (reclaimed.length > 0) {
+        this._pending.unshift(...reclaimed);
+        for (const r of reclaimed) this._pendingDuration += r.buffer.duration;
+      }
+
+      // Where the new rate starts: the end of the audio still in flight, so the
+      // two meet without a gap and without playing over each other. Stretcher
+      // ring already cleared above.
+      this.scheduledTime = seam;
     }
 
     this._playbackRate = newRate;
+    // Refill now, at the new rate. The queue drains on arriving audio or on its
+    // own timer, and neither is due: the player parks its audio loop once the
+    // buffer is deep, and the timer only runs while something was left waiting.
+    // Without this the reclaimed audio would sit there until the retained chunk
+    // had run out — which is the hole again, just a smaller one.
+    this.pumpSchedule();
   }
 
   /**
