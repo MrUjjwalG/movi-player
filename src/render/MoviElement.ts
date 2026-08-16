@@ -737,6 +737,9 @@ export class MoviElement extends HTMLElement {
   // over the first frame during the brief pre-play startup window even
   // though the player is about to start on its own.
   private _autoplayStarting: boolean = false;
+  /** Pending "did startup really stop?" check — see the paused branch in the
+   *  state handler. */
+  private _autoplayPausedTimer: number | undefined;
   /** Set when pause() lands before playback has started, so the pending
    *  autoplay/queued play doesn't fire once loading finishes. */
   private _startCancelled: boolean = false;
@@ -25703,12 +25706,30 @@ export class MoviElement extends HTMLElement {
       // reject in that case and no "playing" event fires, so without this the
       // flag would stay set and keep the centre play button hidden. Clear it and
       // repaint so the big play affordance surfaces for a manual start.
-      if (
-        this._autoplayStarting &&
-        (state === "paused" || state === "ended" || state === "error")
-      ) {
+      if (this._autoplayStarting && (state === "ended" || state === "error")) {
         this._autoplayStarting = false;
         this.updatePlayPauseIcon();
+      } else if (this._autoplayStarting && state === "paused") {
+        // "paused" is no longer proof that startup stopped short.
+        //
+        // The player's own post-seek gate passes THROUGH paused on its way to
+        // playing — buffering, paused, "Buffers refilled, resuming playback",
+        // playing — so clearing the suppression here put the big play icon
+        // over a video that was about to start by itself, for the second or
+        // two until it did. Which is the opposite of what autoplay means.
+        //
+        // So wait, and let the next state answer. A startup that genuinely
+        // stopped stays paused and gets its button; one that was mid-resume
+        // reaches "playing" first and clears the flag there, cancelling this.
+        // Longer than the audio resume grace (see AudioRenderer), because a
+        // blocked context is exactly when that gap is at its widest.
+        clearTimeout(this._autoplayPausedTimer);
+        this._autoplayPausedTimer = setTimeout(() => {
+          if (!this._autoplayStarting) return;
+          if (this.player?.getState() !== "paused") return;
+          this._autoplayStarting = false;
+          this.updatePlayPauseIcon();
+        }, 1600) as unknown as number;
       }
 
       if (state === "playing") {
@@ -25716,6 +25737,7 @@ export class MoviElement extends HTMLElement {
         // first so we can skip the click-confirmation UI below.
         const wasAutoplayStart = this._autoplayStarting;
         this._autoplayStarting = false;
+        clearTimeout(this._autoplayPausedTimer);
         // Surface the resume prompt the moment playback first starts — i.e.
         // the first time the bottom-bar play icon flips to pause. Checked
         // before _hasEverPlayed flips below so it only fires on the very
@@ -26358,6 +26380,9 @@ export class MoviElement extends HTMLElement {
     // the video started by itself the moment the data arrived.
     this._startCancelled = true;
     this._autoplayStarting = false;
+    // The viewer pressing pause during startup is the answer the timer was
+    // waiting for; it must not fire later against a player they stopped.
+    clearTimeout(this._autoplayPausedTimer);
     if (this.player && !this.isLoading && !this._isUnsupported) {
       this.player.pause();
     }
