@@ -3377,18 +3377,21 @@
         max-width: 1200px;
         margin: 1rem auto 0;
         padding: 0;
-        background: rgba(0, 0, 0, 0.92);
-        border: 1px solid rgba(255, 255, 255, 0.12);
+        /* Built from the page's own tokens, so the panel is the same card every
+           other section on the page is, and both themes come for free instead
+           of through a parallel [data-theme="light"] block per rule. */
+        background: var(--bg-card);
+        border: 1px solid var(--border-subtle);
         border-radius: 12px;
-        overflow: hidden;
-        box-shadow: 0 8px 24px rgba(0, 0, 0, 0.35);
+        color: var(--text-primary);
+        /* No `overflow: hidden` here. It used to round the corners by clipping,
+           which also clipped the level menu — with the list empty or filtered
+           down to nothing the panel is barely taller than its header, so the
+           menu got sliced off mid-item. The children round their own outer
+           corners instead, which costs nothing and lets the menu hang out. */
+        box-shadow: var(--shadow-heavy);
       }
       body.dev-mode .dev-log-panel { display: block; }
-      [data-theme="light"] .dev-log-panel {
-        background: rgba(255, 255, 255, 0.85);
-        border-color: rgba(0, 0, 0, 0.12);
-        box-shadow: 0 8px 24px rgba(0, 0, 0, 0.08);
-      }
       .dev-log-header {
         display: flex;
         align-items: center;
@@ -3397,16 +3400,13 @@
         flex-wrap: wrap;
         gap: 0.45rem;
         padding: 0.5rem 0.85rem;
-        background: rgba(255, 255, 255, 0.04);
-        border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+        background: var(--bg-surface);
+        /* 11px, not 12 — the panel's 1px border eats the difference. */
+        border-radius: 11px 11px 0 0;
+        border-bottom: 1px solid var(--border-subtle);
         font-size: 0.78rem;
-        color: rgba(255, 255, 255, 0.7);
+        color: var(--text-secondary);
         user-select: none;
-      }
-      [data-theme="light"] .dev-log-header {
-        background: rgba(0, 0, 0, 0.03);
-        border-bottom-color: rgba(0, 0, 0, 0.08);
-        color: rgba(0, 0, 0, 0.6);
       }
       .dev-log-header .dot {
         width: 8px;
@@ -3428,7 +3428,7 @@
       .dev-log-header button {
         appearance: none;
         background: transparent;
-        border: 1px solid rgba(255, 255, 255, 0.15);
+        border: 1px solid var(--border-hover);
         color: inherit;
         font: inherit;
         font-size: 0.72rem;
@@ -3438,40 +3438,27 @@
         transition: background 0.15s, border-color 0.15s;
       }
       .dev-log-header button:hover {
-        background: rgba(255, 255, 255, 0.08);
-        border-color: rgba(255, 255, 255, 0.25);
-      }
-      [data-theme="light"] .dev-log-header button {
-        border-color: rgba(0, 0, 0, 0.15);
-      }
-      [data-theme="light"] .dev-log-header button:hover {
-        background: rgba(0, 0, 0, 0.05);
-        border-color: rgba(0, 0, 0, 0.3);
+        background: var(--btn-ghost-bg);
+        border-color: var(--text-muted);
       }
       .dev-log-search {
         width: 150px;
         appearance: none;
-        background: rgba(255, 255, 255, 0.06);
-        border: 1px solid rgba(255, 255, 255, 0.15);
+        background: var(--bg-surface);
+        border: 1px solid var(--border-hover);
         border-radius: 6px;
-        color: rgba(255, 255, 255, 0.9);
+        color: var(--text-primary);
         font: inherit;
         font-size: 0.72rem;
         padding: 0.2rem 0.5rem;
         transition: width 0.15s, border-color 0.15s;
       }
-      .dev-log-search::placeholder { color: rgba(255, 255, 255, 0.35); }
+      .dev-log-search::placeholder { color: var(--text-muted); }
       .dev-log-search:focus {
         outline: none;
         width: 220px;
-        border-color: rgba(255, 255, 255, 0.4);
+        border-color: var(--text-muted);
       }
-      [data-theme="light"] .dev-log-search {
-        background: rgba(0, 0, 0, 0.04);
-        border-color: rgba(0, 0, 0, 0.15);
-        color: rgba(0, 0, 0, 0.85);
-      }
-      [data-theme="light"] .dev-log-search::placeholder { color: rgba(0, 0, 0, 0.35); }
       /* Level picker, DevTools-style: one button summarising the selection,
          with the levels themselves behind it. */
       .dev-log-levels { position: relative; }
@@ -3484,12 +3471,13 @@
         z-index: 5;
         min-width: 150px;
         padding: 0.25rem;
-        /* Surface tokens, not a hand-picked black — the menu should read as
-           part of the page, not as a hole punched through it. */
-        background: var(--bg-elevated);
-        border: 1px solid var(--border-subtle);
+        /* Same near-black card as the panel it hangs off — it reads as raised
+           through its border and shadow, not through a different hue. The
+           earlier --bg-elevated put a navy patch over a black panel. */
+        background: var(--bg-card);
+        border: 1px solid var(--border-hover);
         border-radius: 8px;
-        box-shadow: 0 10px 28px rgba(0, 0, 0, 0.28);
+        box-shadow: var(--shadow-heavy);
         color: var(--text-primary);
       }
       .dev-log-levels .menu label {
@@ -3507,18 +3495,15 @@
         margin: 0.25rem 0.2rem;
         background: var(--border-subtle);
       }
-      /* The tick carries the level's colour; the label stays plain text. Tinting
-         the words too turned the menu into a paint chart, and the warn yellow in
-         particular is unreadable on the light surface. */
-      .dev-log-levels .menu input { margin: 0; accent-color: var(--accent); }
-      .dev-log-levels .menu input[data-level="log"]   { accent-color: #8b93a1; }
-      .dev-log-levels .menu input[data-level="info"]  { accent-color: #3aa6e0; }
-      .dev-log-levels .menu input[data-level="warn"]  { accent-color: #d99b1f; }
-      .dev-log-levels .menu input[data-level="error"] { accent-color: #e14b4b; }
-      .dev-log-levels .menu input[data-level="debug"] { accent-color: #8a63e0; }
+      /* One neutral tick for every level. Colouring them per level made the menu
+         a paint chart for information the list already carries, and it read as
+         decoration rather than as state. --text-primary inverts with the theme
+         on its own: white on the dark card, near-black on the light one. */
+      .dev-log-levels .menu input { margin: 0; accent-color: var(--text-primary); }
       .dev-log-body {
         max-height: 240px;
         overflow-y: auto;
+        border-radius: 0 0 11px 11px;
         padding: 0.4rem 0;
         font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
         font-size: 0.72rem;
@@ -3528,20 +3513,16 @@
         display: flex;
         gap: 0.6rem;
         padding: 0.15rem 0.85rem;
-        border-bottom: 1px solid rgba(255, 255, 255, 0.04);
+        border-bottom: 1px solid var(--border-subtle);
         white-space: pre-wrap;
         word-break: break-word;
-      }
-      [data-theme="light"] .dev-log-row {
-        border-bottom-color: rgba(0, 0, 0, 0.04);
       }
       .dev-log-row:last-child { border-bottom: 0; }
       .dev-log-row .ts {
         flex: 0 0 auto;
-        color: rgba(255, 255, 255, 0.4);
+        color: var(--text-muted);
         font-variant-numeric: tabular-nums;
       }
-      [data-theme="light"] .dev-log-row .ts { color: rgba(0, 0, 0, 0.4); }
       .dev-log-row .lvl {
         flex: 0 0 44px;
         text-transform: uppercase;
@@ -3550,9 +3531,8 @@
       }
       .dev-log-row .msg {
         flex: 1 1 auto;
-        color: rgba(255, 255, 255, 0.92);
+        color: var(--text-primary);
       }
-      [data-theme="light"] .dev-log-row .msg { color: rgba(0, 0, 0, 0.85); }
       .dev-log-row.log    .lvl { color: #9aa4b1; }
       .dev-log-row.info   .lvl { color: #5ec6ff; }
       .dev-log-row.warn   .lvl { color: #f1c453; }
@@ -3562,10 +3542,9 @@
       .dev-log-row.debug  .lvl { color: #b48cff; }
       .dev-log-empty {
         padding: 0.9rem 0.85rem;
-        color: rgba(255, 255, 255, 0.45);
+        color: var(--text-muted);
         font-style: italic;
       }
-      [data-theme="light"] .dev-log-empty { color: rgba(0, 0, 0, 0.45); }
     </style>
     <!-- Dev console capture: patch console.* and global error handlers
          as early as possible so logs emitted during module import (e.g.
