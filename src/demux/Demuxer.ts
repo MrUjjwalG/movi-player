@@ -29,11 +29,20 @@ import { Logger } from "../utils/Logger";
 
 const TAG = "Demuxer";
 
-// Wall-clock ceiling for the missing-duration packet scan. Generous because it
-// only ever runs on local sources, where a full demux pass is disk-bound: a
-// 5.5MB Matroska measures ~4ms. Anything that can't finish in a second here is
-// large enough that stalling startup any longer is the worse trade.
-const DURATION_SCAN_BUDGET_MS = 1000;
+// Wall-clock ceiling for the missing-duration packet scan, per source class.
+//
+// Local is disk-bound and the bytes are free: a 5.5MB Matroska demuxes in ~4ms,
+// so a second is already far more rope than any sane file needs. Remote is
+// bandwidth-bound and the bytes cost the viewer something, so it gets a longer
+// clock (a network round trip alone can eat a local budget) but a hard size gate
+// in front of it.
+const DURATION_SCAN_BUDGET_MS = { local: 1000, remote: 3000 };
+
+// Don't even start a remote scan above this. The scan has to pull the whole file
+// to see the last packet, and past this point it's downloading more than a
+// duration is worth — at ordinary broadband it couldn't finish inside the budget
+// anyway, so it would just burn bandwidth on its way to giving up.
+const REMOTE_DURATION_SCAN_MAX_BYTES = 64 * 1024 * 1024;
 
 /**
  * Adapter to convert SourceAdapter to DataSource interface
@@ -160,30 +169,56 @@ export class Demuxer {
    * Cues, so FFmpeg reports AV_NOPTS_VALUE and the player shows 0:00 with a dead
    * seek bar. Native `ffprobe` prints duration=N/A on the same file.
    *
-   * Restricted to *local* sources on purpose. The scan is only expensive in I/O,
-   * and for a File or a blob that means a disk read that finishes in a few ms;
-   * over the network it would mean downloading the entire file before the first
-   * frame. It would also punish live streams, which legitimately have no
-   * duration and would pay the full budget on every start. Extending this to
-   * remote sources needs a size probe and a much tighter budget first.
+   * The scan is only ever expensive in I/O, so what it costs depends entirely on
+   * where the bytes come from, and the gating splits three ways:
+   *
+   *  - Local (a File, an object URL, or the desktop shell's loopback server):
+   *    a disk read. Scan it, no size limit.
+   *  - Segmented (HLS/DASH): never. Those are assembled from a playlist whose
+   *    window slides, and the stream wrapper — not the container — is the
+   *    authority on their duration. Handing one a scanned window length would
+   *    clamp the clock to a number that goes stale as the window moves.
+   *  - Plain remote: only when the server declares a size and that size is small
+   *    enough to be worth the download. Requiring Content-Length is also what
+   *    keeps chunked/endless responses out.
    */
   private async recoverMissingDuration(): Promise<number> {
     if (!this.bindings) return 0;
 
     const key = this.source.getKey();
-    const isLocal = key.startsWith("file:") || key.startsWith("blob:");
-    if (!isLocal) {
-      Logger.debug(
-        TAG,
-        "Container reports no duration; skipping scan for non-local source",
-      );
-      return 0;
+    let budgetMs = DURATION_SCAN_BUDGET_MS.local;
+
+    if (!Demuxer.isLocallyBacked(key)) {
+      if (key.startsWith("hls-segments:")) {
+        Logger.debug(
+          TAG,
+          "Container reports no duration; segmented source owns its own duration",
+        );
+        return 0;
+      }
+
+      budgetMs = DURATION_SCAN_BUDGET_MS.remote;
+      const size = await this.source.getSize().catch(() => 0);
+      if (!Number.isFinite(size) || size <= 0) {
+        Logger.debug(
+          TAG,
+          "Container reports no duration and the source declares no size; skipping scan",
+        );
+        return 0;
+      }
+      if (size > REMOTE_DURATION_SCAN_MAX_BYTES) {
+        Logger.debug(
+          TAG,
+          `Container reports no duration, but ${Math.round(size / 1048576)}MB is too much to scan over the network`,
+        );
+        return 0;
+      }
     }
 
     Logger.info(TAG, "Container reports no duration, scanning packets...");
     const started = performance.now();
     try {
-      const scanned = await this.bindings.scanDuration(DURATION_SCAN_BUDGET_MS);
+      const scanned = await this.bindings.scanDuration(budgetMs);
       const elapsed = Math.round(performance.now() - started);
       if (scanned > 0) {
         Logger.info(TAG, `Recovered duration=${scanned}s by scan (${elapsed}ms)`);
@@ -194,6 +229,48 @@ export class Demuxer {
       Logger.warn(TAG, `Duration scan failed: ${e}`);
     }
     return 0;
+  }
+
+  /**
+   * Are this source's bytes free to read end-to-end? These skip the size gate
+   * the missing-duration scan applies to everything else.
+   *
+   * A File or an object URL is disk- or memory-backed, so a full pass is free.
+   * Loopback HTTP counts too, and has to: the desktop shell can't use file://
+   * (the demuxer needs COOP/COEP, which file:// can't carry) so it serves
+   * OS-opened files from 127.0.0.1 as /_local?p=<path>. Those arrive here as an
+   * http: key even though every byte comes off the local disk — which is why
+   * the scan quietly did nothing in the desktop app while working in the web
+   * one on the same file.
+   *
+   * A loopback origin alone isn't sufficient, though: the same server also
+   * exposes /_proxy?url=<remote> to stream a *remote* URL past CORS. So reject
+   * any loopback URL that carries an absolute http(s) URL in its query — that's
+   * the network wearing a local address.
+   */
+  private static isLocallyBacked(key: string): boolean {
+    if (key.startsWith("file:") || key.startsWith("blob:")) return true;
+
+    try {
+      const base = typeof location !== "undefined" ? location.href : undefined;
+      const url = new URL(key, base);
+      if (url.protocol !== "http:" && url.protocol !== "https:") return false;
+
+      const host = url.hostname;
+      const isLoopback =
+        host === "127.0.0.1" ||
+        host === "localhost" ||
+        host === "[::1]" ||
+        host === "::1";
+      if (!isLoopback) return false;
+
+      for (const value of url.searchParams.values()) {
+        if (/^https?:\/\//i.test(value)) return false;
+      }
+      return true;
+    } catch {
+      return false;
+    }
   }
 
   /**
