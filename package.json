@@ -105,7 +105,7 @@
     "sync:element": "node scripts/sync-element.mjs",
     "build:wasm": "mkdir -p dist/wasm && docker compose run --rm build",
     "build:wasm:force": "mkdir -p dist/wasm && docker compose run --rm -e FORCE_FFMPEG=true -e FORCE_DAV1D=true build",
-    "dev": "vite --open /dev/",
+    "dev": "vite --host --open /dev/",
     "test": "vitest",
     "clean": "rm -rf dist",
     "typecheck": "tsc --noEmit",
