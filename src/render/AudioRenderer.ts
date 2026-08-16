@@ -31,6 +31,17 @@ let sharedAudioContext: AudioContext | null = null;
 // wakes it during init(), before autoplay's block-check runs. Stays false until
 // the first real gesture so a brand-new page's poster-seek can't leak audio.
 let sharedContextActivated = false;
+
+/**
+ * Whether this session's output has ever been handed a buffer.
+ *
+ * Deliberately NOT part of the per-run counters: a seek resets those (the run
+ * starts over) but the DEVICE does not forget it has been playing. The full
+ * start cushion is for an output that has never been fed; asking a warm one
+ * for it again only holds the picture longer. Module-level for the same reason
+ * sharedContextActivated is — the context is shared across videos.
+ */
+let outputEverFed = false;
 /**
  * "Somebody suspended this context on purpose."
  *
@@ -739,9 +750,24 @@ export class AudioRenderer {
       outputLatency?: number;
       baseLatency?: number;
     };
+    // …and that reasoning is about a device that has never been fed. The
+    // starvation it describes is the first buffer of a SESSION, where nothing
+    // has primed the output at all.
+    //
+    // A seek restarts a run on a device that has been playing for minutes: the
+    // flush cleared our scheduling, not the device's own pipeline, and the
+    // decoder already has packets queued so the buffers behind this one land
+    // within a frame or two. Paying the full lead there costs the viewer real
+    // time — the picture is held for exactly this figure plus the output
+    // latency (see expectedStartLead), which on Bluetooth is why the frames
+    // pause for the better part of a second after every seek.
+    //
+    // So the full cushion for a cold start, a small one once warm.
+    const latency = ctx.outputLatency ?? ctx.baseLatency ?? 0;
+    const warmOutput = outputEverFed;
     const deviceLead = this.hasFirstBuffer
       ? 0
-      : Math.min(0.5, ctx.outputLatency ?? ctx.baseLatency ?? 0);
+      : Math.min(warmOutput ? 0.12 : 0.5, latency);
     const minTime = now + 0.005 + deviceLead;
 
     // Detect buffer underrun
@@ -900,6 +926,7 @@ export class AudioRenderer {
     }
     this.currentMediaTime = audioTime;
     this.scheduledCount++;
+    outputEverFed = true;
 
     const endMediaTime = audioTime + audioBuffer.duration;
     if (endMediaTime > this.maxScheduledMediaTime) {
@@ -1700,7 +1727,29 @@ export class AudioRenderer {
       baseLatency?: number;
     };
     const latency = ctx.outputLatency || ctx.baseLatency || 0;
-    return Math.min(0.5, latency) + latency;
+    // Mirrors render()'s deviceLead, warm case included — this figure is what
+    // the video side holds for, so a prediction bigger than the real delay is
+    // a picture parked for nothing.
+    const warmOutput = outputEverFed;
+    return Math.min(warmOutput ? 0.12 : 0.5, latency) + latency;
+  }
+
+  /**
+   * How long until sound is actually coming out — measured once there is a
+   * buffer to measure, predicted before there is.
+   *
+   * The two halves answer the same question at different moments and must not
+   * be mixed up: after a seek's flush there is no scheduled buffer, so the
+   * measurement honestly reports zero, and a caller that acts on it starts the
+   * picture with no lead at all. Past the first buffer the prediction is
+   * stale — the live figure counts down to zero as the sound approaches, and
+   * must be allowed to reach it, or the drift correction it gates never runs.
+   */
+  startLead(): number {
+    if (!this.audioContext) return 0;
+    return this.hasFirstBuffer
+      ? this.secondsUntilAudible()
+      : this.expectedStartLead();
   }
 
   secondsUntilAudible(): number {

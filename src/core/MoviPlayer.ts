@@ -1161,7 +1161,18 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
           this.videoRenderer.setAudioTimeProvider(
             () => this.audioRenderer.getAudioClock(),
             () => this.audioRenderer.hasHealthyBuffer(),
-            () => this.audioRenderer.secondsUntilAudible(),
+            // Measured once there is a buffer, predicted before there is —
+            // see AudioRenderer.startLead().
+            //
+            // The renderer places its post-seek anchor at the one moment the
+            // measurement cannot work: the flush has cleared the scheduled
+            // buffers, so it answers zero, no lead is applied, and the picture
+            // starts immediately. On a high-latency output the sound then
+            // arrives a few hundred ms later, the first A/V sync finds the
+            // video that far ahead and re-anchors it backwards, and the
+            // picture stops until the wall clock catches up — the hitch a beat
+            // after every seek on Bluetooth.
+            () => this.audioRenderer.startLead(),
           );
         } else {
           // When audio is disabled, video runs independently without A/V sync overhead
