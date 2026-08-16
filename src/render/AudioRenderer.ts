@@ -42,6 +42,17 @@ let sharedContextActivated = false;
  * sharedContextActivated is — the context is shared across videos.
  */
 let outputEverFed = false;
+
+/**
+ * How long play() waits on an AudioContext.resume() before carrying on
+ * without it.
+ *
+ * Long enough for a genuine wake-up (measured at tens of ms, and ~100ms on
+ * Gecko), short enough that a resume the browser has silently declined does
+ * not hold playback hostage. Safari's declined resume never settles at all —
+ * see the race in play().
+ */
+const RESUME_GRACE_MS = 1200;
 /**
  * "Somebody suspended this context on purpose."
  *
@@ -1044,12 +1055,33 @@ export class AudioRenderer {
       (!this._muted || contextSuspendIntent)
     ) {
       try {
-        await this.audioContext.resume();
+        const resuming = this.audioContext.resume();
         // Remember that this session's shared context is unlocked, so future
         // auto-advanced / switched videos can wake it without a fresh gesture.
-        if ((this.audioContext.state as string) === "running") {
-          sharedContextActivated = true;
-        }
+        // Hung off the promise itself rather than read after the race below:
+        // a resume that lands late still counts.
+        void resuming
+          .then(() => {
+            if ((this.audioContext?.state as string) === "running") {
+              sharedContextActivated = true;
+            }
+          })
+          .catch(() => {});
+        // Bounded, because a resume the browser will not grant does not always
+        // REJECT. Safari leaves it pending until a gesture arrives, and every
+        // caller awaiting it stops there — which took the whole player down
+        // with it: the buffering→resume path awaited this and so never reached
+        // clock.start() or the "playing" state. Read off a session's log, the
+        // video sat on its poster with no error, no autoplay fallback and no
+        // "Tap to unmute" pill, and the viewer had to press play by hand.
+        //
+        // Past the grace, playback starts without sound. That is the same
+        // bargain the muted-autoplay fallback makes, and the element raises
+        // the pill for it once the picture is moving.
+        await Promise.race([
+          resuming,
+          new Promise<void>((r) => setTimeout(r, RESUME_GRACE_MS)),
+        ]);
       } catch (err) {
         Logger.warn(
           TAG,

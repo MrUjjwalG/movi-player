@@ -25576,8 +25576,24 @@ export class MoviElement extends HTMLElement {
       // for data (`waiting`) and when it genuinely resumed (`playing`). Without
       // these, a host had to subscribe to our non-standard `statechange` and
       // know our internal PlayerState names just to drive a spinner.
-      if (state === "playing") this.dispatchEvent(new Event("playing"));
-      else if (state === "buffering") this.dispatchEvent(new Event("waiting"));
+      if (state === "playing") {
+        this.dispatchEvent(new Event("playing"));
+        // And ask again whether audio was actually allowed.
+        //
+        // The check after autoplay's play() can be asked too early to know.
+        // A post-seek audio prime holds the context suspended DELIBERATELY,
+        // and isBlockedSuspended() reports "not blocked" for exactly that
+        // reason — so a real block sitting underneath the prime read as fine,
+        // the fallback concluded audio was working, and no pill was ever
+        // raised. By the time the picture is moving the prime is over, and a
+        // context still suspended is the browser's answer, not ours.
+        //
+        // Cheap and self-limiting: it returns immediately unless autoplay is
+        // in play, the viewer has not unmuted, and there is audio to offer.
+        if (this._autoplay && !this._muted && !this._userHasUnmuted) {
+          this.maybeFallbackToMutedAutoplay();
+        }
+      } else if (state === "buffering") this.dispatchEvent(new Event("waiting"));
       // The replacement player is up — stop holding the controls open on the
       // rebuild's behalf and let the normal state gating take over again.
       if (

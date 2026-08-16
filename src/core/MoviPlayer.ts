@@ -4008,7 +4008,7 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
         this.clock.pause();
         return;
       }
-    } else {
+    } else if (stateForPlay !== "playing") {
       Logger.error(
         TAG,
         `Cannot transition to playing from state: ${stateForPlay}`,
@@ -4016,6 +4016,22 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
       this.clock.pause();
       return;
     }
+    // Already playing is not a failure — it is this call's own goal, reached
+    // by something else while we were awaiting above.
+    //
+    // play() is async and everything between the entry check and here can
+    // yield: resuming the AudioContext, a first-play re-seek, a decoder flush.
+    // A seek completing in that window resumes playback itself, so this call
+    // comes back to a state it was on its way to setting. canPlay() bars
+    // "playing" at the door, so this can only ever be that race.
+    //
+    // It used to fall into the branch above, which logs an error and PAUSES
+    // THE CLOCK — undoing the playback that had just started. Read off a
+    // Safari session's unmute, where the tap runs an audio resync seek and a
+    // play() together: "Cannot transition to playing from state: playing",
+    // then "Clock: Paused at 0.00026s", and the only reason it survived is
+    // that the unmute re-seeks immediately afterwards and starts it again.
+    // Nothing to transition, nothing to undo: fall through to the loops.
 
     // Start demux loop
     // Cancel any existing animation frame to prevent duplicates
