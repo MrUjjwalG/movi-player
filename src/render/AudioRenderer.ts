@@ -152,6 +152,8 @@ export class AudioRenderer {
   private signalsmith: SignalsmithStretcher | null = null;
   private signalsmithLoading: boolean = false;
   private signalsmithSampleRate: number = 0;
+  /** Pending background build of the stretcher — see warmStretcherSoon(). */
+  private stretcherWarmTimer: number | null = null;
   // Sample rate of the most recently decoded audio buffer. The stretcher is
   // fixed-rate per instance and MUST be built at this rate — not the
   // AudioContext's, which can differ (e.g. 48kHz media in a 44.1kHz context).
@@ -712,6 +714,9 @@ export class AudioRenderer {
     const numberOfChannels = audioBuffer.numberOfChannels;
     const sampleRate = audioBuffer.sampleRate;
     this._decodedSampleRate = sampleRate;
+    // Now that the decoded rate is known, get the stretcher built while nobody
+    // is waiting on it.
+    this.warmStretcherSoon(sampleRate);
 
     // Clear rebuffering flag as soon as audio data arrives (decoder is producing).
     // Don't wait for successful scheduling — the stretcher may swallow a few
@@ -1152,6 +1157,36 @@ export class AudioRenderer {
    * The movi WASM module is shared with FFmpeg, so this is fast once the
    * player has loaded — just an instance allocation.
    */
+  /**
+   * Build the pitch-preserving stretcher in the background, before anyone asks
+   * for a speed change.
+   *
+   * It used to be built when the speed actually changed, and the speed changing
+   * is the worst moment to start: the build is an async WASM load, and until it
+   * lands every chunk is deliberately scheduled as silence rather than as
+   * pitch-shifted audio (see commitAudioBuffer). That choice is right — a
+   * chipmunk blip is worse than a gap — but it means the whole load time is
+   * heard as a hole, which is the second of silence on the first speed change.
+   * Nothing about that load needs the speed change to have happened.
+   *
+   * So it is built once playback is settled, at the DECODED sample rate, which
+   * is only known after some audio has come through (the stretcher is
+   * fixed-rate per instance, and building at the context rate instead means
+   * destroying it and rebuilding at the real rate on the first chunk — the same
+   * silence, just moved). One instance per session, off the startup path.
+   */
+  private warmStretcherSoon(sampleRate: number): void {
+    if (!this.preservePitch) return;
+    if (this.signalsmith || this.signalsmithLoading) return;
+    if (this.stretcherWarmTimer !== null) return;
+    this.stretcherWarmTimer = setTimeout(() => {
+      this.stretcherWarmTimer = null;
+      // Late enough that starting a video does not compete with it, early
+      // enough that nobody has reached the speed menu yet.
+      this.maybeInitSignalsmith(this._decodedSampleRate || sampleRate);
+    }, AudioRenderer.STRETCHER_WARM_DELAY_MS) as unknown as number;
+  }
+
   private maybeInitSignalsmith(sampleRate: number): void {
     if (this.signalsmith || this.signalsmithLoading) return;
     this.signalsmithLoading = true;
@@ -2113,6 +2148,14 @@ export class AudioRenderer {
   private static readonly SCHEDULE_LOOKAHEAD = 1.0;
   /** How often the queue drains itself while no audio is arriving. */
   private static readonly PUMP_INTERVAL_MS = 50;
+  /**
+   * How long after audio starts flowing the stretcher is built.
+   *
+   * Long enough to stay off the opening of a video, where the decode, the fetch
+   * and the first frames are already competing; far shorter than it takes
+   * anyone to open the speed menu.
+   */
+  private static readonly STRETCHER_WARM_DELAY_MS = 1500;
 
   private duckForUnderrun(): void {
     // Suppressed right after a foreground recovery: the recovery's own
@@ -2545,6 +2588,10 @@ export class AudioRenderer {
     this.inputNode = null;
     this.gainNode = null;
     this.compressorNode = null;
+    if (this.stretcherWarmTimer !== null) {
+      clearTimeout(this.stretcherWarmTimer);
+      this.stretcherWarmTimer = null;
+    }
     if (this.signalsmith) {
       this.signalsmith.destroy();
       this.signalsmith = null;
