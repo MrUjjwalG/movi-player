@@ -511,6 +511,26 @@ export class WasmBindings {
   }
 
   /**
+   * Recover a duration the container never stored, by demuxing to EOF and
+   * keeping the largest packet end timestamp. Only worth calling when
+   * getDuration() returned 0. Returns -1 if the scan blew its budget or found
+   * no usable timestamps — see movi_scan_duration() for why a partial result
+   * is deliberately not returned.
+   *
+   * Async: this reads the whole source through the Asyncify I/O callbacks.
+   */
+  async scanDuration(budgetMs: number): Promise<number> {
+    if (!this.contextPtr) return -1;
+    return (await this.module.ccall(
+      "movi_scan_duration",
+      "number",
+      ["number", "number"],
+      [this.contextPtr, budgetMs],
+      { async: true },
+    )) as number;
+  }
+
+  /**
    * Get Media Time(PTS) start time in seconds
    */
   getStartTime(): number {

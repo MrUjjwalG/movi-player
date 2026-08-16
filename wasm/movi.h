@@ -9,6 +9,7 @@
 #include <libavutil/display.h>
 #include <libavutil/pixdesc.h>
 #include <libavutil/spherical.h>
+#include <libavutil/time.h>
 #include <libswresample/swresample.h>
 #include <libswscale/swscale.h>
 #include <stdint.h>

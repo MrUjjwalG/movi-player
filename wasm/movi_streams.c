@@ -299,6 +299,87 @@ int movi_seek_to(MoviContext *ctx, double timestamp, int stream_index,
   return ret;
 }
 
+// Recover a duration the container never wrote down, by demuxing to EOF.
+//
+// Some files carry no duration at all. The common one is a Matroska muxed in
+// "live" mode — unknown segment size (01 FF FF FF FF FF FF FF), no Duration
+// element in Info, no Cues — which is what you get when a downloader pipes
+// into an ffmpeg whose output isn't seekable, so the header never gets patched
+// on close. FFmpeg leaves fmt_ctx->duration at AV_NOPTS_VALUE for these and
+// none of its own fallbacks rescue it: estimate_timings_from_pts is restricted
+// to the mpeg family, and the bitrate estimate can't run because bit_rate is
+// itself derived from a duration that doesn't exist. `ffprobe` on such a file
+// prints duration=N/A, so this is not something the WASM layer got wrong.
+//
+// The one thing that always works is to read every packet and keep the largest
+// end timestamp. That's demux only — no decoding — so it is cheap on CPU: a
+// 5.5MB Matroska (2660 packets) scans in ~4ms natively. What it isn't cheap on
+// is I/O, since it pulls the whole source through the read callbacks, hence the
+// caller-supplied wall-clock budget.
+//
+// Blowing the budget returns -1 rather than the partial maximum. A duration
+// that's too short is worse than no duration at all — the seek bar, the clock's
+// time clamp and every near-end check trust it, so a truncated value makes the
+// file look like it ends early.
+//
+// Byte-offset tail probing was tried first and doesn't work here — the
+// Matroska demuxer parses EBML sequentially, so av_seek_frame(AVSEEK_FLAG_BYTE)
+// is a no-op for it and a raw avio_seek leaves the demuxer's own state pointing
+// at the start anyway. Both "tail probes" measured identical to a full scan.
+EMSCRIPTEN_KEEPALIVE
+double movi_scan_duration(MoviContext *ctx, int budget_ms) {
+  if (!ctx || !ctx->fmt_ctx)
+    return -1.0;
+
+  AVPacket *pkt = av_packet_alloc();
+  if (!pkt)
+    return -1.0;
+
+  int64_t deadline = av_gettime_relative() + (int64_t)budget_ms * 1000;
+  double best = -1.0;
+  int timed_out = 0;
+  unsigned int seen = 0;
+
+  for (;;) {
+    av_packet_unref(pkt);
+    int ret = av_read_frame(ctx->fmt_ctx, pkt);
+    if (ret < 0)
+      break; // EOF, or an error we can't read past — keep what we have
+
+    if (pkt->stream_index >= 0 &&
+        pkt->stream_index < (int)ctx->fmt_ctx->nb_streams) {
+      AVStream *stream = ctx->fmt_ctx->streams[pkt->stream_index];
+      int64_t ts = (pkt->pts != AV_NOPTS_VALUE) ? pkt->pts : pkt->dts;
+      if (ts != AV_NOPTS_VALUE) {
+        int64_t end_ts = ts + (pkt->duration > 0 ? pkt->duration : 0);
+        double end = (double)end_ts * av_q2d(stream->time_base);
+        if (end > best)
+          best = end;
+      }
+    }
+
+    // av_gettime_relative() is far more expensive than the loop body, so only
+    // consult the clock every 256 packets.
+    if (((++seen) & 0xFF) == 0 && av_gettime_relative() > deadline) {
+      timed_out = 1;
+      break;
+    }
+  }
+
+  av_packet_unref(pkt);
+  av_packet_free(&pkt);
+
+  // Put the demuxer back at the start. Go through movi_seek_to so the Matroska
+  // EBML resync and the eof_reached clear live in exactly one place — reaching
+  // EOF above sets that flag, and without clearing it av_read_frame returns EOF
+  // immediately for the rest of the session.
+  movi_seek_to(ctx, 0.0, -1, AVSEEK_FLAG_BACKWARD);
+
+  if (timed_out || best <= 0.0)
+    return -1.0;
+  return best;
+}
+
 // Find the first VCL slice NAL in a (possibly multi-NAL) packet and return its
 // raw nal_unit_type — HEVC: (byte0 >> 1) & 0x3F (VCL = 0..31); H.264: byte0 &
 // 0x1F (VCL = 1..5). Returns -1 if no VCL slice is found, the packet is too

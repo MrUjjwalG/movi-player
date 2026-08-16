@@ -29,6 +29,12 @@ import { Logger } from "../utils/Logger";
 
 const TAG = "Demuxer";
 
+// Wall-clock ceiling for the missing-duration packet scan. Generous because it
+// only ever runs on local sources, where a full demux pass is disk-bound: a
+// 5.5MB Matroska measures ~4ms. Anything that can't finish in a second here is
+// large enough that stalling startup any longer is the worse trade.
+const DURATION_SCAN_BUDGET_MS = 1000;
+
 /**
  * Adapter to convert SourceAdapter to DataSource interface
  */
@@ -110,6 +116,9 @@ export class Demuxer {
 
     // Get duration and start time
     this.duration = this.bindings.getDuration();
+    if (this.duration <= 0) {
+      this.duration = await this.recoverMissingDuration();
+    }
     const startTime = this.bindings.getStartTime();
 
     // Enumerate streams
@@ -140,6 +149,51 @@ export class Demuxer {
       chapters: chapters,
       metadata: metadata,
     };
+  }
+
+  /**
+   * Last resort for a container that stores no duration — demux to EOF and take
+   * the largest packet end timestamp (see movi_scan_duration in the WASM layer).
+   *
+   * The files this rescues are downloads that were never finalised: a Matroska
+   * muxed in live mode has an unknown-size segment, no Duration element and no
+   * Cues, so FFmpeg reports AV_NOPTS_VALUE and the player shows 0:00 with a dead
+   * seek bar. Native `ffprobe` prints duration=N/A on the same file.
+   *
+   * Restricted to *local* sources on purpose. The scan is only expensive in I/O,
+   * and for a File or a blob that means a disk read that finishes in a few ms;
+   * over the network it would mean downloading the entire file before the first
+   * frame. It would also punish live streams, which legitimately have no
+   * duration and would pay the full budget on every start. Extending this to
+   * remote sources needs a size probe and a much tighter budget first.
+   */
+  private async recoverMissingDuration(): Promise<number> {
+    if (!this.bindings) return 0;
+
+    const key = this.source.getKey();
+    const isLocal = key.startsWith("file:") || key.startsWith("blob:");
+    if (!isLocal) {
+      Logger.debug(
+        TAG,
+        "Container reports no duration; skipping scan for non-local source",
+      );
+      return 0;
+    }
+
+    Logger.info(TAG, "Container reports no duration, scanning packets...");
+    const started = performance.now();
+    try {
+      const scanned = await this.bindings.scanDuration(DURATION_SCAN_BUDGET_MS);
+      const elapsed = Math.round(performance.now() - started);
+      if (scanned > 0) {
+        Logger.info(TAG, `Recovered duration=${scanned}s by scan (${elapsed}ms)`);
+        return scanned;
+      }
+      Logger.warn(TAG, `Duration scan found nothing usable (${elapsed}ms)`);
+    } catch (e) {
+      Logger.warn(TAG, `Duration scan failed: ${e}`);
+    }
+    return 0;
   }
 
   /**
