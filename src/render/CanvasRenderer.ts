@@ -171,6 +171,22 @@ export class CanvasRenderer {
   // performance.now() when the perf detectors were (re)armed by configure().
   // The startup grace is measured from here.
   private _perfArmedAt: number = 0;
+  // Host-page contention. The presentation loop can only put up as many frames
+  // as rAF hands it callbacks, and on a page running its own heavy JS animation
+  // the main thread is busy enough that rAF fires well below the display rate.
+  // From inside the detectors below that is indistinguishable from a decoder
+  // that cannot keep up — so an animation-heavy site reads as decode-bound and
+  // gets its rung dropped, losing resolution because of the SITE's animations
+  // rather than anything about the device or the link. Three-way per window:
+  //   queue empty                      → decode really is behind (backlog latches)
+  //   queue ready, our own tick is long → OUR draw is the cost; capping helps
+  //   queue ready, our own tick is short → someone else owns the thread; excuse it
+  private _rafTicks: number = 0; // presentation-loop callbacks this window
+  private _rafSelfMs: number = 0; // wall time spent INSIDE those callbacks
+  private _rafWindowStart: number = 0; // 0 = not started
+  private _framesReadyInWindow: boolean = false; // queue was non-empty at some tick
+  private _hostContended: boolean = false; // verdict of the last completed window
+  private _hostContentionLogged: boolean = false; // log once per source
   private _onPerformanceDegrade: ((targetFps: number) => void) | null = null;
   private static readonly PERF_WINDOW_MS = 1000;
   private static readonly PERF_DEFICIT_RATIO = 0.7; // achieved < 70% of source rate = struggling
@@ -198,6 +214,16 @@ export class CanvasRenderer {
   // the decoder is hunting a keyframe to recover. A genuinely decode-bound
   // device still presents well above this.
   private static readonly PERF_MIN_ACHIEVED_FPS = 5;
+  // rAF cadence below this share of the rate we are trying to present at means
+  // the callbacks themselves are the ceiling — no decoder can beat it, so
+  // nothing the adaptive-FPS or ABR levers do would gain a single frame.
+  private static readonly PERF_CONTENTION_RAF_RATIO = 0.7;
+  // …and if our own ticks account for less than this share of the window's wall
+  // time, the thread is being held by the host page rather than by us. A
+  // healthy 60fps draw is a few ms of each 16.7ms frame (~25%); a draw heavy
+  // enough to BE the bottleneck runs well above this, and must stay judgeable —
+  // present-capping is exactly the right answer for that one.
+  private static readonly PERF_CONTENTION_SELF_SHARE = 0.35;
 
   // Audio time provider for A/V sync
   private getAudioTime: (() => number) | null = null;
@@ -490,6 +516,8 @@ export class CanvasRenderer {
     this._perfStuckWindows = 0;
     this._stuckWindowStart = 0;
     this._perfArmedAt = 0; // stamped on the first sample once playback is live
+    this.resetRafCadence();
+    this._hostContentionLogged = false;
 
     // Set rotation from metadata
     if (rotation !== undefined) {
@@ -1480,12 +1508,81 @@ export class CanvasRenderer {
    *  sustained deficit. Called once per presentation cycle, before the
    *  empty-queue bail, so a starving (decode-bound) pipeline still advances the
    *  window clock and registers its low present count. */
+  private resetRafCadence(): void {
+    this._rafWindowStart = 0;
+    this._rafTicks = 0;
+    this._rafSelfMs = 0;
+    this._framesReadyInWindow = false;
+    this._hostContended = false;
+  }
+
+  /**
+   * Roll the rAF-cadence window and decide whether the one that just closed was
+   * the host page's doing rather than the pipeline's.
+   *
+   * Runs once per presentation tick. The verdict is sticky between windows — it
+   * stands until the next full window overwrites it — which is what we want:
+   * the detectors it gates work on multi-second streaks, so a per-tick verdict
+   * would let a single lucky tick re-open the gate mid-streak.
+   */
+  private sampleRafCadence(now: number): void {
+    // Latch every tick, not once per window: the queue drains and refills
+    // within a window even on a healthy pipeline, so a single unlucky read
+    // would claim the decoder had nothing ready when it did — the same reason
+    // the backlog latches above are rolled this way.
+    if (this.frameQueue.length > 0) this._framesReadyInWindow = true;
+
+    if (this._rafWindowStart === 0) {
+      this._rafWindowStart = now;
+      this._rafTicks = 0;
+      this._rafSelfMs = 0;
+      return;
+    }
+    const elapsed = now - this._rafWindowStart;
+    if (elapsed < CanvasRenderer.PERF_WINDOW_MS) return;
+
+    const rafFps = this._rafTicks / (elapsed / 1000);
+    const selfShare = this._rafSelfMs / elapsed;
+    // Judge the cadence against the rate we are actually trying to hit, so an
+    // engaged present cap doesn't make a deliberately-halved rate look starved.
+    const targetFps =
+      this._presentFpsCap > 0
+        ? Math.min(this.videoFrameRate, this._presentFpsCap)
+        : this.videoFrameRate;
+
+    this._hostContended =
+      targetFps > 0 &&
+      // Frames were sitting ready and we still couldn't put them up — so the
+      // decoder is not what's short. With an empty queue this is a starved
+      // pipeline and the existing detectors own the call.
+      this._framesReadyInWindow &&
+      rafFps < targetFps * CanvasRenderer.PERF_CONTENTION_RAF_RATIO &&
+      selfShare < CanvasRenderer.PERF_CONTENTION_SELF_SHARE;
+
+    if (this._hostContended && !this._hostContentionLogged) {
+      this._hostContentionLogged = true;
+      Logger.info(
+        TAG,
+        `Main thread contended by the host page: rAF fired ~${rafFps.toFixed(0)}/s ` +
+          `against a ${targetFps}fps target with frames ready, while the presentation ` +
+          `loop itself used only ${(selfShare * 100).toFixed(0)}% of the window — ` +
+          `holding off the adaptive-FPS and decode-bound detectors`,
+      );
+    }
+
+    this._rafWindowStart = now;
+    this._rafTicks = 0;
+    this._rafSelfMs = 0;
+    this._framesReadyInWindow = false;
+  }
+
   private samplePerformance(): void {
     if (this._perfDegradeChecked) return;
     if (!this.isPlaying) {
       this._perfWindowStart = 0;
       this._stuckWindowStart = 0;
       this._perfStuckWindows = 0;
+      this.resetRafCadence();
       return;
     }
     // Skip while backgrounded (and not in PiP): the throttled rAF stalls
@@ -1497,12 +1594,29 @@ export class CanvasRenderer {
       this._perfDeficitWindows = 0;
       this._stuckWindowStart = 0;
       this._perfStuckWindows = 0;
+      this.resetRafCadence();
       return;
     }
     // Off-speed playback changes distinct-frames-per-wall-second on its own
     // (2x can't show every frame on a 60Hz panel; slow-mo shows fewer) — that's
     // not the device struggling. Only measure at normal speed.
     if (Math.abs(this.playbackRate - 1.0) > 0.05) {
+      this._perfWindowStart = 0;
+      this._stuckWindowStart = 0;
+      this.resetRafCadence();
+      return;
+    }
+
+    const nowCadence = performance.now();
+    this.sampleRafCadence(nowCadence);
+    // The host page owns the thread, so nothing measured here is about this
+    // pipeline. Drop the accumulated streaks as well as skipping the verdict —
+    // otherwise a burst of the site's own animation work half-fills the
+    // counters and the cap/downshift fires the moment it lets go, on windows
+    // that were never the decoder's fault.
+    if (this._hostContended) {
+      this._perfDeficitWindows = 0;
+      this._perfStuckWindows = 0;
       this._perfWindowStart = 0;
       this._stuckWindowStart = 0;
       return;
@@ -2556,10 +2670,26 @@ export class CanvasRenderer {
   }
 
   /**
+   * The presentation loop, wrapped so each tick is counted and timed. Both
+   * numbers feed sampleRafCadence(), which is what lets the perf detectors tell
+   * "the decoder is behind" apart from "the host page is holding the main
+   * thread". Everything the loop actually does lives in presentationTick().
+   */
+  private presentationLoop = (): void => {
+    const tickStart = performance.now();
+    this._rafTicks++;
+    try {
+      this.presentationTick();
+    } finally {
+      this._rafSelfMs += performance.now() - tickStart;
+    }
+  };
+
+  /**
    * RAF-based presentation loop - presents frames at VSync-aligned times
    * For true 60fps, we present exactly one frame per RAF call when available
    */
-  private presentationLoop = (): void => {
+  private presentationTick = (): void => {
     if (!this.isPlaying) {
       this.rafId = null;
       return;
