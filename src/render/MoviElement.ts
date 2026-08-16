@@ -23068,7 +23068,12 @@ export class MoviElement extends HTMLElement {
         if (settings.volume !== undefined) {
           this._volume = settings.volume;
           this.noteStoredChoice("volume", true, String(settings.volume));
-          this.updateVolume();
+          // Silent: this is last session's volume coming back, not someone
+          // reaching for the slider. It read as a change of its own because
+          // the OSD's key includes `muted`, and a blocked autoplay had muted
+          // us in between — so a restore of the SAME volume announced itself
+          // as "muted 90%" seconds into a video the viewer had just opened.
+          this.updateVolume(true);
           changed = true;
         }
 
@@ -24306,6 +24311,9 @@ export class MoviElement extends HTMLElement {
     );
     this._autoMutedForAutoplay = true;
     this._muted = true;
+    // Keep the OSD's key in step with a mute the viewer did not ask for, so a
+    // later volume apply cannot mistake OUR mute for their change and toast it.
+    this._lastOsdVolumeKey = `${this._volume}|${this._muted}`;
     // Ours, not theirs — so the pill is allowed to appear.
     this._userChoseMute = false;
     this.updateMuted(); // pushes mute to player + surfaces the pill
@@ -24386,10 +24394,15 @@ export class MoviElement extends HTMLElement {
     overlay.style.display = shouldShow ? "flex" : "none";
   }
 
-  private updateVolume() {
+  /**
+   * @param silent Apply the volume without the OSD. For the paths that are not
+   * a viewer changing the volume — restoring a stored preference, replaying an
+   * attribute — where a toast reports a change nobody made.
+   */
+  private updateVolume(silent = false) {
     // Muted state is part of what the OSD reports, so it's part of the key.
     const osdKey = `${this._volume}|${this._muted}`;
-    const volumeChanged = osdKey !== this._lastOsdVolumeKey;
+    const volumeChanged = !silent && osdKey !== this._lastOsdVolumeKey;
     this._lastOsdVolumeKey = osdKey;
 
     if (this.player) {
