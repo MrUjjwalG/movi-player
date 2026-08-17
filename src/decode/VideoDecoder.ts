@@ -74,6 +74,12 @@ export class MoviVideoDecoder {
   // stream — its keyframe was rejected afterwards — so later flushes go straight
   // to a full close()+new decoder. Per source; cleared by configure().
   private _hardRecreateNeeded: boolean = false;
+  // Latched when recovery has failed MAX_ERRORS times for this source: there is
+  // nothing left to try, so stop decoding and stop reporting. The caller goes on
+  // feeding regardless — it has no way to know the pipeline is finished — and
+  // without this every remaining packet raised the fatal error again. Cleared by
+  // configure(), which is what a new source or rendition comes through.
+  private _gaveUp: boolean = false;
   private hardwareRetryCount: number = 0;
   private lastHardwareRetryTime: number = 0;
   private isResurrecting: boolean = false;
@@ -169,8 +175,10 @@ export class MoviVideoDecoder {
     this.hardwareRetryCount = 0;
     this.lastHardwareRetryTime = 0;
     // A new source/rendition gets a fresh verdict on whether the cheap in-place
-    // re-arm is enough for it.
+    // re-arm is enough for it — and on whether it is decodable at all.
     this._hardRecreateNeeded = false;
+    this._gaveUp = false;
+    this.errorCount = 0;
     if (this.swDecoder) {
       this.swDecoder.close();
       this.swDecoder = null;
@@ -859,6 +867,14 @@ export class MoviVideoDecoder {
       return; // Silently skip when not configured
     }
 
+    // Given up on this source — see _gaveUp. Must come BEFORE the closed-state
+    // check below, which is what kept re-arriving here: recovery leaves the
+    // decoder closed, so every later packet re-entered that branch and raised
+    // the fatal error again. A cbcs stream whose every sample fails produced
+    // 160 fatal errors in three seconds that way, each one dispatching an
+    // `error` event to the host page and rebuilding the controls.
+    if (this._gaveUp) return;
+
     // Check if decoder is in a valid state
     if (this.decoder.state === "closed") {
       // Async error callback may have already triggered recovery — don't double-recover
@@ -1181,11 +1197,18 @@ export class MoviVideoDecoder {
     }
 
     if (this.errorCount >= MoviVideoDecoder.MAX_ERRORS) {
-      Logger.error(
-        TAG,
-        `Max errors (${MoviVideoDecoder.MAX_ERRORS}) exceeded within short duration. Emitting fatal error.`,
-      );
-      if (this.onError) this.onError(error);
+      // Latch, and report ONCE. Recovery has already failed MAX_ERRORS times,
+      // so there is nothing left to try for this source, and the caller keeps
+      // feeding — processLoop has no idea the pipeline is finished. Without the
+      // latch every remaining packet raised its own fatal error.
+      if (!this._gaveUp) {
+        this._gaveUp = true;
+        Logger.error(
+          TAG,
+          `Max errors (${MoviVideoDecoder.MAX_ERRORS}) exceeded within short duration. Emitting fatal error.`,
+        );
+        if (this.onError) this.onError(error);
+      }
       return;
     }
 
