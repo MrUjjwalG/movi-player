@@ -12,6 +12,7 @@ import {
 import { CanvasRenderer } from "./CanvasRenderer";
 import { TrackManager } from "../core/TrackManager";
 import { Logger } from "../utils/Logger";
+import { loadPersistedLinkBps, raiseLinkBps } from "../utils/LinkRate";
 
 const TAG = "ShakaPlayerWrapper";
 
@@ -523,9 +524,9 @@ export class ShakaPlayerWrapper extends EventEmitter<PlayerEventMap> {
     this.player.addEventListener("variantchanged", repaint);
 
     // Start from what this device measured last time, not from Shaka's blind
-    // 1 Mbps guess. See readStoredBandwidth().
-    const seed = ShakaPlayerWrapper.readStoredBandwidth();
-    if (seed) {
+    // 1 Mbps guess.
+    const seed = loadPersistedLinkBps();
+    if (seed > 0) {
       this.player.configure({ abr: { defaultBandwidthEstimate: seed } });
       Logger.info(
         TAG,
@@ -564,71 +565,30 @@ export class ShakaPlayerWrapper extends EventEmitter<PlayerEventMap> {
     this.emit("loadEnd", undefined);
   }
 
-  // --- Throughput memory ---------------------------------------------------
-  // Shaka has no measurement before it fetches the first segment, so it falls
-  // back to abr.defaultBandwidthEstimate — 1 Mbps, stock. Against that it can
-  // afford 850 kbps (the 0.85 upgrade target), which on a real ladder is the
-  // second rung from the bottom; a 4K stream therefore opens at 270p on a
-  // gigabit link and climbs from there, a rung per switchInterval. Nothing in
-  // this player asked for that — it is simply what an unseeded estimator has to
-  // assume. Remembering what the last session actually measured removes the
-  // guess for every visit after the first.
-  private static readonly BW_KEY = "movi:bandwidth-estimate";
-  // Networks change — a phone that measured 300 Mbps on home wifi is not on
-  // that link a week later. Old enough and the guess is worth no more than
-  // Shaka's own.
-  private static readonly BW_MAX_AGE_MS = 7 * 24 * 60 * 60 * 1000;
-  // Clamped both ways so one freak reading can't poison the next session: too
-  // low and the first segments crawl at the bottom rung anyway, too high and
-  // the opening segment is one the link can't carry, which is a stall right at
-  // the start — the one thing worse than opening a rung too low.
-  private static readonly BW_MIN = 500_000;
-  private static readonly BW_MAX = 50_000_000;
+  // --- Link rate -----------------------------------------------------------
+  // Shaka's stock abr.defaultBandwidthEstimate is 1 Mbps, and against that it
+  // can afford 850 kbps (the 0.85 upgrade target) — on a real ladder, the
+  // second rung from the bottom. The shared record (see LinkRate) replaces that
+  // guess, and Shaka's own measurement feeds back into it for the next load.
   private bwTimer: number | null = null;
+  private bwPeak = 0; // best estimate seen this session, bits per second
 
-  private static readStoredBandwidth(): number | null {
-    try {
-      const raw = localStorage.getItem(ShakaPlayerWrapper.BW_KEY);
-      if (!raw) return null;
-      const { bps, at } = JSON.parse(raw) as { bps?: number; at?: number };
-      if (typeof bps !== "number" || !Number.isFinite(bps) || bps <= 0) return null;
-      if (typeof at !== "number" || Date.now() - at > ShakaPlayerWrapper.BW_MAX_AGE_MS) {
-        return null;
-      }
-      return Math.min(
-        ShakaPlayerWrapper.BW_MAX,
-        Math.max(ShakaPlayerWrapper.BW_MIN, bps),
-      );
-    } catch {
-      // Storage can be absent or refused (private mode, blocked cookies).
-      return null;
-    }
-  }
-
+  /**
+   * The session PEAK, and only ever raising the shared record — see
+   * raiseLinkBps(). Shaka's estimate decays once the buffer is full and it
+   * stops pulling, so the latest reading is a floor, not a capability.
+   */
   private saveBandwidth(): void {
-    try {
-      const bps = this.player?.getBandwidthEstimate?.();
-      if (!bps || !Number.isFinite(bps) || bps <= 0) return;
-      localStorage.setItem(
-        ShakaPlayerWrapper.BW_KEY,
-        JSON.stringify({
-          bps: Math.min(
-            ShakaPlayerWrapper.BW_MAX,
-            Math.max(ShakaPlayerWrapper.BW_MIN, bps),
-          ),
-          at: Date.now(),
-        }),
-      );
-    } catch {
-      /* storage unavailable — the seed is an optimisation, never a requirement */
-    }
+    const bps = this.player?.getBandwidthEstimate?.();
+    if (typeof bps !== "number" || !(bps > 0) || bps <= this.bwPeak) return;
+    this.bwPeak = bps;
+    raiseLinkBps(bps);
   }
 
   /**
-   * Write the estimate down periodically rather than only on teardown: a tab
-   * closed or killed outright never runs destroy(), and those are exactly the
-   * sessions worth learning from. The interval is long because the value only
-   * has to be roughly right.
+   * Write the measurement down periodically, not only on teardown: a tab closed
+   * or killed outright never runs destroy(), and those are exactly the sessions
+   * worth learning from. Long interval — the value only has to be roughly right.
    */
   private startBandwidthPersistence(): void {
     if (this.bwTimer !== null) return;

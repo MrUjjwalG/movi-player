@@ -14,6 +14,7 @@ import { CanvasRenderer } from "./CanvasRenderer";
 import { TrackManager } from "../core/TrackManager";
 import { Logger } from "../utils/Logger";
 import { sanitizeVttHtml } from "./sanitizeVttHtml";
+import { loadPersistedLinkBps, raiseLinkBps } from "../utils/LinkRate";
 
 const TAG = "DASHPlayerWrapper";
 
@@ -47,6 +48,8 @@ export class DASHPlayerWrapper extends EventEmitter<PlayerEventMap> {
   // AdaptationSet" answer, and hasThumbnails() has to be sync — the Timeline
   // control and MoviElement's preview guard both ask before any hover.
   private thumbnailsAvailable: boolean = false;
+  private bwTimer: number | null = null;
+  private bwPeak = 0; // best throughput seen this session, bits per second
   // Decoded sprite sheets keyed by URL — adjacent hover positions usually live
   // in the same sheet, so this avoids re-fetching/decoding it on every move.
   private spriteCache = new Map<string, Promise<ImageBitmap | null>>();
@@ -317,6 +320,27 @@ export class DASHPlayerWrapper extends EventEmitter<PlayerEventMap> {
       streaming: { text: { defaultEnabled: false, dispatchForManualRendering: true } },
     });
 
+    // Open on what this device measured last time instead of dash.js's own
+    // bottom-of-the-ladder start. dash.js does ship lastBitrateCachingInfo, on
+    // by default, but in v5 that persists only language/codec settings — the
+    // stored dashjs_video_settings holds {lang, viewpoint, codec} and no
+    // bitrate — so every load still opens near the bottom and climbs. Measured
+    // on a 4K ladder over a gigabit link: dash.js started at 270p/760 kbps and
+    // only reached 2160p after several switches.
+    //
+    // initialBitrate is in kbps, while the shared record (like everything else
+    // that reads it) is bits per second.
+    const seed = loadPersistedLinkBps();
+    if (seed > 0) {
+      this.dash.updateSettings({
+        streaming: { abr: { initialBitrate: { video: Math.round(seed / 1000) } } },
+      });
+      Logger.info(
+        TAG,
+        `Seeding ABR with the last measured throughput: ${(seed / 1e6).toFixed(1)} Mbps`,
+      );
+    }
+
     // Custom media headers on every request dash.js makes (manifest + segments).
     // Must be registered before initialize() so the manifest fetch carries them.
     const mediaHeaders = this.config.headers;
@@ -337,6 +361,7 @@ export class DASHPlayerWrapper extends EventEmitter<PlayerEventMap> {
         const count = this.updateTracks();
         Logger.info(TAG, `DASH manifest parsed. Found ${count} representations`);
         void this.probeThumbnails();
+        this.startBandwidthPersistence();
         this.setState("ready");
         this.emit("loadEnd", undefined);
         settled = true;
@@ -890,6 +915,36 @@ export class DASHPlayerWrapper extends EventEmitter<PlayerEventMap> {
     return this.thumbnailsAvailable;
   }
 
+  /**
+   * Record what the link is actually doing, for the next load to open on.
+   *
+   * The session PEAK, and only ever raising the shared record — see
+   * raiseLinkBps(). Throughput measured mid-playback is a floor, not a
+   * capability: observed at 2 Mbps while the very same session was sustaining a
+   * 15 Mbps rung, because the buffer was full and nothing was being pulled.
+   *
+   * dash.js reports throughput in kbps; the shared record is bits per second.
+   * (Established by playing a 14,932 kbps rung steadily while the API read
+   * ~5.9M — kbps, or the rung could not have held.)
+   */
+  private saveBandwidth(): void {
+    const kbps = this.dash?.getAverageThroughput?.("video");
+    if (typeof kbps !== "number" || !(kbps > 0)) return;
+    const bps = kbps * 1000;
+    if (bps <= this.bwPeak) return;
+    this.bwPeak = bps;
+    raiseLinkBps(bps);
+  }
+
+  /**
+   * Periodically, not only on teardown: a tab closed or killed outright never
+   * runs destroy(), and those are exactly the sessions worth learning from.
+   */
+  private startBandwidthPersistence(): void {
+    if (this.bwTimer !== null) return;
+    this.bwTimer = window.setInterval(() => this.saveBandwidth(), 15000);
+  }
+
   /** Fetch + decode a sprite sheet once, cached by URL. */
   private loadSprite(url: string): Promise<ImageBitmap | null> {
     let p = this.spriteCache.get(url);
@@ -949,6 +1004,14 @@ export class DASHPlayerWrapper extends EventEmitter<PlayerEventMap> {
   destroy(): void {
     this.lifetimeAbort.abort();
     this.stopFrameLoop();
+
+    // Last word on this session's throughput, taken before dash.js goes —
+    // getAverageThroughput() needs it alive.
+    if (this.bwTimer !== null) {
+      clearInterval(this.bwTimer);
+      this.bwTimer = null;
+    }
+    this.saveBandwidth();
 
     // Release cached thumbnail sprite sheets.
     for (const p of this.spriteCache.values()) {
