@@ -1,5 +1,5 @@
 import { MediaPlayer } from "dashjs";
-import type { MediaPlayerClass, Representation } from "dashjs";
+import type { MediaPlayerClass, Representation, Thumbnail } from "dashjs";
 import { EventEmitter } from "../events/EventEmitter";
 import {
   PlayerEventMap,
@@ -40,6 +40,16 @@ export class DASHPlayerWrapper extends EventEmitter<PlayerEventMap> {
   // when dispatchForManualRendering is set — we just paint the given text into
   // our own overlay, keyed by cue id so cueExit can remove the right element.
   private textContainer: HTMLDivElement | null = null;
+  // Seek-preview thumbnails. dash.js reads the manifest's DASH-IF thumbnail
+  // tile track and resolves a time to a tile for us; the sprite fetch and the
+  // crop are ours, same as the Shaka path. Latched by a probe rather than read
+  // off a field because dash.js exposes no synchronous "is there an image
+  // AdaptationSet" answer, and hasThumbnails() has to be sync — the Timeline
+  // control and MoviElement's preview guard both ask before any hover.
+  private thumbnailsAvailable: boolean = false;
+  // Decoded sprite sheets keyed by URL — adjacent hover positions usually live
+  // in the same sheet, so this avoids re-fetching/decoding it on every move.
+  private spriteCache = new Map<string, Promise<ImageBitmap | null>>();
 
   constructor(config: PlayerConfig) {
     super();
@@ -326,6 +336,7 @@ export class DASHPlayerWrapper extends EventEmitter<PlayerEventMap> {
       this.dash!.on(MediaPlayer.events.STREAM_INITIALIZED, () => {
         const count = this.updateTracks();
         Logger.info(TAG, `DASH manifest parsed. Found ${count} representations`);
+        void this.probeThumbnails();
         this.setState("ready");
         this.emit("loadEnd", undefined);
         settled = true;
@@ -819,12 +830,132 @@ export class DASHPlayerWrapper extends EventEmitter<PlayerEventMap> {
     return false;
   }
 
+  /**
+   * Ask dash.js which tile covers `time`. Wrapped because provideThumbnail is
+   * callback-style, and because a missing answer has to be a real outcome:
+   * dash.js drops the request without ever calling back when its thumbnail
+   * controller isn't up (before the first segment, or mid-teardown). The
+   * element fetches previews through a single-flight queue that only reopens
+   * when the current one settles, so a call that never comes back would shut
+   * seek previews for the rest of the session, not just for this hover.
+   */
+  private requestTile(time: number): Promise<Thumbnail | null> {
+    const dash = this.dash;
+    if (!dash || typeof dash.provideThumbnail !== "function") {
+      return Promise.resolve(null);
+    }
+    return new Promise<Thumbnail | null>((resolve) => {
+      let settled = false;
+      const done = (t: Thumbnail | null) => {
+        if (settled) return;
+        settled = true;
+        clearTimeout(timer);
+        resolve(t);
+      };
+      const timer = setTimeout(() => done(null), 4000);
+      try {
+        dash.provideThumbnail(time, (t) => done(t ?? null));
+      } catch (e) {
+        Logger.warn(TAG, "provideThumbnail failed", e);
+        done(null);
+      }
+    });
+  }
+
+  /**
+   * One probe once the manifest is parsed, so hasThumbnails() can answer
+   * synchronously afterwards.
+   *
+   * Probed at 0 and, failing that, at the playhead: on a live manifest 0 sits
+   * outside the DVR window and resolves to nothing, which would report a
+   * thumbnail track that exists as absent.
+   */
+  private async probeThumbnails(): Promise<void> {
+    let tile = await this.requestTile(0);
+    if (!tile?.url) {
+      const live = this.videoElement.currentTime || this.dash?.time?.() || 0;
+      if (live > 0) tile = await this.requestTile(live);
+    }
+    this.thumbnailsAvailable = !!tile?.url;
+    Logger.info(
+      TAG,
+      this.thumbnailsAvailable
+        ? "Manifest carries a thumbnail tile track — seek previews enabled"
+        : "No thumbnail tile track in the manifest — seek previews unavailable",
+    );
+  }
+
+  /** True when the manifest carries a thumbnail/image track for seek previews. */
+  hasThumbnails(): boolean {
+    return this.thumbnailsAvailable;
+  }
+
+  /** Fetch + decode a sprite sheet once, cached by URL. */
+  private loadSprite(url: string): Promise<ImageBitmap | null> {
+    let p = this.spriteCache.get(url);
+    if (!p) {
+      p = (async () => {
+        try {
+          const res = await fetch(url, {
+            mode: "cors",
+            signal: this.lifetimeAbort.signal,
+          });
+          if (!res.ok) return null;
+          return await createImageBitmap(await res.blob());
+        } catch (e) {
+          Logger.warn(TAG, "Thumbnail sprite fetch failed", e);
+          return null;
+        }
+      })();
+      this.spriteCache.set(url, p);
+    }
+    return p;
+  }
+
+  /**
+   * Seek-preview thumbnail for `time` as a JPEG Blob, or null when the manifest
+   * carries no thumbnail track. dash.js resolves the time to a tile within a
+   * sprite sheet ({url, x, y, width, height}); we crop that tile out and hand
+   * back a Blob the MoviElement preview <img> can show — the same contract
+   * ShakaPlayerWrapper.getThumbnailBlob answers, which is what lets
+   * MoviPlayer.getPreviewFrame treat the two engines identically.
+   */
+  async getThumbnailBlob(time: number): Promise<Blob | null> {
+    if (!this.thumbnailsAvailable) return null;
+
+    const tile = await this.requestTile(time);
+    if (!tile?.url) return null;
+
+    const bitmap = await this.loadSprite(tile.url);
+    if (!bitmap) return null;
+
+    const w = tile.width || bitmap.width;
+    const h = tile.height || bitmap.height;
+    const canvas = document.createElement("canvas");
+    canvas.width = w;
+    canvas.height = h;
+    const ctx = canvas.getContext("2d");
+    if (!ctx) return null;
+    // Crop the single tile (x/y, width/height) out of the sheet.
+    ctx.drawImage(bitmap, tile.x || 0, tile.y || 0, w, h, 0, 0, w, h);
+    return new Promise<Blob | null>((resolve) =>
+      canvas.toBlob((b) => resolve(b), "image/jpeg", 0.85),
+    );
+  }
+
   /** Aborted by destroy(), so a DRM licence request can't outlive the wrapper. */
   private readonly lifetimeAbort = new AbortController();
 
   destroy(): void {
     this.lifetimeAbort.abort();
     this.stopFrameLoop();
+
+    // Release cached thumbnail sprite sheets.
+    for (const p of this.spriteCache.values()) {
+      p.then((b) => b?.close()).catch(() => {});
+    }
+    this.spriteCache.clear();
+    this.thumbnailsAvailable = false;
 
     if (this.dash) {
       try {
