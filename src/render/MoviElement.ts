@@ -3093,6 +3093,15 @@ export class MoviElement extends HTMLElement {
       nextTime: null as number | null,
     };
 
+    /** Drop the card back to time-only: no frame, and no spinner promising one. */
+    const hidePreviewLoading = () => {
+      if (thumbnailImg) thumbnailImg.style.display = "none";
+      const placeholder = shadowRoot.querySelector(
+        ".movi-thumbnail-placeholder",
+      ) as HTMLElement | null;
+      if (placeholder) placeholder.style.display = "none";
+    };
+
     const processPreviewQueue = async () => {
       if (previewLoopState.isFetching || previewLoopState.nextTime === null)
         return;
@@ -3131,6 +3140,21 @@ export class MoviElement extends HTMLElement {
           // so a CSS rotate would double-transform them.
           if (!this._vr360) this.applyThumbnailRotation(thumbnailImg);
           else thumbnailImg.style.transform = "";
+        } else if (previewLoopState.nextTime === null) {
+          // No frame for THIS position, and nothing newer queued behind it.
+          // canPreviewFrames() rules out the sources that can never produce
+          // one, but a source that usually can still says no for a particular
+          // time: a live stream hovered at the edge, where the thumbnail
+          // segment isn't published yet, is the reproducible case. Without an
+          // exit here the card keeps the loading state it entered on hover and
+          // never leaves it — a spinner over a frame that was already decided
+          // not to exist. Fall back to the time-only card, same as a stream
+          // that carries no thumbnail track at all.
+          //
+          // Skipped when another time is already pending: that fetch owns the
+          // card and is about to repaint it, and blanking in between is a
+          // flicker on every drag across the bar.
+          hidePreviewLoading();
         }
       } catch (e) {
         // Ignore aborts
@@ -3234,14 +3258,10 @@ export class MoviElement extends HTMLElement {
         (time >= (this.player.getBufferStartTime?.() ?? 0) &&
           time <= (this.player.getBufferEndTime?.() ?? duration));
 
-      if (this._thumb && previewInWindow) {
+      if (this.canPreviewFrames() && previewInWindow) {
         requestPreview(time);
       } else {
-        if (thumbnailImg) thumbnailImg.style.display = "none";
-        const thumbnailPlaceholder = shadowRoot.querySelector(
-          ".movi-thumbnail-placeholder",
-        ) as HTMLElement;
-        if (thumbnailPlaceholder) thumbnailPlaceholder.style.display = "none";
+        hidePreviewLoading();
       }
 
       // The frame's box, from the source's proportions. Before the measurement
@@ -3255,8 +3275,11 @@ export class MoviElement extends HTMLElement {
       // bar the card hung past the frame and was cut off by exactly the amount
       // the guess was wrong.
       thumbnail.style.display = "flex";
+      // The pre-measurement guess has to match what will actually be in the
+      // card: a stream with no thumbnail track shows the time alone, so guessing
+      // the 180px frame width would clamp it as if it were four times wider.
       const tooltipWidth =
-        thumbnail.offsetWidth || (this._thumb ? 180 : 60);
+        thumbnail.offsetWidth || (this.canPreviewFrames() ? 180 : 60);
       const half = tooltipWidth / 2;
       // Clamped against the PLAYER, not against the track. The track is inset
       // from the frame by the chrome padding, so clamping to the track pinned
@@ -33100,6 +33123,33 @@ export class MoviElement extends HTMLElement {
    * A manual 90/270 rotation transposes what the viewer sees, and the preview
    * is rotated to match, so the box is transposed with it.
    */
+  /**
+   * Whether a hover on the seek bar can actually produce a preview frame.
+   *
+   * `thumb` asks for previews; it does not make them possible. requestPreview()
+   * puts the card into its loading state the moment it is called and only
+   * leaves it when a blob comes back, so on a source that can never return one
+   * the card sits there loading forever — a spinner for something that is not
+   * coming. Every path that cannot produce a frame has to be ruled out BEFORE
+   * that state is entered, not after the null arrives.
+   */
+  private canPreviewFrames(): boolean {
+    if (!this._thumb || this._audioOnly) return false;
+    // The native <video> fallback has no decoder of its own to thumbnail with:
+    // NativeVideoWrapper.getPreviewFrame() is a hard null, whatever the source.
+    if (this._nativeFallbackActive) return false;
+    const p = this.player as any;
+    // On an adaptive stream the frames come from a thumbnail track in the
+    // manifest (DASH-IF tiled thumbnails / HLS image playlists) rather than
+    // from a decoder — there is no byte-range seek to decode from. Shaka is the
+    // only engine that reads one, and plenty of manifests carry none; the
+    // hls.js and dash.js fallback wrappers don't implement the thumbnail
+    // contract at all, so for them the answer is always no. Same test the
+    // Timeline control already hides itself on.
+    if (p?.isStreamPlayback?.() && !p.streamHasThumbnails?.()) return false;
+    return true;
+  }
+
   private updatePreviewBox(): void {
     const track = this.player?.trackManager?.getActiveVideoTrack?.() as
       | { width?: number; height?: number }
