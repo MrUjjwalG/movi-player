@@ -171,6 +171,22 @@ export async function analyzeDashFallback(
   const mpd = doc.getElementsByTagName("MPD")[0];
   if (!mpd) return null;
 
+  // Encrypted content is not ours to play. This path hands the media to the
+  // FFmpeg demuxer and WebCodecs, neither of which has a key: the container
+  // parses fine, the decoder configures fine, and then every single sample
+  // fails. Observed on a cbcs DASH vector after both DRM engines had correctly
+  // refused for a missing licence server — the fallback opened it anyway, read
+  // 163 MB of a 263 MB file, and produced a decode error per packet for as long
+  // as it was fed. Refusing here leaves the DRM error the engines already
+  // raised as the one the viewer is told about, which is the true one.
+  if (mpd.getElementsByTagName("ContentProtection").length > 0) {
+    Logger.info(
+      TAG,
+      "Manifest declares ContentProtection — no fallback (encrypted media can't be demuxed here)",
+    );
+    return null;
+  }
+
   const mpdBase = resolve(manifestUrl, baseUrlOf(mpd));
 
   let bestVideo: { url: string; bw: number; muxed: boolean } | null = null;

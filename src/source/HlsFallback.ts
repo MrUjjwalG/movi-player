@@ -331,6 +331,20 @@ export async function loadHlsVariant(
   }
 }
 
+/**
+ * Whether a playlist declares encrypted segments.
+ *
+ * This path hands segments straight to the FFmpeg demuxer, which is given no
+ * key and no key-fetching of its own — so ANY method other than NONE fails,
+ * SAMPLE-AES (DRM) and plain AES-128 (clear-key) alike. And it fails in the
+ * worst way: the container parses, the decoder configures, and then every
+ * sample errors for as long as it is fed. Covers both tags, since a master
+ * declares its DRM with EXT-X-SESSION-KEY and a media playlist with EXT-X-KEY.
+ */
+function declaresEncryption(playlist: string): boolean {
+  return /#EXT-X-(?:SESSION-)?KEY:[^\n]*METHOD=(?!NONE)/i.test(playlist);
+}
+
 async function loadMediaTrack(
   url: string,
   headers?: Record<string, string>,
@@ -338,6 +352,10 @@ async function loadMediaTrack(
 ): Promise<HlsMediaTrack | null> {
   try {
     const text = await fetchText(url, headers, signal);
+    if (declaresEncryption(text)) {
+      Logger.info(TAG, `media playlist is encrypted — no fallback: ${url}`);
+      return null;
+    }
     const track = parseMediaPlaylist(text, url);
     return track.segments.length > 0 ? track : null;
   } catch (e) {
@@ -358,6 +376,14 @@ export async function analyzeHlsFallback(
 ): Promise<HlsFallbackPlan | null> {
   try {
     const text = await fetchText(url, headers, signal);
+
+    // Encrypted content is not ours to play — see declaresEncryption(). Checked
+    // up front so a master's EXT-X-SESSION-KEY stops us before we start
+    // fetching variants.
+    if (declaresEncryption(text)) {
+      Logger.info(TAG, "Playlist declares encryption — no fallback");
+      return null;
+    }
 
     // Media playlist directly (muxed, no alternate renditions).
     if (!isMaster(text)) {
