@@ -25174,7 +25174,27 @@ export class MoviElement extends HTMLElement {
         // scheme) fails at fetch() with a generic "Failed to fetch" that reads
         // as a network problem — blame the URL up front, BEFORE the CORS/fetch
         // branches that would otherwise swallow it. See hasUnfetchableSrcScheme.
+        // Protected content, checked FIRST: it is the one failure here that the
+        // person embedding the player can usually fix, and every other branch
+        // would rather tell them the network or the file is at fault. The
+        // engines already produce a viewer-ready sentence for it — Shaka's
+        // friendlyMessage, dash.js's "No license server URL specified!" — which
+        // fell through to the generic line for want of a branch to catch it.
+        // Written to match what the engines actually say, in every spelling they
+        // say it: Shaka's own wording and its SCREAMING_CASE codes
+        // (REQUESTED_KEY_SYSTEM_CONFIG_UNAVAILABLE), dash.js's sentence, and
+        // either spelling of licence. None of the branches below own a message
+        // containing any of these words, so running first is safe.
         if (
+          /protected and can't be played|licen[cs]e|key[ _-]?system|\bdrm\b|widevine|playready|fairplay/i.test(
+            raw,
+          )
+        ) {
+          title = "Protected Video";
+          message = this.hasAttribute("licenseurl")
+            ? "This video is protected and the licence was refused. It may have expired, or it isn't available in your region."
+            : "This video is protected and needs a licence to play here.";
+        } else if (
           this.hasUnfetchableSrcScheme() ||
           /invalid url|failed to construct 'url'/i.test(raw)
         ) {
