@@ -39,6 +39,26 @@ export class SoftwareAudioDecoder {
   private consecutiveFailures = 0;
   private isBroken = false;
   private static readonly MAX_CONSECUTIVE_FAILURES = 50;
+  /**
+   * The threshold in force, so a caller that already knows recovery is hopeless
+   * can lower it to 1.
+   *
+   * Fifty is right when failures might be a passing corruption worth riding
+   * out. It is a trap when the audio cannot decode AT ALL: nothing decodes, so
+   * the player stalls, so it stops feeding packets — and the count never climbs
+   * to fifty. Failure suppresses the very evidence that would declare it. An
+   * encrypted source with no licence lands exactly there, and the visible
+   * result is a player that buffers, nudges a seek, and repeats forever.
+   */
+  private maxConsecutiveFailures: number =
+    SoftwareAudioDecoder.MAX_CONSECUTIVE_FAILURES;
+
+  /** Declare broken on the first failure — see maxConsecutiveFailures. */
+  setFailFast(on: boolean): void {
+    this.maxConsecutiveFailures = on
+      ? 1
+      : SoftwareAudioDecoder.MAX_CONSECUTIVE_FAILURES;
+  }
 
   // TrueHD/MLP and DTS decode to tiny frames — one access unit per packet, e.g.
   // 40 samples (~0.83ms) at 48kHz — ~1200 per second. The AudioRenderer
@@ -160,10 +180,7 @@ export class SoftwareAudioDecoder {
       if (this.consecutiveFailures === 1) {
         Logger.warn(TAG, `sendPacket failed: ${ret}`);
       }
-      if (
-        this.consecutiveFailures >=
-        SoftwareAudioDecoder.MAX_CONSECUTIVE_FAILURES
-      ) {
+      if (this.consecutiveFailures >= this.maxConsecutiveFailures) {
         this.isBroken = true;
         Logger.error(
           TAG,
@@ -209,10 +226,7 @@ export class SoftwareAudioDecoder {
       if (this.consecutiveFailures === 1) {
         Logger.warn(TAG, `decodeAudioBatch failed: ${consumed}`);
       }
-      if (
-        this.consecutiveFailures >=
-        SoftwareAudioDecoder.MAX_CONSECUTIVE_FAILURES
-      ) {
+      if (this.consecutiveFailures >= this.maxConsecutiveFailures) {
         this.isBroken = true;
         Logger.error(
           TAG,

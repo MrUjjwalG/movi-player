@@ -67,6 +67,22 @@ type StreamWrapper =
 
 const TAG = "MoviPlayer";
 
+/**
+ * Whether a stream engine turned a source down for want of a LICENCE, rather
+ * than for any of the other reasons it turns sources down.
+ *
+ * Both engines say so plainly — Shaka's wrapper produces "This video is
+ * protected and can't be played here", dash.js produces "DRM: No license server
+ * URL specified!" — and the difference matters: a licence refusal is the one
+ * failure where the demuxer tier below already knows it has nothing to gain.
+ */
+function looksLikeDrmFailure(e: unknown): boolean {
+  const msg = String((e as Error)?.message ?? e ?? "");
+  return /protected|licen[cs]e|key[ _-]?system|\bdrm\b|widevine|playready|fairplay/i.test(
+    msg,
+  );
+}
+
 // Module-level device decode-capability cache — survives player/element
 // recreates for the whole page session, so a fresh MoviPlayer (per video, or
 // after a recovery) doesn't re-learn the same limit and re-stutter. Keyed by
@@ -546,6 +562,62 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
   private _subtitleTracks: SubtitleSourceEntry[] = [];
   // DASH-fallback video Representations (best-first) + the one currently playing,
   // for the demuxer-mode quality menu. Populated only in the force-demux path.
+  /**
+   * The demuxer-path source came from a manifest that declares encryption. It
+   * plays for as long as the packager's clear lead lasts, then stops for good;
+   * this is what turns that stop into "needs a licence" rather than a decoder
+   * fault. Set when the fallback plan is taken, cleared on every load.
+   */
+  private _sourceIsEncrypted: boolean = false;
+
+  /**
+   * Halt further reading without tearing the source down — the buffered part is
+   * still good to seek around in, and only what comes next is unusable.
+   */
+  private stopSourceStreaming(): void {
+    try {
+      (this.source as unknown as { haltStreaming?: () => void })?.haltStreaming?.();
+    } catch {
+      /* best-effort */
+    }
+  }
+
+  /** Reported once; either decoder may be the one that hits the wall first. */
+  private _encryptedGaveUp: boolean = false;
+  /** Audio already given up on for this source — say it once, not per packet. */
+  private _encryptedAudioSilenced: boolean = false;
+
+  /**
+   * The clear lead of an encrypted source has run out. Whichever decoder
+   * noticed, the answer is the same and there is no recovery to attempt.
+   *
+   * Stopping matters as much as reporting. Left running, the pipeline keeps
+   * asking for frames it can never get, and the machinery built to rescue a
+   * struggling stream turns on itself: audio empties, video is bound to it, the
+   * stall detector fires, the element nudges a seek, and that repeats for as
+   * long as anyone watches. Pausing ends that; halting the source stops pulling
+   * bytes that cannot be used; the error names the cause.
+   */
+  private encryptedSourceGaveUp(): void {
+    if (this._encryptedGaveUp) return;
+    this._encryptedGaveUp = true;
+    Logger.warn(
+      TAG,
+      "Encrypted source: the clear lead has ended — no licence, so playback stops here",
+    );
+    this.stopSourceStreaming();
+    try {
+      this.pause();
+    } catch {
+      /* already stopped */
+    }
+    this.stateManager.setState("error");
+    this.emit(
+      "error",
+      new Error("This video is protected and needs a licence to play here."),
+    );
+  }
+
   private _dashRenditions: {
     url: string;
     label: string;
@@ -1369,6 +1441,12 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
       throw new Error("Player must be idle to load");
     }
 
+    // A verdict about the previous source's encryption says nothing about this
+    // one; the fallback sets it again if this source earns it.
+    this._sourceIsEncrypted = false;
+    this._encryptedGaveUp = false;
+    this._encryptedAudioSilenced = false;
+
     if (sourceConfig) {
       this.config.source = sourceConfig;
       // New source on a reused instance: re-arm the startup grace so its first
@@ -1450,6 +1528,10 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
         try {
           const plan = await analyzeDashFallback(streamUrl!, src?.headers, this.lifetimeSignal);
           if (plan) {
+            this._sourceIsEncrypted = !!plan.encrypted;
+            // Nothing here can recover, so don't spend fifty failed packets
+            // discovering it — see AudioDecoder.setFailFast.
+            if (plan.encrypted) this.audioDecoder.setFailFast(true);
             Logger.info(
               TAG,
               "forceStreamDemux: MSE failed at runtime — routing this DASH source through the FFmpeg demuxer",
@@ -1521,6 +1603,10 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
             this.lifetimeSignal,
           );
           if (plan) {
+            this._sourceIsEncrypted = !!plan.encrypted;
+            // Nothing here can recover, so don't spend fifty failed packets
+            // discovering it — see AudioDecoder.setFailFast.
+            if (plan.encrypted) this.audioDecoder.setFailFast(true);
             Logger.info(
               TAG,
               `forceStreamDemux: routing HLS through the FFmpeg demuxer (${plan.segments.length} video segments)`,
@@ -1640,6 +1726,12 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
         try { this.streamWrapper?.destroy(); } catch {}
         this.streamWrapper = null;
 
+        // Did the engines turn this down for want of a LICENCE, as opposed to
+        // any of the other reasons they turn a stream down? It decides what the
+        // demuxer tier below is allowed to do with encrypted media — see the
+        // note where it is read.
+        let drmRefused = looksLikeDrmFailure(eShaka);
+
         // --- Tier 2: hls.js / dash.js. Their MSE engines play streams Shaka
         // rejects (e.g. under-specified single-file DASH the browser demuxer
         // handles but Shaka/FFmpeg won't). ---
@@ -1657,6 +1749,7 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
             return;
           } catch (eFallback) {
             Logger.warn(TAG, `${isHls ? "hls.js" : "dash.js"} fallback also failed`, eFallback);
+            drmRefused = drmRefused || looksLikeDrmFailure(eFallback);
             try { this.streamWrapper?.destroy(); } catch {}
             this.streamWrapper = null;
           }
@@ -1670,7 +1763,32 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
         if (isDash) {
           try {
             const plan = await analyzeDashFallback(streamUrl!, src?.headers, this.lifetimeSignal);
+            // Encrypted, and we are only here because a licence was refused: the
+            // answer is already known, so don't spend the viewer's attention
+            // discovering it. A packager's clear lead exists to cover the wait
+            // for a licence, not to be watched on its own — playing it would put
+            // a few seconds of video up and then stop, which reads as the player
+            // breaking rather than as content that was never going to play.
+            //
+            // Only when the licence is the reason. Arriving here for any other
+            // reason (a forced engine, an MSE runtime failure) leaves the
+            // encrypted flag to the decode-time path, which still plays whatever
+            // is clear — the escape hatch for a manifest that declares
+            // ContentProtection over media that turns out not to need it.
+            if (plan?.encrypted && drmRefused) {
+              Logger.info(
+                TAG,
+                "Encrypted manifest and the licence was refused — not opening it in the demuxer",
+              );
+              throw new Error(
+                "This video is protected and needs a licence to play here.",
+              );
+            }
             if (plan) {
+              this._sourceIsEncrypted = !!plan.encrypted;
+              // Nothing here can recover, so don't spend fifty failed packets
+              // discovering it — see AudioDecoder.setFailFast.
+              if (plan.encrypted) this.audioDecoder.setFailFast(true);
               Logger.info(TAG, "Falling back to the FFmpeg demuxer");
               this.source = await this.createSource({
                 type: "url",
@@ -9143,6 +9261,31 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
    */
   private async recoverBrokenAudio(): Promise<void> {
     if (this._destroyed || this._audioRecoveryInFlight) return;
+    // On an encrypted source there is nothing to re-align to: the audio track
+    // gets no clear lead of its own (the packager's lead covers the video), so
+    // the first packet fails and so will every one after it.
+    //
+    // Go SILENT rather than stopping. The video's clear lead is real playback
+    // and worth showing; ending it here would throw away the whole point of
+    // getting this far. What must not continue is the waiting — audio empty,
+    // video bound to it, the stall detector nudging a seek, forever. Cutting
+    // audio out of the picture entirely is what unblocks the video, and the
+    // stop then comes from the video decoder when ITS clear lead runs out.
+    if (this._sourceIsEncrypted) {
+      if (this._encryptedAudioSilenced) return;
+      this._encryptedAudioSilenced = true;
+      Logger.warn(
+        TAG,
+        "Encrypted source: audio needs a licence — going silent so the clear video lead can still play",
+      );
+      this.disableAudio = true;
+      try {
+        this.audioRenderer.pause();
+      } catch {
+        /* nothing scheduled */
+      }
+      return;
+    }
     if (this._audioRecoveries >= MoviPlayer.MAX_AUDIO_RECOVERIES) {
       Logger.warn(
         TAG,
@@ -11612,6 +11755,16 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
 
     dec.setOnError((error) => {
       Logger.error(TAG, "Video decoder error", error);
+      // On a source we KNOW is encrypted, this is where the clear lead ran out.
+      // The decoder is telling the truth — it cannot decode these samples — but
+      // "Decoding error" describes the symptom and hides the cause, and the
+      // cause is one the embedder can act on. Say it plainly instead, and stop
+      // pulling: the rest of the file is bytes we can never use, and reading it
+      // to the end is what turned this into a hundreds-of-megabytes download.
+      if (this._sourceIsEncrypted) {
+        this.encryptedSourceGaveUp();
+        return;
+      }
       this.emit("error", error);
       // Note: Decoder now has built-in recovery, only pauses after MAX_ERRORS
     });

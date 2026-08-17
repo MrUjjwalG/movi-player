@@ -36,6 +36,12 @@ const VIDEO_CODEC_RE = /\b(avc[13]|hvc1|hev1|vp0[89]|vp8|vp9|av01|dvh)/i;
 export interface DashFallbackPlan {
   /** Single-file video (or muxed) Representation to feed the demuxer. */
   videoUrl: string;
+  /**
+   * The manifest declares ContentProtection. Playback still gets as far as the
+   * clear lead — see the note where this is set — but it WILL stop, and this is
+   * what lets the player name the reason instead of reporting a decoder fault.
+   */
+  encrypted?: boolean;
   /** Separate audio file for demuxed content; omitted when muxed/audio-only. */
   audioUrl?: string;
   /**
@@ -171,20 +177,23 @@ export async function analyzeDashFallback(
   const mpd = doc.getElementsByTagName("MPD")[0];
   if (!mpd) return null;
 
-  // Encrypted content is not ours to play. This path hands the media to the
-  // FFmpeg demuxer and WebCodecs, neither of which has a key: the container
-  // parses fine, the decoder configures fine, and then every single sample
-  // fails. Observed on a cbcs DASH vector after both DRM engines had correctly
-  // refused for a missing licence server — the fallback opened it anyway, read
-  // 163 MB of a 263 MB file, and produced a decode error per packet for as long
-  // as it was fed. Refusing here leaves the DRM error the engines already
-  // raised as the one the viewer is told about, which is the true one.
-  if (mpd.getElementsByTagName("ContentProtection").length > 0) {
+  // Encrypted, but NOT refused. This path has no key, so the moment it reaches
+  // an encrypted sample the decoder fails — yet refusing outright throws away
+  // real playback: packagers routinely leave a clear lead so a player can start
+  // while it fetches a licence, and that lead can be substantial. Shaka's
+  // angel-one-widevine vector carries about twenty seconds of it (first
+  // fragment: no senc/saiz/saio at all; later fragments: all three), and those
+  // twenty seconds play perfectly through the demuxer.
+  //
+  // So: play what is playable, and carry the flag so that when decoding does
+  // stop, the player can say WHY — "this needs a licence" rather than a decoder
+  // error, which is what the viewer was told before.
+  const encrypted = mpd.getElementsByTagName("ContentProtection").length > 0;
+  if (encrypted) {
     Logger.info(
       TAG,
-      "Manifest declares ContentProtection — no fallback (encrypted media can't be demuxed here)",
+      "Manifest declares ContentProtection — playing what is clear; decoding will stop where encryption starts",
     );
-    return null;
   }
 
   const mpdBase = resolve(manifestUrl, baseUrlOf(mpd));
@@ -277,7 +286,7 @@ export async function analyzeDashFallback(
     return { videoUrl: bestAudio.url };
   }
 
-  const plan: DashFallbackPlan = { videoUrl: bestVideo!.url };
+  const plan: DashFallbackPlan = { videoUrl: bestVideo!.url, encrypted };
   // Muxed file already carries audio; otherwise attach the separate audio file.
   if (!bestVideo!.muxed && bestAudio) plan.audioUrl = bestAudio.url;
   if (subtitles.length > 0) plan.subtitles = subtitles;

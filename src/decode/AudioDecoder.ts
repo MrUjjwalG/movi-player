@@ -52,6 +52,18 @@ export class MoviAudioDecoder {
     if (this.swDecoder) this.swDecoder.setDownmix(downmix);
   }
 
+  /**
+   * Declare the audio broken on its FIRST failed packet instead of riding out a
+   * run of them — for a caller that already knows recovery is impossible. See
+   * SoftwareAudioDecoder.maxConsecutiveFailures for why waiting can never
+   * finish in that case. Remembered so it survives a decoder rebuild.
+   */
+  private _failFast = false;
+  setFailFast(on: boolean): void {
+    this._failFast = on;
+    this.swDecoder?.setFailFast(on);
+  }
+
   setBindings(bindings: WasmBindings) {
     this.bindings = bindings;
   }
@@ -249,6 +261,10 @@ export class MoviAudioDecoder {
     if (
       producedNothing &&
       this.currentTrack &&
+      // Fail-fast means the caller already knows why nothing decoded, and it is
+      // not a decoder that picked wrong. Reverting to hardware just rebuilds a
+      // decoder to fail on the next packet — the cycle the log filled up with.
+      !this._failFast &&
       this.swRevertAttempts < MoviAudioDecoder.MAX_SW_REVERTS
     ) {
       this.swRevertAttempts++;
@@ -301,6 +317,7 @@ export class MoviAudioDecoder {
     // (e.g. an audio-track switch) doesn't snap back to stereo while
     // the renderer is still wired for multi-channel output.
     this.swDecoder.setDownmix(this._downmix);
+    this.swDecoder.setFailFast(this._failFast);
     this.swDecoder.setOnData((frame) => {
       this.swFramesProduced++;
       if (this.onPCM) this.onPCM(frame);

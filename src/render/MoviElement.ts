@@ -25984,6 +25984,20 @@ export class MoviElement extends HTMLElement {
         raw = error;
       }
 
+      // Protected content, first and by itself. Playback reaching this point
+      // means the clear lead ran out, which is not a fault in the file or the
+      // connection — the two things every branch below would otherwise blame.
+      // The player has already phrased it for a viewer, so pass it through
+      // rather than mapping it again.
+      if (/protected|licen[cs]e|key[ _-]?system|\bdrm\b|widevine|playready|fairplay/i.test(raw)) {
+        title = "Protected Video";
+        message = this.hasAttribute("licenseurl")
+          ? "This video is protected and the licence was refused. It may have expired, or it isn't available in your region."
+          : "This video is protected and needs a licence to play here.";
+        this.handleUnsupportedVideo(title, message);
+        return;
+      }
+
       // Prettify the raw HttpSource messages — surfaced verbatim they read
       // like "HTTP 503" or "Stream failed after maximum retries" which means
       // nothing to a user staring at a buffering UI that just gave up.

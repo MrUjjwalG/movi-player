@@ -1717,6 +1717,19 @@ export class HttpSource implements SourceAdapter {
     return true;
   }
 
+  /**
+   * Stop pulling, but keep what has already been read.
+   *
+   * For when the player knows nothing further can be used — the clear lead of
+   * an encrypted source has ended, say. close() would be wrong there: the
+   * buffered part is still valid to seek around in, and tearing the source down
+   * turns a stopped playback into a broken one. Reading on is the waste, and on
+   * a large file it is a very expensive one.
+   */
+  haltStreaming(): void {
+    void this.stopStream();
+  }
+
   private async stopStream(): Promise<void> {
     this.atomicSetStreaming(false);
 
