@@ -655,9 +655,12 @@ if (window.top === window.self) {
 } else {
   const p=document.getElementById("p");
   const url="${videoUrl.replace(/"/g, "&quot;")}";
-  // Adaptive-streaming manifests (HLS/DASH/Smooth) load directly — the player
-  // fetches their (relative-URL) segments itself, which /proxy?url= would break.
-  if(url) p.src=/\\.(m3u8|mpd|ism)($|\\?)/i.test(url)?url:"/proxy?url="+encodeURIComponent(url);
+  // Always load the source directly, never through /proxy. An embed lives on
+  // someone else's page, so proxying would put third-party media on our origin
+  // and make us the transmitter for content we never chose. The cost is that a
+  // host without permissive CORS won't play here — that's the host's call to
+  // make, not ours to route around.
+  if(url) p.src=url;
 }
 </script>
 </body>
@@ -1199,8 +1202,10 @@ async function handleProxy(request, url, env) {
       if (val) respHeaders.set(h, val);
     }
 
-    // Cache video responses
-    respHeaders.set("Cache-Control", "public, max-age=86400");
+    // Never cache third-party media on our edge. The proxy exists only to
+    // solve CORS for a URL the visitor typed; storing a copy of someone
+    // else's video for a day makes us a host rather than a conduit.
+    respHeaders.set("Cache-Control", "private, no-store");
 
     // Stream the response body (no buffering)
     return new Response(body, {
