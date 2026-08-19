@@ -2535,12 +2535,12 @@
         z-index: 4;
         pointer-events: none;
         overflow: hidden;
-        /* Opaque, but the same black as the stage, so this reads as an empty
-           frame rather than a panel dropped on top. It has to cover fully:
-           underneath is the player's own "No Video — add a source" message,
-           which is exactly wrong once a source has been given, and at any
-           lower opacity it stays legible under the sweep. */
-        background: #060608;
+        /* Transparent on purpose — whatever is already on the stage stays
+           visible and the sweep rides over it, so replacing a playing video
+           keeps the old frame instead of blinking to black. The player's own
+           "No Video — add a source" placeholder is the one thing that must
+           not show through; loadUrl hides it directly. */
+        background: transparent;
       }
 
       .player-loading.visible { display: block; }
@@ -5054,6 +5054,12 @@
         scrollToPlayer();
         loadBtn.classList.add("is-loading");
         playerLoading?.classList.add("visible");
+        // "No Video — add a video source" is wrong the moment a source has
+        // been given, and with a transparent overlay it would show straight
+        // through. The shadow root is open, so hide it directly; the player
+        // takes the element back over once it has the source.
+        const emptyState = player.shadowRoot?.querySelector(".movi-empty-state");
+        if (emptyState) emptyState.style.display = "none";
 
         try {
           player.src = await proxyUrl(url);
@@ -5061,6 +5067,8 @@
           console.error("Proxy authorisation failed:", err);
           alert(err.message || "Could not load that URL.");
           embedBtn.classList.remove("visible");
+          // Nothing loaded after all, so the placeholder is true again.
+          if (emptyState) emptyState.style.display = "flex";
         } finally {
           loadBtn.classList.remove("is-loading");
           playerLoading?.classList.remove("visible");
