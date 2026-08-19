@@ -1433,6 +1433,28 @@
 
       .url-bar-btn:active { transform: translateY(0) scale(0.98); }
 
+      /* Authorising a URL is a round trip to the worker. Without a visible
+         state the button looks dead for a second or so, which reads as a
+         failed click and invites a second one. */
+      .url-bar-btn.is-loading {
+        pointer-events: none;
+        opacity: 0.85;
+      }
+
+      .url-bar-btn.is-loading svg { display: none; }
+
+      .url-bar-btn.is-loading::after {
+        content: "";
+        width: 16px;
+        height: 16px;
+        border: 2px solid rgba(255, 255, 255, 0.35);
+        border-top-color: #fff;
+        border-radius: 50%;
+        animation: btnSpin 0.6s linear infinite;
+      }
+
+      @keyframes btnSpin { to { transform: rotate(360deg); } }
+
       .btn-ripple {
         position: absolute;
         border-radius: 50%;
@@ -2500,6 +2522,40 @@
           min-height: 320px;
           max-height: 420px;
         }
+      }
+
+      /* Shown while a pasted URL is being authorised. The button spinner is
+         no use here — clicking Play scrolls the button off screen, so the
+         only thing the visitor is looking at is this black stage. Without
+         something in it the wait reads as a dead player. */
+      .player-loading {
+        position: absolute;
+        inset: 0;
+        display: none;
+        flex-direction: column;
+        align-items: center;
+        justify-content: center;
+        gap: 0.9rem;
+        background: rgba(0, 0, 0, 0.55);
+        color: rgba(255, 255, 255, 0.78);
+        font-size: 0.9rem;
+        z-index: 4;
+        pointer-events: none;
+      }
+
+      .player-loading.visible { display: flex; }
+
+      .player-loading-spinner {
+        width: 34px;
+        height: 34px;
+        border: 3px solid rgba(255, 255, 255, 0.15);
+        border-top-color: var(--accent);
+        border-radius: 50%;
+        animation: btnSpin 0.7s linear infinite;
+      }
+
+      @media (prefers-reduced-motion: reduce) {
+        .player-loading-spinner { animation-duration: 1.6s; }
       }
 
       .player-stage {
@@ -4010,6 +4066,10 @@
           <div class="player-ambient" id="player-ambient" aria-hidden="true"></div>
           <div class="player-wrapper">
             <div class="player-stage">
+              <div class="player-loading" id="player-loading" aria-hidden="true">
+                <div class="player-loading-spinner"></div>
+                <span>Preparing your video…</span>
+              </div>
               <movi-player
                 id="movi-player"
                 renderer="canvas"
@@ -4374,6 +4434,7 @@
 
       const urlInput = document.getElementById("url-input");
       const loadBtn = document.getElementById("load-btn");
+      const playerLoading = document.getElementById("player-loading");
       const encryptToggle = document.getElementById("encrypt-toggle");
 
       // ── Paste button ────────────────────────────────────────────────
@@ -4958,15 +5019,25 @@
         // next initializePlayer takes the plain /proxy path.
         player.removeAttribute("encrypted");
         currentVideoUrl = url;
+
+        // Move to the player first, and say something there. Authorising the
+        // URL takes a round trip; making the scroll wait for it left the page
+        // still for a second after the click, which reads as a dead button.
+        embedBtn.classList.add("visible");
+        scrollToPlayer();
+        loadBtn.classList.add("is-loading");
+        playerLoading?.classList.add("visible");
+
         try {
           player.src = await proxyUrl(url);
         } catch (err) {
           console.error("Proxy authorisation failed:", err);
           alert(err.message || "Could not load that URL.");
-          return;
+          embedBtn.classList.remove("visible");
+        } finally {
+          loadBtn.classList.remove("is-loading");
+          playerLoading?.classList.remove("visible");
         }
-        embedBtn.classList.add("visible");
-        scrollToPlayer();
       };
 
       loadBtn.addEventListener("click", loadUrl);
