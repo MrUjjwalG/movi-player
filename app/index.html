@@ -2532,30 +2532,58 @@
         position: absolute;
         inset: 0;
         display: none;
-        flex-direction: column;
-        align-items: center;
-        justify-content: center;
-        gap: 0.9rem;
-        background: rgba(0, 0, 0, 0.55);
-        color: rgba(255, 255, 255, 0.78);
-        font-size: 0.9rem;
         z-index: 4;
         pointer-events: none;
+        overflow: hidden;
+        /* Opaque, but the same black as the stage, so this reads as an empty
+           frame rather than a panel dropped on top. It has to cover fully:
+           underneath is the player's own "No Video — add a source" message,
+           which is exactly wrong once a source has been given, and at any
+           lower opacity it stays legible under the sweep. */
+        background: #060608;
       }
 
-      .player-loading.visible { display: flex; }
+      .player-loading.visible { display: block; }
 
-      .player-loading-spinner {
-        width: 34px;
-        height: 34px;
-        border: 3px solid rgba(255, 255, 255, 0.15);
-        border-top-color: var(--accent);
-        border-radius: 50%;
-        animation: btnSpin 0.7s linear infinite;
+      /* A band of light sweeping the stage. Skeleton shimmer says "this is
+         filling in" without claiming to know how far along it is, which a
+         spinner over an empty frame does not. */
+      .player-loading::after {
+        content: "";
+        position: absolute;
+        inset: 0;
+        background-image: linear-gradient(
+          105deg,
+          transparent 35%,
+          rgba(255, 255, 255, 0.10) 50%,
+          transparent 65%
+        );
+        /* Sliding the background rather than the box keeps the band on screen
+           for the whole cycle. Translating a full-size box leaves it parked
+           outside the frame for most of the sweep, and easing makes it linger
+           there — which looks like the animation has stopped. */
+        background-size: 200% 100%;
+        background-repeat: no-repeat;
+        animation: playerShimmer 1.6s linear infinite;
       }
 
+      @keyframes playerShimmer {
+        from { background-position: -50% 0; }
+        to   { background-position: 150% 0; }
+      }
+
+      /* A sweep across a large dark surface is exactly the motion this
+         setting is meant to spare people. Hold still and breathe instead. */
       @media (prefers-reduced-motion: reduce) {
-        .player-loading-spinner { animation-duration: 1.6s; }
+        .player-loading::after {
+          transform: none;
+          background: rgba(255, 255, 255, 0.06);
+          animation: playerShimmerFade 2s ease-in-out infinite;
+        }
+        @keyframes playerShimmerFade {
+          0%, 100% { opacity: 0.35; }
+          50%      { opacity: 1; }
+        }
       }
 
       .player-stage {
@@ -4066,9 +4094,8 @@
           <div class="player-ambient" id="player-ambient" aria-hidden="true"></div>
           <div class="player-wrapper">
             <div class="player-stage">
-              <div class="player-loading" id="player-loading" aria-hidden="true">
-                <div class="player-loading-spinner"></div>
-                <span>Preparing your video…</span>
+              <div class="player-loading" id="player-loading" role="status" aria-live="polite">
+                <span style="position:absolute;width:1px;height:1px;overflow:hidden;clip:rect(0 0 0 0);white-space:nowrap">Preparing your video</span>
               </div>
               <movi-player
                 id="movi-player"
