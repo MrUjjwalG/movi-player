@@ -20,6 +20,16 @@ routes = [
 DRIVE_CLIENT_ID = "1051579256106-k6kn9uavacv1g7rjj8805976t25131se.apps.googleusercontent.com"
 DRIVE_APP_ID = "1051579256106"
 
+# Hosts /proxy will refuse to relay, comma-separated. This is the lever the
+# takedown process in the terms of service promises: add a host here and it
+# stops resolving immediately, including for signatures already issued and
+# for redirects that try to reach it. Subdomains are covered — "example.com"
+# also blocks "cdn.example.com".
+#
+# Editable without a redeploy:
+#   wrangler secret put PROXY_BLOCKED_HOSTS   (or edit here and deploy)
+PROXY_BLOCKED_HOSTS = ""
+
 [[r2_buckets]]
 binding = "ASSETS"
 bucket_name = "movi-assets"

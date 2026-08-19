@@ -992,6 +992,31 @@ const PROXY_MAX_REDIRECTS = 4;
 // Turnstile widget, and gating a handful of public sample files behind a
 // bot challenge would buy nothing — the set is closed, so the worst case
 // is someone relaying five well-known test videos.
+// Hosts we've been asked to stop relaying, per the takedown process in the
+// terms. Checked when a signature is minted *and* again on every /proxy
+// request — a signature stays valid for 12 hours, so verifying only at
+// minting time would leave a blocked host playing for the rest of the day.
+//
+// Entries match the host and everything under it: "example.com" also blocks
+// "cdn.example.com". Add them here, or without redeploying via the
+// PROXY_BLOCKED_HOSTS var in wrangler.toml (comma-separated).
+const PROXY_BLOCKED_HOSTS = new Set([
+  // e.g. "piracy.example",
+]);
+
+function isBlockedProxyHost(env, hostname) {
+  const host = hostname.toLowerCase().replace(/\.$/, "");
+  const extra = (env?.PROXY_BLOCKED_HOSTS || "")
+    .split(",")
+    .map((h) => h.trim().toLowerCase())
+    .filter(Boolean);
+
+  for (const blocked of [...PROXY_BLOCKED_HOSTS, ...extra]) {
+    if (host === blocked || host.endsWith("." + blocked)) return true;
+  }
+  return false;
+}
+
 const PROXY_UNGATED_HOSTS = new Set([
   "interactive-examples.mdn.mozilla.net",
   "raw.githubusercontent.com",
@@ -1031,7 +1056,7 @@ async function verifyProxySignature(env, targetUrl, expRaw, sigGiven) {
  * wherever that host points — a public URL that 302s to a private address
  * defeats isPrivateHost entirely.
  */
-async function fetchWithGuardedRedirects(targetUrl, init) {
+async function fetchWithGuardedRedirects(env, targetUrl, init) {
   let current = targetUrl;
   for (let hop = 0; hop <= PROXY_MAX_REDIRECTS; hop++) {
     const res = await fetch(current, { ...init, redirect: "manual" });
@@ -1049,6 +1074,9 @@ async function fetchWithGuardedRedirects(targetUrl, init) {
     }
     if (isPrivateHost(next.hostname)) {
       return { error: "Redirect to a private address" };
+    }
+    if (isBlockedProxyHost(env, next.hostname)) {
+      return { error: "Redirect to a blocked host" };
     }
     current = next.toString();
   }
@@ -1126,10 +1154,10 @@ async function sniffAndPassthrough(stream) {
 // upstreams that ignore Range and return 200 with the full body.
 // Retries once to smooth over transient subrequest failures (CF→CF
 // fetches occasionally flake on cold paths).
-async function preflightSignatureCheck(targetUrl) {
+async function preflightSignatureCheck(env, targetUrl) {
   for (let attempt = 0; attempt < 2; attempt++) {
     try {
-      const hopped = await fetchWithGuardedRedirects(targetUrl, {
+      const hopped = await fetchWithGuardedRedirects(env, targetUrl, {
         method: "GET",
         headers: {
           "Range": `bytes=0-${MAGIC_SNIFF_SIZE - 1}`,
@@ -1206,6 +1234,9 @@ async function handleProxySign(request, env) {
   if (isPrivateHost(parsed.hostname)) {
     return jsonResponse({ error: "Private URLs not allowed" }, 403);
   }
+  if (isBlockedProxyHost(env, parsed.hostname)) {
+    return jsonResponse({ error: "This host is blocked" }, 451);
+  }
 
   // Bot gate. Same fall-open behaviour as /api/token and /api/comments so a
   // fork without a Turnstile secret still runs — it just has no gate.
@@ -1276,6 +1307,12 @@ async function handleProxy(request, url, env) {
     return jsonResponse({ error: "Private URLs not allowed" }, 403);
   }
 
+  // Re-checked here, not just at signing, so a takedown takes effect the
+  // moment it lands rather than when the last signature expires.
+  if (isBlockedProxyHost(env, parsed.hostname)) {
+    return jsonResponse({ error: "This host is blocked" }, 451);
+  }
+
   // Only allow http/https
   if (!["http:", "https:"].includes(parsed.protocol)) {
     return jsonResponse({ error: "Only HTTP(S) URLs allowed" }, 400);
@@ -1292,7 +1329,7 @@ async function handleProxy(request, url, env) {
   headers.set("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36");
 
   try {
-    const hopped = await fetchWithGuardedRedirects(targetUrl, {
+    const hopped = await fetchWithGuardedRedirects(env, targetUrl, {
       method: request.method === "HEAD" ? "HEAD" : "GET",
       headers,
     });
@@ -1335,7 +1372,7 @@ async function handleProxy(request, url, env) {
     let body = response.body;
     if (request.method !== "HEAD") {
       if (!startsAtZero) {
-        const result = await preflightSignatureCheck(targetUrl);
+        const result = await preflightSignatureCheck(env, targetUrl);
         if (!result.ok) {
           const status = result.reason === "format" ? 415 : 502;
           const message = result.reason === "format"

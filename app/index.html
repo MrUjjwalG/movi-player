@@ -66,12 +66,7 @@
       "name": "MoviPlayer",
       "alternateName": ["Online Video Player", "MoviPlayer Online Video Player", "MoviPlayer — Play Any Video in Your Browser"],
       "url": "https://moviplayer.com/",
-      "description": "Free online video player for MKV, HEVC, AV1, HDR, VP9 — plays any video format in your browser with no downloads.",
-      "potentialAction": {
-        "@type": "SearchAction",
-        "target": "https://moviplayer.com/?url={search_term_string}",
-        "query-input": "required name=search_term_string"
-      }
+      "description": "Free online video player for MKV, HEVC, AV1, HDR, VP9 — plays any video format in your browser with no downloads."
     }
     </script>
     <script type="application/ld+json">
@@ -6282,8 +6277,12 @@
       });
 
       // --- Auto-play from URL params ---
+      // Deliberately no ?url= here. A link that plays an arbitrary source on
+      // sight turns this page into a one-click delivery front for whatever
+      // someone chose to put in it — a source we never picked, fetched the
+      // moment the link is opened. Encrypted playback below keeps its params
+      // because those only address content served from our own bucket.
       const params = new URLSearchParams(window.location.search);
-      const videoUrl = params.get("url");
 
       // Encrypted playback via EncryptedHttpSource.
       //
@@ -6344,17 +6343,6 @@
           player.load?.().catch((err) => console.error("Encrypted load failed:", err));
           urlInput.value = `[encrypted: ${encVideoId}]`;
           urlInput.disabled = true;
-        })();
-      } else if (videoUrl && player) {
-        currentVideoUrl = videoUrl;
-        urlInput.value = videoUrl;
-        (async () => {
-          try {
-            player.src = await proxyUrl(videoUrl);
-            embedBtn.classList.add("visible");
-          } catch (err) {
-            console.error("Proxy authorisation failed:", err);
-          }
         })();
       }
 
