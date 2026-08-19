@@ -4770,7 +4770,10 @@
       // through /proxy — that would make the worker fetch its own zone, which
       // Cloudflare routes to a non-existent origin and times out with a 522.
       // They have no CORS problem anyway, so load them directly.
-      const proxyUrl = (url) => {
+      // Asking the worker to sign the target is a network round trip, so this
+      // is async now. It resolves to a plain URL whenever the proxy isn't
+      // involved at all — same-origin sources and adaptive manifests below.
+      const proxyUrl = async (url) => {
         try {
           if (new URL(url, location.href).origin === location.origin) return url;
         } catch { /* not a parseable URL — fall through to proxy */ }
@@ -4782,7 +4785,21 @@
         // text/xml manifests some CDNs serve. These CDNs are CORS-enabled, so
         // load them directly.
         if (/\.(m3u8|mpd|ism)(\?|$)/i.test(url)) return url;
-        return `/proxy?url=${encodeURIComponent(url)}`;
+        // /proxy only accepts signed URLs. The signature is bound to this
+        // exact target, so it can't be repointed at anything else.
+        const jwt = await ensureEncSession().catch(() => null);
+        const res = await fetch("/api/proxy-sign", {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            ...(jwt ? { Authorization: `Bearer ${jwt}` } : {}),
+          },
+          body: JSON.stringify({ url }),
+        });
+        if (!res.ok) {
+          throw new Error(`Could not authorise that URL for playback (${res.status})`);
+        }
+        return (await res.json()).url;
       };
 
       // ── Turnstile session gate (optional) ──────────────────────────
@@ -4927,7 +4944,7 @@
         embedBtn.classList.toggle("visible", ok);
       };
 
-      const loadUrl = () => {
+      const loadUrl = async () => {
         const url = urlInput.value.trim();
         if (!isValidUrl(url)) {
           urlInput.focus();
@@ -4946,7 +4963,13 @@
         // next initializePlayer takes the plain /proxy path.
         player.removeAttribute("encrypted");
         currentVideoUrl = url;
-        player.src = proxyUrl(url);
+        try {
+          player.src = await proxyUrl(url);
+        } catch (err) {
+          console.error("Proxy authorisation failed:", err);
+          alert(err.message || "Could not load that URL.");
+          return;
+        }
         embedBtn.classList.add("visible");
         scrollToPlayer();
       };
@@ -6325,8 +6348,14 @@
       } else if (videoUrl && player) {
         currentVideoUrl = videoUrl;
         urlInput.value = videoUrl;
-        player.src = proxyUrl(videoUrl);
-        embedBtn.classList.add("visible");
+        (async () => {
+          try {
+            player.src = await proxyUrl(videoUrl);
+            embedBtn.classList.add("visible");
+          } catch (err) {
+            console.error("Proxy authorisation failed:", err);
+          }
+        })();
       }
 
       // --- Theme Logic ---

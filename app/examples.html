@@ -913,7 +913,17 @@ npm install movi-player</code></pre>
       // Route a URL through the site's same-origin proxy when it can't be read
       // cross-origin directly (no CORS headers). The proxy forwards Range, so
       // seeking still works. Same-origin URLs (/samples/…) never need it.
-      const proxied = (u) => "/proxy?url=" + encodeURIComponent(u);
+      // /proxy only accepts URLs the worker has signed, so this is a round
+      // trip now. The signature is bound to this one target and expires.
+      const proxied = async (u) => {
+        const res = await fetch("/api/proxy-sign", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ url: u }),
+        });
+        if (!res.ok) throw new Error("Could not authorise demo source (" + res.status + ")");
+        return (await res.json()).url;
+      };
 
       // Self-contained album cover for the audio demo (the plain MP3 ships no
       // embedded artwork). A data-URI SVG — no separate file for the Worker to
@@ -932,7 +942,7 @@ npm install movi-player</code></pre>
         "<circle cx='300' cy='300' r='12' fill='#0b0b10'/></svg>"
       );
 
-      const openModal = (card) => {
+      const openModal = async (card) => {
         // Build via the parser, NOT document.createElement: MoviElement's
         // constructor sets attributes on itself, which makes createElement throw
         // "The result must not have attributes". A parser-created element carries
@@ -948,13 +958,13 @@ npm install movi-player</code></pre>
 
         if (card.dataset.video && card.dataset.audio) {
           // Split source: separate video + audio files, given as <source> kids.
-          const v = card.dataset.videoProxy === "true" ? proxied(card.dataset.video) : card.dataset.video;
-          const a = card.dataset.audioProxy === "true" ? proxied(card.dataset.audio) : card.dataset.audio;
+          const v = card.dataset.videoProxy === "true" ? await proxied(card.dataset.video) : card.dataset.video;
+          const a = card.dataset.audioProxy === "true" ? await proxied(card.dataset.audio) : card.dataset.audio;
           const vs = document.createElement("source"); vs.setAttribute("src", v);
           const as = document.createElement("source"); as.setAttribute("src", a); as.setAttribute("kind", "audio");
           player.append(vs, as);   // children present before upgrade → read on connect
         } else {
-          const s = card.dataset.proxy === "true" ? proxied(card.dataset.src) : card.dataset.src;
+          const s = card.dataset.proxy === "true" ? await proxied(card.dataset.src) : card.dataset.src;
           player.setAttribute("src", s);
           player.setAttribute("thumb", "");
           // Cover art for audio-only sources without embedded artwork (e.g. the

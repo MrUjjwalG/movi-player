@@ -419,6 +419,9 @@ export default {
     if (path === "/api/token" && request.method === "POST") {
       return handleEncToken(request, env);
     }
+    if (path === "/api/proxy-sign" && request.method === "POST") {
+      return handleProxySign(request, env);
+    }
     if (path === "/api/video") {
       return handleEncVideo(request, env);
     }
@@ -963,6 +966,95 @@ const PROXY_ALLOWED_REFERER_ORIGINS = new Set([
   "http://127.0.0.1:8787",
 ]);
 
+// ─── Signed proxy URLs ─────────────────────────────────────────────────
+//
+// The Referer allowlist above only constrains *browsers* — a browser won't
+// let script forge Referer, so it stops hotlinking. It stops nothing else:
+// `curl -H "Referer: https://moviplayer.com"` walks straight through, and
+// without a second gate /proxy is an open, anonymising media relay running
+// on our bandwidth and our reputation.
+//
+// So every /proxy request must now carry an HMAC over the exact target URL.
+// Signatures come from /api/proxy-sign, which is rate-limited and (when
+// Turnstile is configured) requires a session JWT. A leaked signature is
+// worth little: it is bound to one URL, so it can't be repointed at
+// anything else, and it expires.
+//
+// The TTL is long because a <video> element re-requests the same signed URL
+// for every range as playback proceeds — a short window would break seeking
+// in a two-hour film, not just the initial load.
+const PROXY_SIG_TTL_MS = 12 * 60 * 60 * 1000;   // 12h
+const PROXY_SIGN_RATE_WINDOW_MS = 10 * 60 * 1000;
+const PROXY_SIGN_RATE_MAX = 40;                 // signatures per IP per window
+const PROXY_MAX_REDIRECTS = 4;
+
+// Hosts serving the fixed demo clips on /examples. Those pages carry no
+// Turnstile widget, and gating a handful of public sample files behind a
+// bot challenge would buy nothing — the set is closed, so the worst case
+// is someone relaying five well-known test videos.
+const PROXY_UNGATED_HOSTS = new Set([
+  "interactive-examples.mdn.mozilla.net",
+  "raw.githubusercontent.com",
+  "storage.googleapis.com",
+  "test-streams.mux.dev",
+  "www.soundhelix.com",
+]);
+
+function proxySigMessage(targetUrl, expiresAt) {
+  return `proxy:${expiresAt}:${targetUrl}`;
+}
+
+async function signProxyTarget(env, targetUrl, expiresAt) {
+  return hmacSha256Hex(env.ENC_SERVER_SECRET, proxySigMessage(targetUrl, expiresAt));
+}
+
+/**
+ * Verify the ?exp/?sig pair against the ?url the caller is asking us to
+ * fetch. Returns a reason string on failure so the caller can pick a status.
+ */
+async function verifyProxySignature(env, targetUrl, expRaw, sigGiven) {
+  if (!expRaw || !sigGiven) return "missing";
+  const expiresAt = Number(expRaw);
+  if (!Number.isSafeInteger(expiresAt)) return "malformed";
+  if (Date.now() > expiresAt) return "expired";
+  // Don't honour a far-future expiry even if it verifies — that would turn a
+  // single leaked signature into a permanent one.
+  if (expiresAt > Date.now() + PROXY_SIG_TTL_MS) return "malformed";
+  const expected = await signProxyTarget(env, targetUrl, expiresAt);
+  if (!constantTimeEqual(sigGiven, expected)) return "bad-signature";
+  return null;
+}
+
+/**
+ * fetch() with redirects followed by hand so every hop is re-validated.
+ * `redirect: "follow"` checks the host we were given and then quietly goes
+ * wherever that host points — a public URL that 302s to a private address
+ * defeats isPrivateHost entirely.
+ */
+async function fetchWithGuardedRedirects(targetUrl, init) {
+  let current = targetUrl;
+  for (let hop = 0; hop <= PROXY_MAX_REDIRECTS; hop++) {
+    const res = await fetch(current, { ...init, redirect: "manual" });
+    if (res.status < 300 || res.status >= 400) return { res };
+    const location = res.headers.get("Location");
+    if (!location) return { res };
+    let next;
+    try {
+      next = new URL(location, current);
+    } catch {
+      return { error: "Invalid redirect target" };
+    }
+    if (!["http:", "https:"].includes(next.protocol)) {
+      return { error: "Invalid redirect target" };
+    }
+    if (isPrivateHost(next.hostname)) {
+      return { error: "Redirect to a private address" };
+    }
+    current = next.toString();
+  }
+  return { error: "Too many redirects" };
+}
+
 function isAllowedProxyReferer(request) {
   const referer = request.headers.get("Referer");
   if (!referer) return false;
@@ -1037,14 +1129,15 @@ async function sniffAndPassthrough(stream) {
 async function preflightSignatureCheck(targetUrl) {
   for (let attempt = 0; attempt < 2; attempt++) {
     try {
-      const res = await fetch(targetUrl, {
+      const hopped = await fetchWithGuardedRedirects(targetUrl, {
         method: "GET",
         headers: {
           "Range": `bytes=0-${MAGIC_SNIFF_SIZE - 1}`,
           "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
         },
-        redirect: "follow",
       });
+      if (hopped.error) return { ok: false, reason: "network" };
+      const res = hopped.res;
       if (!res.ok && res.status !== 206) {
         if (attempt === 0) continue;
         return { ok: false, reason: "network" };
@@ -1075,6 +1168,66 @@ async function preflightSignatureCheck(targetUrl) {
   return { ok: false, reason: "network" };
 }
 
+/**
+ * POST /api/proxy-sign — mint a signed /proxy URL for one specific target.
+ *
+ * This is the choke point that /proxy itself can't be: a browser sends a real
+ * Origin here and can't forge it, and when Turnstile is configured the caller
+ * must also hold a session JWT, so a script can't mint signatures in bulk.
+ * Everything downstream is then just signature verification — no per-range
+ * database work while a video plays.
+ */
+async function handleProxySign(request, env) {
+  if (!isAllowedEncOrigin(request)) {
+    return jsonResponse({ error: "Origin not allowed" }, 403);
+  }
+
+  let payload;
+  try {
+    payload = await request.json();
+  } catch {
+    return jsonResponse({ error: "Invalid JSON" }, 400);
+  }
+
+  const targetUrl = typeof payload?.url === "string" ? payload.url.trim() : "";
+  if (!targetUrl) {
+    return jsonResponse({ error: "url required" }, 400);
+  }
+
+  let parsed;
+  try {
+    parsed = new URL(targetUrl);
+  } catch {
+    return jsonResponse({ error: "Invalid URL" }, 400);
+  }
+  if (!["http:", "https:"].includes(parsed.protocol)) {
+    return jsonResponse({ error: "Only HTTP(S) URLs allowed" }, 400);
+  }
+  if (isPrivateHost(parsed.hostname)) {
+    return jsonResponse({ error: "Private URLs not allowed" }, 403);
+  }
+
+  // Bot gate. Same fall-open behaviour as /api/token and /api/comments so a
+  // fork without a Turnstile secret still runs — it just has no gate.
+  if (env.TURNSTILE_SECRET_KEY && !PROXY_UNGATED_HOSTS.has(parsed.hostname)) {
+    const auth = request.headers.get("Authorization") || "";
+    const jwt = auth.startsWith("Bearer ") ? auth.slice(7) : "";
+    const ip = request.headers.get("CF-Connecting-IP") || "";
+    if (!(await verifySessionJwt(env, jwt, ip))) {
+      return jsonResponse({ error: "Session required" }, 401);
+    }
+  } else if (!env.TURNSTILE_SECRET_KEY) {
+    console.warn("TURNSTILE_SECRET_KEY missing — /api/proxy-sign has no bot gate");
+  }
+
+  const expiresAt = Date.now() + PROXY_SIG_TTL_MS;
+  const sig = await signProxyTarget(env, targetUrl, expiresAt);
+  return jsonResponse({
+    url: `/proxy?url=${encodeURIComponent(targetUrl)}&exp=${expiresAt}&sig=${sig}`,
+    expiresAt,
+  });
+}
+
 async function handleProxy(request, url, env) {
   if (!isAllowedProxyReferer(request)) {
     return jsonResponse({ error: "Referer not allowed" }, 403);
@@ -1083,6 +1236,20 @@ async function handleProxy(request, url, env) {
   const targetUrl = url.searchParams.get("url");
   if (!targetUrl) {
     return jsonResponse({ error: "url parameter required" }, 400);
+  }
+
+  // The signature is the real gate — see the note above the helpers. It has
+  // to be checked before anything else, so no unsigned request can reach an
+  // upstream fetch, an R2 read, or a redirect.
+  const sigFailure = await verifyProxySignature(
+    env,
+    targetUrl,
+    url.searchParams.get("exp"),
+    url.searchParams.get("sig"),
+  );
+  if (sigFailure) {
+    const status = sigFailure === "expired" ? 410 : 403;
+    return jsonResponse({ error: `Proxy signature ${sigFailure}` }, status);
   }
 
   // Validate URL
@@ -1125,11 +1292,14 @@ async function handleProxy(request, url, env) {
   headers.set("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36");
 
   try {
-    const response = await fetch(targetUrl, {
+    const hopped = await fetchWithGuardedRedirects(targetUrl, {
       method: request.method === "HEAD" ? "HEAD" : "GET",
       headers,
-      redirect: "follow",
     });
+    if (hopped.error) {
+      return jsonResponse({ error: hopped.error }, 403);
+    }
+    const response = hopped.res;
 
     if (!response.ok && response.status !== 206) {
       return jsonResponse({ error: `Upstream returned ${response.status}` }, response.status);
@@ -2445,20 +2615,74 @@ async function handleEncVideo(request, env) {
   });
 }
 
-function isPrivateHost(hostname) {
-  // Block localhost and private IPs
-  if (hostname === "localhost" || hostname === "127.0.0.1" || hostname === "::1") return true;
-  if (hostname.endsWith(".local") || hostname.endsWith(".internal")) return true;
+/**
+ * Parse the many legal spellings of an IPv4 literal into four octets, or
+ * return null when the host isn't one. Parts may be decimal, hex (0x…) or
+ * octal (leading 0), and there may be one to four of them.
+ */
+function ipv4Octets(host) {
+  const parts = host.split(".");
+  if (parts.length < 1 || parts.length > 4) return null;
 
-  // Check private IP ranges
-  const parts = hostname.split(".");
-  if (parts.length === 4) {
-    const [a, b] = parts.map(Number);
+  const values = [];
+  for (const part of parts) {
+    if (part === "") return null;
+    let value;
+    if (/^0[xX][0-9a-fA-F]+$/.test(part)) value = parseInt(part.slice(2), 16);
+    else if (/^0[0-7]+$/.test(part)) value = parseInt(part.slice(1), 8);
+    else if (/^\d+$/.test(part)) value = Number(part);
+    else return null;
+    if (!Number.isSafeInteger(value) || value < 0) return null;
+    values.push(value);
+  }
+
+  // Every part but the last must fit in one octet; the last absorbs the rest.
+  const head = values.slice(0, -1);
+  const tail = values[values.length - 1];
+  if (head.some((v) => v > 255)) return null;
+  const tailMax = Math.pow(256, 4 - head.length);
+  if (tail >= tailMax) return null;
+
+  let n = 0;
+  for (const v of head) n = n * 256 + v;
+  n = n * tailMax + tail;
+  return [(n / 16777216) & 255, (n / 65536) & 255, (n / 256) & 255, n & 255];
+}
+
+function isPrivateHost(hostname) {
+  const host = hostname.toLowerCase().replace(/^\[|\]$/g, "");
+
+  // Block localhost and private IPs
+  if (host === "localhost" || host === "::1" || host === "::") return true;
+  if (host.endsWith(".local") || host.endsWith(".internal") || host.endsWith(".localhost")) return true;
+
+  // IPv6 loopback/link-local/unique-local. Anything with a colon is IPv6;
+  // fc00::/7 (fc,fd), fe80::/10 (fe8-feb) and ::ffff:… mapped v4 are all
+  // ways to reach something we shouldn't be fetching for a visitor.
+  if (host.includes(":")) {
+    if (/^f[cd]/.test(host)) return true;
+    if (/^fe[89ab]/.test(host)) return true;
+    if (host.startsWith("::ffff:")) return isPrivateHost(host.slice(7));
+    return false;
+  }
+
+  // Dotted-quad is only one of the ways to write an IPv4 address. "127.1",
+  // "2130706433" and "0x7f.1" all reach 127.0.0.1, and a check that only
+  // understands a.b.c.d waves every one of them through. Normalise to a
+  // 32-bit value first, following the same 1-to-4-part rule resolvers use:
+  // the last part fills all remaining low octets.
+  const octets = ipv4Octets(host);
+
+  if (octets) {
+    const [a, b] = octets;
     if (a === 10) return true;                          // 10.0.0.0/8
+    if (a === 127) return true;                         // 127.0.0.0/8 — all of it
     if (a === 172 && b >= 16 && b <= 31) return true;   // 172.16.0.0/12
-    if (a === 192 && b === 168) return true;             // 192.168.0.0/16
-    if (a === 169 && b === 254) return true;             // 169.254.0.0/16
-    if (a === 0) return true;                            // 0.0.0.0/8
+    if (a === 192 && b === 168) return true;            // 192.168.0.0/16
+    if (a === 169 && b === 254) return true;            // 169.254.0.0/16
+    if (a === 0) return true;                           // 0.0.0.0/8
+    if (a === 100 && b >= 64 && b <= 127) return true;  // 100.64.0.0/10 (CGNAT)
+    if (a >= 224) return true;                          // multicast + reserved
   }
 
   return false;
