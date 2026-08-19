@@ -1,6 +1,6 @@
 # Privacy Policy
 
-**Last updated:** August 18, 2026
+**Last updated:** August 19, 2026
 
 **Movi Player — Web Player, Chrome Extension & Google Drive integration**
 
@@ -54,7 +54,7 @@ These permissions are used solely for their stated purpose and grant no access t
 ## Third-Party Services
 
 - **Cloudflare** hosts and serves moviplayer.com. Cloudflare processes connection data (including IP addresses) as part of delivering the site.
-- **Cloudflare Turnstile** protects the comments form from bots. It is used in place of a tracking-based CAPTCHA.
+- **Cloudflare Turnstile** protects the comments form and URL playback from bots. It runs invisibly — there is no CAPTCHA to solve and nothing appears on screen. Turnstile processes minimal signals to tell human visitors from automated ones; what those are, and how Cloudflare handles them, is set out in the [Cloudflare Turnstile Privacy Addendum](https://www.cloudflare.com/turnstile-privacy-policy/).
 - **Google Drive**, if you choose to use that integration, is subject to [Google's Privacy Policy](https://policies.google.com/privacy). Movi Player's use of information received from Google APIs adheres to the [Google API Services User Data Policy](https://developers.google.com/terms/api-services-user-data-policy), including the Limited Use requirements.
 
 We share data with no one else.
