@@ -6379,7 +6379,17 @@
         // double quotes and stays readable to whoever pastes it.
         const srcdoc = doc.replace(/&/g, "&amp;").replace(/'/g, "&#39;");
         const allow = "fullscreen" + (wantAutoplay ? "; autoplay" : "");
-        return `<iframe srcdoc='${srcdoc}' width="800" height="450" frameborder="0" allowfullscreen allow="${allow}"></iframe>`;
+        // Inline, because this lands on pages whose stylesheets we have never
+        // seen. A theme rule like `iframe { border: 1px solid }` outranks the
+        // frameborder attribute but not this, and padding or margin from the
+        // same rule would distort the ratio and push the frame past the edge
+        // of its column. display:block removes the strip of background under
+        // an inline element's baseline, and the width / aspect-ratio pair lets
+        // the frame shrink on a phone instead of running off the side.
+        const style = "display:block;box-sizing:border-box;border:0;margin:0;"
+          + "padding:0;width:100%;max-width:800px;aspect-ratio:16/9;"
+          + "height:auto;background:#000";
+        return `<iframe srcdoc='${srcdoc}' style="${style}" width="800" height="450" frameborder="0" allowfullscreen allow="${allow}"></iframe>`;
       };
 
       const refreshEmbedCode = () => {
