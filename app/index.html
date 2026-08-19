@@ -5054,12 +5054,18 @@
         scrollToPlayer();
         loadBtn.classList.add("is-loading");
         playerLoading?.classList.add("visible");
-        // "No Video — add a video source" is wrong the moment a source has
-        // been given, and with a transparent overlay it would show straight
-        // through. The shadow root is open, so hide it directly; the player
-        // takes the element back over once it has the source.
-        const emptyState = player.shadowRoot?.querySelector(".movi-empty-state");
-        if (emptyState) emptyState.style.display = "none";
+        // The player's placeholder still reads "nothing loaded", which stops
+        // being true the moment a source is given — and a transparent overlay
+        // shows it straight through. Reword it rather than hide it: an empty
+        // frame with a sweep over it says less than one that says what it is
+        // waiting for. Same copy rules as the placeholder itself — don't say
+        // "video" (audio sources land here too) and don't instruct.
+        const emptyTitle = player.shadowRoot?.querySelector(".movi-empty-title");
+        const emptyMessage = player.shadowRoot?.querySelector(".movi-empty-message");
+        const priorTitle = emptyTitle?.textContent;
+        const priorMessage = emptyMessage?.textContent;
+        if (emptyTitle) emptyTitle.textContent = "Preparing";
+        if (emptyMessage) emptyMessage.textContent = "Fetching the source";
 
         try {
           player.src = await proxyUrl(url);
@@ -5067,11 +5073,11 @@
           console.error("Proxy authorisation failed:", err);
           alert(err.message || "Could not load that URL.");
           embedBtn.classList.remove("visible");
-          // Nothing loaded after all, so the placeholder is true again.
-          if (emptyState) emptyState.style.display = "flex";
         } finally {
           loadBtn.classList.remove("is-loading");
           playerLoading?.classList.remove("visible");
+          if (emptyTitle && priorTitle != null) emptyTitle.textContent = priorTitle;
+          if (emptyMessage && priorMessage != null) emptyMessage.textContent = priorMessage;
         }
       };
 
