@@ -574,13 +574,131 @@ function buildEmbedPlayerAttrs(searchParams) {
     .join(" ");
 }
 
+// The replacement this endpoint now hands out. Kept in step with
+// buildEmbedCode() in index.html — same document, same inline styles — so a
+// visitor gets the identical snippet whether they come from the Embed dialog
+// or from an old iframe that stopped working.
+const EMBED_PLAYER_CDN = "https://cdn.jsdelivr.net/npm/movi-player/dist/element.js";
+const EMBED_IFRAME_STYLE =
+  "display:block;box-sizing:border-box;border:0;margin:0;padding:0;" +
+  "width:100%;max-width:800px;aspect-ratio:16/9;height:auto;background:#000";
+
+function buildSrcdocEmbed(videoUrl, playerAttrs, wantAutoplay) {
+  const doc =
+    '<!doctype html><meta charset="utf-8">' +
+    "<style>html,body{margin:0;height:100%;overflow:hidden;background:#000}" +
+    "movi-player{width:100%;height:100%}</style>" +
+    '<script type="module" src="' + EMBED_PLAYER_CDN + '"><\/script>' +
+    '<movi-player src="' + escapeEmbedAttr(videoUrl) + '" ' + playerAttrs +
+    "></movi-player>";
+  // srcdoc carries a whole document inside one attribute, so everything in it
+  // is unescaped a second time when parsed — hence the second pass.
+  const srcdoc = doc.replace(/&/g, "&amp;").replace(/'/g, "&#39;");
+  const allow = "fullscreen" + (wantAutoplay ? "; autoplay" : "");
+  return `<iframe srcdoc='${srcdoc}' style="${EMBED_IFRAME_STYLE}" width="800" ` +
+    `height="450" frameborder="0" allowfullscreen allow="${allow}"></iframe>`;
+}
+
+/**
+ * What an old /embed iframe shows now.
+ *
+ * This endpoint used to relay the media through our worker, which is the only
+ * reason it ever worked for a source that sends no CORS headers. It doesn't
+ * relay any more, so rather than let the player fail with a network error the
+ * page explains what happened — and builds the replacement snippet from the
+ * very parameters the old embed was called with, so the fix is a copy away.
+ */
+function embedDeprecatedNotice(videoUrl, playerAttrs, wantAutoplay) {
+  const snippet = buildSrcdocEmbed(videoUrl, playerAttrs, wantAutoplay);
+  const inTextarea = snippet.replace(/&/g, "&amp;").replace(/</g, "&lt;");
+
+  const html = `<!doctype html>
+<html lang="en">
+<head>
+<meta charset="UTF-8"/>
+<meta name="viewport" content="width=device-width,initial-scale=1.0"/>
+<title>Embed out of date — MoviPlayer</title>
+<style>
+*{margin:0;padding:0;box-sizing:border-box}
+html,body{height:100%}
+body{font:13px/1.55 system-ui,-apple-system,sans-serif;background:#0e0e1a;color:#cfcfe6;
+     padding:16px;display:flex;align-items:center;justify-content:center;overflow:auto}
+.wrap{width:100%;max-width:620px}
+.brand{display:flex;align-items:center;gap:8px;margin-bottom:12px}
+.brand-name{font-size:15px;font-weight:700;letter-spacing:-0.02em;color:#fff}
+h1{font-size:15px;color:#fff;margin-bottom:6px}
+p{margin-bottom:10px;color:#a9a9c4}
+/* Wrapped, not scrolled sideways. The snippet is one very long line, and a
+   box that shows only its first few words reads as truncated — which is
+   exactly the doubt this page exists to remove. */
+textarea{width:100%;height:150px;background:#07070f;color:#c9c9e4;border:1px solid #26263c;
+         border-radius:8px;padding:8px;font:11px/1.45 ui-monospace,SFMono-Regular,Menlo,monospace;
+         resize:vertical;white-space:pre-wrap;word-break:break-all;overflow:auto}
+.row{display:flex;gap:8px;align-items:center;margin-top:8px;flex-wrap:wrap}
+button{background:#6c5dd3;color:#fff;border:0;border-radius:7px;padding:7px 14px;
+       font:600 12px system-ui;cursor:pointer}
+button:hover{background:#7d6ee0}
+a{color:#8b7bff;text-decoration:none}
+a:hover{text-decoration:underline}
+.ok{color:#7ddba0;font-size:12px}
+</style>
+</head>
+<body>
+<div class="wrap">
+<div class="brand">
+<svg width="26" height="26" viewBox="0 0 100 100" aria-hidden="true"><defs><linearGradient id="g" x1="0%" y1="0%" x2="100%" y2="100%"><stop offset="0%" stop-color="#8a7cf2"/><stop offset="100%" stop-color="#6c5dd3"/></linearGradient></defs><circle cx="50" cy="50" r="46" fill="url(#g)"/><polygon points="40,29 40,71 73,50" fill="#ffffff"/></svg>
+<span class="brand-name">MoviPlayer</span>
+</div>
+<h1>This embed is out of date</h1>
+<p>It played through moviplayer.com's servers. It no longer does, so the video
+has to be readable directly by the browser. Replace the old iframe on your page
+with the one below &mdash; it runs the player on your own site, and your options
+have been carried over.</p>
+<textarea readonly onclick="this.select()">${inTextarea}</textarea>
+<div class="row">
+<button id="c">Copy</button>
+<span id="s" class="ok"></span>
+<span style="margin-left:auto"><a href="https://moviplayer.com" target="_blank" rel="noopener">moviplayer.com</a></span>
+</div>
+</div>
+<script>
+document.getElementById("c").addEventListener("click", function () {
+  var t = document.querySelector("textarea");
+  var done = function () { document.getElementById("s").textContent = "Copied"; };
+  // Clipboard access needs a permission an old embed's iframe was never given,
+  // so fall back to the selection copy that has always worked.
+  t.select();
+  if (navigator.clipboard && navigator.clipboard.writeText) {
+    navigator.clipboard.writeText(t.value).then(done, function () {
+      try { document.execCommand("copy"); done(); } catch (e) {
+        document.getElementById("s").textContent = "Press Ctrl/Cmd+C";
+      }
+    });
+  } else {
+    try { document.execCommand("copy"); done(); } catch (e) {
+      document.getElementById("s").textContent = "Press Ctrl/Cmd+C";
+    }
+  }
+});
+<\/script>
+</body>
+</html>`;
+  return new Response(html, {
+    headers: {
+      "Content-Type": "text/html;charset=UTF-8",
+      "Cache-Control": "no-store",
+      Vary: "Sec-Fetch-Dest",
+    },
+  });
+}
+
 function handleEmbed(url, request) {
   // Embed-only: this page is meant to live inside an <iframe>, never opened
   // directly. Sec-Fetch-Dest tells us the request's destination — 'iframe' or
   // 'frame' when embedded, 'document' on a top-level navigation (typing the
   // URL, opening in a new tab). Block the top-level case. All current browsers
-  // send this header; when it's absent (older clients) we fall through and the
-  // client-side guard in the page below handles it.
+  // send this header; when it's absent (older clients) we fall through to the
+  // notice below, which is harmless to read directly.
   const dest = request && request.headers.get("Sec-Fetch-Dest");
   if (dest === "document") {
     return embedTopLevelBlock();
@@ -589,97 +707,13 @@ function handleEmbed(url, request) {
   const videoUrl = url.searchParams.get("url") || "";
   const playerAttrs = buildEmbedPlayerAttrs(url.searchParams);
 
-  const embedHTML = `<!doctype html>
-<html lang="en">
-<head>
-<meta charset="UTF-8"/>
-<meta name="viewport" content="width=device-width,initial-scale=1.0"/>
-<link rel="icon" type="image/svg+xml" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Cdefs%3E%3ClinearGradient id='g' x1='0%25' y1='0%25' x2='100%25' y2='100%25'%3E%3Cstop offset='0%25' stop-color='%236c5dd3'/%3E%3Cstop offset='100%25' stop-color='%234a3bba'/%3E%3C/linearGradient%3E%3C/defs%3E%3Ccircle cx='50' cy='50' r='45' fill='url(%23g)'/%3E%3Cpolygon points='39,29 39,71 74,50' fill='white'/%3E%3C/svg%3E"/>
-<style>
-*{margin:0;padding:0;box-sizing:border-box}
-html,body{width:100%;height:100%;overflow:hidden;background:#000}
-movi-player{width:100%;height:100%;display:block}
-</style>
-<script>
-// Minimal __movilog shim for the embed. The bundled player is built
-// with terser drop_console:true, so any diagnostics it wants to emit
-// go through window.__movilog (the name survives minification). In
-// the embed we route them straight to the iframe's DevTools console
-// so users debugging an embed can still see player logs — and we
-// keep a small ring buffer for postMessage/inspection from the
-// parent. No on-page panel here (embed is meant to be invisible
-// chrome).
-(function () {
-  var MAX = 200;
-  var buf = [];
-  function push(level, args) {
-    var entry = { level: level, args: Array.prototype.slice.call(args), t: Date.now() };
-    buf.push(entry);
-    if (buf.length > MAX) buf.splice(0, buf.length - MAX);
-    try { (console[level] || console.log).apply(console, args); } catch (e) {}
-  }
-  function makeLogger(level) {
-    return function () { push(level, arguments); };
-  }
-  var movilog = makeLogger("log");
-  movilog.log = makeLogger("log");
-  movilog.info = makeLogger("info");
-  movilog.warn = makeLogger("warn");
-  movilog.error = makeLogger("error");
-  movilog.debug = makeLogger("debug");
-  window.__movilog = movilog;
-  window.__moviDevLog = { buffer: buf };
-})();
-</script>
-</head>
-<body>
-<movi-player id="p" ${playerAttrs}></movi-player>
-<script type="module">
-import "/dist/${BUILD_VERSION}/element.js";
-// Fallback for the rare browser that doesn't send Sec-Fetch-Dest (the worker
-// already blocks the top-level case for everyone else): if we're the top-level
-// document rather than framed, this embed URL was opened directly — show the
-// notice instead of the player. window.top vs window.self compares safely even
-// across origins (reference compare, no property access).
-if (window.top === window.self) {
-  // Build via DOM (not innerHTML) so there's zero markup-injection surface,
-  // even though the strings here are all static. Text nodes escape the literal
-  // "<iframe>" for us.
-  document.body.textContent = "";
-  const box = document.createElement("div");
-  box.setAttribute("style", "font:14px/1.5 system-ui,sans-serif;color:#cfcfe6;display:flex;align-items:center;justify-content:center;height:100%;text-align:center;padding:24px");
-  box.append("This is an embed-only page — open it inside an <iframe>. ");
-  const a = document.createElement("a");
-  a.href = "https://moviplayer.com";
-  a.textContent = "moviplayer.com";
-  a.setAttribute("style", "color:#8b7bff;margin-left:6px");
-  box.appendChild(a);
-  document.body.appendChild(box);
-} else {
-  const p=document.getElementById("p");
-  const url="${videoUrl.replace(/"/g, "&quot;")}";
-  // Always load the source directly, never through /proxy. An embed lives on
-  // someone else's page, so proxying would put third-party media on our origin
-  // and make us the transmitter for content we never chose. The cost is that a
-  // host without permissive CORS won't play here — that's the host's call to
-  // make, not ours to route around.
-  if(url) p.src=url;
-}
-</script>
-</body>
-</html>`;
-
-  return new Response(embedHTML, {
-    headers: {
-      "Content-Type": "text/html;charset=UTF-8",
-      "Cache-Control": "public, max-age=3600",
-      // The response depends on Sec-Fetch-Dest (embed vs top-level block), so
-      // caches must key on it — otherwise a cached iframe copy could be served
-      // to a direct top-level open, or vice versa.
-      "Vary": "Sec-Fetch-Dest",
-      ...SECURITY_HEADERS,
-    },
-  });
+  // This endpoint no longer plays anything. Relaying the media was the only
+  // thing that made it work for a source without CORS headers, and it stopped
+  // relaying — so the player would fail with a network error that tells the
+  // site owner nothing. Hand them the replacement instead, built from the
+  // parameters this very embed was called with.
+  const wantsAutoplay = /(^|&)autoplay(=|&|$)/i.test(url.search);
+  return embedDeprecatedNotice(videoUrl, playerAttrs, wantsAutoplay);
 }
 
 // 403 shown when /embed is opened as a top-level document instead of inside an
