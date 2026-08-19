@@ -594,7 +594,7 @@ export class CanvasRenderer {
       // dim. The HDR Canvas spec's RGBA16F float buffer (drawingBufferStorage)
       // is NOT required for this — the colorspace tag is independent of the
       // buffer's bit depth. 8-bit PQ has some quantization banding but
-      // unlocks the full HDR brightness range, which Ujjwal prefers.
+      // unlocks the full HDR brightness range, which Ujjawal prefers.
       try {
         const isChromium = !!(window as any).chrome;
         const transferLc = (colorTransfer || "").toLowerCase();

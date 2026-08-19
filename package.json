@@ -113,7 +113,7 @@
     "docs:dev": "vitepress dev docs",
     "docs:build": "vitepress build docs",
     "docs:preview": "vitepress preview docs",
-    "docs:deploy": "npm run docs:build && npx gh-pages -d docs/.vitepress/dist",
+    "docs:deploy": "npm run docs:build && npx gh-pages -d docs/.vitepress/dist -u \"Ujjawal Kashyap <29924487+MrUjjwalG@users.noreply.github.com>\"",
     "app:dev": "cd app && npx wrangler dev",
     "app:deploy": "cd app && cp worker.js worker.js.bak && sed -i '' \"s|\\\"__BUILD_VERSION__\\\"|\\\"$(date +%s)\\\"|\" worker.js && npx wrangler deploy; mv worker.js.bak worker.js",
     "app:harden": "node scripts/harden-element.js",

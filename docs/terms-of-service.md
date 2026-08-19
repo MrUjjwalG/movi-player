@@ -49,7 +49,7 @@ We aim to acknowledge notices within 48 hours. If you believe a URL was blocked 
 
 In accordance with the Information Technology Act, 2000 and the Information Technology (Intermediary Guidelines and Digital Media Ethics Code) Rules, 2021:
 
-- **Grievance Officer:** Ujjwal Kashyap
+- **Grievance Officer:** Ujjawal Kashyap
 - **Email:** grievance@moviplayer.com
 
 Complaints are acknowledged within 24 hours and resolved within 15 days of receipt. Content will be removed or access disabled within 36 hours of receiving an order from a court of competent jurisdiction or an appropriate government agency.
