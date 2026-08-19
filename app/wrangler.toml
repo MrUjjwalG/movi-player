@@ -30,6 +30,18 @@ DRIVE_APP_ID = "1051579256106"
 #   wrangler secret put PROXY_BLOCKED_HOSTS   (or edit here and deploy)
 PROXY_BLOCKED_HOSTS = ""
 
+# Turnstile site key — public, safe to commit. The worker substitutes it into
+# the page at request time; the matching secret never lives here and goes in
+# with `wrangler secret put TURNSTILE_SECRET_KEY`.
+#
+# Leaving this empty disables the bot gate everywhere it is used — the comments
+# form, /api/token and /api/proxy-sign all fall open with a console warning.
+# Set BOTH halves or neither: a secret without a site key leaves the server
+# demanding a challenge the page has no way to solve.
+#
+# Local dev test key that always passes: 1x00000000000000000000AA
+TURNSTILE_SITE_KEY = "0x4AAAAAAEU9gOLpQnS9mR0D"
+
 [[r2_buckets]]
 binding = "ASSETS"
 bucket_name = "movi-assets"
@@ -73,7 +85,7 @@ database_id = "ea838cee-312d-46ea-b2f5-94efb870bcd3"   # replace with the id fro
 # server enforces but client has no site key to solve the challenge):
 #
 #   wrangler secret put TURNSTILE_SECRET_KEY   # from Cloudflare dashboard
-#   # TURNSTILE_SITE_KEY goes in the [vars] block below or the dashboard
+#   # TURNSTILE_SITE_KEY goes in the [vars] block at the top of this file
 #
 # Get keys: https://dash.cloudflare.com → Turnstile → Add site.
 # Test keys for local dev (always pass, no network call):
