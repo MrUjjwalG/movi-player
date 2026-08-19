@@ -6332,17 +6332,54 @@
         ? embedDialog.querySelectorAll("input[data-attr]")
         : [];
 
+      // The snippet carries the player itself rather than pointing an iframe
+      // at /embed. An iframe loaded from moviplayer.com runs in OUR origin, so
+      // the embedder's own video is cross-origin to it and needs CORS headers
+      // their host may not send. A srcdoc iframe inherits the embedding page's
+      // origin, so a video sitting on that same site is simply same-origin and
+      // the question never comes up. (A base64 data: URL does the opposite —
+      // opaque origin, where even relative URLs fail to resolve.)
+      //
+      // It also takes us out of the loop entirely: nothing about a third-party
+      // page's playback touches our worker.
+      const EMBED_PLAYER_CDN = "https://cdn.jsdelivr.net/npm/movi-player/dist/element.js";
+
+      // Mirrors buildEmbedPlayerAttrs() in worker.js so a generated snippet
+      // behaves like the /embed page it replaces.
+      const EMBED_DEFAULT_ATTRS = [
+        'renderer="canvas"', "controls", 'objectfit="control"',
+        "gesturefs", "fastseek", "stablevolume",
+      ];
+
+      const escapeHtmlAttr = (v) => String(v)
+        .replace(/&/g, "&amp;")
+        .replace(/"/g, "&quot;")
+        .replace(/</g, "&lt;");
+
       const buildEmbedCode = () => {
-        const params = ["url=" + encodeURIComponent(currentVideoUrl || "")];
+        const attrs = [...EMBED_DEFAULT_ATTRS];
         let wantAutoplay = false;
         embedOptInputs.forEach((cb) => {
           if (!cb.checked) return;
-          params.push(cb.dataset.attr);
+          attrs.push(cb.dataset.attr);
           if (cb.dataset.attr === "autoplay") wantAutoplay = true;
         });
-        // Autoplay in a cross-origin iframe needs the allow directive too.
+
+        const doc =
+          '<!doctype html><meta charset="utf-8">' +
+          "<style>html,body{margin:0;height:100%;overflow:hidden;background:#000}" +
+          "movi-player{width:100%;height:100%}</style>" +
+          '<script type="module" src="' + EMBED_PLAYER_CDN + '"><\/script>' +
+          '<movi-player src="' + escapeHtmlAttr(currentVideoUrl || "") + '" ' +
+          attrs.join(" ") + "></movi-player>";
+
+        // srcdoc holds a whole document inside one attribute, so its contents
+        // are unescaped once more when parsed — everything needs escaping a
+        // second time. Single-quoted so the markup inside keeps its ordinary
+        // double quotes and stays readable to whoever pastes it.
+        const srcdoc = doc.replace(/&/g, "&amp;").replace(/'/g, "&#39;");
         const allow = "fullscreen" + (wantAutoplay ? "; autoplay" : "");
-        return `<iframe src="https://moviplayer.com/embed?${params.join("&")}" width="800" height="450" frameborder="0" allowfullscreen allow="${allow}"></iframe>`;
+        return `<iframe srcdoc='${srcdoc}' width="800" height="450" frameborder="0" allowfullscreen allow="${allow}"></iframe>`;
       };
 
       const refreshEmbedCode = () => {
