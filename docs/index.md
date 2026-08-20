@@ -2,6 +2,13 @@
 # https://vitepress.dev/reference/default-theme-home-page
 layout: home
 
+# The tab, and the search result: "Movi-Player" alone is the product, and the
+# landing page carries that name too — this page is the documentation for it,
+# and says so. titleTemplate off so the site title isn't appended to a title
+# that already contains it.
+title: Movi-Player Docs
+titleTemplate: false
+
 hero:
   name: "Movi-Player"
   text: "Modern Video Player for the Web"
