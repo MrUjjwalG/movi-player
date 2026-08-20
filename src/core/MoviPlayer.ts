@@ -4394,6 +4394,34 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
     return at >= this._videoTailStart - 0.05;
   }
 
+  /**
+   * True when the picture is the whole of playback — there is no sound that
+   * could carry it on its own. A file with no audio track, audio switched off,
+   * or sound the browser refuses to start.
+   *
+   * It matters wherever the pipeline is willing to let playback run without
+   * frames. With sound, that is a picture falling behind; without it, it is a
+   * wall clock ticking over a frozen frame while nothing plays at all — the
+   * timeline advancing past content the viewer never saw, because the frames
+   * that arrive late are already behind the clock and get dropped.
+   *
+   * False where the picture is missing BY DESIGN — data-saver audio-only, a
+   * hidden tab — since waiting for frames nobody is decoding never ends.
+   */
+  private pictureIsPlayback(): boolean {
+    // Nothing to show: a music file, or the stretch of a file whose video track
+    // has already ended. Asking those to wait for frames waits forever.
+    if (!this.trackManager.getActiveVideoTrack()) return false;
+    if (this.isInAudioOnlyTail()) return false;
+    if (this._audioOnly) return false;
+    if (this.isBackgrounded && !this.isPiPActive) return false;
+    if (this.disableAudio) return true;
+    const hasAudio =
+      !!this.trackManager.getActiveAudioTrack() || !!this.audioDemuxer;
+    if (!hasAudio) return true;
+    return this.audioRenderer.isDroppingAudio();
+  }
+
   private cancelBlackFrameWatchdog(): void {
     if (this._blackFrameWatchdog !== null) {
       clearTimeout(this._blackFrameWatchdog);
@@ -5155,8 +5183,14 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
       // picture that comes back has something behind it (see the entry point in
       // notifySeekCompletion). Falling back to `1` would satisfy it with the
       // single frame it was entered on.
+      // With no sound to carry it the picture is the whole of playback, so it
+      // needs the same cushion a binding asks for: resuming on the single frame
+      // a `> 0` test accepts empties the queue again on the next tick, and the
+      // resume grace then covers the seconds that follow — stall, resume, a
+      // frozen frame with the clock running, stall again. See pictureIsPlayback.
+      const needsFrames = this.pictureIsPlayback();
       const videoTargetFrames =
-        bound || this._seekResumeQueueWait
+        bound || needsFrames || this._seekResumeQueueWait
           ? Math.max(2, Math.round(fps * MoviPlayer.BOUND_RESUME_CUSHION_S))
           : 1;
       const videoReady =
@@ -5221,12 +5255,19 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
       // element's stuck watchdog, the decoder's own recreate) all run inside
       // buffering anyway.
       const somethingToShow = (this.videoRenderer?.getQueueSize() ?? 0) > 0;
-      const mayEscape = !bound || somethingToShow;
+      // …and with nothing to hear, escaping onto an empty queue is not "letting
+      // go on what we have" either — there is nothing at all to play.
+      const mayEscape = (!bound && !needsFrames) || somethingToShow;
       // Resume if: (1) both ready after minDwell, (2) unbound, audio ready
       // after a longer wait, or (3) the escape (don't wait forever).
       const canResume = dwellMs >= minDwell && (
         (audioReady && videoReady) ||
-        (!bound && audioReady && dwellMs >= 3000) ||
+        // Audio alone, after a longer wait — but only where audio IS the
+        // playback. On a file with no sound `audioReady` is permanently true,
+        // so this resumed every stall after three seconds whatever the queue
+        // held, which on a link running under the video's own bitrate meant
+        // resuming into nothing, over and over.
+        (!bound && !needsFrames && audioReady && dwellMs >= 3000) ||
         (dwellMs >= escapeMs && mayEscape)
       );
       if (
@@ -5303,11 +5344,21 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
     // once per stall. Five of those in a row is where the audio in the reported
     // session got 17 seconds ahead of a picture that never moved. Bound, a
     // resume off the stall path gets a short grace instead.
+    //
+    // The same is true, for a different reason, when there is no sound at all:
+    // three seconds during which the detector may not look is three seconds of
+    // wall clock over a frozen frame, and on a link that keeps running dry it
+    // repeats at every resume. Measured on a video-only file served under its
+    // own bitrate: stall, resume, and the timeline ran 32.5s → 35.5s with the
+    // queue empty and not one frame presented.
     const sinceStallResume = performance.now() - this._stallResumeAt;
-    const playGraceMs =
-      boundToAudio && this._stallResumeAt > 0 && sinceStallResume < 3000
-        ? MoviPlayer.BOUND_RESUME_GRACE_MS
-        : 3000;
+    const resumedFromStall =
+      (boundToAudio || this.pictureIsPlayback()) &&
+      this._stallResumeAt > 0 &&
+      sinceStallResume < 3000;
+    const playGraceMs = resumedFromStall
+      ? MoviPlayer.BOUND_RESUME_GRACE_MS
+      : 3000;
     const inPlayGrace = this._playStartTime > 0 && (performance.now() - this._playStartTime) < playGraceMs;
     // Grace while the video decoder is recovering from a transient decode
     // error (recreate + wait-for-keyframe). The video queue is legitimately
