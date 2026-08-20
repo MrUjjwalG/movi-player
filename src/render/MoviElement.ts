@@ -16170,6 +16170,24 @@ export class MoviElement extends HTMLElement {
         padding: 7px;
       }
 
+      /* A host's control is not always an icon. addControl takes any element
+         — a switch, a pill, a badge — and the box it lands in is the square the
+         player's own icons use, with overflow visible: a 78px pill inside a
+         38px button, spilling 40px over whatever sits beside it. Measured on
+         movi-tube's autoplay pill, that was the clock: the pill drew straight
+         across "00:01 / 04:12".
+         So let the box follow the content, with the icon square as its floor —
+         an SVG-only control keeps exactly the size it had (the glyph is smaller
+         than the floor), and a wider one takes the width it actually needs, so
+         the row lays out around the thing the host drew instead of around a
+         square it was never drawn for. */
+      :host .movi-controls-left > .movi-custom-btn,
+      :host .movi-controls-right .movi-custom-btn,
+      :host .movi-buttons-row > .movi-control-group .movi-custom-btn {
+        width: auto;
+        min-width: var(--movi-btn-size);
+      }
+
       /* Where the host's controls end and the player's begin. Six marks at one
          spacing read as six unrelated things — measured on a host that adds two
          of its own, the row was a switch, an icon, a badged gear and three more
@@ -19186,6 +19204,15 @@ export class MoviElement extends HTMLElement {
         :host .movi-controls-left > .movi-custom-btn {
           width: var(--movi-btn-size) !important;
           height: var(--movi-btn-size) !important;
+        }
+        /* …except a host control that isn't an icon: the width above is a
+           square, and a pill drawn wider than it spills over the clock beside
+           it. Height stays pinned — it is the row's own rhythm — and the width
+           follows the content with the square as its floor. See the base rule
+           for the same override. */
+        :host .movi-controls-left > .movi-custom-btn {
+          width: auto !important;
+          min-width: var(--movi-btn-size);
         }
         /* Text needs a little air from the icons either side, but far less
            than a capsule's worth. */
