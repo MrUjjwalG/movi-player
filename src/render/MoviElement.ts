@@ -19392,6 +19392,16 @@ export class MoviElement extends HTMLElement {
         .movi-buttons-row:has(.movi-controls-right.expanded) .movi-controls-left {
            display: none !important;
         }
+
+        /* …and with the left group goes the play capsule, which is the tallest
+           thing in the row (42px against the 38px icon buttons beside it). So
+           the bar lost 4mm of height at the moment it opened and got it back on
+           close — a row that twitches as you use it. Hold the row at the taller
+           of its two states: opening the tray changes WHAT is in the row, not
+           how tall the row is. */
+        .movi-buttons-row {
+          min-height: 42px;
+        }
         
         /* Alternative for older browsers: shrink left instead of hiding if :has not supported */
         /* Shrink, don't grow. flex:1 is 1 1 0% — it GROWS the cluster to fill
