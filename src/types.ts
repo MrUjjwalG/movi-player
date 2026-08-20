@@ -12,6 +12,14 @@ export interface Track {
   id: number;
   type: "video" | "audio" | "subtitle";
   codec: string;
+  /**
+   * This stream's own duration in seconds, as the container declares it —
+   * NOT the file's. They differ on a file whose streams don't end together:
+   * a 161s recording whose camera stopped at 80s has a video track of 80s
+   * and an audio track of 161s. Falls back to the container duration when the
+   * stream doesn't carry one, and is 0 when neither does.
+   */
+  duration?: number;
   codecString?: string;
   extradata?: Uint8Array;
   profile?: number;

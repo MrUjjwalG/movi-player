@@ -470,6 +470,15 @@ export class Demuxer {
       track.extradata = extradata;
     }
 
+    // Per-stream duration, kept because it is the only place the container
+    // says a stream ENDS BEFORE THE FILE DOES — a recording whose camera cut
+    // out while the mic ran on has 80s of video inside a 161s file, and
+    // without this the pipeline has no way to tell that apart from video
+    // that simply stopped arriving. See MoviPlayer's audio-only tail.
+    if (track && info.duration > 0) {
+      track.duration = info.duration;
+    }
+
     return track;
   }
 

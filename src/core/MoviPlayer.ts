@@ -801,6 +801,41 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
   private _blackFrameWatchdog: ReturnType<typeof setTimeout> | null = null;
   private _blackRecoverySeeks: number = 0;
   private static readonly MAX_BLACK_RECOVERY_SEEKS = 3;
+
+  // ── The audio-only tail ────────────────────────────────────────────────
+  // Some files carry audio past the end of their video: a phone recording
+  // whose camera app cut the video track at 80s while the mic ran to 161s, a
+  // stream remuxed from a feed that dropped its video mid-way, a concatenated
+  // file with a music-only outro. There are no more video packets to come, so
+  // every pipeline that treats an empty video queue as "the picture is late"
+  // is wrong here — the picture is FINISHED. Bound (bindav, the default), that
+  // read froze the whole thing: buffering at 80.5s, the element's stuck
+  // watchdog nudging the playhead forward, each nudge seeking into a region
+  // with no frame to decode, black-frame recovery burning its budget, and the
+  // file ending on an error overlay with 80 seconds of audio never played.
+  //
+  // What should happen is what a native player does: the last frame stays on
+  // screen and the sound plays on to the end of the file.
+  //
+  // Two independent detectors, because one of them can be absent:
+  //  - the container's per-stream duration, exact and known before playback
+  //    starts (MP4/Matroska both write it; see Track.duration), which is also
+  //    what lets a SEEK into the tail know not to wait for a frame; and
+  //  - the demuxer's own read cursor, for a container that declares nothing
+  //    useful — audio packets arriving far past the newest video packet mean
+  //    the video has stopped whatever the header claims.
+  /** Media time from which the file has audio but no video. */
+  private _videoTailStart: number = Number.POSITIVE_INFINITY;
+  /** pts of the newest video packet the demuxer has handed us. */
+  private _lastVideoPacketPts: number = -1;
+  // How far audio may run ahead of the last video packet before the runtime
+  // detector calls it a tail. Generous on purpose: interleave is a container's
+  // own business and a coarsely-muxed file can legitimately hand over several
+  // seconds of one stream at a time. Nothing is lost by deciding late — the
+  // container-declared duration has usually decided already — and a false
+  // positive only means the player declines to stall for a picture, which it
+  // undoes the moment a video packet arrives.
+  private static readonly VIDEO_TAIL_GAP_S = 6;
   private _activeSubtitleLang: string = "";
   private _externalSubCues: SubtitleCue[] = [];
   private _externalSubTimer: number | null = null;
@@ -1938,6 +1973,29 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
       this.seekKeyframeOffset = 0;
       this.clock.setDuration(this.mediaInfo.duration + this.startTime);
       this.clock.seek(this.startTime);
+
+      // Does the video track stop before the file does? (See _videoTailStart.)
+      // Read here rather than discovered later so a seek straight into the
+      // tail — the seek bar dragged past the end of the picture — already
+      // knows there is no frame coming and doesn't sit waiting for one.
+      this._videoTailStart = Number.POSITIVE_INFINITY;
+      this._lastVideoPacketPts = -1;
+      const tailVideoTrack = this.trackManager.getActiveVideoTrack();
+      const tailVideoDuration = tailVideoTrack?.duration ?? 0;
+      const tailFileDuration = this.mediaInfo.duration;
+      if (
+        tailVideoTrack &&
+        !tailVideoTrack.isAttachedPic &&
+        tailVideoDuration > 0 &&
+        tailFileDuration > 0 &&
+        tailFileDuration - tailVideoDuration > 1
+      ) {
+        this._videoTailStart = this.startTime + tailVideoDuration;
+        Logger.info(
+          TAG,
+          `Video track ends at ${this._videoTailStart.toFixed(2)}s of a ${tailFileDuration.toFixed(2)}s file — audio plays on past the last frame`,
+        );
+      }
 
       // Emit duration
       this.emit("durationChange", this.mediaInfo.duration);
@@ -4321,6 +4379,21 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
    * Internal handler for seek completion when first target frame is found.
    * Clears the seek flag, synchronizes clock, and transitions to final state.
    */
+  /**
+   * True when the playhead has reached the stretch of the file that has audio
+   * but no video (see _videoTailStart). Callers ask this before treating an
+   * empty video queue as a stall: past here the queue is empty because the
+   * video track ENDED, so the right behaviour is the native one — hold the
+   * last frame and let the sound play on to the end of the file.
+   */
+  private isInAudioOnlyTail(at: number = this.clock.getTime()): boolean {
+    if (!Number.isFinite(this._videoTailStart)) return false;
+    // No video track at all is a different thing entirely (a music file, a
+    // data-saver rendition); those paths already skip the picture on purpose.
+    if (!this.trackManager.getActiveVideoTrack()) return false;
+    return at >= this._videoTailStart - 0.05;
+  }
+
   private cancelBlackFrameWatchdog(): void {
     if (this._blackFrameWatchdog !== null) {
       clearTimeout(this._blackFrameWatchdog);
@@ -4345,6 +4418,10 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
     this._blackFrameWatchdog = setTimeout(() => {
       this._blackFrameWatchdog = null;
       if (this.seekSessionId !== session) return; // a newer seek owns recovery
+      // A black screen is a decode failure; a finished video track is not. Past
+      // the end of the picture there is nothing to nudge towards, and nudging
+      // anyway skips the audio the viewer is listening to. See _videoTailStart.
+      if (this.isInAudioOnlyTail()) return;
       const nowFrames = this.videoRenderer?.getStats?.().framesPresented ?? 0;
       if (nowFrames > baseFrames) {
         this._blackRecoverySeeks = 0; // a frame decoded on its own — recovered
@@ -4454,11 +4531,16 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
     // IS the playback, so let it start. PiP is not backgrounded in this sense:
     // the picture is on screen and worth waiting for.
     const pictureIsBeingDecoded = !this.isBackgrounded || this.isPiPActive;
+    // …and not past the end of the video track: no frame is coming, so
+    // "buffering until the first frame" is a wait with no end, and the nudges
+    // armed with it walk the playhead through the rest of the file. Resume on
+    // audio, over the frame already on screen. See _videoTailStart.
     const forcedWithoutFrame =
       forced &&
       noVideoFrameYet &&
       pictureIsBeingDecoded &&
-      !!this.trackManager.getActiveVideoTrack();
+      !!this.trackManager.getActiveVideoTrack() &&
+      !this.isInAudioOnlyTail();
 
     const seekTarget = this.seekTargetTime;
     this.seekTargetTime = -1;
@@ -5044,12 +5126,16 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
       // Nor where the sound is being dropped rather than played: an
       // autoplay-blocked context is suspended, so there is no sound to come back
       // in step with and waiting for it never ends. See the stall detector.
+      // Nor past the end of the video track, where waiting for the picture to
+      // come back in step is waiting for a picture that has finished. The last
+      // frame stays on screen and the sound carries the rest of the file.
       const bound =
         this._bindAV &&
         hasAudioTrack &&
         !this.disableAudio &&
         pictureRunning &&
-        !this.audioRenderer.isDroppingAudio();
+        !this.audioRenderer.isDroppingAudio() &&
+        !this.isInAudioOnlyTail();
       // …and bound, "a frame exists" is not "the picture is running again". One
       // frame satisfies a `> 0` test the instant it lands; the presentation
       // loop shows it, the queue is empty again, and the post-play grace then
@@ -5075,6 +5161,7 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
           : 1;
       const videoReady =
         !this.videoRenderer ||
+        this.isInAudioOnlyTail() ||
         this.videoRenderer.getQueueSize() >= videoTargetFrames;
       const dwellMs = performance.now() - this._bufferingEntryTime;
       // A rate change is NOT a stall. AudioRenderer.isRebuffering() is raised
@@ -5317,8 +5404,15 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
       // every frame. It has to be audio that EXISTS and has run out.
       const audioStarved =
         hasAudio && this.audioRenderer.getBufferedDuration() < 0.05;
+      // …but an empty queue past the end of the video track is not a shortfall
+      // at all — there are no more frames in the file to wait for. Stalling
+      // there stops the sound too (bound, which is the default) and hands the
+      // rest of the file to the stuck watchdog. See _videoTailStart.
       const videoStalled =
-        videoEmpty && (audioLow || this._bindAV) && !decoderRecovering;
+        videoEmpty &&
+        (audioLow || this._bindAV) &&
+        !decoderRecovering &&
+        !this.isInAudioOnlyTail();
       // The audio side of the stall, whether it arrived as a real underrun
       // (holes already heard) or as an empty buffer under a binding.
       const audioBlocking = audioUnderrunning || (this._bindAV && audioStarved);
@@ -6038,6 +6132,19 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
           const activeAudio = this.trackManager.getActiveAudioTrack();
 
           if (activeVideo && activeVideo.id === packet.streamIndex) {
+            // A video packet exists at this position, whatever anyone decided
+            // earlier — recorded before the skips below, which drop the DECODE
+            // and not the evidence. Past a tail start, it also retracts it: the
+            // container under-declared its video duration, or this is a gap in
+            // the middle of the file rather than the end of the picture.
+            this._lastVideoPacketPts = packet.timestamp;
+            if (packet.timestamp > this._videoTailStart) {
+              Logger.info(
+                TAG,
+                `Video resumed at ${packet.timestamp.toFixed(2)}s, past the expected end of the picture — clearing the audio-only tail`,
+              );
+              this._videoTailStart = Number.POSITIVE_INFINITY;
+            }
             // Audio-only mode: skip ALL video decoding to save CPU. Decode is
             // the expensive part; the interleaved bytes still arrive (no single-
             // file bandwidth saving — that's the adaptive-stream wrapper's job),
@@ -6180,6 +6287,25 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
               );
             }
           } else if (activeAudio && activeAudio.id === packet.streamIndex) {
+            // Audio running this far past the newest video packet means the
+            // video track has stopped — either for good (the tail) or for a
+            // stretch. The container's own duration usually says so first; this
+            // is for the ones that don't say anything useful. Split audio is
+            // excluded: it comes from a DIFFERENT file, so the two cursors have
+            // no relationship to measure. (See _videoTailStart.)
+            if (
+              !this.audioDemuxer &&
+              !Number.isFinite(this._videoTailStart) &&
+              this._lastVideoPacketPts >= 0 &&
+              packet.timestamp - this._lastVideoPacketPts >
+                MoviPlayer.VIDEO_TAIL_GAP_S
+            ) {
+              this._videoTailStart = this._lastVideoPacketPts;
+              Logger.info(
+                TAG,
+                `No video packet since ${this._lastVideoPacketPts.toFixed(2)}s while audio reached ${packet.timestamp.toFixed(2)}s — holding the last frame and playing the audio on`,
+              );
+            }
             // Audio can be processed normally (doesn't need keyframes)
             // Skip audio processing if disabled for debugging
             if (!this.disableAudio) {
@@ -6193,9 +6319,17 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
 
               // If waiting for video frame to ensure sync, buffer audio packets
               // (even when muted — needed for clock alignment to start at 0s)
+              //
+              // …unless the seek landed past the end of the video track, where
+              // no frame will ever arrive to release them: every audio packet
+              // to the end of the file would pile up in this array while the
+              // player sat in "seeking". Past there the audio IS the playback
+              // and completes the seek on its own, exactly as it does for a
+              // file with no video track at all (see below).
               if (
                 this.waitingForVideoSync &&
-                this.trackManager.getActiveVideoTrack()
+                this.trackManager.getActiveVideoTrack() &&
+                !this.isInAudioOnlyTail(this.seekTargetTime)
               ) {
                 this.pendingAudioPackets.push(packet);
                 continue;
@@ -6215,7 +6349,10 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
                   TAG,
                   `Audio reached seek target: ${packet.timestamp.toFixed(3)}s (target: ${this.seekTargetTime.toFixed(3)}s)`,
                 );
-                if (!this.trackManager.getActiveVideoTrack()) {
+                if (
+                  !this.trackManager.getActiveVideoTrack() ||
+                  this.isInAudioOnlyTail(this.seekTargetTime)
+                ) {
                   this.notifySeekCompletion(packet.timestamp);
                 }
                 // Retire it once audio is past: the guard exists to stop
@@ -10487,6 +10624,17 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
   /** True when audio-only (data-saver) mode is active. */
   isAudioOnly(): boolean {
     return this._audioOnly;
+  }
+
+  /**
+   * True when the playhead has passed the end of the video track in a file
+   * whose audio runs on past it (see _videoTailStart). The picture is finished
+   * — the last frame stays on screen — so anything that judges playback by
+   * frames arriving has to stop judging here: for the rest of the file the
+   * sound IS the playback.
+   */
+  isPastVideoEnd(): boolean {
+    return this.isInAudioOnlyTail();
   }
 
   /**
