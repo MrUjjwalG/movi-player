@@ -12,6 +12,9 @@ export default defineConfig({
 
   head: [
     ["link", { rel: "icon", type: "image/svg+xml", href: "/movi-player/favicon.svg" }],
+    // A multiple of 48px square, which is what Google asks for when it picks a
+    // site's search-result icon — the smaller sizes below are for tabs.
+    ["link", { rel: "icon", type: "image/png", sizes: "192x192", href: "/movi-player/favicon-192x192.png" }],
     ["link", { rel: "icon", type: "image/png", sizes: "32x32", href: "/movi-player/favicon-32x32.png" }],
     ["link", { rel: "icon", type: "image/png", sizes: "16x16", href: "/movi-player/favicon-16x16.png" }],
     ["link", { rel: "icon", type: "image/x-icon", href: "/movi-player/favicon.ico" }],

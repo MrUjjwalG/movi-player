@@ -3,7 +3,7 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>Online Video Player — Play MKV, HEVC, AV1, HDR Videos Free in Browser | MoviPlayer</title>
+    <title>Online Video Player — Play MKV, HEVC, AV1 & HDR | MoviPlayer</title>
 
     <!-- Kick off the player bundle download the moment the HTML lands, in
          parallel with the rest of <head>, rather than waiting for the module
@@ -17,6 +17,14 @@
       fetchpriority="high"
     />
     <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
+    <!-- Google picks the site's search-result icon from these, and it wants one
+         that is a multiple of 48px square; everything declared here was 16, 32
+         or a 180 apple-touch, so there was nothing for it to use and the result
+         showed a blank globe. Both files were already built and served — they
+         just weren't declared. Keep the URLs stable: the crawler remembers
+         them, and a moved icon is a re-crawl before it comes back. -->
+    <link rel="icon" type="image/png" sizes="192x192" href="/favicon-192x192.png" />
+    <link rel="icon" type="image/png" sizes="512x512" href="/favicon-512x512.png" />
     <link rel="icon" type="image/png" sizes="32x32" href="/favicon-32x32.png" />
     <link rel="icon" type="image/png" sizes="16x16" href="/favicon-16x16.png" />
     <link rel="icon" type="image/x-icon" href="/favicon.ico" />
