@@ -801,6 +801,17 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
   private _blackFrameWatchdog: ReturnType<typeof setTimeout> | null = null;
   private _blackRecoverySeeks: number = 0;
   private static readonly MAX_BLACK_RECOVERY_SEEKS = 3;
+  // Set when the picture could not be recovered where it stopped and the sound
+  // was handed playback instead of the playhead being nudged past it. It is the
+  // difference between "the viewer misses the picture for a few seconds" and
+  // "the viewer misses those seconds", which is what a nudge costs: each one
+  // skips content — first two seconds, then six, then ten — that was decodable
+  // sound the viewer never gets to hear. Cleared the moment a frame reaches the
+  // screen, and by any seek or source change.
+  private _soundCarryingAlone: boolean = false;
+  /** Set for the one seek that STARTS the hand-over, so seek() re-primes the
+   *  pipeline where the playhead is without cancelling it. */
+  private _carrySoundThroughNextSeek: boolean = false;
 
   // ── The audio-only tail ────────────────────────────────────────────────
   // Some files carry audio past the end of their video: a phone recording
@@ -1980,6 +1991,7 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
       // knows there is no frame coming and doesn't sit waiting for one.
       this._videoTailStart = Number.POSITIVE_INFINITY;
       this._lastVideoPacketPts = -1;
+      this._soundCarryingAlone = false;
       const tailVideoTrack = this.trackManager.getActiveVideoTrack();
       const tailVideoDuration = tailVideoTrack?.duration ?? 0;
       const tailFileDuration = this.mediaInfo.duration;
@@ -4415,11 +4427,21 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
     if (this.isInAudioOnlyTail()) return false;
     if (this._audioOnly) return false;
     if (this.isBackgrounded && !this.isPiPActive) return false;
-    if (this.disableAudio) return true;
-    const hasAudio =
-      !!this.trackManager.getActiveAudioTrack() || !!this.audioDemuxer;
-    if (!hasAudio) return true;
-    return this.audioRenderer.isDroppingAudio();
+    return !this.hasAudioThatCanPlay();
+  }
+
+  /**
+   * Is there sound that could carry playback on its own right now? A track that
+   * exists, isn't switched off, and isn't being dropped because the browser
+   * won't start the context. (Split audio lives in its own demuxer, outside the
+   * track manager, so it is counted separately.)
+   */
+  private hasAudioThatCanPlay(): boolean {
+    if (this.disableAudio) return false;
+    if (!this.trackManager.getActiveAudioTrack() && !this.audioDemuxer) {
+      return false;
+    }
+    return !this.audioRenderer.isDroppingAudio();
   }
 
   private cancelBlackFrameWatchdog(): void {
@@ -4450,6 +4472,11 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
       // the end of the picture there is nothing to nudge towards, and nudging
       // anyway skips the audio the viewer is listening to. See _videoTailStart.
       if (this.isInAudioOnlyTail()) return;
+      // Already handed to the sound — the picture rejoins on its own at the
+      // next keyframe the decoder accepts, and nudging now would skip audio the
+      // viewer is currently hearing. From here the frozen-picture watchdog owns
+      // recovery, and its corrective seek stays where the playhead is.
+      if (this._soundCarryingAlone) return;
       const nowFrames = this.videoRenderer?.getStats?.().framesPresented ?? 0;
       if (nowFrames > baseFrames) {
         this._blackRecoverySeeks = 0; // a frame decoded on its own — recovered
@@ -4471,6 +4498,29 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
       const from0 = Math.max(seekTarget, this.clock.getTime());
       if (this.getBufferedTime() - from0 < 0.5) {
         this.armBlackFrameWatchdog(seekTarget);
+        return;
+      }
+      // Nothing decodes here — but the sound does, and a nudge buys the picture
+      // by throwing away everything in between. Let the sound carry playback
+      // from where it is instead: the demuxer keeps feeding both decoders, so
+      // the picture comes back at the next keyframe the decoder accepts, and
+      // nothing the viewer could have heard is skipped to get it. The nudges
+      // stay for the case with no sound to hand it to — a video-only file,
+      // where the only thing in the gap is the picture that won't decode.
+      if (this.hasAudioThatCanPlay()) {
+        Logger.info(
+          TAG,
+          `No decodable frame at ${this.clock.getTime().toFixed(1)}s — letting the sound carry playback rather than skipping ahead; the picture rejoins at the next keyframe`,
+        );
+        this._soundCarryingAlone = true;
+        // Through a seek to where the playhead already is. Not to move it —
+        // it doesn't — but because the wait has left the audio schedule built
+        // out ahead of a clock that never advanced, and resuming onto that
+        // starts the sound wherever the schedule reached. Measured: a hold
+        // that began at 23.6s resumed the sound at 28.8s. Re-priming from the
+        // playhead is what makes this hand-over cost nothing.
+        this._carrySoundThroughNextSeek = true;
+        void this.seek(Math.max(seekTarget, this.clock.getTime()));
         return;
       }
       if (this._blackRecoverySeeks >= MoviPlayer.MAX_BLACK_RECOVERY_SEEKS) {
@@ -4568,7 +4618,8 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
       noVideoFrameYet &&
       pictureIsBeingDecoded &&
       !!this.trackManager.getActiveVideoTrack() &&
-      !this.isInAudioOnlyTail();
+      !this.isInAudioOnlyTail() &&
+      !this._soundCarryingAlone;
 
     const seekTarget = this.seekTargetTime;
     this.seekTargetTime = -1;
@@ -5163,7 +5214,11 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
         !this.disableAudio &&
         pictureRunning &&
         !this.audioRenderer.isDroppingAudio() &&
-        !this.isInAudioOnlyTail();
+        !this.isInAudioOnlyTail() &&
+        // …nor while the sound is deliberately carrying playback past a
+        // stretch the decoder can't get through: binding it to the picture
+        // there is what the hand-over exists to avoid.
+        !this._soundCarryingAlone;
       // …and bound, "a frame exists" is not "the picture is running again". One
       // frame satisfies a `> 0` test the instant it lands; the presentation
       // loop shows it, the queue is empty again, and the post-play grace then
@@ -5196,6 +5251,7 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
       const videoReady =
         !this.videoRenderer ||
         this.isInAudioOnlyTail() ||
+        this._soundCarryingAlone ||
         this.videoRenderer.getQueueSize() >= videoTargetFrames;
       const dwellMs = performance.now() - this._bufferingEntryTime;
       // A rate change is NOT a stall. AudioRenderer.isRebuffering() is raised
@@ -5463,7 +5519,8 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
         videoEmpty &&
         (audioLow || this._bindAV) &&
         !decoderRecovering &&
-        !this.isInAudioOnlyTail();
+        !this.isInAudioOnlyTail() &&
+        !this._soundCarryingAlone;
       // The audio side of the stall, whether it arrived as a real underrun
       // (holes already heard) or as an empty buffer under a binding.
       const audioBlocking = audioUnderrunning || (this._bindAV && audioStarved);
@@ -6380,7 +6437,8 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
               if (
                 this.waitingForVideoSync &&
                 this.trackManager.getActiveVideoTrack() &&
-                !this.isInAudioOnlyTail(this.seekTargetTime)
+                !this.isInAudioOnlyTail(this.seekTargetTime) &&
+                !this._soundCarryingAlone
               ) {
                 this.pendingAudioPackets.push(packet);
                 continue;
@@ -6402,7 +6460,8 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
                 );
                 if (
                   !this.trackManager.getActiveVideoTrack() ||
-                  this.isInAudioOnlyTail(this.seekTargetTime)
+                  this.isInAudioOnlyTail(this.seekTargetTime) ||
+                  this._soundCarryingAlone
                 ) {
                   this.notifySeekCompletion(packet.timestamp);
                 }
@@ -6989,7 +7048,19 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
       // We need to skip audio packets before target and decode (but not display) video frames.
       // Normalize target time against startTime offset
       this.seekTargetTime = seconds + this.startTime;
-    this._videoResumeTarget = -1; // a real seek supersedes a video-only catch-up
+    if (this._carrySoundThroughNextSeek) {
+      // The hand-over's own seek: re-prime decode where the playhead already is
+      // so the sound starts again from exactly there — not from wherever the
+      // schedule built up to during the wait — and keep the hand-over armed, so
+      // the completion below resumes on audio instead of holding for a picture
+      // this position has already proved it can't produce. Any frame from here
+      // on is the picture rejoining.
+      this._carrySoundThroughNextSeek = false;
+      this._videoResumeTarget = seconds + this.startTime;
+    } else {
+      this._videoResumeTarget = -1; // a real seek supersedes a video-only catch-up
+      this._soundCarryingAlone = false; // …and re-primes the picture from here
+    }
       this.waitingForVideoSync = true;
       // Tag which seek session armed this completion. notifySeekCompletion
       // bails if a newer seek has since superseded this one, so a stale (e.g.
@@ -11927,6 +11998,17 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
         // packets run seconds ahead of this frame and must not decode twice.
         if (this._videoResumeTarget !== -1) {
           this._videoResumeTarget = Number.NEGATIVE_INFINITY;
+          // The picture is back — whatever it was waiting on, including a
+          // stretch the decoder couldn't get through with the sound carrying
+          // playback alone. See _soundCarryingAlone.
+          if (this._soundCarryingAlone) {
+            Logger.info(
+              TAG,
+              `Picture rejoined at ${frameTime.toFixed(1)}s`,
+            );
+            this._soundCarryingAlone = false;
+            this._blackRecoverySeeks = 0;
+          }
           this.videoRenderer.queueFrame(frame);
           return;
         }
