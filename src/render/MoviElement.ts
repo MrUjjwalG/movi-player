@@ -23979,12 +23979,32 @@ export class MoviElement extends HTMLElement {
     const left = sr.querySelector(".movi-controls-left") as HTMLElement | null;
     const right = sr.querySelector(".movi-controls-right") as HTMLElement | null;
     if (!left || !right) return;
-    // 6px so the two never touch, let alone overlap.
+    // Two ways the row runs out of room, and the second one is the common one.
+    //
+    //  1. The left cluster reaches the settings run. 6px so the two never
+    //     touch, let alone overlap.
+    //  2. The left cluster is SQUEEZED (it shrinks; the settings run does not)
+    //     and its own contents — nowrap text and fixed boxes — spill out of it.
+    //     What they spill onto is whatever the row puts next, which is not
+    //     always the settings run: a host control given its own group sits
+    //     between the two clusters, and movi-tube's autoplay pill is exactly
+    //     that. Measured there: the clusters were 54px apart while the clock
+    //     hung 17px past its own cluster, straight across the pill. Comparing
+    //     the two clusters saw nothing wrong.
     const collides = () => {
       const l = left.getBoundingClientRect();
       const r = right.getBoundingClientRect();
-      if (l.width === 0 || r.width === 0) return false;
-      return l.right > r.left - 6;
+      if (l.width === 0) return false;
+      if (r.width > 0 && l.right > r.left - 6) return true;
+      let contentRight = 0;
+      for (const kid of Array.from(left.children)) {
+        const el = kid as HTMLElement;
+        if (el.offsetParent === null && getComputedStyle(el).position !== "fixed") {
+          continue;
+        }
+        contentRight = Math.max(contentRight, el.getBoundingClientRect().right);
+      }
+      return contentRight > l.right + 1;
     };
     this.classList.remove("movi-clock-compact", "movi-clock-hidden");
     if (!collides()) return;
