@@ -22776,6 +22776,11 @@ export class MoviElement extends HTMLElement {
     // the first load with every attribute already applied.
     this._hasConnected = true;
 
+    // Before anything measures anything: a player given a width and no height
+    // has to get its height from its own shape, not from its contents. See
+    // applyIntrinsicAspect.
+    this.applyIntrinsicAspect();
+
     // Remembered settings go on BEFORE the first load, so the player opens on
     // the viewer's last choices rather than snapping to them a moment after.
     this.applyPersistedSettings();
@@ -23692,6 +23697,9 @@ export class MoviElement extends HTMLElement {
         break;
       case "width":
       case "height":
+        // A height of the author's own retires the fallback ratio (and setting
+        // one back to nothing brings it back) — see applyIntrinsicAspect.
+        this.applyIntrinsicAspect();
         this.updateCanvasSize();
         break;
       case "crossorigin":
@@ -23826,6 +23834,36 @@ export class MoviElement extends HTMLElement {
 
   private _lastCanvasW: number = 0;
   private _lastCanvasH: number = 0;
+
+  /**
+   * Keep the element from having to measure its own content to know how tall
+   * it is.
+   *
+   * `:host` is `height: 100%`, which against a parent of auto height resolves
+   * to auto — and the canvas inside is `height: 100%` of THAT, so it falls back
+   * to its intrinsic size: the backbuffer, in device pixels. The host then
+   * takes its content height from the canvas, updateCanvasSize measures the
+   * host, and sets a backbuffer bigger again. Measured on a player given a
+   * width and no height: 8,694px tall on the first sample and climbing ~840px
+   * a second, with the picture a sliver at the top of a canvas tens of
+   * thousands of pixels long — which reads as "it never played".
+   *
+   * An aspect ratio breaks the loop: the height comes from the width, and
+   * nothing downstream can feed back into it. Only when the author hasn't
+   * given a height of their own — with one, `height: 100%` is definite and CSS
+   * ignores `aspect-ratio` anyway, so this stays out of the way.
+   */
+  private applyIntrinsicAspect(): void {
+    if (this.hasAttribute("height") || this.style.height) {
+      this.style.removeProperty("aspect-ratio");
+      return;
+    }
+    const w = this._lastVideoWidth;
+    const h = this._lastVideoHeight;
+    // Before the first track resolves there is nothing to go on but the
+    // convention — better a 16:9 box than a runaway one.
+    this.style.aspectRatio = w > 0 && h > 0 ? `${w} / ${h}` : "16 / 9";
+  }
 
   private updateCanvasSize() {
     const widthAttr = this.getAttribute("width");
@@ -25551,6 +25589,9 @@ export class MoviElement extends HTMLElement {
       if (vw > 0 && vhh > 0 && (vw !== this._lastVideoWidth || vhh !== this._lastVideoHeight)) {
         this._lastVideoWidth = vw;
         this._lastVideoHeight = vhh;
+        // The box the picture is drawn into follows the picture's own shape
+        // when the author hasn't dictated a height — see applyIntrinsicAspect.
+        this.applyIntrinsicAspect();
         this.dispatchEvent(
           new CustomEvent("resize", { detail: { width: vw, height: vhh } }),
         );
