@@ -7,8 +7,11 @@ export default defineConfig({
   // Keeps every URL consistent with the canonical (which never has .html).
   cleanUrls: true,
   title: "Movi-Player",
+  // What this SITE is, not what the product is — the product line belongs on
+  // the landing page, and Google, finding nothing here that described
+  // documentation, went and scraped a paragraph out of the demo instead.
   description:
-    "Modern, modular video player for the web powered by WebCodecs + FFmpeg WASM",
+    "Documentation for movi-player: install it, the element and its attributes, events, the JavaScript API, and the React, Vue and Svelte wrappers.",
 
   head: [
     ["link", { rel: "icon", type: "image/svg+xml", href: "/movi-player/favicon.svg" }],
