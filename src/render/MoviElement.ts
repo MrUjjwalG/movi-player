@@ -24484,8 +24484,27 @@ export class MoviElement extends HTMLElement {
   private hasUnfetchableSrcScheme(): boolean {
     if (this._sourceAdapter) return false;
     if (typeof this._src !== "string" || !this._src) return false;
-    // Resolve against the page so relative paths ("video.mp4") stay valid.
-    return !isOpenableScheme(this._src, location.href);
+    const src = this._src.trim();
+    // A src carrying no scheme of its own — "/videos/a.mp4", "./a.mp4",
+    // "a.mp4", "//cdn/a.mp4" — is resolved by the browser against the page and
+    // inherits the page's scheme. The page loaded, so that scheme fetches:
+    // there is no typo here to report, whatever the resolution comes out as.
+    // Resolving it was also the bug — a document the URL parser can't use as a
+    // base (about:blank, about:srcdoc, a blob:/data: document) throws, and the
+    // unparseable "" scheme fell straight through to "unfetchable", painting
+    // "Invalid Link" over an ordinary root-relative path.
+    if (!/^[a-z][a-z0-9+.-]*:/i.test(src)) return false;
+    // Same reasoning for an explicit scheme that IS the page's own: an Electron
+    // app:// page, an extension page, capacitor://. Those aren't built-in
+    // schemes, but the document was served over one, so a same-scheme src is
+    // as fetchable as the page itself.
+    try {
+      if (new URL(src).protocol === location.protocol) return false;
+    } catch {
+      // Malformed beyond parsing ("http://[bad]") — that IS a bad link.
+      return true;
+    }
+    return !isOpenableScheme(src, location.href);
   }
 
   /**
