@@ -18934,6 +18934,49 @@ export class MoviElement extends HTMLElement {
         }
       }
 
+      /* Players narrower than a phone: a thumbnail in a feed, a preview tile,
+         a comparison grid. The bottom row is a fixed left cluster and a fixed
+         right cluster with nothing between them that can give way, so below
+         about 300px the clock ran straight under the settings run — "00:00 /
+         02:41" overlapping the gear, which is what a viewer sees as a broken
+         control rather than a small one.
+
+         Take the readout apart in the order the information is worth keeping.
+         The duration is the half a viewer can infer (and the seek bar shows
+         it); the position is the half they can't, so it goes last. */
+      @container movi-host (max-width: 340px) {
+        :host .movi-controls-left > .movi-time .movi-time-separator,
+        :host .movi-controls-left > .movi-time .movi-duration {
+          display: none;
+        }
+        :host .movi-controls-left > .movi-time {
+          padding: 0 8px;
+        }
+        :host .movi-controls-left {
+          gap: 4px;
+          /* The cluster is what overflows, and everything to its right is a
+             fixed run of icons — so it, not they, is what has to give. */
+          min-width: 0;
+          flex-shrink: 1;
+          overflow: hidden;
+        }
+      }
+
+      /* Smaller still: the transport and nothing else. A clock nobody can read
+         at this size is worth less than the room it takes from the buttons. */
+      @container movi-host (max-width: 240px) {
+        :host .movi-controls-left > .movi-time {
+          display: none;
+        }
+        :host .movi-controls-bar {
+          padding-left: 4px;
+          padding-right: 4px;
+        }
+        :host .movi-controls-right {
+          gap: 0;
+        }
+      }
+
       /* ========================================
          RESPONSIVE STYLES - Mobile First
       ======================================== */
