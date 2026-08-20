@@ -297,8 +297,11 @@ export default {
     const url = new URL(request.url);
     const path = url.pathname;
 
-    // Redirect www to non-www
-    if (url.hostname === "www.moviplayer.com") {
+    // One canonical origin: https, no www. The www half was already here; the
+    // http half was not, so http://moviplayer.com/ answered 200 with the page
+    // and Search Console filed it as a second copy that happened to carry the
+    // right canonical. A redirect says it once, at the door.
+    if (url.hostname === "www.moviplayer.com" || url.protocol === "http:") {
       return Response.redirect(`https://moviplayer.com${path}${url.search}`, 301);
     }
 
@@ -2764,6 +2767,12 @@ function jsonResponse(data, status = 200) {
     status,
     headers: {
       "Content-Type": "application/json",
+      // Not a page. Googlebot found /api/comments and /api/session by itself
+      // and filed them under "crawled - currently not indexed" and "not found"
+      // — noise in a report that should only be about pages. robots.txt now
+      // keeps the crawler off /api/ entirely; this covers anything that
+      // reaches one of these anyway.
+      "X-Robots-Tag": "noindex",
       ...CORS_HEADERS,
     },
   });

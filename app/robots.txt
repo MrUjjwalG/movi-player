@@ -2,5 +2,6 @@ User-agent: *
 Allow: /
 Disallow: /proxy
 Disallow: /dist/
+Disallow: /api/
 
 Sitemap: https://moviplayer.com/sitemap.xml
