@@ -504,6 +504,10 @@ export class MoviElement extends HTMLElement {
   /** The chapter section currently raised under the pointer, so the playback
    *  tick can keep its paint current without re-scanning every segment. */
   private _hoveredChapter: HTMLElement | null = null;
+  /** Media time the pointer is over on the seek bar, or -1 when it is off it.
+   *  Kept so the tick can repaint the hover range against a moving playhead —
+   *  see paintSeekRangeHover. */
+  private _hoverBarTime: number = -1;
   private isTouchDragging: boolean = false;
 
   // Gesture tracking
@@ -1823,6 +1827,13 @@ export class MoviElement extends HTMLElement {
             <div class="movi-progress-paint">
               <div class="movi-progress-buffer"></div>
               <div class="movi-progress-filled"></div>
+              <!-- The stretch between the playhead and where the pointer is:
+                   what a click here would skip, or replay. Last inside the
+                   wrapper so it reads over the played bar as well as the
+                   unplayed track — a backwards hover has to show something
+                   too. Inside the wrapper so chapter gaps cut it like the
+                   rest. -->
+              <div class="movi-progress-hover"></div>
             </div>
             <div class="movi-chapter-markers"></div>
             <div class="movi-progress-handle"></div>
@@ -3125,6 +3136,10 @@ export class MoviElement extends HTMLElement {
 
       const time = this.barFractionToTime(percent);
       thumbnailTime.textContent = this.formatTime(time);
+      // Mark what seeking here would cost: the stretch between the playhead
+      // and the pointer. First, because it records where the pointer is and
+      // the chapter paint below reads that.
+      this.paintSeekRangeHover(time);
       // Raise the section the pointer is over (no-op without chapters).
       this.paintChapterHover(time);
 
@@ -3485,8 +3500,11 @@ export class MoviElement extends HTMLElement {
         }
         // The raised section drops with the cursor, not with the preview's
         // 300ms grace — it is part of the bar, and a chapter left standing
-        // proud of a bar nobody is pointing at reads as a stuck control.
+        // proud of a bar nobody is pointing at reads as a stuck control. The
+        // hover range goes with it: it describes a seek the pointer is no
+        // longer offering.
         this.paintChapterHover();
+        this.paintSeekRangeHover();
         hideThumbnail(300); // 300ms delay for mouse leave
       });
     }
@@ -15047,6 +15065,10 @@ export class MoviElement extends HTMLElement {
         --movi-controls-bg: var(--movi-glass-bg);
         --movi-progress-color: var(--movi-primary);
         --movi-progress-buffer-color: rgba(255, 255, 255, 0.2);
+        /* The hover range. White at low alpha on purpose: it has to read over
+           the played bar (the accent colour) and over bare track alike, and a
+           solid colour that works on one washes out on the other. */
+        --movi-progress-hover-color: rgba(255, 255, 255, 0.45);
         --movi-btn-hover-bg: rgba(255, 255, 255, 0.1);
         
         display: block;
@@ -15141,6 +15163,7 @@ export class MoviElement extends HTMLElement {
         --movi-btn-hover-bg: rgba(0, 0, 0, 0.05);
         --movi-btn-hover-bg: rgba(0, 0, 0, 0.05);
         --movi-progress-buffer-color: rgba(0, 0, 0, 0.15);
+        --movi-progress-hover-color: rgba(255, 255, 255, 0.55);
 
         /* Light Theme Backgrounds. Bottom bar uses the same dark
            gradient as the dark theme + as the title bar — the white
@@ -16540,6 +16563,26 @@ export class MoviElement extends HTMLElement {
         transition: width 0.1s linear;
       }
 
+      .movi-progress-hover {
+        position: absolute;
+        top: 0;
+        left: 0;
+        height: 100%;
+        width: 0%;
+        background: var(--movi-progress-hover-color, rgba(255, 255, 255, 0.45));
+        border-radius: 100px;
+        pointer-events: none;
+        opacity: 0;
+        /* Fade, don't slide: the band's ends are the playhead and the pointer,
+           and animating those would have it lag the cursor it is describing.
+           Only its appearance is worth easing. */
+        transition: opacity 0.12s linear;
+      }
+
+      .movi-progress-hover.visible {
+        opacity: 1;
+      }
+
       .movi-chapter-markers {
         position: absolute;
         top: 0;
@@ -16590,12 +16633,27 @@ export class MoviElement extends HTMLElement {
         height: var(--movi-progress-height-hover);
         transform: translateY(-50%);
         border-radius: 2px;
-        background-image: linear-gradient(
-          to right,
-          var(--movi-primary) 0 var(--movi-seg-played, 0%),
-          rgba(255, 255, 255, 0.25) var(--movi-seg-played, 0%) var(--movi-seg-buffered, 0%),
-          var(--movi-progress-bg) var(--movi-seg-buffered, 0%) 100%
-        );
+        /* Two layers, in the same order the thin bar stacks them: the hover
+           range on top of the played/buffered/track gradient, so a raised
+           section shows the same band as the rest of the bar. It is drawn as
+           its own layer rather than as more stops in one gradient because the
+           band can sit either side of the playhead, and a single gradient
+           needs its stops in order — which "either side" cannot promise.
+           Collapsed to nothing (from == to) when the pointer is elsewhere. */
+        background-image:
+          linear-gradient(
+            to right,
+            transparent 0 var(--movi-seg-hover-from, 0%),
+            var(--movi-progress-hover-color) var(--movi-seg-hover-from, 0%)
+              var(--movi-seg-hover-to, 0%),
+            transparent var(--movi-seg-hover-to, 0%) 100%
+          ),
+          linear-gradient(
+            to right,
+            var(--movi-primary) 0 var(--movi-seg-played, 0%),
+            rgba(255, 255, 255, 0.25) var(--movi-seg-played, 0%) var(--movi-seg-buffered, 0%),
+            var(--movi-progress-bg) var(--movi-seg-buffered, 0%) 100%
+          );
         transition: height 0.18s cubic-bezier(0.4, 0, 0.2, 1);
       }
 
@@ -27880,6 +27938,25 @@ export class MoviElement extends HTMLElement {
       // current run began, and a buffered edge to the LEFT of the played one
       // would invert the gradient's stops and paint the section solid.
       seg.style.setProperty("--movi-seg-buffered", pct(Math.max(played, buffered)));
+      // The hover range, clipped to this section. The thin bar's own band is
+      // masked out under a raised section (the track is CUT there — see
+      // applyChapterGaps), so without this the band stopped dead at the edge
+      // of whichever chapter the pointer was in — the one place it was being
+      // asked about. Both ends are clamped into the section, so a playhead in
+      // an earlier chapter simply anchors the band at this one's left edge.
+      //
+      // Read from the pointer's own position, NOT from `time`: the playback
+      // tick repaints a raised section with the section's MIDPOINT when the
+      // pointer's position isn't known (it only needs to re-pick the same
+      // section), and taken as a hover position that painted a band from the
+      // middle of the chapter to the playhead — so clicking past the halfway
+      // mark washed the played bar out and left it that way until the pointer
+      // left the bar. With no pointer the band collapses to nothing.
+      const pointer = this._hoverBarTime;
+      const hoverFrom = pointer >= 0 ? Math.min(played, pointer) : played;
+      const hoverTo = pointer >= 0 ? Math.max(played, pointer) : played;
+      seg.style.setProperty("--movi-seg-hover-from", pct(hoverFrom));
+      seg.style.setProperty("--movi-seg-hover-to", pct(hoverTo));
     });
     // Cut the track under the raised section — see applyChapterGaps. Only when
     // the section CHANGES: rebuilding a gradient on every pointer move is work
@@ -27914,6 +27991,65 @@ export class MoviElement extends HTMLElement {
       return start + f * Math.max(0, end - start);
     }
     return f * this.duration;
+  }
+
+  /**
+   * The inverse of barFractionToTime: where on the bar a media time sits, as a
+   * percentage. Live streams scale against the seekable DVR window, so a bare
+   * time/duration would put every live position in the wrong place.
+   */
+  private barTimeToPercent(time: number): number {
+    if (this.player?.isLiveStream?.()) {
+      const start = this.player.getSeekRangeStart?.() ?? 0;
+      const end = this.player.getLiveEdge?.() ?? 0;
+      const span = end - start;
+      if (span <= 0) return 0;
+      return Math.max(0, Math.min(100, ((time - start) / span) * 100));
+    }
+    if (this.duration <= 0) return 0;
+    return Math.max(0, Math.min(100, (time / this.duration) * 100));
+  }
+
+  /**
+   * Paint the stretch between the playhead and the pointer — what clicking
+   * here would skip forward over, or go back and replay. The bar already says
+   * where playback is and how far it has loaded; this says what the seek you
+   * are considering would COST, before you commit to it.
+   *
+   * Called with the hovered time, and with nothing to clear it. Never during a
+   * drag: there the fill itself follows the pointer, so the playhead and the
+   * pointer are the same place and the band would be a sliver chasing the
+   * handle.
+   */
+  private paintSeekRangeHover(time?: number): void {
+    const band = this.shadowRoot?.querySelector(
+      ".movi-progress-hover",
+    ) as HTMLElement | null;
+    if (!band) return;
+    if (
+      time === undefined ||
+      this.isDragging ||
+      this.isTouchDragging ||
+      this.duration <= 0
+    ) {
+      this._hoverBarTime = -1;
+      band.classList.remove("visible");
+      band.style.width = "0%";
+      return;
+    }
+    this._hoverBarTime = time;
+    const played = this.barTimeToPercent(
+      this._posterSeekActive ? 0 : this._uiCurrentTime(),
+    );
+    const hovered = this.barTimeToPercent(time);
+    const from = Math.min(played, hovered);
+    const width = Math.abs(hovered - played);
+    band.style.left = `${from}%`;
+    band.style.width = `${width}%`;
+    // Under about a third of a percent the band is narrower than the handle
+    // that is already sitting there — a flicker at the playhead rather than a
+    // distance worth showing.
+    band.classList.toggle("visible", width > 0.3);
   }
 
   private updateProgressBar(): void {
@@ -27960,13 +28096,27 @@ export class MoviElement extends HTMLElement {
       return;
     }
 
+    // The band's left edge IS the playhead, which keeps moving while the
+    // pointer holds still — so it is repainted on the tick like everything
+    // else, not only when the cursor moves.
+    if (this._hoverBarTime >= 0) {
+      this.paintSeekRangeHover(this._hoverBarTime);
+    }
+
     // A raised chapter paints its own copy of the fill and buffer, so it has
     // to move with them — otherwise the section under the pointer freezes at
     // whatever the progress was when the cursor arrived.
     if (this._hoveredChapter) {
       const start = Number(this._hoveredChapter.dataset.start ?? 0);
       const end = Number(this._hoveredChapter.dataset.end ?? 0);
-      if (end > start) this.paintChapterHover((start + end) / 2);
+      // The pointer's own time when we have it — the midpoint is only good
+      // enough to re-pick the same section, and the hover band's far end is a
+      // real position that would otherwise snap to the middle of the chapter.
+      if (end > start) {
+        this.paintChapterHover(
+          this._hoverBarTime >= 0 ? this._hoverBarTime : (start + end) / 2,
+        );
+      }
     }
 
     if (this.duration > 0) {

@@ -877,6 +877,10 @@
               "description": "Movi Player theme variable.\n\nDefault: `rgba(255, 255, 255, 0.2)`"
             },
             {
+              "name": "--movi-progress-hover-color",
+              "description": "Movi Player theme variable.\n\nDefault: `rgba(255, 255, 255, 0.45)`"
+            },
+            {
               "name": "--movi-btn-hover-bg",
               "description": "Movi Player theme variable.\n\nDefault: `rgba(255, 255, 255, 0.1)`"
             },
