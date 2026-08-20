@@ -22497,6 +22497,11 @@ export class MoviElement extends HTMLElement {
         display: none !important;
       }
       :host(.movi-native-video) .movi-context-menu-item[data-action="fit"],
+      /* Cropping the bars is the canvas drawing a smaller rectangle; a native
+         <video> has no such lever, so the row would take the click and change
+         nothing. (The settings panel's own crop row already follows Aspect's
+         availability and is gone here for the same reason.) */
+      :host(.movi-native-video) .movi-context-menu-item[data-action="crop-toggle"],
       :host(.movi-native-video) .movi-context-menu-item[data-action="rotate-video"],
       :host(.movi-native-video) .movi-context-menu-item[data-action="ambient-toggle"],
       :host(.movi-native-video) .movi-context-menu-item[data-action="snapshot"],
@@ -28814,6 +28819,21 @@ export class MoviElement extends HTMLElement {
       // The handoff worked, so the failure that led here is not the host's
       // problem any more — see _deferredError.
       this._deferredError = undefined;
+      // The picture's own shape, which on this path only the <video> knows —
+      // the track manager that normally supplies it belongs to the WASM
+      // pipeline that just stood down. Without it the box keeps the 16:9
+      // placeholder and a portrait video sits letterboxed in a landscape
+      // frame. See applyIntrinsicAspect.
+      if (v.videoWidth > 0 && v.videoHeight > 0) {
+        this._lastVideoWidth = v.videoWidth;
+        this._lastVideoHeight = v.videoHeight;
+        this.applyIntrinsicAspect();
+        this.dispatchEvent(
+          new CustomEvent("resize", {
+            detail: { width: v.videoWidth, height: v.videoHeight },
+          }),
+        );
+      }
       if (Number.isFinite(v.duration) && v.duration > 0) {
         this.dispatchEvent(
           new CustomEvent("durationchange", { detail: v.duration }),
