@@ -14,6 +14,40 @@ const TAG = 'FFmpegLoader';
 let modulePromise: Promise<MoviWasmModule> | null = null;
 let loadedModule: MoviWasmModule | null = null;
 
+// Who currently owns the shared module.
+//
+// Emscripten's Asyncify unwinds and rewinds the WHOLE module's stack, and the
+// pending read that a rewind resumes is stored on the module — one slot, module
+// wide. Two players demuxing through the same module therefore overwrite each
+// other's read: one of them is answered with the other's bytes, the other is
+// told "No pending read to fulfill", and its open ends as
+// "File is corrupted or in an unsupported format". Two <movi-player>s on one
+// page is an ordinary thing to build (a gallery, a comparison, a feed) and it
+// could not work at all.
+//
+// So the shared module is claimed, not assumed: the first main-playback demuxer
+// takes it and every other one loads its own isolated instance — the same thing
+// the preview pipeline already does. The cost is another WASM instance per
+// simultaneous player, which is the honest price of playing two files at once.
+let sharedModuleClaimed = false;
+
+/**
+ * Try to take the shared main-playback module. Returns false when another
+ * demuxer already holds it, and the caller should load an isolated instance
+ * (loadWasmModuleNew) instead. Synchronous on purpose: it settles the race
+ * between two demuxers opening in the same tick, before either awaits.
+ */
+export function claimSharedModule(): boolean {
+  if (sharedModuleClaimed) return false;
+  sharedModuleClaimed = true;
+  return true;
+}
+
+/** Give the shared module back, so the next player can use it. */
+export function releaseSharedModule(): void {
+  sharedModuleClaimed = false;
+}
+
 // Embedded WASM binary (will be set if WASM is bundled)
 let embeddedWasmBinary: Uint8Array | null = null;
 
@@ -59,6 +93,8 @@ export interface LoaderOptions {
 export function resetWasmModule(): void {
   loadedModule = null;
   modulePromise = null;
+  // Whoever held the dead module is not going to give it back.
+  sharedModuleClaimed = false;
 }
 
 /**

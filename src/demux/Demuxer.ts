@@ -20,6 +20,8 @@ import {
   ThumbnailBindings,
   loadWasmModule,
   loadWasmModuleNew,
+  claimSharedModule,
+  releaseSharedModule,
   type MoviWasmModule,
   type StreamInfo,
   type DataSource,
@@ -74,6 +76,8 @@ export class Demuxer {
   private bindings: WasmBindings | null = null;
   private tracks: Track[] = [];
   private duration: number = 0;
+  /** This demuxer holds the shared main-playback module — see claimSharedModule. */
+  private _holdsSharedModule = false;
   private isOpened: boolean = false;
   private wasmBinary?: Uint8Array;
   private useNewWasmInstance: boolean = false;
@@ -103,8 +107,20 @@ export class Demuxer {
     if (this.useNewWasmInstance) {
       Logger.debug(TAG, "Using isolated WASM instance");
       this.module = await loadWasmModuleNew({ wasmBinary: this.wasmBinary });
-    } else {
+    } else if (this._holdsSharedModule || claimSharedModule()) {
+      // The shared module is ours (or already was, if this demuxer is being
+      // re-opened) — see claimSharedModule for why it can only have one user.
+      this._holdsSharedModule = true;
       this.module = await loadWasmModule({ wasmBinary: this.wasmBinary });
+    } else {
+      // Another player is demuxing through the shared module. Sharing it would
+      // cross the two players' reads (see claimSharedModule); take an isolated
+      // instance instead so both play.
+      Logger.info(
+        TAG,
+        "The shared WASM module is in use by another player — opening on an isolated instance",
+      );
+      this.module = await loadWasmModuleNew({ wasmBinary: this.wasmBinary });
     }
     this.bindings = new WasmBindings(this.module);
 
@@ -634,6 +650,10 @@ export class Demuxer {
     if (this.bindings) {
       this.bindings.destroy();
       this.bindings = null;
+    }
+    if (this._holdsSharedModule) {
+      this._holdsSharedModule = false;
+      releaseSharedModule();
     }
 
     this.isOpened = false;
