@@ -16561,6 +16561,15 @@ export class MoviElement extends HTMLElement {
         transition: width 0.1s linear;
       }
 
+      /* Set by fitControlsRow when the row's two ends would otherwise collide. */
+      :host(.movi-clock-compact) .movi-controls-left > .movi-time .movi-time-separator,
+      :host(.movi-clock-compact) .movi-controls-left > .movi-time .movi-duration {
+        display: none;
+      }
+      :host(.movi-clock-hidden) .movi-controls-left > .movi-time {
+        display: none;
+      }
+
       .movi-progress-hover {
         position: absolute;
         top: 0;
@@ -18945,10 +18954,6 @@ export class MoviElement extends HTMLElement {
          The duration is the half a viewer can infer (and the seek bar shows
          it); the position is the half they can't, so it goes last. */
       @container movi-host (max-width: 340px) {
-        :host .movi-controls-left > .movi-time .movi-time-separator,
-        :host .movi-controls-left > .movi-time .movi-duration {
-          display: none;
-        }
         :host .movi-controls-left > .movi-time {
           padding: 0 8px;
         }
@@ -18965,9 +18970,6 @@ export class MoviElement extends HTMLElement {
       /* Smaller still: the transport and nothing else. A clock nobody can read
          at this size is worth less than the room it takes from the buttons. */
       @container movi-host (max-width: 240px) {
-        :host .movi-controls-left > .movi-time {
-          display: none;
-        }
         :host .movi-controls-bar {
           padding-left: 4px;
           padding-right: 4px;
@@ -23923,6 +23925,47 @@ export class MoviElement extends HTMLElement {
     this.style.aspectRatio = w > 0 && h > 0 ? `${w} / ${h}` : "16 / 9";
   }
 
+  /**
+   * Keep the two ends of the bottom row from running into each other.
+   *
+   * The row is a left cluster (transport + clock) and a right cluster
+   * (settings run), and neither can give way: the clock is nowrap text and the
+   * icons are fixed boxes. When they don't both fit, the left one overflows and
+   * the two draw on top of each other — a host's own control landing across
+   * "00:01 / 04:12" is the same collision as a 200px player having no room for
+   * the clock.
+   *
+   * A width breakpoint can't decide this. `addControl` lets the host put as
+   * many buttons in the row as it likes, and a 2-hour duration is wider than a
+   * 3-minute one, so what fits is a question about the CONTENT, not the
+   * viewport. Measure instead, and give up the clock in the order the parts are
+   * worth keeping: the duration first (the seek bar shows it, and it doesn't
+   * change), then the position.
+   *
+   * Cheap because it is rare — a resize, a duration arriving, a control being
+   * added — and it always measures from the un-hidden state, so a row that
+   * gains space takes its clock back.
+   */
+  private fitControlsRow(): void {
+    const sr = this.shadowRoot;
+    if (!sr) return;
+    const left = sr.querySelector(".movi-controls-left") as HTMLElement | null;
+    const right = sr.querySelector(".movi-controls-right") as HTMLElement | null;
+    if (!left || !right) return;
+    // 6px so the two never touch, let alone overlap.
+    const collides = () => {
+      const l = left.getBoundingClientRect();
+      const r = right.getBoundingClientRect();
+      if (l.width === 0 || r.width === 0) return false;
+      return l.right > r.left - 6;
+    };
+    this.classList.remove("movi-clock-compact", "movi-clock-hidden");
+    if (!collides()) return;
+    this.classList.add("movi-clock-compact");
+    if (!collides()) return;
+    this.classList.add("movi-clock-hidden");
+  }
+
   private updateCanvasSize() {
     const widthAttr = this.getAttribute("width");
     const heightAttr = this.getAttribute("height");
@@ -23972,6 +24015,8 @@ export class MoviElement extends HTMLElement {
       // when the overlay is hidden (no bitmap / has video track) since
       // it bails before any drawImage work.
       this.updateCoverArtOverlay();
+      // The row got wider or narrower; re-decide what still fits in it.
+      this.fitControlsRow();
     }
   }
 
@@ -27255,6 +27300,8 @@ export class MoviElement extends HTMLElement {
   private _lastVideoHeight = 0;
   /** `canplaythrough` is once-per-source. */
   private _canPlayThroughFired = false;
+  /** Characters in the clock at the last fit — see fitControlsRow. */
+  private _lastClockLen = -1;
   /**
    * Whether THIS source has ever resolved a video track. Lets the cover-art
    * decision tell "the track list is being rebuilt" (quality switch) apart from
@@ -27719,6 +27766,19 @@ export class MoviElement extends HTMLElement {
     }
     if (durationEl) {
       durationEl.textContent = this.formatTime(this.duration);
+    }
+    // What the clock is WIDE enough to need, which is a question of how many
+    // characters it holds — not which ones, since the readout is tabular. It
+    // changes when the duration first arrives, when the position crosses an
+    // hour, and when a host adds a control beside it. Each of those can be the
+    // difference between the row fitting and the row colliding, so re-decide
+    // then and not on every tick. See fitControlsRow.
+    const clockLen =
+      (currentTimeEl?.textContent?.length ?? 0) +
+      (durationEl?.textContent?.length ?? 0);
+    if (clockLen !== this._lastClockLen) {
+      this._lastClockLen = clockLen;
+      this.fitControlsRow();
     }
 
     this.updateSeekAria();
@@ -32595,6 +32655,9 @@ export class MoviElement extends HTMLElement {
         } else {
           this.insertAtAnchor(row, btn, spec);
         }
+        // A control the host just added is more content in a row that may not
+        // have had room for what was already there — see fitControlsRow.
+        this.fitControlsRow();
       }
     }
 
