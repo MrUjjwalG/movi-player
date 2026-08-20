@@ -8541,9 +8541,7 @@ export class MoviElement extends HTMLElement {
     // new source starts from the same clean slate a fresh element gets.
     this._startCancelled = false;
     this._pendingPlay = false;
-    this.dispatchEvent(
-      new CustomEvent("loadstart", { detail: { src: this._src } }),
-    );
+    this.announceLoadStart(typeof this._src === "string" ? this._src : null);
     this.load();
   }
 
@@ -23484,9 +23482,7 @@ export class MoviElement extends HTMLElement {
           // `el.src = url` announced the load but `el.setAttribute("src", url)`
           // — the same thing to a host, and what frameworks emit — stayed
           // silent. A <video> fires it for both.
-          this.dispatchEvent(
-            new CustomEvent("loadstart", { detail: { src: this._src } }),
-          );
+          this.announceLoadStart(this._src);
           // New source → reset the "has been played" flag so the
           // next source's initial poster-seek "paused" transition
           // doesn't trigger a premature bar surface.
@@ -25239,7 +25235,7 @@ export class MoviElement extends HTMLElement {
       if (this._tryQualityRecovery(initMsg)) return;
 
       this.noteMediaError(error);
-      this.dispatchEvent(new CustomEvent("error", { detail: error }));
+      this.dispatchMediaError(error);
       Logger.error(TAG, "Failed to initialize MoviPlayer", error);
 
       // "Initialization Failed" is our vocabulary, not the viewer's — it reads
@@ -26052,7 +26048,7 @@ export class MoviElement extends HTMLElement {
 
       this._qoe.error(rawMsg, true);
       this.noteMediaError(error);
-      this.dispatchEvent(new CustomEvent("error", { detail: error }));
+      this.dispatchMediaError(error);
       // Always log the raw error before the message gets prettified for
       // the overlay — without this, "State: ... -> error" appears in
       // the log without any "what crashed" line and debugging requires
@@ -26777,6 +26773,7 @@ export class MoviElement extends HTMLElement {
     // Movi's own canvas pipeline (the previous source may have degraded to the
     // browser <video> via fallback="native").
     this._nativeFallbackAttempted = false;
+    this._deferredError = undefined;
     this._engineTried.clear();
     if (this._nativeFallbackActive) {
       this._nativeFallbackActive = false;
@@ -27172,6 +27169,26 @@ export class MoviElement extends HTMLElement {
    * <video> fires it once per load; this keeps the triple coherent.
    */
   private _loadedDataFired = false;
+
+  /**
+   * `loadstart`, once per load.
+   *
+   * `el.src = url` announces the load and then writes the attribute, whose
+   * change callback announces it again — so a host counting loads, or arming a
+   * one-shot per `loadstart`, saw two for one source. The two run in the same
+   * task (setAttribute calls attributeChangedCallback synchronously), so a
+   * microtask-scoped latch collapses them while leaving a genuine later re-set
+   * — a different task — free to announce again.
+   */
+  private _loadStartPending = false;
+  private announceLoadStart(src: string | null): void {
+    if (this._loadStartPending) return;
+    this._loadStartPending = true;
+    queueMicrotask(() => {
+      this._loadStartPending = false;
+    });
+    this.dispatchEvent(new CustomEvent("loadstart", { detail: { src } }));
+  }
 
   /** Dispatch the loaded/ready triple once per load, in native order. */
   private _emitLoadedData(withMetadata: boolean): void {
@@ -28640,6 +28657,13 @@ export class MoviElement extends HTMLElement {
     wrapper.on("error", () => {
       if (!this._nativeFallbackActive) return; // torn down already
       this._nativeFallbackActive = false;
+      // The handoff was the last hope for this source, so the failure that led
+      // here is real after all — release it to the host (see _deferredError).
+      if (this._deferredError !== undefined) {
+        const held = this._deferredError;
+        this._deferredError = undefined;
+        this.dispatchEvent(new CustomEvent("error", { detail: held }));
+      }
       try {
         wrapper.destroy();
       } catch {}
@@ -28736,7 +28760,78 @@ export class MoviElement extends HTMLElement {
     this.isLoading = wasLoading;
 
     this.dispatchEvent(new CustomEvent("nativefallback", { detail: { src: url } }));
-    this.dispatchEvent(new Event("loadeddata"));
+
+    // A host learns a source loaded from `durationchange` → `loadedmetadata` →
+    // `loadeddata` → `canplay`, the way a <video> announces itself. This path
+    // used to fire one bare `loadeddata` HERE — at the handoff, before the
+    // element had opened anything — and nothing afterwards: no duration, no
+    // metadata, no canplay, ever. Anything waiting on those waited forever over
+    // a video that was in fact playing (issue #14). Announce off the element's
+    // own metadata instead, and if it already has some, right away.
+    const announceNativeReady = () => {
+      if (!this._nativeFallbackActive) return;
+      // The handoff worked, so the failure that led here is not the host's
+      // problem any more — see _deferredError.
+      this._deferredError = undefined;
+      if (Number.isFinite(v.duration) && v.duration > 0) {
+        this.dispatchEvent(
+          new CustomEvent("durationchange", { detail: v.duration }),
+        );
+      }
+      this._emitLoadedData(true);
+    };
+    if (v.readyState >= 1 /* HAVE_METADATA */) {
+      announceNativeReady();
+    } else {
+      v.addEventListener("loadedmetadata", announceNativeReady, { once: true });
+      this.eventHandlers.set("nativeloadedmetadata", () =>
+        v.removeEventListener("loadedmetadata", announceNativeReady),
+      );
+    }
+  }
+
+  /**
+   * The load error, held back because a native handoff is about to be tried.
+   *
+   * `error` is how a host is told the source failed, and most treat it as
+   * final — they tear the player down, or report it. Firing it and THEN
+   * recovering through `fallback="native"` (which reached playing state a few
+   * milliseconds later) told them the load had failed when it had not; the
+   * viewer saw a playing video while the page reported an error (issue #14).
+   * So it is deferred: released if the native element can't play it either,
+   * dropped the moment it can.
+   */
+  private _deferredError: unknown = undefined;
+
+  /**
+   * Is a native <video> handoff still to come for this source? Then the load
+   * hasn't finished failing yet.
+   */
+  private willHandOffToNative(): boolean {
+    if (typeof this._src !== "string" || this._nativeFallbackActive) return false;
+    if (this._fallbackMode() === "native" && !this._nativeFallbackAttempted) {
+      return true;
+    }
+    const order = this._enginePriority();
+    return (
+      order.includes("native") &&
+      !this._engineTried.has("native") &&
+      order.some((e) => this._engineTried.has(e))
+    );
+  }
+
+  /** Tell the host the source failed — unless a fallback may yet rescue it. */
+  private dispatchMediaError(error: unknown): void {
+    if (this.willHandOffToNative()) {
+      this._deferredError = error;
+      Logger.info(
+        TAG,
+        "Load failed, but a native handoff is still to come — holding the `error` event back until it is decided",
+      );
+      return;
+    }
+    this._deferredError = undefined;
+    this.dispatchEvent(new CustomEvent("error", { detail: error }));
   }
 
   private handleUnsupportedVideo(title?: string, message?: string): void {
@@ -30546,7 +30641,7 @@ export class MoviElement extends HTMLElement {
     // Switching to a URL/File source supersedes any custom adapter.
     this._sourceAdapter = null;
 
-    this.dispatchEvent(new CustomEvent("loadstart", { detail: { src: value instanceof File ? value.name : value } }));
+    this.announceLoadStart(value instanceof File ? value.name : value);
 
     if (value instanceof File) {
       // For File objects, store in memory (can't store in attributes)
@@ -35257,11 +35352,21 @@ export class MoviElement extends HTMLElement {
   get readyState(): number {
     // Map MoviPlayer states to HTMLMediaElement readyState
     // 0 = HAVE_NOTHING, 1 = HAVE_METADATA, 2 = HAVE_CURRENT_DATA, 3 = HAVE_FUTURE_DATA, 4 = HAVE_ENOUGH_DATA
+    //
+    // Every state that wasn't one of four names used to answer 0 — so a video
+    // that was buffering, seeking, or had ENDED reported "nothing loaded",
+    // which is the one thing that was certainly untrue: metadata, duration and
+    // frames were all there. A host polling this to decide whether a source
+    // loaded read a mid-playback rebuffer as a failed load.
     const state = this.player?.getState();
-    if (!state || state === "idle") return 0; // HAVE_NOTHING
-    if (state === "ready" || state === "loading") return 1; // HAVE_METADATA
-    if (state === "playing" || state === "paused") return 4; // HAVE_ENOUGH_DATA
-    return 0;
+    if (!state || state === "idle" || state === "error") return 0;
+    // "loading" is the file being opened — before metadata, which is exactly
+    // what HAVE_NOTHING means. It used to claim HAVE_METADATA.
+    if (state === "loading") return 0;
+    // Data at the playhead, but not enough to keep going.
+    if (state === "buffering" || state === "seeking") return 2;
+    // ready / playing / paused / ended — metadata, a frame, and a buffer.
+    return 4;
   }
 
   get width(): number {
