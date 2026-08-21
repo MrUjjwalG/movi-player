@@ -4763,6 +4763,18 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
       // gate to wait for it (issue #11, seek case).
       if (this.activeAudioNeedsColdPrime()) {
         this.beginAudioPrime();
+      } else {
+        // …and every other codec still has to be HELD, even though it needs no
+        // cushion demand. render() drops AudioData while the renderer isn't
+        // playing, and this branch hands control to the resume gate without
+        // starting it — so without the hold, every frame decoded during the
+        // wait is thrown away while the demuxer reads on. Captured on a
+        // software-AAC file over a slow link: seventeen seconds of audio
+        // discarded, the buffer still reading zero, the bound stall giving up
+        // on "audioReady=false", and then the first buffer that finally landed
+        // was at 16.8s of media time against a picture at 0.7s — the clock
+        // jumped forward to meet it. See holdAudioForBuffering.
+        this.holdAudioForBuffering();
       }
       if (this._playStartTime === 0) {
         this._playStartTime = performance.now();
