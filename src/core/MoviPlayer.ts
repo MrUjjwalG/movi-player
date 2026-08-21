@@ -1044,6 +1044,36 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
    *  attributable to the flush/re-anchor that operation performed itself. */
   private static readonly SELF_INFLICTED_STALL_WINDOW_MS = 1500;
   /**
+   * The picture running behind the sound, and staying there.
+   *
+   * Frame selection normally makes this self-healing: the presentation loop
+   * takes the LATEST due frame, so a hitch is absorbed the moment fresh frames
+   * arrive. What it cannot absorb is a decoder that lost ground and only ever
+   * decodes forward at ~1x — after a GC pause or a few starved seconds on a
+   * small-memory device, every frame that arrives is already late by the same
+   * amount, each one is dutifully presented, and the offset becomes permanent.
+   *
+   * Nothing else catches it. The frozen-picture watchdog reads advancing
+   * frames as healthy, and the desync check further down only looks the other
+   * way (audio behind video), so the only fix was the viewer seeking by hand.
+   */
+  private _videoLagSince: number = 0;
+  private _videoLagHealthySince: number = 0;
+  private _lastVideoLagResyncAt: number = 0;
+  private _videoLagResyncs: number = 0;
+  /** Lip-sync is long gone by here, and it matches the audio-side threshold. */
+  private static readonly VIDEO_LAG_S = 0.5;
+  /** Long enough that an ordinary hitch heals itself first. */
+  private static readonly VIDEO_LAG_SUSTAIN_MS = 2000;
+  private static readonly VIDEO_LAG_COOLDOWN_MS = 6000;
+  /**
+   * A catch-up that keeps being needed isn't catching up. Past this the device
+   * is simply behind, and more re-seeks would only cost it the read-ahead they
+   * throw away — the FPS/DPR degrades and the ABR downshift own that case. The
+   * budget comes back after a stretch of being genuinely in step.
+   */
+  private static readonly MAX_VIDEO_LAG_RESYNCS = 3;
+  /**
    * How long a bound stall may hold before it gives up and resumes on whatever
    * it has.
    *
@@ -1490,6 +1520,13 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
     if (!this.stateManager.is("idle") && !sourceConfig) {
       throw new Error("Player must be idle to load");
     }
+
+    // A new source gets its own attempts at catching the picture up; what the
+    // last one spent says nothing about this one (see _videoLagSince).
+    this._videoLagSince = 0;
+    this._videoLagHealthySince = 0;
+    this._lastVideoLagResyncAt = 0;
+    this._videoLagResyncs = 0;
 
     // A verdict about the previous source's encryption says nothing about this
     // one; the fallback sets it again if this source earns it.
@@ -5735,6 +5772,68 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
       }
     }
 
+    // The other direction: the PICTURE behind the sound (see _videoLagSince).
+    // The recovery is the video-only one, not seek() — the sound is where the
+    // viewer already is and must not be flushed to fetch the picture back.
+    if (
+      this.stateManager.getState() === "playing" &&
+      !this._audioOnly &&
+      !this.disableAudio &&
+      !inPlayGrace &&
+      !this.isBackgrounded &&
+      !!this.videoRenderer &&
+      // A decoder that cannot hold the rate at all will just lose the ground
+      // again, and each attempt costs the source's read-ahead. That case has
+      // its own answers: the renderer's own degrade, and the ABR downshift.
+      !this.videoRenderer.isDecodeBound?.() &&
+      Math.abs(this.clock.getPlaybackRate() - 1.0) < 0.01
+    ) {
+      const nowLag = performance.now();
+      const audioAt = this.audioRenderer.getAudioClock();
+      const videoAt = (this.videoRenderer as any).currentTime ?? -1;
+      const videoBehind =
+        audioAt >= 0 && videoAt > 0 ? audioAt - videoAt : 0;
+      if (videoBehind < MoviPlayer.VIDEO_LAG_S) {
+        this._videoLagSince = 0;
+        if (this._videoLagHealthySince === 0) {
+          this._videoLagHealthySince = nowLag;
+        } else if (nowLag - this._videoLagHealthySince > 10000) {
+          this._videoLagResyncs = 0;
+        }
+      } else {
+        // Behind. Clear the healthy streak FIRST, outside the settle gate
+        // below — leaving a stale timestamp there let a run of lag end in an
+        // instant budget refill, which is the opposite of what it measures.
+        this._videoLagHealthySince = 0;
+      }
+      if (
+        videoBehind >= MoviPlayer.VIDEO_LAG_S &&
+        // A seek's own re-prime trails the sound for a moment by design; only
+        // start counting once that is behind us.
+        nowLag - this._lastSeekResumeAt > MoviPlayer.VIDEO_LAG_SUSTAIN_MS
+      ) {
+        if (this._videoLagSince === 0) {
+          this._videoLagSince = nowLag;
+        } else if (
+          nowLag - this._videoLagSince > MoviPlayer.VIDEO_LAG_SUSTAIN_MS &&
+          nowLag - this._lastVideoLagResyncAt >
+            MoviPlayer.VIDEO_LAG_COOLDOWN_MS &&
+          this._videoLagResyncs < MoviPlayer.MAX_VIDEO_LAG_RESYNCS
+        ) {
+          this._videoLagSince = 0;
+          this._lastVideoLagResyncAt = nowLag;
+          this._videoLagResyncs++;
+          Logger.warn(
+            TAG,
+            `Picture ${(videoBehind * 1000).toFixed(0)}ms behind the sound ` +
+              `(video=${videoAt.toFixed(2)}s, audio=${audioAt.toFixed(2)}s) — ` +
+              `catching the picture up (attempt ${this._videoLagResyncs})`,
+          );
+          void this.resyncVideoToAudio("Picture fell behind").catch(() => {});
+        }
+      }
+    }
+
     // Prevent concurrent async WASM operations (Asyncify limitation)
     // Add timeout safeguard - if demux has been in flight too long, reset it
     if (this.demuxInFlight) {
@@ -6838,6 +6937,14 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
     seconds: number,
     opts?: { suppressSpinner?: boolean; preservePlaying?: boolean },
   ): Promise<void> {
+    // Whatever lag was being tracked is re-primed by this seek; the ATTEMPT
+    // BUDGET deliberately survives it. Resetting the budget here made the cap
+    // toothless — a recovery that ends in any seek at all handed itself a
+    // fresh three attempts, which is exactly the loop the cap exists to stop.
+    // The budget comes back the honest way: ten seconds of being in step.
+    this._videoLagSince = 0;
+    this._videoLagHealthySince = 0;
+
     if (this.streamWrapper) {
       return this.streamWrapper.seek(seconds);
     }
