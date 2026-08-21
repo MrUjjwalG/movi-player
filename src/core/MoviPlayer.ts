@@ -5319,7 +5319,17 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
       const somethingToShow = (this.videoRenderer?.getQueueSize() ?? 0) > 0;
       // …and with nothing to hear, escaping onto an empty queue is not "letting
       // go on what we have" either — there is nothing at all to play.
-      const mayEscape = (!bound && !needsFrames) || somethingToShow;
+      // …and the same for sound. The escape exists so a picture that is BEHIND
+      // isn't held forever; it was letting a picture that has nothing to play
+      // WITH start anyway. On a link running far under the file's bitrate that
+      // is what it did — captured on a 2.8Mbps file over a 0.15MB/s link:
+      // "Bound stall gave up after 15002ms — audioReady=false videoReady=true",
+      // then video with no sound at all, and a fresh stall 0.7s later. Waiting
+      // is the honest answer there: the spinner says the link cannot carry
+      // this, where silent video says the player is broken.
+      const soundToPlay = audioReady || !hasAudioTrack || this.disableAudio;
+      const mayEscape =
+        ((!bound && !needsFrames) || somethingToShow) && soundToPlay;
       // Resume if: (1) both ready after minDwell, (2) unbound, audio ready
       // after a longer wait, or (3) the escape (don't wait forever).
       const canResume = dwellMs >= minDwell && (
