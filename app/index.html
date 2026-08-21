@@ -3025,6 +3025,22 @@
         border: 1px solid rgba(48, 164, 108, 0.25);
       }
 
+      /* One column, not the full page.
+         The rest of this page is grids, which are happy at 1200px. A comment
+         wall is prose, and prose at that width put ~120 characters on a line
+         and left the eye no way back to the start of the next one. Capping the
+         column keeps the card, the form and the sentence agreeing about how
+         wide the conversation is. */
+      .comments-section .comments-head,
+      .comments-section .section-desc,
+      .comments-section .comment-form,
+      .comments-section .comment-list,
+      .comments-section .comment-more {
+        max-width: 820px;
+        margin-left: auto;
+        margin-right: auto;
+      }
+
       .comment-list {
         display: flex;
         flex-direction: column;
@@ -3091,7 +3107,37 @@
         white-space: pre-wrap;
         overflow-wrap: anywhere;
         margin: 0;
+        /* A line you can find your way back to. The card is as wide as the
+           page allows, which on a desktop put about 120 characters on a line
+           — nearly twice what anyone reads comfortably, and the reason a wall
+           of comments read as a wall. The card keeps its width; the sentence
+           doesn't have to use all of it. */
+        max-width: 68ch;
       }
+
+      /* Long comments come in — one on the live page runs 2,200 characters —
+         and at full height a single card was 1,067px tall, burying every
+         comment around it. Show the first stretch and let the reader ask for
+         the rest. */
+      .comment-body.is-clamped {
+        display: -webkit-box;
+        -webkit-line-clamp: 8;
+        -webkit-box-orient: vertical;
+        overflow: hidden;
+      }
+
+      .comment-expand {
+        margin-top: 0.4rem;
+        padding: 0;
+        border: 0;
+        background: none;
+        font: inherit;
+        font-size: 0.78rem;
+        font-weight: 600;
+        color: var(--text-muted);
+        cursor: pointer;
+      }
+      .comment-expand:hover { color: var(--text-primary); }
 
       /* A reply is indented and rule-marked rather than boxed: nesting a card
          inside a card reads as a second comment, and the whole point is that
@@ -6662,6 +6708,35 @@
         return wrap;
       };
 
+      /**
+       * Clamp the comments that need it — measured, not guessed at from the
+       * character count, because what overflows depends on the width the card
+       * actually got. One read per batch after they are all in the DOM.
+       */
+      const clampLongBodies = (root) => {
+        for (const body of root.querySelectorAll(".comment-body")) {
+          if (body.dataset.clampChecked) continue;
+          body.dataset.clampChecked = "1";
+          body.classList.add("is-clamped");
+          if (body.scrollHeight <= body.clientHeight + 4) {
+            // It fits — nothing was hidden, so nothing to offer.
+            body.classList.remove("is-clamped");
+            continue;
+          }
+          const toggle = document.createElement("button");
+          toggle.type = "button";
+          toggle.className = "comment-expand";
+          toggle.textContent = "Show more";
+          toggle.setAttribute("aria-expanded", "false");
+          toggle.addEventListener("click", () => {
+            const clamped = body.classList.toggle("is-clamped");
+            toggle.textContent = clamped ? "Show more" : "Show less";
+            toggle.setAttribute("aria-expanded", clamped ? "false" : "true");
+          });
+          body.insertAdjacentElement("afterend", toggle);
+        }
+      };
+
       const renderCard = (c) => {
         const card = document.createElement("div");
         card.className = "comment-card";
@@ -6881,6 +6956,7 @@
             listEl.appendChild(renderCard(c));
             oldestId = c.id;
           }
+          clampLongBodies(listEl);
 
           if (!listEl.children.length) {
             const empty = document.createElement("p");
@@ -6952,6 +7028,7 @@
           const empty = listEl.querySelector(".comment-empty");
           if (empty) empty.remove();
           listEl.prepend(renderCard(data.comment));
+          clampLongBodies(listEl);
 
           form.reset();
           counter.textContent = "0 / " + MAX_BODY;
