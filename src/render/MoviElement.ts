@@ -5210,14 +5210,14 @@ export class MoviElement extends HTMLElement {
         case "ArrowUp":
           // Up Arrow: Increase volume
           e.preventDefault();
-          if (this.player && this.player.hasAudibleSource()) {
+          if (this.player && this.player.hasAudibleSource() && !this._noAudibleAudio) {
             this.volume = Math.min(this.getMaxVolume(), this.volume + 0.1);
           }
           break;
         case "ArrowDown":
           // Down Arrow: Decrease volume
           e.preventDefault();
-          if (this.player && this.player.hasAudibleSource()) {
+          if (this.player && this.player.hasAudibleSource() && !this._noAudibleAudio) {
             this.volume = Math.max(0, this.volume - 0.1);
           }
           break;
@@ -5225,6 +5225,11 @@ export class MoviElement extends HTMLElement {
         case "M":
           // M: Mute/Unmute
           e.preventDefault();
+          // Nothing to mute when the browser could not decode the audio at all
+          // — the key would just toggle an icon over a silence it can't lift.
+          // The arrow keys already refuse on the same grounds
+          // (hasAudibleSource); this is the same refusal for the same reason.
+          if (this._noAudibleAudio) break;
           this.muted = !this.muted;
           this.showOSD(
             this.muted
@@ -10646,6 +10651,8 @@ export class MoviElement extends HTMLElement {
 
   /** Once per source: the native element is decoding a picture and no sound. */
   private _nativeAudioSilentReported = false;
+  /** True while the volume control is switched off for want of any audio. */
+  private _noAudibleAudio = false;
   private _nativeAudioCheckTimer: number | null = null;
 
   /**
@@ -10698,7 +10705,33 @@ export class MoviElement extends HTMLElement {
         '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M11 5L6 9H2v6h4l5 4V5z"></path><line x1="23" y1="9" x2="17" y2="15"></line><line x1="17" y1="9" x2="23" y2="15"></line></svg>',
         "This audio format isn't supported by your browser",
       );
+      this.setNoAudibleAudio(true);
     }, 3000) as unknown as number;
+  }
+
+  /**
+   * Switch the volume control off (or back on): the button, the slider and the
+   * keys that drive them. See the CSS note on .movi-no-audible-audio.
+   */
+  private setNoAudibleAudio(on: boolean): void {
+    this._noAudibleAudio = on;
+    this.classList.toggle("movi-no-audible-audio", on);
+    const sr = this.shadowRoot;
+    if (!sr) return;
+    const btn = sr.querySelector(".movi-volume-btn") as HTMLButtonElement | null;
+    const slider = sr.querySelector(".movi-volume-slider") as HTMLInputElement | null;
+    // aria and the disabled property as well as the class: a control that is
+    // only dimmed is still reachable by keyboard and still announced as usable.
+    if (btn) {
+      btn.disabled = on;
+      btn.setAttribute("aria-disabled", on ? "true" : "false");
+      if (on) btn.title = "This file's audio can't be decoded by your browser";
+      else btn.removeAttribute("title");
+    }
+    if (slider) {
+      slider.disabled = on;
+      slider.setAttribute("aria-disabled", on ? "true" : "false");
+    }
   }
 
   private showOSD(icon: string, text: string): void {
@@ -16797,6 +16830,37 @@ export class MoviElement extends HTMLElement {
         align-items: center;
         gap: 4px;
         height: 100%;
+      }
+
+      /* No sound to control.
+         When the native handoff is playing a file whose audio the browser has
+         no decoder for (see watchNativeAudio), the volume control does nothing
+         — dragging it is the viewer trying to fix a silence that isn't theirs
+         to fix. Switched off rather than removed: an absent control reads as
+         "this player can't do volume", where a dead one reads as "there is no
+         audio here", which is the truth. The MARK fades, the capsule doesn't —
+         same rule the disabled play button follows. */
+      /* The button and the slider, not the container: the container carries an
+         inline pointer-events from the controls-visibility code, and inline
+         beats a rule. Both are also disabled in the DOM — this is what stops
+         the cursor and the hover states from still offering them. */
+      :host(.movi-no-audible-audio) .movi-volume-btn,
+      :host(.movi-no-audible-audio) .movi-volume-slider,
+      :host(.movi-no-audible-audio) .movi-volume-slider-container {
+        /* Important because the controls-visibility code writes both of these
+           inline on every control it reveals, and inline outranks a rule.
+           Nothing else in the cascade wants them on a dead control. */
+        pointer-events: none !important;
+        cursor: default !important;
+      }
+      :host(.movi-no-audible-audio) .movi-volume-btn svg,
+      :host(.movi-no-audible-audio) .movi-volume-slider {
+        /* The slider IS the mark on this control, so it fades with the glyph —
+           a full-strength track beside a dimmed speaker reads as half-broken
+           rather than switched off. Important for the slider's sake: the
+           controls-visibility code writes opacity on it inline, the same way it
+           writes pointer-events, and inline outranks a rule. */
+        opacity: 0.4 !important;
       }
 
       .movi-volume-slider-container {
@@ -27022,6 +27086,7 @@ export class MoviElement extends HTMLElement {
     // browser <video> via fallback="native").
     this._nativeFallbackAttempted = false;
     this._nativeAudioSilentReported = false;
+    if (this._noAudibleAudio) this.setNoAudibleAudio(false);
     if (this._nativeAudioCheckTimer !== null) {
       clearTimeout(this._nativeAudioCheckTimer);
       this._nativeAudioCheckTimer = null;
