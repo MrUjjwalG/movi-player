@@ -10644,6 +10644,63 @@ export class MoviElement extends HTMLElement {
    */
   private osdTimeout: number | null = null;
 
+  /** Once per source: the native element is decoding a picture and no sound. */
+  private _nativeAudioSilentReported = false;
+  private _nativeAudioCheckTimer: number | null = null;
+
+  /**
+   * Say so when the browser is playing the video and dropping the audio.
+   *
+   * The native handoff plays a file the WASM path could not read, and the
+   * browser decodes only what it has decoders for. A Hindi WEB-DL is typically
+   * H.264 with E-AC-3 (DDP5.1): Chrome plays the picture out of the MKV and has
+   * no E-AC-3 decoder at all, so the sound is dropped without a word. From the
+   * viewer's side that is a silent video and a player that looks broken.
+   *
+   * Chromium counts what it decoded, and the two counters answer it exactly —
+   * video bytes climbing while audio bytes sit at zero is the browser saying it
+   * never decoded a sample. There is nothing to do about it here (the fixes are
+   * CORS on the host, so the WASM path can decode it, or a file the browser
+   * knows) but saying it is better than silence.
+   *
+   * Chromium-only, because the counters are: elsewhere we don't claim.
+   */
+  private watchNativeAudio(video: HTMLVideoElement): void {
+    const el = video as HTMLVideoElement & {
+      webkitAudioDecodedByteCount?: number;
+      webkitVideoDecodedByteCount?: number;
+    };
+    if (typeof el.webkitAudioDecodedByteCount !== "number") return;
+    if (this._nativeAudioCheckTimer !== null) {
+      clearTimeout(this._nativeAudioCheckTimer);
+    }
+    this._nativeAudioCheckTimer = window.setTimeout(() => {
+      this._nativeAudioCheckTimer = null;
+      if (!this._nativeFallbackActive || this._nativeAudioSilentReported) return;
+      // Only once the picture is genuinely running: before that both counters
+      // are zero for the ordinary reason.
+      if ((el.webkitVideoDecodedByteCount ?? 0) <= 0) {
+        this.watchNativeAudio(video);
+        return;
+      }
+      if ((el.webkitAudioDecodedByteCount ?? 0) > 0) return; // sound is fine
+      this._nativeAudioSilentReported = true;
+      Logger.warn(
+        TAG,
+        "The browser decoded this file's video but not its audio — no decoder here for its audio codec (E-AC-3/AC-3/DTS in Chrome, typically). Playing without sound.",
+      );
+      this.dispatchEvent(
+        new CustomEvent("nativeaudiounsupported", {
+          detail: { src: typeof this._src === "string" ? this._src : null },
+        }),
+      );
+      this.showOSD(
+        '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M11 5L6 9H2v6h4l5 4V5z"></path><line x1="23" y1="9" x2="17" y2="15"></line><line x1="17" y1="9" x2="23" y2="15"></line></svg>',
+        "This audio format isn't supported by your browser",
+      );
+    }, 3000) as unknown as number;
+  }
+
   private showOSD(icon: string, text: string): void {
     const osdContainer = this.shadowRoot?.querySelector(
       ".movi-osd-container",
@@ -26964,6 +27021,11 @@ export class MoviElement extends HTMLElement {
     // Movi's own canvas pipeline (the previous source may have degraded to the
     // browser <video> via fallback="native").
     this._nativeFallbackAttempted = false;
+    this._nativeAudioSilentReported = false;
+    if (this._nativeAudioCheckTimer !== null) {
+      clearTimeout(this._nativeAudioCheckTimer);
+      this._nativeAudioCheckTimer = null;
+    }
     this._deferredError = undefined;
     this._engineTried.clear();
     if (this._nativeFallbackActive) {
@@ -28831,6 +28893,9 @@ export class MoviElement extends HTMLElement {
         // The standard "it is actually running now" event, which the WASM path
         // sends from the same place.
         this.dispatchEvent(new Event("playing"));
+        // …and from here we can tell whether the browser took the sound with
+        // it. See watchNativeAudio.
+        this.watchNativeAudio(v);
       }
       this.updatePlayPauseIcon();
       this.updateControlsState();
