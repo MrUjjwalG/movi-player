@@ -6039,10 +6039,31 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
     // it; all it allows is reading ahead by the few hundred ms the catch-up
     // takes.
     const catchingUpVideo = this._videoResumeTarget !== -1;
+    // Buffering is the same trap, and the worse one, because it can never end
+    // on its own.
+    //
+    // The player enters "buffering" waiting for VIDEO — that is what the resume
+    // gate measures. The audio cap can stop the very reads that would produce
+    // it, and while the context is held suspended the audio cushion does not
+    // drain, so the cap never clears: no reads, no frames, no resume, forever.
+    // Captured on a slow link with a 7.8s cushion: sixty-four seconds in
+    // "buffering" without a single demuxer read, and a manual seek — which
+    // flushes both sides — was the only way out.
+    //
+    // Same narrowness as the catch-up above: the audio DECODER's queue gate
+    // still applies, so this cannot flood it; all it allows is reading on for
+    // the picture the wait is waiting for.
+    const bufferingForVideo =
+      this.stateManager.is("buffering") &&
+      !!this.videoRenderer &&
+      !this._audioOnly;
     if (
       (!skipVideoBackpressure && !skipVideoDecodeForAudio && this.videoDecoder.queueSize > maxVideoQueue) ||
       (gateOnAudio && this.audioDecoder.queueSize > maxAudioQueue) ||
-      (gateOnAudio && !catchingUpVideo && audioBuffered > maxAudioBuffered) ||
+      (gateOnAudio &&
+        !catchingUpVideo &&
+        !bufferingForVideo &&
+        audioBuffered > maxAudioBuffered) ||
       (!skipVideoBackpressure && !skipVideoDecodeForAudio && videoBuffered > maxVideoBuffered)
     ) {
       if (
