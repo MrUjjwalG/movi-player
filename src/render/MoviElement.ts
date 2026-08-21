@@ -33589,12 +33589,23 @@ export class MoviElement extends HTMLElement {
 
   private updatePreviewBox(): void {
     const track = this.player?.trackManager?.getActiveVideoTrack?.() as
-      | { width?: number; height?: number }
+      | { width?: number; height?: number; rotation?: number }
       | undefined;
     let w = track?.width || this.video?.videoWidth || 0;
     let h = track?.height || this.video?.videoHeight || 0;
     if (w <= 0 || h <= 0) return; // nothing known yet — the 16:9 fallback stands
-    if (this._currentManualRotation % 180 !== 0) [w, h] = [h, w];
+    // Both rotations, and only the NET of them.
+    //
+    // A track's own rotation is as real as the viewer's: a phone recording is
+    // stored 1080x1920 with a 270° display matrix and watched as 1920x1080.
+    // Only the manual rotation was being counted here, so such a file got a
+    // tall box while the preview renderer — which does honour the metadata —
+    // handed it a wide frame, and object-fit centred a thin strip in it with
+    // empty space above and below. Netting them also gets the case where the
+    // viewer rotates a rotated source back to where it started.
+    const netRotation =
+      (((track?.rotation ?? 0) + this._currentManualRotation) % 360 + 360) % 360;
+    if (netRotation % 180 !== 0) [w, h] = [h, w];
     const caps = this.previewCaps();
     const scale = Math.min(caps.w / w, caps.h / h);
     const boxW = Math.round(w * scale);
@@ -33642,9 +33653,13 @@ export class MoviElement extends HTMLElement {
     if (!this.shadowRoot) return;
     this._currentManualRotation = deg;
 
-    // Get video aspect ratio to determine if portrait
+    // Get video aspect ratio to determine if portrait — as WATCHED, which for a
+    // phone recording is not how it is stored: 1080x1920 with a 270° display
+    // matrix is a landscape picture. See updatePreviewBox.
     const videoTrack = this.player?.getVideoTracks()?.[0];
-    const isPortraitVideo = videoTrack && videoTrack.height > videoTrack.width;
+    const storedPortrait = !!videoTrack && videoTrack.height > videoTrack.width;
+    const metaRotated = ((videoTrack?.rotation ?? 0) % 180) !== 0;
+    const isPortraitVideo = metaRotated ? !storedPortrait : storedPortrait;
     const is90 = deg % 180 !== 0;
     // After 90° rotation: portrait becomes landscape, landscape becomes portrait
     const resultIsPortrait = is90 ? !isPortraitVideo : isPortraitVideo;
