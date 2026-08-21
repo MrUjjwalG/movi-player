@@ -809,6 +809,10 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
   // sound the viewer never gets to hear. Cleared the moment a frame reaches the
   // screen, and by any seek or source change.
   private _soundCarryingAlone: boolean = false;
+  /** framesPresented when the sound took over, so a picture that comes back on
+   *  its own can end the hand-over even if the gate that watches for it was
+   *  cleared by something else. */
+  private _soundCarryingFrames = 0;
   /** Set for the one seek that STARTS the hand-over, so seek() re-primes the
    *  pipeline where the playhead is without cancelling it. */
   private _carrySoundThroughNextSeek: boolean = false;
@@ -4513,6 +4517,8 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
           `No decodable frame at ${this.clock.getTime().toFixed(1)}s — letting the sound carry playback rather than skipping ahead; the picture rejoins at the next keyframe`,
         );
         this._soundCarryingAlone = true;
+        this._soundCarryingFrames =
+          this.videoRenderer?.getStats?.().framesPresented ?? 0;
         // Through a seek to where the playhead already is. Not to move it —
         // it doesn't — but because the wait has left the audio schedule built
         // out ahead of a clock that never advanced, and resuming onto that
@@ -5515,6 +5521,23 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
       // at all — there are no more frames in the file to wait for. Stalling
       // there stops the sound too (bound, which is the default) and hands the
       // rest of the file to the stuck watchdog. See _videoTailStart.
+      // The hand-over is a claim that no picture is coming. Frames reaching the
+      // screen disprove it — and they can arrive by a route that never passes
+      // the gate the hand-over armed (a rendition switch, a recovery recreate,
+      // a poster reset). Without this the claim outlives the outage that made
+      // it, and with it the A/V binding stays off: sound and picture drift and
+      // nothing pulls them back.
+      if (this._soundCarryingAlone) {
+        const framesNow = this.videoRenderer?.getStats?.().framesPresented ?? 0;
+        if (framesNow > this._soundCarryingFrames) {
+          Logger.info(
+            TAG,
+            "Picture is presenting again — ending the sound-only hand-over",
+          );
+          this._soundCarryingAlone = false;
+          this._blackRecoverySeeks = 0;
+        }
+      }
       const videoStalled =
         videoEmpty &&
         (audioLow || this._bindAV) &&
@@ -8572,6 +8595,11 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
     this.seekKeyframeOffset = 0; // so getCurrentTime() === 0
     this.seekTargetTime = -1; // clear any lingering pre-target frame-drop filter
     this._videoResumeTarget = -1;
+    // …and with the gate goes the thing waiting on it. Left armed, the sound
+    // would carry playback for the whole of the next source — which means no
+    // A/V binding, so a picture drifting from the sound would never be pulled
+    // back. See _soundCarryingAlone.
+    this._soundCarryingAlone = false;
     this.waitingForVideoSync = false; // no stale seek-completion armed
     this._playStartTime = 0; // keep first-play branch eligible
     this._primingAudio = false;
