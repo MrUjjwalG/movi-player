@@ -28814,7 +28814,24 @@ export class MoviElement extends HTMLElement {
 
     // The polled UI loop (startUIUpdates) drives time/progress/icons off
     // this.player; these keep the play/pause state + controls snappy on change.
-    wrapper.on("stateChange", () => {
+    wrapper.on("stateChange", (state: PlayerState) => {
+      // …and the one piece of the WASM path's own state handler that the
+      // centre button depends on.
+      //
+      // `_hasEverPlayed` is what tells the UI that the poster moment is over.
+      // Only that handler sets it, and it doesn't run here — so on this path it
+      // stayed false for the whole session, and the button's two rules read it
+      // and disagreed: showControls treats "never played" as the poster state
+      // and puts the big button up on every pointer move, while
+      // updatePlayPauseIcon takes it back down on every tick because the
+      // pointer isn't a touch one. Add, remove, add — a flicker at the tick's
+      // own 4Hz, for as long as the bar was up.
+      if (state === "playing") {
+        this._hasEverPlayed = true;
+        // The standard "it is actually running now" event, which the WASM path
+        // sends from the same place.
+        this.dispatchEvent(new Event("playing"));
+      }
       this.updatePlayPauseIcon();
       this.updateControlsState();
     });
