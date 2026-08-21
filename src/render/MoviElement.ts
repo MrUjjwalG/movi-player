@@ -1368,6 +1368,7 @@ export class MoviElement extends HTMLElement {
     // to replace the markup outright rather than restyle it.
     this.brokenIndicator.innerHTML = `
       <slot name="error"></slot>
+      <div class="movi-broken-stage">
       <div class="movi-broken-container" part="error-container">
         <div class="movi-broken-icon-wrapper" part="error-icon">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
@@ -1399,6 +1400,7 @@ export class MoviElement extends HTMLElement {
             Retry
           </button>
         </div>
+      </div>
       </div>
     `;
     this.brokenIndicator.setAttribute("part", "error-screen");
@@ -21662,9 +21664,19 @@ export class MoviElement extends HTMLElement {
         color: white;
         font-family: 'Inter', sans-serif;
         text-align: center;
-        padding: clamp(16px, 5%, 40px);
         opacity: 0;
         animation: movi-fade-in 0.5s ease forwards;
+        /* Query source for the sizes below. The screen is inset: 0 over the
+           player, so its box IS the player's box -- as long as it carries no
+           padding of its own, because a query measures the CONTENT box. The
+           inset lives on the stage and on slotted markup instead. */
+        container-type: size;
+        container-name: movi-error;
+      }
+
+      ::slotted([slot="error"]) {
+        box-sizing: border-box;
+        padding: clamp(16px, 5%, 40px);
       }
 
       @keyframes movi-fade-in {
@@ -21672,11 +21684,29 @@ export class MoviElement extends HTMLElement {
         to { opacity: 1; }
       }
       
+      /* The card sits in a stage rather than directly in the screen, because a
+         container query can style anything EXCEPT the container it measures --
+         and the screen is what defines the query box. The stage is that same
+         box, one level down, so it can be told to step off the control bar. */
+      .movi-broken-stage {
+        position: absolute;
+        inset: 0;
+        box-sizing: border-box;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        padding: clamp(16px, 5%, 40px);
+      }
+
       .movi-broken-container {
         display: flex;
         flex-direction: column;
         align-items: center;
         max-width: min(320px, 90%);
+        /* Everything inside sizes off the PLAYER, not the window (see the
+           container-type on the screen above): a 400px player embedded in a
+           desktop page was reading vw and painting a phone-sized icon at its
+           full 80px, tall enough to sit under the control bar. */
         animation: movi-slide-up 0.6s cubic-bezier(0.16, 1, 0.3, 1);
       }
 
@@ -21684,7 +21714,7 @@ export class MoviElement extends HTMLElement {
          rather than stacking on top of it. The backdrop stays — it is what
          covers the last painted frame — and is overridable through
          ::part(error-screen) for hosts that want their own. */
-      .movi-broken-indicator.movi-custom-error .movi-broken-container {
+      .movi-broken-indicator.movi-custom-error .movi-broken-stage {
         display: none;
       }
 
@@ -21697,10 +21727,15 @@ export class MoviElement extends HTMLElement {
         position: relative;
         width: clamp(48px, 12vw, 80px);
         height: clamp(48px, 12vw, 80px);
+        width: clamp(26px, min(17cqw, 20cqh), 80px);
+        height: clamp(26px, min(17cqw, 20cqh), 80px);
         margin-bottom: clamp(12px, 3vw, 24px);
+        margin-bottom: clamp(6px, 3cqh, 24px);
         background: rgba(255, 255, 255, 0.03);
         border: 1px solid rgba(255, 255, 255, 0.08);
         border-radius: clamp(12px, 3vw, 20px);
+        /* Proportional to the box, so the corner keeps its shape at any size. */
+        border-radius: 24%;
         display: flex;
         align-items: center;
         justify-content: center;
@@ -21710,13 +21745,18 @@ export class MoviElement extends HTMLElement {
       .movi-broken-icon-wrapper svg {
         width: clamp(28px, 7vw, 44px);
         height: clamp(28px, 7vw, 44px);
+        /* Track the wrapper instead of the window — one ratio, every size. */
+        width: 55%;
+        height: 55%;
         filter: drop-shadow(0 0 15px rgba(255, 68, 68, 0.4));
       }
 
       .movi-broken-title {
         font-size: clamp(16px, 4vw, 22px);
+        font-size: clamp(12px, min(5cqw, 6cqh), 22px);
         font-weight: 700;
         margin: 0 0 10px 0;
+        margin-bottom: clamp(3px, 1.4cqh, 10px);
         letter-spacing: -0.02em;
         background: linear-gradient(to bottom, var(--movi-chrome-fg, #fff), #bbb);
         -webkit-background-clip: text;
@@ -21735,6 +21775,7 @@ export class MoviElement extends HTMLElement {
       
       .movi-broken-message {
         font-size: clamp(11px, 2.5vw, 14px);
+        font-size: clamp(9px, min(3.2cqw, 4cqh), 14px);
         line-height: 1.6;
         color: rgba(255, 255, 255, 0.6);
         margin: 0;
@@ -21764,16 +21805,58 @@ export class MoviElement extends HTMLElement {
         align-items: center;
         justify-content: center;
         gap: 8px;
+        gap: 0.55em;
         margin-top: 16px;
+        margin-top: clamp(6px, 2.5cqh, 16px);
         padding: 10px 20px;
+        /* em, so the box follows the font-size below instead of staying a
+           full-size button wrapped around shrunken text. */
+        padding: 0.7em 1.4em;
         background: rgba(255, 255, 255, 0.15);
         border: 1px solid rgba(255, 255, 255, 0.2);
         border-radius: var(--movi-radius-control);
         color: var(--movi-chrome-fg, #fff);
         font-size: 14px;
+        font-size: clamp(10px, min(3cqw, 3.6cqh), 14px);
         font-weight: 500;
         cursor: pointer;
         transition: all 0.2s ease;
+      }
+
+      /* Short players: the stack still has to clear the control bar, and there
+         is no room left for everything. Drop the decorative parts first -- the
+         icon, then the sentence -- so the title and the one button that can fix
+         anything are the last things standing. */
+      @container movi-error (max-height: 250px) {
+        .movi-broken-stage {
+          /* The chrome owns the bottom 71px at every size (progress rail plus
+             the 42px button row). Reserving all of it leaves a short player
+             nothing, so reserve the button row and let the rail overlap. */
+          padding: 6px 10px 52px;
+          justify-content: center;
+        }
+      }
+
+      @container movi-error (max-height: 190px) {
+        .movi-broken-icon-wrapper { display: none; }
+      }
+
+      /* Thumbnail-sized players: the button row alone eats half the height, so
+         stacking title over button no longer fits above it. Lay them side by
+         side instead -- both survive, in the strip of picture that is left. */
+      @container movi-error (max-height: 130px) {
+        .movi-broken-stage { padding: 3px 8px 51px; }
+        .movi-broken-message { display: none; }
+        .movi-broken-container {
+          flex-direction: row;
+          align-items: center;
+          justify-content: center;
+          gap: 8px;
+          max-width: 100%;
+        }
+        .movi-broken-title { margin-bottom: 0; }
+        .movi-sw-fallback-btn,
+        .movi-retry-btn { margin-top: 0; padding: 0.45em 0.9em; }
       }
 
       .movi-sw-fallback-btn:hover,
@@ -21786,6 +21869,8 @@ export class MoviElement extends HTMLElement {
       .movi-sw-fallback-btn svg,
       .movi-retry-btn svg {
         flex-shrink: 0;
+        width: 1.15em;
+        height: 1.15em;
       }
 
       /* Empty State Indicator */
@@ -29012,8 +29097,8 @@ export class MoviElement extends HTMLElement {
       this._nativeFallbackActive = false;
       // The handoff was the last hope for this source, so the failure that led
       // here is real after all — release it to the host (see _deferredError).
-      if (this._deferredError !== undefined) {
-        const held = this._deferredError;
+      const held = this._deferredError;
+      if (held !== undefined) {
         this._deferredError = undefined;
         this.dispatchEvent(new CustomEvent("error", { detail: held }));
       }
@@ -29024,7 +29109,40 @@ export class MoviElement extends HTMLElement {
       // Restore Movi's surfaces — this path doesn't go through dispose().
       if (this.canvas) this.canvas.style.display = "block";
       v.style.display = "none";
-      this.handleUnsupportedVideo(origTitle, origMessage);
+      // What to tell the viewer when BOTH engines are out.
+      //
+      // The message carried in here is the one the WASM path failed with, and
+      // for the case that brought us to a handoff at all — a host that won't
+      // let this page read the bytes — that reads "Couldn't load it. Check your
+      // connection, then try again." The connection is fine, and no amount of
+      // trying again will change either half of the problem: we can't read the
+      // file, and the browser can't play it. Say that instead, so the viewer
+      // stops retrying something that cannot work.
+      const fetchFailed = [origMessage, (held as { message?: string } | undefined)
+        ?.message].some((m) =>
+          /cors|failed to fetch|fetch video resource/i.test(String(m ?? "")),
+        );
+      if (!fetchFailed) {
+        this.handleUnsupportedVideo(origTitle, origMessage);
+        return;
+      }
+      // "Failed to fetch" is what Chrome says both when a host refuses to share
+      // its bytes with this page AND when the host isn't there at all — the two
+      // are deliberately indistinguishable to script. They call for opposite
+      // advice, so ask the one question that separates them: a no-cors HEAD,
+      // which needs no permission from the host and only has to answer at all.
+      void this.serverAnswers(url).then((reachable) => {
+        if (this._nativeFallbackActive) return; // a newer source took over
+        if (reachable) {
+          this.handleUnsupportedVideo(
+            "Can't Play This",
+            "Your browser can't play this file, and the site hosting it " +
+              "doesn't allow this page to read it.",
+          );
+        } else {
+          this.handleUnsupportedVideo(origTitle, origMessage);
+        }
+      });
     });
 
     wrapper
@@ -29200,6 +29318,24 @@ export class MoviElement extends HTMLElement {
     }
     this._deferredError = undefined;
     this.dispatchEvent(new CustomEvent("error", { detail: error }));
+  }
+
+  /**
+   * Is the origin answering at all? A no-cors HEAD gets an opaque response the
+   * page can't read, but resolving at all proves the server replied — which is
+   * the whole question. Rejects (or takes too long) → the network or the host
+   * is the problem, not permissions. Only used to word an error screen, so a
+   * slow host is treated as unreachable rather than kept waiting on.
+   */
+  private serverAnswers(url: string, timeoutMs = 1500): Promise<boolean> {
+    let done: (v: boolean) => void;
+    const settled = new Promise<boolean>((r) => (done = r));
+    const timer = setTimeout(() => done(false), timeoutMs);
+    fetch(url, { method: "HEAD", mode: "no-cors", cache: "no-store" })
+      .then(() => done(true))
+      .catch(() => done(false))
+      .finally(() => clearTimeout(timer));
+    return settled;
   }
 
   private handleUnsupportedVideo(title?: string, message?: string): void {
