@@ -10734,6 +10734,8 @@ export class MoviElement extends HTMLElement {
       slider.disabled = on;
       slider.setAttribute("aria-disabled", on ? "true" : "false");
     }
+    // The pill is an offer of sound; withdraw it along with the control.
+    this.updateUnmuteOverlay();
   }
 
   private showOSD(icon: string, text: string): void {
@@ -24756,6 +24758,12 @@ export class MoviElement extends HTMLElement {
     const shouldShow =
       this._muted &&
       hasAudio &&
+      // Nothing to unmute. When the native fallback is carrying a file whose
+      // audio this browser has no decoder for, the pill is an offer of sound
+      // that tapping cannot deliver — and it sits there over the picture
+      // inviting the tap again. Detection takes a few seconds of playback, so
+      // this hides a pill that is already up as well as suppressing the next.
+      !this._noAudibleAudio &&
       // A mute the VIEWER asked for is not a mute to offer a way out of. The
       // autoplay clause below cannot tell the two apart: on a player with
       // `controls autoplay` — which is most of them — pressing mute produced
