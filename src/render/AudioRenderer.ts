@@ -128,6 +128,9 @@ export class AudioRenderer {
   // clear of the gap cadence during a bad stretch, or we'd fade in and out
   // between holes and turn a dropout into tremolo.
   private static readonly DUCK_CLEAR_MS = 300;
+  /** How often the duck re-asks whether it can lift — see duckForUnderrun. */
+  private static readonly DUCK_POLL_MS = 100;
+  private _duckReleaseTimer: number | null = null;
   // performance.now() before which ducking is suppressed. The player sets this
   // around a background→foreground recovery: the recovery flushes the video
   // decoder and re-seeks, which briefly starves audio — a transient underrun,
@@ -1691,6 +1694,7 @@ export class AudioRenderer {
     // a seek would play the old position's audio a moment later.
     this._pending = [];
     this._pendingDuration = 0;
+    this.stopDuckPolling();
     if (this._pumpTimer !== null) {
       clearInterval(this._pumpTimer);
       this._pumpTimer = null;
@@ -2080,6 +2084,7 @@ export class AudioRenderer {
 
   /** Immediately restore the input gain and clear the duck (no fade). */
   private forceUnduck(): void {
+    this.stopDuckPolling();
     if (!this._ducked || !this.inputNode || !this.audioContext) return;
     this._ducked = false;
     try {
@@ -2176,6 +2181,26 @@ export class AudioRenderer {
     }
     if (this._ducked || !this.inputNode || !this.audioContext) return;
     this._ducked = true;
+    // Its own way back up.
+    //
+    // The release used to ride on the next committed buffer, and a buffer is
+    // committed only when one ARRIVES — so on a link that stalls, the duck
+    // engaged on the underrun at the resume and then sat there for the whole
+    // play stretch, because the cushion it resumed with was already scheduled
+    // and nothing new needed committing before the next stall. Measured on a
+    // 1.4GB file over a throttled link: state "playing", the clock running
+    // 79.86s to 82.19s, and the input gain flat at 0 the entire time. Video
+    // playing to no sound, which is the report.
+    //
+    // The duck is about the audio being broken, so its end is a question of
+    // time, not of traffic: check on a timer and lift as soon as no underrun
+    // has landed for DUCK_CLEAR_MS.
+    if (this._duckReleaseTimer === null) {
+      this._duckReleaseTimer = setInterval(
+        () => this.unduckIfClean(),
+        AudioRenderer.DUCK_POLL_MS,
+      ) as unknown as number;
+    }
     try {
       const param = this.inputNode.gain;
       const now = this.audioContext.currentTime;
@@ -2219,6 +2244,13 @@ export class AudioRenderer {
     }
   }
 
+  private stopDuckPolling(): void {
+    if (this._duckReleaseTimer !== null) {
+      clearInterval(this._duckReleaseTimer);
+      this._duckReleaseTimer = null;
+    }
+  }
+
   /** Fade back in once the re-read has landed. Safe to call unconditionally. */
   releaseResyncSilence(): void {
     if (!this._resyncSilenced) return;
@@ -2245,6 +2277,7 @@ export class AudioRenderer {
     if (!this._ducked || !this.inputNode || !this.audioContext) return;
     if (this.isUnderrunning(AudioRenderer.DUCK_CLEAR_MS)) return;
     this._ducked = false;
+    this.stopDuckPolling();
     try {
       const param = this.inputNode.gain;
       const now = this.audioContext.currentTime;
