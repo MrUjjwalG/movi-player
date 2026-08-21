@@ -5422,6 +5422,24 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
       ? MoviPlayer.BOUND_RESUME_GRACE_MS
       : 3000;
     const inPlayGrace = this._playStartTime > 0 && (performance.now() - this._playStartTime) < playGraceMs;
+    // …and the sound gets a much shorter one.
+    //
+    // The grace above is for the VIDEO pipeline filling up — a cold start has
+    // an empty renderer queue by definition, and a spinner over that is a lie.
+    // It was applied to the whole detector, so it covered the audio side too:
+    // resume with a thin buffer, the sound runs dry, and for as long as the
+    // grace lasts nothing is allowed to notice. On a resume that isn't stamped
+    // as coming off a stall — a seek that buffered, most often — that is three
+    // full seconds of picture playing to an empty room, which is exactly what
+    // it sounds like.
+    //
+    // An audio pipeline that has started fills in a fraction of a second, so a
+    // silence outlasting this one is not a pipeline warming up.
+    const AUDIO_PLAY_GRACE_MS = 400;
+    const inAudioGrace =
+      this._playStartTime > 0 &&
+      performance.now() - this._playStartTime <
+        Math.min(playGraceMs, AUDIO_PLAY_GRACE_MS);
     // Grace while the video decoder is recovering from a transient decode
     // error (recreate + wait-for-keyframe). The video queue is legitimately
     // empty for ~1 GOP there — counting it as a stall sends the player into a
@@ -5465,7 +5483,7 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
     // seek brought the picture back. Bound, EOF stops speaking for the picture;
     // the genuine end of playback is already covered by `nearEnd` below.
     const eofSilencesStall = this.eofReached && !boundToAudio;
-    if (this.stateManager.getState() === "playing" && !eofSilencesStall && !this.waitingForVideoSync && !nearEnd && !this.isBackgrounded && !inPlayGrace) {
+    if (this.stateManager.getState() === "playing" && !eofSilencesStall && !this.waitingForVideoSync && !nearEnd && !this.isBackgrounded) {
       const videoEmpty = this.videoRenderer ? this.videoRenderer.getQueueSize() === 0 : false;
       // Split (separate-URL) audio has no track in the MAIN demuxer's
       // trackManager — it's decoded from its own demuxer into audioRenderer. So
@@ -5542,11 +5560,13 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
         videoEmpty &&
         (audioLow || this._bindAV) &&
         !decoderRecovering &&
+        !inPlayGrace &&
         !this.isInAudioOnlyTail() &&
         !this._soundCarryingAlone;
       // The audio side of the stall, whether it arrived as a real underrun
       // (holes already heard) or as an empty buffer under a binding.
-      const audioBlocking = audioUnderrunning || (this._bindAV && audioStarved);
+      const audioBlocking =
+        !inAudioGrace && (audioUnderrunning || (this._bindAV && audioStarved));
       if (videoStalled || audioBlocking) {
         // An underrun isn't a silent buffer dipping low — it's a hole the user
         // ALREADY heard as a click. Waiting the full stall window means five or
