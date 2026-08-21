@@ -538,6 +538,8 @@ const EMBED_ATTR_WHITELIST = new Set([
   "fps", "gesturefs", "nohotkeys", "fastseek", "doubletap", "themecolor",
   "buffersize", "title", "showtitle", "resume", "stablevolume", "audioonly",
   "vr", "vrpad", "renderer", "width", "height", "sw",
+  // Chooses which engine leads/trails — no URL, no headers, no credentials.
+  "fallback", "engine",
 ]);
 
 function escapeEmbedAttr(v) {
@@ -559,6 +561,12 @@ function buildEmbedPlayerAttrs(searchParams) {
     ["gesturefs", true],
     ["fastseek", true],
     ["stablevolume", true],
+    // See EMBED_DEFAULT_ATTRS in index.html: a host that sends no CORS headers
+    // blocks the fetch the WASM path needs, and the embedder rarely controls
+    // that host. The native element never needed CORS for the same file, and
+    // the bytes still travel from their host to their page — never through
+    // ours. `fallback=0` in the embed URL turns it off.
+    ["fallback", "native"],
   ]);
   for (const [rawName, value] of searchParams) {
     const name = rawName.toLowerCase();

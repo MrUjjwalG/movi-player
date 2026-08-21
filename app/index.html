@@ -6403,6 +6403,16 @@
       const EMBED_DEFAULT_ATTRS = [
         'renderer="canvas"', "controls", 'objectfit="control"',
         "gesturefs", "fastseek", "stablevolume",
+        // The snippet reads the video with fetch(), which a host that sends no
+        // CORS headers refuses — and the embedder usually cannot change that
+        // host. A <video> element has never needed CORS for the same file, so
+        // let the player fall back to one: the bytes still go from their host
+        // to their page and never through ours, which is the whole point of
+        // handing out a srcdoc snippet rather than an iframe of our own.
+        // Costs the WASM features (multi-track audio, embedded subtitles, the
+        // canvas extras) and only plays what the browser itself decodes — but
+        // that beats a network error on an ordinary MP4.
+        'fallback="native"',
       ];
 
       const escapeHtmlAttr = (v) => String(v)
