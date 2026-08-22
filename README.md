@@ -315,6 +315,41 @@ Standard `<video>`-style markup, no JS wiring needed. Treats `kind="subtitles"`,
 </movi-player>
 ```
 
+### Storyboard Previews (`<track>`)
+
+Scrub previews normally cost a seek and a decode. A storyboard is the other
+way round: the frames were made once, ahead of time, and stitched into a
+mosaic — so hovering the bar costs a crop out of an image the browser already
+has. Declare one the way every other player does, as a thumbnail track:
+
+```html
+<movi-player controls>
+  <source src="video.mp4" type="video/mp4">
+  <!-- video.js's spelling -->
+  <track kind="metadata" label="thumbnails" src="thumbs.vtt">
+  <!-- JW Player's `kind="thumbnails"` is read too -->
+</movi-player>
+```
+
+The VTT's cues carry an image URL and the rectangle to take from it
+(`sprite.jpg#xywh=160,0,160,90`); one cue per whole image works as well.
+There is no attribute for this — a thumbnail track is a track.
+
+For a board worked out at runtime, set the `storyboard` PROPERTY to a tile
+spec instead — `{columns, rows, width, height, fragments}`, the shape YouTube
+publishes and yt-dlp reports, or the `videojs-sprite-thumbnails`
+`{url, width, height, columns, rows, interval}` form:
+
+```js
+player.storyboard = {
+  columns: 5, rows: 5, width: 160, height: 90,
+  fragments: [{ url: "sb0.jpg", duration: 120 }, { url: "sb1.jpg", duration: 120 }],
+};
+```
+
+Either way the decode pipeline is never started: no seek, no decode, and the
+second WASM module stays unopened.
+
 ### Split Video + Audio Sources
 
 Separate video and audio files via child `<source>` elements with `kind="audio"`:
@@ -666,7 +701,6 @@ Every attribute can also be read and set as a JS property (`el.rotate = 90`). Gr
 |---|---|---|
 | `fastseek` | `fastseek="keys gestures"` | ±10s skip affordances. Bare = all; or narrow to `buttons`, `keys`, `gestures` (aliases: `touch`, `nontouch`, `keyonly`, `controls`, `none`) |
 | `doubletap` | `doubletap="true"` | Double-tap to seek ±10s |
-| `storyboard` | `storyboard` | URL of a WebVTT thumbnail track (`sprite.jpg#xywh=x,y,w,h`). Previews become a crop out of a mosaic — no seek, no decode, and the second WASM module is never opened. The `storyboard` property also accepts a tile spec (`{columns, rows, width, height, fragments}`), the shape YouTube publishes |
 | `thumb` | `thumb` | Generate on-demand thumbnails for seek-bar previews. `thumb="precise"` decodes forward from the keyframe to the frame under the pointer — exact, at the cost of a run of frames per preview |
 | `nohotkeys` | `nohotkeys` | Disable all keyboard shortcuts |
 | `controlslist` | `controlslist="nofullscreen nopip nospeed"` | Switch built-in controls off, as `no<name>` tokens (`noplay`, `nocc`, `noquality`, `nosettings`, … or the `id` of an `addControl()` control) |

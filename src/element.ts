@@ -222,14 +222,6 @@ export interface MoviPlayerAttributes {
    */
   thumb?: boolean | "precise" | "";
   /**
-   * URL of a WebVTT thumbnail track for scrub previews, whose cues carry an
-   * image URL and a `#xywh=` rectangle. Previews then come from that sprite
-   * instead of being decoded, and the decode pipeline is never started. The
-   * matching PROPERTY also accepts a tile spec object.
-   */
-  storyboard?: string;
-
-  /**
    * Enter Picture-in-Picture automatically when the tab is hidden, as the
    * attribute does on `<video>`. Only meaningful while the native element is
    * carrying playback — a canvas has no auto-PiP of its own.

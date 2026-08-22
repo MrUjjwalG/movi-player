@@ -22,19 +22,6 @@
           ]
         },
         {
-          "name": "storyboard",
-          "description": {
-            "kind": "markdown",
-            "value": "WebVTT thumbnail track for scrub previews — a crop out of a sprite instead of a decode"
-          },
-          "references": [
-            {
-              "name": "Documentation",
-              "url": "https://moviplayer.com/docs/api/element#storyboard"
-            }
-          ]
-        },
-        {
           "name": "autopictureinpicture",
           "description": {
             "kind": "markdown",

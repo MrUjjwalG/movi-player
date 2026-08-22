@@ -851,8 +851,11 @@ export class MoviElement extends HTMLElement {
    * video.js carries scrub previews on `<track kind="metadata"
    * label="thumbnails">`, because `kind` is a fixed HTML enum with no value for
    * this; JW Player writes `kind="thumbnails"` anyway. Both are read here, so
-   * markup written for either drops in unchanged — the `storyboard` attribute
-   * is this player's own spelling, not a requirement.
+   * markup written for either drops in unchanged. A track is the only way to
+   * DECLARE a board, and deliberately so: there is no attribute of our own for
+   * it, because a thumbnail track is a track and every player that has them
+   * already writes one. The `storyboard` PROPERTY takes a spec object, for a
+   * board worked out at runtime rather than written in the markup.
    */
   private static thumbnailTrackSrc(host: HTMLElement): string | null {
     for (const track of Array.from(host.querySelectorAll("track"))) {
@@ -963,8 +966,7 @@ export class MoviElement extends HTMLElement {
       this.player?.setStoryboard(null);
     }
     if (typeof this._storyboard !== "object" || this._storyboard === null) {
-      this._storyboard =
-        this.getAttribute("storyboard") ?? MoviElement.thumbnailTrackSrc(this);
+      this._storyboard = MoviElement.thumbnailTrackSrc(this);
     }
   }
 
@@ -1346,7 +1348,6 @@ export class MoviElement extends HTMLElement {
   static get observedAttributes() {
     return [
       "src",
-      "storyboard",
       "autopictureinpicture",
       "autoplay",
       "controls",
@@ -23711,11 +23712,10 @@ export class MoviElement extends HTMLElement {
     this._thumbPrecise = MoviElement.wantsPrecisePreviews(
       this.getAttribute("thumb"),
     );
-    // A spec set through the property outranks the attribute — the property is
-    // the richer form, and a wrapper that sets both means the object.
+    // A spec set through the property outranks a declared track — the property
+    // is the richer form, and a wrapper that sets both means the object.
     if (typeof this._storyboard !== "object" || this._storyboard === null) {
-      this._storyboard =
-        this.getAttribute("storyboard") ?? MoviElement.thumbnailTrackSrc(this);
+      this._storyboard = MoviElement.thumbnailTrackSrc(this);
     }
     this._hdr = this.hasAttribute("hdr") || this.getAttribute("hdr") === null; // Default to true if attribute is missing
     const themeAttr = this.getAttribute("theme");
@@ -24169,13 +24169,6 @@ export class MoviElement extends HTMLElement {
         // same-tick set still beats the fetch — and a connect-time attribute
         // just calls this with the same value.
         setWasmUrl(newValue);
-        break;
-      case "storyboard":
-        // The attribute carries a URL; the property can carry a spec object,
-        // and setting one must not wipe the other out — an attribute only ever
-        // replaces a URL it set itself.
-        if (newValue === null && typeof this._storyboard !== "string") break;
-        this.storyboard = newValue;
         break;
       case "thumb":
         this._thumb = newValue !== null;
@@ -25819,8 +25812,7 @@ export class MoviElement extends HTMLElement {
         this.getAttribute("thumb"),
       );
       if (typeof this._storyboard !== "object" || this._storyboard === null) {
-        this._storyboard =
-          this.getAttribute("storyboard") ?? MoviElement.thumbnailTrackSrc(this);
+        this._storyboard = MoviElement.thumbnailTrackSrc(this);
       }
 
       // Create MoviPlayer instance

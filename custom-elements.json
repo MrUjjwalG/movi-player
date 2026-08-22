@@ -18,10 +18,6 @@
               "description": "Specifies the video source URL or File object."
             },
             {
-              "name": "storyboard",
-              "description": "WebVTT thumbnail track for scrub previews — a crop out of a sprite instead of a decode"
-            },
-            {
               "name": "autopictureinpicture",
               "description": "Enter Picture-in-Picture automatically when the tab is hidden, and leave it on"
             },

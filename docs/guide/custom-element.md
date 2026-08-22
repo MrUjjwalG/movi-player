@@ -46,7 +46,6 @@ The `<movi-player>` custom element is a drop-in replacement for the native `<vid
 | `sw`          | `boolean`, `string` | `auto`                             | Decoder mode (`auto`, `true`/`software`, `false`) |
 | `fps`         | `number`            | -                                  | Custom frame rate override                        |
 | `autopictureinpicture` | `boolean`  | -                                  | Auto-enter PiP when the tab hides (native-element playback only) |
-| `storyboard`  | `string`            | -                                  | WebVTT thumbnail track for scrub previews — a crop out of a sprite instead of a decode |
 | `thumb`       | `boolean`, `string` | -                                  | Seek preview thumbnails; `thumb="precise"` decodes to the hovered frame instead of the keyframe before it |
 | `fastseek`    | `boolean`           | -                                  | Enable skip buttons and gestures                  |
 | `showtitle`   | `boolean`           | -                                  | Show video title bar                              |
@@ -114,6 +113,10 @@ Ship a full multi-quality + multi-language + multi-subtitle setup as plain HTML 
   <!-- Sidecar subtitles -->
   <track src="subs-en.vtt" srclang="en" label="English" kind="subtitles" default>
   <track src="subs-jp.srt" srclang="ja" label="Japanese" kind="subtitles" data-format="srt">
+
+  <!-- Storyboard: scrub previews cropped out of a sprite, no decode at all.
+       video.js's spelling; JW Player's kind="thumbnails" is read too. -->
+  <track kind="metadata" label="thumbnails" src="thumbs.vtt">
 </movi-player>
 ```
 
@@ -180,6 +183,13 @@ player.muted = true;
 player.loop = true;
 player.playbackRate = 1.5;
 player.sw = "auto"; // "auto", true (software), false (hardware-first)
+
+// A storyboard built at runtime, rather than declared as a <track>. Takes a
+// VTT URL, or a tile spec — YouTube's shape, and videojs-sprite-thumbnails'.
+player.storyboard = {
+  columns: 5, rows: 5, width: 160, height: 90,
+  fragments: [{ url: "sb0.jpg", duration: 120 }],
+};
 
 // Read-only properties
 console.log(player.duration); // Total duration
