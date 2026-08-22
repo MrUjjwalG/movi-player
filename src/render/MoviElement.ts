@@ -892,6 +892,112 @@ export class MoviElement extends HTMLElement {
    * of a seek and a decode — see MoviPlayer.setStoryboard.
    */
   private _storyboard: string | StoryboardSpec | null = null;
+  /** The task in which the board was set, against the counter below. */
+  private _storyboardTask = -1;
+  /** The task the host last wrote a source in, and whether a load owes it an answer. */
+  private _srcAssignedTask = -2;
+  private _srcAssignedPending = false;
+  private _taskId = 0;
+  private _taskOpen = false;
+
+  /**
+   * An id for the run of code we are in — the same for everything up to the
+   * next microtask checkpoint, different after it. Enough to tell "these two
+   * lines were written together" from "this happened later", which is the only
+   * question asked of it.
+   */
+  private currentTaskId(): number {
+    if (!this._taskOpen) {
+      this._taskOpen = true;
+      this._taskId++;
+      queueMicrotask(() => {
+        this._taskOpen = false;
+      });
+    }
+    return this._taskId;
+  }
+
+  /**
+   * A new source arrives with no thumbnails of its own until it is given some.
+   *
+   * A board set through the PROPERTY is an object describing one video: the
+   * frames in it are that video's frames, so carrying it into the next source
+   * means hovering the new video and being shown the old one — which is what a
+   * page swapping `src` and then fetching the new board (a route change, then
+   * an API call) saw on every first hover. Unless the two were written
+   * together, in which case the board came WITH the source and stays.
+   *
+   * A board declared in the MARKUP is a different statement: the attribute (or
+   * a <track>) is still there, still says what it says, and is re-read here
+   * rather than thrown away.
+   */
+  /**
+   * The host has written a new source. Remembered rather than acted on: the
+   * load it starts runs a task later, and the question this answers is only
+   * legible now —
+   *
+   *   el.storyboard = board; el.src = url;          ← written together
+   *   el.src = url;          el.storyboard = board;  ← also together
+   *   el.src = url;          … an API call later …   ← the board is the old
+   *                                                    video's
+   *
+   * — which is a comparison of WHEN, not of order.
+   */
+  private noteSourceAssigned(): void {
+    this._srcAssignedTask = this.currentTaskId();
+    this._srcAssignedPending = true;
+  }
+
+  private dropStaleStoryboard(): void {
+    // Only a source the HOST wrote invalidates a board. The reloads the player
+    // does for itself — a rendition recreate, walking to the next <source> —
+    // are the same video, and its thumbnails are still its thumbnails.
+    if (!this._srcAssignedPending) return;
+    this._srcAssignedPending = false;
+    if (
+      typeof this._storyboard === "object" &&
+      this._storyboard !== null &&
+      this._storyboardTask !== this._srcAssignedTask
+    ) {
+      this._storyboard = null;
+      this.player?.setStoryboard(null);
+    }
+    if (typeof this._storyboard !== "object" || this._storyboard === null) {
+      this._storyboard =
+        this.getAttribute("storyboard") ?? MoviElement.thumbnailTrackSrc(this);
+    }
+  }
+
+  /**
+   * Wipe what is painted on the preview card.
+   *
+   * The tile layer keeps the mosaic it last painted as a background, and the
+   * frame beside it keeps its object URL, so both survive a source change and
+   * the first hover on the new video answered with the old one's picture. The
+   * card is only ever repainted by a hover, so it has to be emptied here.
+   */
+  private clearPreviewSurfaces(): void {
+    const sr = this.shadowRoot;
+    if (!sr) return;
+    const tile = sr.querySelector(".movi-thumbnail-tile") as HTMLElement | null;
+    if (tile) {
+      tile.style.removeProperty("background-image");
+      tile.style.display = "none";
+    }
+    const img = sr.querySelector(".movi-thumbnail-img") as HTMLImageElement | null;
+    if (img) {
+      img.removeAttribute("src");
+      img.style.display = "none";
+    }
+    const placeholder = sr.querySelector(
+      ".movi-thumbnail-placeholder",
+    ) as HTMLElement | null;
+    if (placeholder) placeholder.style.display = "none";
+    // The mosaics of a video nobody is watching any more. Keyed by URL, so
+    // they were never going to be painted by mistake — they were just held
+    // decoded, one set per video, for as long as the page lived.
+    this._sheetWarm.clear();
+  }
 
   get storyboard(): string | StoryboardSpec | null {
     return this._storyboard;
@@ -899,6 +1005,12 @@ export class MoviElement extends HTMLElement {
 
   set storyboard(value: string | StoryboardSpec | null) {
     this._storyboard = value ?? null;
+    // Which source this board was meant for. A board handed over as an object
+    // describes one particular video, and the only thing tying it to that
+    // video is when it was set — so remember the moment, and let a source
+    // change decide from that whether the board came with it or belongs to the
+    // video before it (see dropStaleStoryboard).
+    this._storyboardTask = this.currentTaskId();
     this.player?.setStoryboard(this._storyboard);
     // A board is cheap enough to be worth showing without `thumb` being asked
     // for; the decode pipeline behind that attribute is what was expensive.
@@ -24235,6 +24347,9 @@ export class MoviElement extends HTMLElement {
         this._videoId = newValue || "";
         break;
       case "src": {
+        // The attribute is the other half of the property setter — a framework
+        // writes this one. Same reading of "was the board written with it".
+        this.noteSourceAssigned();
         // When switching from a File source to a URL, clear the File reference
         // so the URL path can proceed. Without this, the File instanceof check
         // blocks the URL from loading.
@@ -27423,6 +27538,9 @@ export class MoviElement extends HTMLElement {
     this._playIntent = false;
     this._playFired = false;
     this._seekAnnouncedFor = null;
+    // The previous video's thumbnails go with the previous video.
+    this.dropStaleStoryboard();
+    this.clearPreviewSurfaces();
     // A genuine video→audio source change must still be able to reach audio
     // mode, so this memory is per-source.
     this._sourceHadVideoTrack = false;
@@ -31945,6 +32063,7 @@ export class MoviElement extends HTMLElement {
   }
 
   set src(value: string | File | null) {
+    this.noteSourceAssigned();
     // Save position before switching source, then stop saving
     if (this._resume) this.saveResumePosition();
     this.stopResumeSaving();
