@@ -1375,6 +1375,8 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
    * frames as healthy, and the desync check further down only looks the other
    * way (audio behind video), so the only fix was the viewer seeking by hand.
    */
+  /** Set per seek() call: true while a seek nobody asked for is in flight. */
+  private _seekIsInternal = false;
   private _videoLagSince: number = 0;
   private _videoLagHealthySince: number = 0;
   private _lastVideoLagResyncAt: number = 0;
@@ -4466,7 +4468,13 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
       const uiTarget = 0;
       this.wasPlayingBeforeSeek = true;
       try {
-        await this.seek(uiTarget, { suppressSpinner: true });
+        // Realigning the demuxer after the poster seek is housekeeping, not a
+        // seek anybody asked for: pressing play on a fresh element reports no
+        // seeking/seeked at all, and this one used to make it look as though
+        // the viewer had scrubbed before playback began. (The replay-from-ended
+        // seek above stays audible — an element genuinely does report that
+        // one.)
+        await this.seek(uiTarget, { suppressSpinner: true, internal: true });
         this._playStartTime = performance.now();
       } catch (error) {
         this.suppressSeekSpinner = false;
@@ -4962,6 +4970,25 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
       return;
     }
 
+    // "The seek is done" is a different statement from "playback has resumed",
+    // and only the first one is what `seeked` means.
+    //
+    // This used to be announced at the very end of this function — which the
+    // branches below never reach when playback was rolling: a seek made while
+    // playing lands in one of the "buffer until the cushion fills" paths and
+    // returns from there. So a scrub during playback fired `seeking` and then
+    // nothing, and any page waiting for `seeked` waited for good. A media
+    // element says seeked as soon as the new position is available and then,
+    // if it has to refill, waiting — in that order.
+    let seekedAnnounced = false;
+    const announceSeeked = () => {
+      if (seekedAnnounced) return;
+      seekedAnnounced = true;
+      if (this._seekIsInternal) return;
+      // Media time back to UI time.
+      this.emit("seeked", Math.max(0, time - this.startTime));
+    };
+
     // A genuine frame-driven completion (forced=false) means a real picture
     // decoded — cancel any pending black-frame watchdog and refill its budget so
     // a later, unrelated black event gets fresh recovery attempts.
@@ -5193,6 +5220,7 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
         this.clock.pause();
         if (this.videoRenderer) this.videoRenderer.stopPresentationLoop();
         Logger.info(TAG, "Audio cold-prime: buffering until cushion");
+        announceSeeked();
         return;
       }
 
@@ -5228,6 +5256,7 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
         this.clock.pause();
         if (this.videoRenderer) this.videoRenderer.stopPresentationLoop();
         Logger.debug(TAG, "Post-seek: buffering until the frame queue fills");
+        announceSeeked();
         return;
       }
 
@@ -5284,9 +5313,8 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
       this.startPauseBuffering();
     }
 
-    // Emit seeked event now that we are actually ready
-    // Convert back from media time to UI time
-    this.emit("seeked", Math.max(0, time - this.startTime));
+    // Ready — and if a branch above already said so, this is a no-op.
+    announceSeeked();
   }
 
   /**
@@ -7289,8 +7317,19 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
 
   async seek(
     seconds: number,
-    opts?: { suppressSpinner?: boolean; preservePlaying?: boolean },
+    opts?: {
+      suppressSpinner?: boolean;
+      preservePlaying?: boolean;
+      /**
+       * Machinery, not a request: rendering the first frame, priming a poster,
+       * re-anchoring after a context loss. `seeking`/`seeked` stay quiet for
+       * these — a media element repositioning itself internally says nothing
+       * either, because those events answer for what a page asked for.
+       */
+      internal?: boolean;
+    },
   ): Promise<void> {
+    this._seekIsInternal = opts?.internal ?? false;
     // Whatever lag was being tracked is re-primed by this seek; the ATTEMPT
     // BUDGET deliberately survives it. Resetting the budget here made the cap
     // toothless — a recovery that ends in any seek at all handed itself a
@@ -7361,9 +7400,9 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
         }
         this.startAudioLoop();
       }
-      this.emit("seeking", t);
+      if (!this._seekIsInternal) this.emit("seeking", t);
       this.emit("timeUpdate", t);
-      this.emit("seeked", t);
+      if (!this._seekIsInternal) this.emit("seeked", t);
       return;
     }
 
@@ -7451,7 +7490,7 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
     // the same thing for the same reason.
     this._lastBufferAhead = 0;
     this.stateManager.setState("seeking");
-    this.emit("seeking", seconds);
+    if (!this._seekIsInternal) this.emit("seeking", seconds);
 
     // Re-anchor the buffer bar's START to the target NOW, not after the
     // (blocking, potentially multi-second) demuxer.seek below. The scrubber

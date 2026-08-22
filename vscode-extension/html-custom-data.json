@@ -35,6 +35,19 @@
           ]
         },
         {
+          "name": "autopictureinpicture",
+          "description": {
+            "kind": "markdown",
+            "value": "Enter Picture-in-Picture automatically when the tab is hidden, and leave it on"
+          },
+          "references": [
+            {
+              "name": "Documentation",
+              "url": "https://moviplayer.com/docs/api/element#autopictureinpicture"
+            }
+          ]
+        },
+        {
           "name": "autoplay",
           "description": {
             "kind": "markdown",

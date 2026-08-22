@@ -22,6 +22,10 @@
               "description": "WebVTT thumbnail track for scrub previews — a crop out of a sprite instead of a decode"
             },
             {
+              "name": "autopictureinpicture",
+              "description": "Enter Picture-in-Picture automatically when the tab is hidden, and leave it on"
+            },
+            {
               "name": "autoplay",
               "description": "Starts playback automatically when loaded."
             },

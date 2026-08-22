@@ -678,6 +678,24 @@ export class MoviElement extends HTMLElement {
   // for) from the synthetic "paused" state the initial poster seek
   // lands in before the user has even pressed play.
   private _hasEverPlayed: boolean = false;
+  /**
+   * Whether `play` has been announced and not yet answered by `pause` — the
+   * element's own idea of "currently playing", which keeps the pair ordered
+   * and stops a startup state change from reporting a pause nobody asked for.
+   */
+  private _playFired: boolean = false;
+  /**
+   * The paused flag, in the sense a media element means it: not "is a frame
+   * being painted right now" but "has playback been asked for and not
+   * stopped". It flips on play() and pause(), and at the end of the media —
+   * which is why buffering, seeking and a slow start all still read as
+   * playing, exactly as they do on a <video>.
+   */
+  private _playIntent: boolean = false;
+  /** A pause waiting to see whether it was really a seek — see the state handler. */
+  private _pauseAnnounceTimer: number | null = null;
+  /** The seek target already announced, so the same one is not announced twice. */
+  private _seekAnnouncedFor: number | null = null;
   private _pendingPlay: boolean = false;
   // True while loading spinner + play() must wait for FileSource preload to
   // complete (mobile only, height >= 2160). Released by the player's
@@ -14744,7 +14762,14 @@ export class MoviElement extends HTMLElement {
             !this._stalledFired
           ) {
             this._stalledFired = true;
-            this.dispatchEvent(new Event("stalled"));
+            // Bytes stopped arriving — but if there are none left to ask for,
+            // that is the download FINISHING, which a media element reports as
+            // `suspend`. Calling it `stalled` told a page its network had died
+            // every time a short file finished buffering.
+            const buffered = this.player?.getBufferedTime?.() ?? 0;
+            const whole = this.duration || 0;
+            const complete = whole > 0 && buffered >= whole - 0.5;
+            this.dispatchEvent(new Event(complete ? "suspend" : "stalled"));
           } else if (!this._stalledSince) {
             this._stalledSince = timestamp;
           }
@@ -26035,7 +26060,7 @@ export class MoviElement extends HTMLElement {
             this.captureMediaSessionArtwork();
           });
           this.player
-            .seek(posterTime, { suppressSpinner: true })
+            .seek(posterTime, { suppressSpinner: true, internal: true })
             .catch(() => {
               this._posterSeekActive = false;
             });
@@ -26043,7 +26068,9 @@ export class MoviElement extends HTMLElement {
           // Frame 0 lands on the canvas when "seeked" fires (the seek promise
           // resolves earlier, before paint) — snapshot it there for artwork.
           this.player.once("seeked", () => this.captureMediaSessionArtwork());
-          this.player.seek(0, { suppressSpinner: true }).catch(() => {});
+          this.player
+            .seek(0, { suppressSpinner: true, internal: true })
+            .catch(() => {});
         }
       }
 
@@ -26485,6 +26512,16 @@ export class MoviElement extends HTMLElement {
       // these, a host had to subscribe to our non-standard `statechange` and
       // know our internal PlayerState names just to drive a spinner.
       if (state === "playing") {
+        // `play` first, then `playing` — the order a media element uses, and
+        // the order page code is written against: the intent, then the fact.
+        // Both were fired here, but `playing` came out first because it sits at
+        // the top of this branch and `play` further down among the autoplay
+        // bookkeeping, so a listener pair saw the fact before the intent.
+        if (this._pauseAnnounceTimer !== null) {
+          clearTimeout(this._pauseAnnounceTimer);
+          this._pauseAnnounceTimer = null;
+        }
+        this.announcePlay();
         this.dispatchEvent(new Event("playing"));
         // And ask again whether audio was actually allowed.
         //
@@ -26640,7 +26677,7 @@ export class MoviElement extends HTMLElement {
           this.maybeShowResumeDialog();
         }
         this._hasEverPlayed = true;
-        this.dispatchEvent(new Event("play"));
+        this.announcePlay();
         // Autoplay had no user gesture, so there's no click to confirm —
         // hide the controls immediately rather than running the 200ms
         // pause-confirmation flash below.
@@ -26705,7 +26742,25 @@ export class MoviElement extends HTMLElement {
         this._qoe.playing();
         this.startQoeHeartbeat();
       } else if (state === "paused") {
-        this.dispatchEvent(new Event("pause"));
+        // A media element only pauses something that was playing. Startup goes
+        // through this state on its way to the poster frame — the same
+        // synthetic pause _hasEverPlayed already exists to recognise — and
+        // announcing it flipped the play/pause state of any page tracking us
+        // before the viewer had pressed anything.
+        if (this._playFired) {
+          // …and a pause the pipeline passes through on its way somewhere else
+          // is not one either. A seek stops and restarts playback internally,
+          // which a media element never reports: it fires seeking and seeked
+          // and stays "playing" throughout. Held for a moment so a resume can
+          // cancel it, which is what a seek's resume does.
+          if (this._pauseAnnounceTimer !== null) clearTimeout(this._pauseAnnounceTimer);
+          this._pauseAnnounceTimer = window.setTimeout(() => {
+            this._pauseAnnounceTimer = null;
+            if (!this._playFired) return; // already answered
+            this._playFired = false;
+            this.dispatchEvent(new Event("pause"));
+          }, 80);
+        }
         this.updateMediaSession();
         this.stopStutterMonitor();
         this._qoe.paused();
@@ -26719,7 +26774,25 @@ export class MoviElement extends HTMLElement {
         // surfaces the bar manually.
         if (this._resume) this.saveResumePosition();
       } else if (state === "ended") {
-        this.dispatchEvent(new Event("ended"));
+        // Reaching the end pauses, and says so first. A media element sets
+        // paused, fires pause, and only then fires ended — a page that tracks
+        // playing/paused through the events (a button's icon, an analytics
+        // ping) would otherwise still believe this was playing after it
+        // stopped. The pending 80ms debounce is dropped: this pause is
+        // certain, and nothing is going to resume past it.
+        if (this._pauseAnnounceTimer !== null) {
+          clearTimeout(this._pauseAnnounceTimer);
+          this._pauseAnnounceTimer = null;
+        }
+        // …unless `loop` is on, where an element reports neither: it seeks
+        // back to the start and keeps playing, and never left the playing
+        // state at all.
+        if (!this._loop) this.announcePause();
+        // A looping element does not end. It reaches the last frame, seeks
+        // back and carries on — seeking and seeked, no `ended` — so a page
+        // that shows a replay button on ended never saw one, and neither
+        // should it here.
+        if (!this._loop) this.dispatchEvent(new Event("ended"));
         // Only surface the chrome when the player is actually
         // stopping. With `loop` on, the player immediately restarts
         // playback, so popping the bar for the brief end→play
@@ -26826,15 +26899,38 @@ export class MoviElement extends HTMLElement {
     // "seeked"|"durationchange")` silently did nothing, and the element's OWN
     // quality-switch resume path listened for `durationchange` on itself — a
     // listener that could never fire.
-    const seekingHandler = (time: number) =>
+    // One seek, one `seeking`. The pipeline announces a seek more than once
+    // for a single request — the entry point and the internal restart both say
+    // so — which a media element never does: a page counting seeking against
+    // seeked to drive a spinner was left holding one that never balanced. A
+    // genuinely new destination still announces itself, so a scrub's stream of
+    // targets is reported the way an element reports it.
+    const seekingHandler = (time: number) => {
+      if (this._seekAnnouncedFor !== null && Math.abs(this._seekAnnouncedFor - time) < 0.01) {
+        return;
+      }
+      this._seekAnnouncedFor = time;
       this.dispatchEvent(new CustomEvent("seeking", { detail: time }));
+    };
     this.player.on("seeking", seekingHandler);
     this.eventHandlers.set("seeking", () =>
       this.player?.off("seeking", seekingHandler),
     );
 
-    const seekedHandler = (time: number) =>
+    const seekedHandler = (time: number) => {
+      this._seekAnnouncedFor = null;
       this.dispatchEvent(new CustomEvent("seeked", { detail: time }));
+      // Landing somewhere new is a readiness announcement too. A media element
+      // drops to "not enough data" while it seeks and says canplay again on
+      // the other side — a page that arms work on canplay after a seek (a
+      // custom spinner, an overlay it hides) never heard from us a second
+      // time. Only once the first one has been said, and canplaythrough only
+      // if it was earned.
+      if (this._loadedDataFired) this.dispatchEvent(new Event("canplay"));
+      if (this._canPlayThroughFired) {
+        this.dispatchEvent(new Event("canplaythrough"));
+      }
+    };
     this.player.on("seeked", seekedHandler);
     this.eventHandlers.set("seeked", () =>
       this.player?.off("seeked", seekedHandler),
@@ -27196,6 +27292,13 @@ export class MoviElement extends HTMLElement {
       if (markers) markers.innerHTML = "";
     }
 
+    // Was this element carrying media before this load? Read BEFORE the
+    // teardown below, which is what makes the answer no.
+    // hasMediaSource() is NOT the test: the src that triggered this load is
+    // already set by the time we get here, so it answers yes on a first load.
+    // What matters is whether anything was playing, loaded, or loading BEFORE.
+    const hadMedia = !!this.player || this._loadedDataFired || this.isLoading;
+
     if (this.player) {
       // If player exists, destroy and recreate
       this.player.destroy();
@@ -27210,6 +27313,12 @@ export class MoviElement extends HTMLElement {
     this._lastProgressBufferEnd = -1;
     this._canPlayThroughFired = false;
     this._loadedDataFired = false;
+    // A fresh source is a paused one, and has said nothing yet: loading media
+    // sets the paused flag, so the next play() is a new run of playback with
+    // its own `play` — and `autoplay` re-asserts the intent when it starts.
+    this._playIntent = false;
+    this._playFired = false;
+    this._seekAnnouncedFor = null;
     // A genuine video→audio source change must still be able to reach audio
     // mode, so this memory is per-source.
     this._sourceHadVideoTrack = false;
@@ -27225,10 +27334,18 @@ export class MoviElement extends HTMLElement {
     // "In flight" is broader than the isLoading flag, which a finished fetch
     // clears while the pipeline is still building: a load that never reached
     // playable data was still aborted.
-    if (this.isLoading || (this.hasMediaSource() && !this._loadedDataFired)) {
-      this.dispatchEvent(new Event("abort"));
+    // …but only when there WAS something. A fresh element being given its
+    // first source has nothing to empty and nothing was aborted, and a media
+    // element says neither: `<video>` on its first src fires `loadstart` and
+    // that is all. Announcing an abort there told page code — analytics, state
+    // machines counting failed loads — that a load had been interrupted before
+    // any load had started.
+    if (hadMedia) {
+      if (this.isLoading || (this.hasMediaSource() && !this._loadedDataFired)) {
+        this.dispatchEvent(new Event("abort"));
+      }
+      this.dispatchEvent(new Event("emptied"));
     }
-    this.dispatchEvent(new Event("emptied"));
     // Drop any autoplay deferred for the previous source — initializePlayer
     // re-arms it for the new one if still hidden.
     this._autoplayPendingVisible = false;
@@ -27255,6 +27372,13 @@ export class MoviElement extends HTMLElement {
   async play(): Promise<void> {
     if (this._isUnsupported) return;
     this._startCancelled = false;
+    // `play` is the sound of the request, not of the picture moving: an
+    // element fires it when play() is called and reports paused === false from
+    // that instant, whether or not a single frame has decoded yet. Announcing
+    // it from the playing state instead meant a clip short enough to finish
+    // inside its own start-up — or one whose start was deferred behind a load
+    // — was played without ever saying so.
+    this.announcePlay();
     // If a load is in flight, defer the play. initializePlayer() flushes
     // this once loading settles, matching HTMLMediaElement.play() semantics.
     if (this.isLoading) {
@@ -27305,7 +27429,36 @@ export class MoviElement extends HTMLElement {
     if (this.player && !this.isLoading && !this._isUnsupported) {
       this.player.pause();
     }
+    // Asked for outright, so answered outright. The 80ms hold in the state
+    // handler is there to swallow the pauses a seek passes through; a pause
+    // the caller requested is never one of those, and holding it back lost the
+    // event entirely when the element was torn down in the same breath.
+    this.announcePause();
     this.updatePlayPauseIcon();
+  }
+
+  /** Say `play` once per run of playback, and remember that we did. */
+  private announcePlay(): void {
+    this._playIntent = true;
+    if (this._pauseAnnounceTimer !== null) {
+      clearTimeout(this._pauseAnnounceTimer);
+      this._pauseAnnounceTimer = null;
+    }
+    if (this._playFired) return;
+    this._playFired = true;
+    this.dispatchEvent(new Event("play"));
+  }
+
+  /** …and `pause` once, for a stop that is real. */
+  private announcePause(): void {
+    this._playIntent = false;
+    if (this._pauseAnnounceTimer !== null) {
+      clearTimeout(this._pauseAnnounceTimer);
+      this._pauseAnnounceTimer = null;
+    }
+    if (!this._playFired) return;
+    this._playFired = false;
+    this.dispatchEvent(new Event("pause"));
   }
 
   /**
@@ -29573,12 +29726,17 @@ export class MoviElement extends HTMLElement {
       if (state === "playing") {
         this._hasEverPlayed = true;
         // The standard "it is actually running now" event, which the WASM path
-        // sends from the same place.
+        // sends from the same place — with the intent that precedes it, so a
+        // handed-off source reports play/pause and `paused` the way it did
+        // before the handoff. The viewer cannot tell which engine is running;
+        // neither should a listener.
+        this.announcePlay();
         this.dispatchEvent(new Event("playing"));
         // …and from here we can tell whether the browser took the sound with
         // it. See watchNativeAudio.
         this.watchNativeAudio(v);
       }
+      if (state === "paused") this.announcePause();
       this.updatePlayPauseIcon();
       this.updateControlsState();
     });
@@ -29617,6 +29775,7 @@ export class MoviElement extends HTMLElement {
         wrapper.seek(0);
         wrapper.play().catch(() => {});
       } else {
+        this.announcePause();
         this.dispatchEvent(new Event("ended"));
       }
     });
@@ -32135,7 +32294,7 @@ export class MoviElement extends HTMLElement {
         await this.player.play().catch(() => {});
       } else if (this.player) {
         if (this._startAt === 0) {
-          this.player.seek(0).catch(() => {});
+          this.player.seek(0, { internal: true }).catch(() => {});
         }
       }
 
@@ -36555,7 +36714,12 @@ export class MoviElement extends HTMLElement {
   }
 
   get paused(): boolean {
-    return this.player?.getState() === "paused" || false;
+    // Not a reading of the pipeline: a media element is paused when playback
+    // has not been asked for, so a fresh element reads true before anything
+    // has loaded, and one that is buffering or seeking mid-playback reads
+    // false. Reporting the internal state instead made a loading player look
+    // playing and a buffering one look stopped.
+    return !this._playIntent;
   }
 
   get ended(): boolean {
