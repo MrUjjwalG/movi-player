@@ -18,6 +18,10 @@
               "description": "Specifies the video source URL or File object."
             },
             {
+              "name": "storyboard",
+              "description": "WebVTT thumbnail track for scrub previews — a crop out of a sprite instead of a decode"
+            },
+            {
               "name": "autoplay",
               "description": "Starts playback automatically when loaded."
             },
@@ -148,12 +152,8 @@
               }
             },
             {
-              "name": "storyboard",
-              "description": "URL of a WebVTT thumbnail track (cues whose payload is an image URL with a #xywh= media fragment). Scrub previews are then cropped out of the sprite instead of being decoded, and the thumbnail decode pipeline is never started. The matching property also accepts a tile spec object ({columns, rows, width, height, fragments})."
-            },
-            {
               "name": "thumb",
-              "description": "Generates thumbnails on demand for seek-bar previews. Set to \"precise\" to decode forward from the keyframe to the frame under the pointer instead of showing the keyframe before it."
+              "description": "Generates thumbnails on demand (used internally for preview)."
             },
             {
               "name": "hdr",

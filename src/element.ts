@@ -208,8 +208,20 @@ export interface MoviPlayerAttributes {
   sw?: boolean | "auto";
   /** Enable HDR tone-mapping (Chromium + canvas renderer + HDR source). */
   hdr?: boolean | "";
-  /** Generate on-demand thumbnails for seek-bar previews. */
-  thumb?: boolean | "";
+  /**
+   * Generate on-demand thumbnails for seek-bar previews. `thumb="precise"`
+   * decodes forward from the keyframe to the frame under the pointer, rather
+   * than showing the keyframe before it — exact, at the cost of a run of
+   * frames per preview.
+   */
+  thumb?: boolean | "precise" | "";
+  /**
+   * URL of a WebVTT thumbnail track for scrub previews, whose cues carry an
+   * image URL and a `#xywh=` rectangle. Previews then come from that sprite
+   * instead of being decoded, and the decode pipeline is never started. The
+   * matching PROPERTY also accepts a tile spec object.
+   */
+  storyboard?: string;
 
   /** Subtitle timing offset, in seconds (positive = later, VLC/mpv sign). */
   subtitledelay?: number | string;
