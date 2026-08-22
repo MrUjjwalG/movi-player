@@ -210,9 +210,16 @@ export class Storyboard {
       else if (time >= cue.end) lo = mid + 1;
       else return cue.tile;
     }
-    // Just past the last cue (a hover at the very end) still has a picture.
+    // Just past the last cue a picture is still the right answer: the board's
+    // last tile usually ends a rounding error short of the video's own end, and
+    // a hover there should not go blank. FAR past it is a different thing — a
+    // board that covers only part of the video (a partial or truncated one)
+    // would otherwise answer for the whole of the rest with a picture from
+    // where it stopped, and nothing would ever fall through to decoding. One
+    // cue's worth of slack draws that line.
     const last = this.cues[this.cues.length - 1];
-    if (time >= last.start) return last.tile;
+    const slack = Math.max(this.step, last.end - last.start, 1);
+    if (time >= last.start && time < last.end + slack) return last.tile;
     return null;
   }
 }
