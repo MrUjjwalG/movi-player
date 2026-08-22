@@ -3186,6 +3186,32 @@ export class MoviElement extends HTMLElement {
       }
     };
 
+    const tileLayerEl = () =>
+      shadowRoot.querySelector(".movi-thumbnail-tile") as HTMLElement | null;
+    /**
+     * Is a storyboard tile on the card right now?
+     *
+     * The card holds its three surfaces — placeholder, tile, decoded frame —
+     * as SIBLINGS in a column, so any two of them showing at once is two boxes
+     * stacked, not one replacing another. Everything that puts the loading
+     * placeholder up therefore has to know whether the tile is already
+     * answering: it counts as a picture, and it has to come down before the
+     * placeholder goes up.
+     */
+    const tileShowing = () => {
+      const tile = tileLayerEl();
+      return (
+        !!tile && tile.style.display !== "none" && !!tile.style.backgroundImage
+      );
+    };
+    /** Put the loading placeholder up — never over a tile. */
+    const showPreviewPlaceholder = (placeholder: HTMLElement | null) => {
+      const tile = tileLayerEl();
+      if (tile) tile.style.display = "none";
+      if (thumbnailImg) thumbnailImg.style.display = "none";
+      if (placeholder) placeholder.style.display = "block";
+    };
+
     /** Drop the card back to time-only: no frame, and no spinner promising one. */
     const hidePreviewLoading = () => {
       cancelStaleTimer();
@@ -3290,17 +3316,22 @@ export class MoviElement extends HTMLElement {
       // better answer than no frame at all; only when the next one really is
       // taking a while does the card admit it.
       cancelStaleTimer();
+      // A storyboard tile is a picture too. Read only from the decoded frame,
+      // this saw an empty card whenever the tile was the thing on it — which
+      // is every hover on a source with a board — and put the placeholder up
+      // straight away, ON TOP of the tile, for the fraction of a second until
+      // the next paint. That flash is the empty box that appeared above the
+      // thumbnail mid-scrub.
       const showingPicture =
-        !!thumbnailImg.getAttribute("src") &&
-        thumbnailImg.style.display !== "none";
+        (!!thumbnailImg.getAttribute("src") &&
+          thumbnailImg.style.display !== "none") ||
+        tileShowing();
       if (!showingPicture) {
-        thumbnailImg.style.display = "none";
-        if (thumbnailPlaceholder) thumbnailPlaceholder.style.display = "block";
+        showPreviewPlaceholder(thumbnailPlaceholder);
       } else {
         stalePreviewTimer = window.setTimeout(() => {
           stalePreviewTimer = null;
-          thumbnailImg.style.display = "none";
-          if (thumbnailPlaceholder) thumbnailPlaceholder.style.display = "block";
+          showPreviewPlaceholder(thumbnailPlaceholder);
         }, STALE_PREVIEW_GRACE_MS);
       }
 
@@ -3385,7 +3416,7 @@ export class MoviElement extends HTMLElement {
         (time >= (this.player.getBufferStartTime?.() ?? 0) &&
           time <= (this.player.getBufferEndTime?.() ?? duration));
 
-      if (this.canPreviewFrames() && previewInWindow) {
+      if (this.canPreviewFrames() && (previewInWindow || this.hasInstantPreviews())) {
         // A storyboard can answer in this very frame — the mosaic is an image
         // the browser already has, and the tile is a background offset into
         // it. Going through requestPreview instead would spend 40ms of
@@ -3484,8 +3515,21 @@ export class MoviElement extends HTMLElement {
             const thumbnailPlaceholder = shadowRoot.querySelector(
               ".movi-thumbnail-placeholder",
             ) as HTMLElement;
-            if (thumbnailPlaceholder)
-              thumbnailPlaceholder.style.display = "block";
+            // Arming the placeholder here is how a card that has to decode its
+            // next frame opens in the loading state. A board has nothing to
+            // wait for — its next tile is painted in the same frame the
+            // pointer moves — so arming one left the empty box showing above
+            // the tile for the first moment of the NEXT hover. Leave the card
+            // as the tile left it.
+            if (this.hasInstantPreviews()) {
+              if (thumbnailPlaceholder)
+                thumbnailPlaceholder.style.display = "none";
+            } else {
+              const tile = tileLayerEl();
+              if (tile) tile.style.display = "none";
+              if (thumbnailPlaceholder)
+                thumbnailPlaceholder.style.display = "block";
+            }
           }
         }, transitionDelay);
       };
