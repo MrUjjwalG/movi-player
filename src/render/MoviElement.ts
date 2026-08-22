@@ -8930,6 +8930,13 @@ export class MoviElement extends HTMLElement {
         let audioSources = allSources.filter((s) => s.kind === "audio");
         const videoSources = allSources.filter((s) => s.kind !== "audio");
 
+        // The candidates, in the order they were written. A <source> list is a
+        // list of things to TRY: an element that can't open the first one moves
+        // to the next and only reports failure once they are all gone. See
+        // _trySiblingSource, which walks this.
+        this._childSourceUrls = videoSources.map((s) => s.src);
+        this._childSourceIndex = -1;
+
         if (videoSources.length > 0) {
           // Capture quality metadata for non-HLS quality menu
           this._videoQualities = videoSources
@@ -8956,6 +8963,7 @@ export class MoviElement extends HTMLElement {
             const picked = this.pickSource(videoSources);
             this._src = picked ? picked.src : videoSources[0].src;
           }
+          this._childSourceIndex = this._childSourceUrls.indexOf(this._src);
 
           // Under Auto, ALWAYS open on the SMALLEST rung, not the consumer's
           // default (movi-tube marks the HIGHEST as default — right for a manual
@@ -9291,6 +9299,51 @@ export class MoviElement extends HTMLElement {
     }
     this.updateSubtitleTrackMenu();
     this.updateAudioTrackMenu();
+  }
+
+  /**
+   * The next `<source>` along, when the current one wouldn't open.
+   *
+   * This is what the list is for. A page that writes
+   *
+   *   <source src="movie.mp4" type="video/mp4">
+   *   <source src="movie.webm" type="video/webm">
+   *
+   * is naming alternatives, and an element that fails on the first one is
+   * expected to try the second — the error belongs to the LIST, and is only
+   * reported once every candidate is spent. We picked by type up front (see
+   * pickSource) but a type hint says nothing about whether the file is
+   * actually there: a moved or mistyped first URL used to end the load with
+   * "Not Found" while a perfectly good second source sat unread underneath it.
+   *
+   * Only during resource selection: once media has loaded, the list has done
+   * its job and a later failure is this source's failure, not a reason to
+   * start another one. Returns true when the next candidate is loading, and
+   * the caller then leaves the overlay alone.
+   */
+  private _trySiblingSource(): boolean {
+    if (this._loadedDataFired) return false;
+    const next = this._childSourceIndex + 1;
+    if (next <= 0 || next >= this._childSourceUrls.length) return false;
+    const url = this._childSourceUrls[next];
+    if (!url) return false;
+    this._childSourceIndex = next;
+    Logger.warn(
+      TAG,
+      `Source ${next} of ${this._childSourceUrls.length} wouldn't open — trying the next <source>: ${url}`,
+    );
+    try {
+      this.player?.destroy();
+    } catch {
+      /* a player that failed to open may not tear down cleanly */
+    }
+    this.player = null;
+    // The guards a failed load leaves behind, cleared so load() runs at all.
+    this._isUnsupported = false;
+    this.isLoading = false;
+    this._src = url;
+    this.load();
+    return true;
   }
 
   private _recreateAtLowerQuality(): boolean {
@@ -26124,6 +26177,7 @@ export class MoviElement extends HTMLElement {
       // dropping straight to the overlay. Only mid-recovery; a first-load failure
       // still surfaces normally below.
       if (this._tryQualityRecovery(initMsg)) return;
+      if (this._trySiblingSource()) return;
 
       this.noteMediaError(error);
       this.dispatchMediaError(error);
@@ -27008,6 +27062,12 @@ export class MoviElement extends HTMLElement {
       // another quality frequently still loads. Only for network-ish errors, and
       // capped so a genuinely dead link still ends at the overlay.
       if (this._tryQualityRecovery(rawMsg)) return;
+      // Same walk as the init path: while the <source> list still has an
+      // untried candidate, this failure is not the element's failure. Nothing
+      // is announced — an element reports `error` once, when the list is
+      // spent — so a page that swaps in a placeholder on error doesn't flash
+      // one for a source that was only ever a first guess.
+      if (this._trySiblingSource()) return;
 
       this._qoe.error(rawMsg, true);
       this.noteMediaError(error);
@@ -28210,6 +28270,9 @@ export class MoviElement extends HTMLElement {
    * <video> fires it once per load; this keeps the triple coherent.
    */
   private _loadedDataFired = false;
+  /** The `<source>` children in document order, and how far along them we are. */
+  private _childSourceUrls: string[] = [];
+  private _childSourceIndex = -1;
 
   /**
    * `loadstart`, once per load.
@@ -30008,8 +30071,23 @@ export class MoviElement extends HTMLElement {
       return;
     }
     this._deferredError = undefined;
+    // One failure, one `error`. A failed load arrives twice — once as the
+    // player's own error event and once as the init-catch — which the overlay
+    // has always collapsed (see handleUnsupportedVideo) while the event did
+    // not, so a host that counts failures, or retries on each one, saw two of
+    // everything. Same message inside the same moment is that pair, not two
+    // things going wrong.
+    const message = error instanceof Error ? error.message : String(error);
+    if (this._lastErrorAnnounced === message) return;
+    this._lastErrorAnnounced = message;
+    window.setTimeout(() => {
+      if (this._lastErrorAnnounced === message) this._lastErrorAnnounced = null;
+    }, 300);
     this.dispatchEvent(new CustomEvent("error", { detail: error }));
   }
+
+  /** The message of the error just announced, while its double is still due. */
+  private _lastErrorAnnounced: string | null = null;
 
   /**
    * Is the origin answering at all? A no-cors HEAD gets an opaque response the
