@@ -4738,6 +4738,20 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
    */
   private demuxInFlight = false;
   private demuxInFlightStartTime: number = 0;
+  /**
+   * The DTS of the last video packet handed to the decoder, and the marks a
+   * muxed rate-change rewind leaves behind: re-read video up to that DTS has
+   * already been decoded and is dropped, audio before the rewind target is a
+   * fraction of a second the renderer has just been reset past. DTS rather
+   * than PTS because the demuxer delivers in decode order, and re-delivers the
+   * identical sequence — so resuming at the packet after the last one fed
+   * leaves the decoder's reference chain exactly as it was.
+   */
+  private _lastFedVideoDts = -1;
+  /** Decoded picture, in seconds at the new rate, that makes an audio-only rewind safe. */
+  private static readonly REWIND_PICTURE_CUSHION_S = 0.8;
+  private _rewindVideoUntilDts = -1;
+  private _rewindAudioFrom = -1;
   private static readonly DEMUX_TIMEOUT = 35000; // 35 seconds timeout (slightly more than HTTP timeout of 30s)
   private eofReached = false;
   // Wall-clock time (performance.now) when eofReached first flipped true.
@@ -6947,6 +6961,24 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
               }
             }
 
+            // Re-reading ground the decoder has already covered — an audio
+            // rewind moved the shared cursor back, and the picture never
+            // stopped. Decoding these again would paint frames that are behind
+            // the clock (dropped as stale) at exactly the moment the machine is
+            // busiest. Skipped until the cursor passes the last packet fed, and
+            // then the stream continues into a decoder whose references were
+            // never disturbed.
+            if (this._rewindVideoUntilDts >= 0) {
+              // …and the moment the cushion this was spending runs low, stop
+              // spending it. If the cursor never reaches the mark — a seek
+              // landed elsewhere, the file ended — the alternative is a picture
+              // that never moves again. Decoding what we already have costs a
+              // frame the renderer drops as stale; not decoding costs the film.
+              const cushion = this.videoRenderer?.getQueueSize?.() ?? 0;
+              if (packet.dts <= this._rewindVideoUntilDts && cushion > 4) continue;
+              this._rewindVideoUntilDts = -1;
+            }
+
             if (this.videoDecoder) {
               // Decode and render to canvas
               // Note: All packets including pre-target are decoded to build reference frames
@@ -6960,6 +6992,7 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
                 packet.isRasl,
                 packet.disposable,
               );
+              this._lastFedVideoDts = packet.dts;
             }
           } else if (activeAudio && activeAudio.id === packet.streamIndex) {
             // Audio running this far past the newest video packet means the
@@ -6984,6 +7017,14 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
             // Audio can be processed normally (doesn't need keyframes)
             // Skip audio processing if disabled for debugging
             if (!this.disableAudio) {
+              // The rewind lands on the keyframe before its target, so the
+              // first audio it hands back is a fraction of a second already
+              // heard. The renderer was just reset; playing it would be that
+              // fraction played twice.
+              if (this._rewindAudioFrom >= 0) {
+                if (packet.timestamp < this._rewindAudioFrom) continue;
+                this._rewindAudioFrom = -1;
+              }
               // IMPORTANT: Skip audio packets before the seek target time
               if (
                 this.seekTargetTime !== -1 &&
@@ -7470,6 +7511,10 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
     // Drop the keyframe-jump offset from the previous seek; it gets
     // re-measured when this seek completes.
     this.seekKeyframeOffset = 0;
+    // A seek repositions the cursor for its own reasons, so a rate-change
+    // rewind's marks describe a cursor that no longer exists.
+    this._rewindVideoUntilDts = -1;
+    this._rewindAudioFrom = -1;
 
     const mySessionId = ++this.seekSessionId;
     // Claim the session: from here until this seek finishes or is superseded,
@@ -9746,15 +9791,97 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
       // to playing again, 2504ms of it with the sound stopped, for a rewind
       // that only ever concerned the sound. Rewind just the audio; the picture
       // never stops.
-      if (this.audioDemuxer) {
-        void this.rewindSplitAudioTo(savedTime);
-      } else {
+      const fullSeek = () =>
         this.seek(savedTime, {
           suppressSpinner: true,
           preservePlaying: true,
         }).catch(() => {});
+      if (this.audioDemuxer) {
+        void this.rewindSplitAudioTo(savedTime);
+      } else if (this.hasPictureToCarryARewind(rate)) {
+        // Muxed, with enough decoded picture in hand to cover the re-prime:
+        // rewind the sound alone and let the frames already made keep playing.
+        void this.rewindMuxedAudioTo(savedTime).then((done) => {
+          if (!done) fullSeek();
+        });
+      } else {
+        fullSeek();
       }
     }
+  }
+
+  /**
+   * Put the MUXED audio pipeline back to a media time, and leave the picture
+   * running.
+   *
+   * The problem a rate change creates is entirely an audio one: the renderer
+   * drops the audio scheduled at the old rate, those packets are already spent
+   * from the demuxer, and the next chunk to arrive comes from the read-ahead
+   * position — so the clock pivots onto it and seconds of the film are skipped.
+   * A seek back to the playhead fixes that by rewinding the demuxer, but the
+   * demuxer is shared: the same seek flushes the video decoder, throws away
+   * every decoded frame waiting to be shown, and waits on a keyframe. Measured
+   * on a 1080p file at 2x with the CPU throttled to a phone's: 96 frames of
+   * cushion discarded, the picture stopped, and about six tenths of a second
+   * before playback was itself again — on every press of the speed control.
+   *
+   * The rewind is what is needed; the flush is not. The frames already decoded
+   * are the same frames the seek would decode again, so the video decoder and
+   * the renderer queue are left alone and the re-read is dropped on the way in
+   * (see _rewindVideoUntilDts). The sound re-primes from the playhead, the
+   * picture never stops, and nothing is skipped.
+   *
+   * Returns false if the pipeline could not be settled safely, so the caller
+   * can fall back to the seek.
+   */
+  private async rewindMuxedAudioTo(time: number): Promise<boolean> {
+    const dm = this.demuxer;
+    if (!dm) return false;
+    const target = Math.max(0, time) + this.startTime;
+    // Same order the seek path uses: stop the loop BEFORE waiting on the read
+    // in flight, or it starts another one behind the wait.
+    if (this.animationFrameId !== null) {
+      cancelAnimationFrame(this.animationFrameId);
+      this.animationFrameId = null;
+    }
+    let guard = 0;
+    while (this.demuxInFlight && guard++ < 100) {
+      await new Promise((r) => setTimeout(r, 10));
+    }
+    if (this._destroyed || this.demuxer !== dm) return true; // gone; nothing owed
+    if (this.demuxInFlight) {
+      // A read that will not settle is a demuxer nobody may reposition.
+      this.animationFrameId = requestAnimationFrame(this.processLoop);
+      return false;
+    }
+    this.audioDecoder.flush();
+    this.audioRenderer.reset();
+    this._rewindVideoUntilDts = this._lastFedVideoDts;
+    this._rewindAudioFrom = target;
+    // The cursor is moving backwards; whatever the loop decided about the end
+    // of the file no longer holds.
+    this.eofReached = false;
+    this.eofSince = 0;
+    try {
+      await dm.seek(target);
+    } catch (e) {
+      Logger.warn(
+        TAG,
+        `Rate-change audio rewind to ${time.toFixed(2)}s failed: ${(e as { message?: string })?.message ?? e}`,
+      );
+      this._rewindVideoUntilDts = -1;
+      this._rewindAudioFrom = -1;
+    }
+    if (this._destroyed || this.demuxer !== dm) return true;
+    if (
+      !this.disableAudio &&
+      !this.audioRenderer.isAudioPlaying() &&
+      (this.stateManager.is("playing") || this.stateManager.is("buffering"))
+    ) {
+      this.audioRenderer.play();
+    }
+    this.animationFrameId = requestAnimationFrame(this.processLoop);
+    return true;
   }
 
   /**
@@ -9803,6 +9930,24 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
       }
       this.startAudioLoop();
     }
+  }
+
+  /**
+   * Is there enough decoded picture in hand to play through an audio rewind?
+   *
+   * The rewind costs the demuxer a re-read of everything between the keyframe
+   * it lands on and the playhead, and the picture during that is whatever the
+   * renderer already holds — measured at the NEW rate, which is the whole
+   * point: a queue that is two seconds at 1x is one at 2x. Short of that, the
+   * old full seek is the safer answer, because a rewind that outlasts the
+   * queue stops the picture anyway and without a spinner to explain it.
+   */
+  private hasPictureToCarryARewind(rate: number): boolean {
+    const queued = this.videoRenderer?.getQueueSize?.() ?? 0;
+    if (queued <= 0) return false;
+    const fps = this.trackManager?.getActiveVideoTrack()?.frameRate || 24;
+    const seconds = queued / Math.max(1, fps) / Math.max(1, rate);
+    return seconds >= MoviPlayer.REWIND_PICTURE_CUSHION_S;
   }
 
   /**
