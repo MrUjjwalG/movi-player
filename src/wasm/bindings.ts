@@ -284,6 +284,21 @@ export class WasmBindings {
       }
     };
 
+    // The demuxer telling the source that the next few reads are a search, not
+    // a playhead (see HttpSource.setProbeMode). Sources that don't care about
+    // the difference simply don't implement it.
+    (this.module as any).onProbeMode = (on: number) => {
+      try {
+        (
+          self.dataSource as unknown as {
+            setProbeMode?: (v: boolean) => void;
+          } | null
+        )?.setProbeMode?.(!!on);
+      } catch {
+        /* advisory only */
+      }
+    };
+
     // Handle seek requests from WASM
     // IMPORTANT: offset may be a BigInt for files >= 2GB
     // This is especially important for large files (>= 2GB) where position tracking

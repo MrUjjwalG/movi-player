@@ -214,6 +214,24 @@ export class HttpSource implements SourceAdapter {
   // instead of dribbling the whole file out as tiny range requests.
   private consecutiveOneOffFetches: number = 0;
   private readonly MAX_ONEOFF_BEFORE_RESTART = 2;
+  /**
+   * Probing: the reads arriving right now are deliberate poking around the
+   * file, not a play position moving.
+   *
+   * The demuxer's index search for an unindexed Matroska bisects the whole file
+   * — a dozen reads at wildly different offsets, each a few hundred KB, none of
+   * them anywhere the viewer is about to watch. The one-off allowance above
+   * runs out after two of those, and from the third on every probe restarted
+   * the download at its offset: 12MB fetched to answer a 256KB question, on
+   * every probe. While this is set, an out-of-window read is always served as
+   * a one-off range and never counts toward a restart.
+   */
+  private _probing = false;
+
+  setProbeMode(on: boolean): void {
+    this._probing = on;
+    if (!on) this.consecutiveOneOffFetches = 0;
+  }
   // Set by the player immediately before a demuxer seek. Counting one-off
   // fetches (above) can only INFER a seek after a run of them, and each one is
   // its own HTTP request racing the still-running old stream for bandwidth —
@@ -2051,10 +2069,14 @@ export class HttpSource implements SourceAdapter {
       this.atomicIsStreaming() &&
       // A hinted seek landed outside the window — reposition the stream now
       // rather than serving the new region as one-off ranges while the old
-      // stream keeps consuming the bandwidth we need here.
-      !this.seekHinted &&
+      // stream keeps consuming the bandwidth we need here. …unless these reads
+      // are the search FOR that seek: the hint is still set from the viewer's
+      // request, so every probe repositioned the download to a place the
+      // search was about to reject.
+      (!this.seekHinted || this._probing) &&
       length <= ONEOFF_RANGE_MAX_BYTES &&
-      this.consecutiveOneOffFetches < this.MAX_ONEOFF_BEFORE_RESTART
+      (this._probing ||
+        this.consecutiveOneOffFetches < this.MAX_ONEOFF_BEFORE_RESTART)
     ) {
       Logger.info(TAG, `Read: one-off range fetch for offset=${offset}, length=${length} (outside stream window, main stream continues)`);
       try {
@@ -2105,7 +2127,7 @@ export class HttpSource implements SourceAdapter {
           this.consecutiveForceRestarts = 0;
           // Count this one-off; a run of them (a real seek) trips the gate above
           // on the next read and restarts the stream at the new position.
-          this.consecutiveOneOffFetches++;
+          if (!this._probing) this.consecutiveOneOffFetches++;
           return result.buffer;
         }
       } catch (e) {

@@ -159,6 +159,212 @@ int movi_get_extradata(MoviContext *ctx, int stream_index, uint8_t *buffer,
 }
 
 EMSCRIPTEN_KEEPALIVE
+// ---- Seeking a Matroska that never got an index --------------------------
+//
+// Matroska keeps its seek index (Cues) at the end of the file, and a file whose
+// tail was truncated has none — the SeekHead still points at where the Cues
+// were meant to be, and there is nothing there. FFmpeg's Matroska demuxer has
+// no read_timestamp callback, so with no index there is no binary search to
+// fall back on: av_seek_frame simply reads FORWARD from wherever it is. On a
+// 4.2GB, 2h42m WEB-DL that means downloading gigabytes to reach a seek — the
+// player sits in "seeking" and the byte counter climbs. Measured on such a
+// file, ffmpeg's own CLI spent 25 minutes on a seek to one hour without ever
+// producing a frame, and had read 90MB of a 5-minute seek at the 100s mark.
+//
+// But the container is still perfectly navigable: every Cluster carries its own
+// timestamp, and clusters are self-delimiting. So do the search the demuxer
+// cannot — binary-search the file by BYTE, read the timestamp of whatever
+// cluster each probe lands on, and hand the result to FFmpeg as index entries
+// through the same public API its own demuxers use. About twenty 256KB probes
+// cover a 4GB file, and the seek that follows is an ordinary indexed one.
+//
+// Every cluster the search touches is kept, not just the winner: they are all
+// valid resync points, and a viewer who seeks once usually seeks again nearby.
+#define MOVI_MKV_PROBE_WINDOW (256 * 1024)
+// How far a single probe may read forward looking for a cluster header before
+// it gives up. Clusters are a second or two of media apart, so this is orders
+// of magnitude more slack than any sane muxer needs.
+#define MOVI_MKV_PROBE_SCAN (16 * 1024 * 1024)
+#define MOVI_MKV_PROBE_BUDGET 32
+#define MOVI_MKV_PROBE_MS 15000
+// How far behind the target an existing index entry may sit before it stops
+// being worth using. Landing this much early costs a forward read of the same
+// size, which is the very thing being avoided.
+#define MOVI_MKV_INDEX_TOLERANCE_S 30.0
+
+// Tell the source that the reads about to arrive are a SEARCH, not a playhead.
+// Without it an HTTP source reads the bisection as a series of seeks and
+// restarts its download at each probe — 12MB fetched to answer a 256KB
+// question, a dozen times over. Advisory: sources that don't implement it are
+// unaffected.
+EM_JS(void, js_probe_mode, (int on), {
+  if (Module.onProbeMode)
+    Module.onProbeMode(on);
+});
+
+static int movi_is_matroska(const MoviContext *ctx) {
+  const char *n = (ctx && ctx->fmt_ctx && ctx->fmt_ctx->iformat)
+                      ? ctx->fmt_ctx->iformat->name
+                      : NULL;
+  return n && (strcmp(n, "matroska,webm") == 0 || strcmp(n, "matroska") == 0 ||
+               strcmp(n, "webm") == 0);
+}
+
+// One EBML variable-length integer. Element IDs are written WITH their length
+// marker, sizes without it — hence keep_marker. Advances *p past the field.
+static int64_t movi_ebml_vint(const uint8_t *buf, int len, int *p,
+                              int keep_marker) {
+  if (*p < 0 || *p >= len)
+    return -1;
+  uint8_t first = buf[*p];
+  if (first == 0)
+    return -1; // 8+ byte lengths are not used by anything we read here
+  int n = 1;
+  uint8_t mask = 0x80;
+  while (!(first & mask)) {
+    mask >>= 1;
+    n++;
+  }
+  if (n > 8 || *p + n > len)
+    return -1;
+  int64_t v = keep_marker ? first : (first & (mask - 1));
+  for (int i = 1; i < n; i++)
+    v = (v << 8) | buf[*p + i];
+  *p += n;
+  return v;
+}
+
+// Find the first Cluster at or after `from` and read its timestamp, in the
+// stream time base (Matroska scales both by TimecodeScale, so a cluster's
+// stored value IS its pts). Returns 0 on success.
+static int movi_mkv_probe_cluster(MoviContext *ctx, int64_t from, uint8_t *buf,
+                                  int64_t *out_pos, int64_t *out_ts) {
+  if (from < 0)
+    from = 0;
+  if (ctx->file_size > 0 && from >= ctx->file_size)
+    return -1;
+  // Keep reading forward until a cluster turns up. One window is not enough:
+  // this file's clusters run about a megabyte, so a 256KB look at a random
+  // offset lands INSIDE one three times out of four. Treating that as "no
+  // cluster here" and stepping the search forward by a window broke the
+  // bisection — the low bound crept up on every miss and the search converged
+  // on the end of the file instead of the target (seek to 50:00 landed at
+  // 41:00). Scanning to the next cluster instead keeps every probe informative;
+  // the answer just lies a little past where we looked.
+  int64_t scanned = 0;
+  while (scanned < MOVI_MKV_PROBE_SCAN) {
+  if (ctx->file_size > 0 && from >= ctx->file_size)
+    return -1;
+  if (avio_seek(ctx->fmt_ctx->pb, from, SEEK_SET) < 0)
+    return -1;
+  int got = avio_read(ctx->fmt_ctx->pb, buf, MOVI_MKV_PROBE_WINDOW);
+  if (got <= 16)
+    return -1;
+  for (int i = 0; i + 12 < got; i++) {
+    // Cluster ID, 0x1F43B675.
+    if (buf[i] != 0x1F || buf[i + 1] != 0x43 || buf[i + 2] != 0xB6 ||
+        buf[i + 3] != 0x75)
+      continue;
+    int p = i + 4;
+    if (movi_ebml_vint(buf, got, &p, 0) < 0) // cluster size (may be unknown)
+      continue;
+    // Timestamp (0xE7) is required to be the cluster's first child, but a
+    // CRC-32 or Void may legally sit ahead of it.
+    for (int guard = 0; guard < 8 && p < got; guard++) {
+      int64_t id = movi_ebml_vint(buf, got, &p, 1);
+      if (id < 0)
+        break;
+      int64_t esz = movi_ebml_vint(buf, got, &p, 0);
+      if (esz < 0 || esz > (int64_t)(got - p))
+        break;
+      if (id == 0xE7) {
+        if (esz < 1 || esz > 8)
+          break;
+        int64_t ts = 0;
+        for (int k = 0; k < (int)esz; k++)
+          ts = (ts << 8) | buf[p + k];
+        *out_pos = from + i;
+        *out_ts = ts;
+        return 0;
+      }
+      p += (int)esz;
+    }
+    // Those four bytes were frame data that happened to look like a cluster.
+    // Keep scanning the window rather than giving up on it.
+  }
+  // Overlap by the longest header we might have straddled.
+  from += got - 16;
+  scanned += got;
+  }
+  return -1;
+}
+
+// Binary-search the file for the cluster covering `target_sec` and feed what it
+// finds into the stream's index. Returns 0 if the index gained anything.
+static int movi_mkv_index_near(MoviContext *ctx, int anchor, double target_sec) {
+  if (!movi_is_matroska(ctx) || anchor < 0 || ctx->file_size <= 0)
+    return -1;
+  AVStream *st = ctx->fmt_ctx->streams[anchor];
+  double tbd = av_q2d(st->time_base);
+  if (tbd <= 0)
+    tbd = 0.001;
+  uint8_t *buf = av_malloc(MOVI_MKV_PROBE_WINDOW);
+  if (!buf)
+    return -1;
+
+  const int64_t saved = avio_tell(ctx->fmt_ctx->pb);
+  js_probe_mode(1);
+  const int64_t deadline =
+      av_gettime_relative() + (int64_t)MOVI_MKV_PROBE_MS * 1000;
+  const double duration = ctx->fmt_ctx->duration != AV_NOPTS_VALUE
+                              ? (double)ctx->fmt_ctx->duration / AV_TIME_BASE
+                              : 0.0;
+  int64_t lo = 0, hi = ctx->file_size;
+  int64_t best_pos = -1;
+  int added = 0;
+
+  for (int i = 0; i < MOVI_MKV_PROBE_BUDGET && lo < hi; i++) {
+    if (av_gettime_relative() > deadline)
+      break;
+    int64_t mid = lo + (hi - lo) / 2;
+    int64_t cpos = 0, cts = 0;
+    if (movi_mkv_probe_cluster(ctx, mid, buf, &cpos, &cts) < 0) {
+      // Nothing between here and the end of the scan — treat everything from
+      // mid onwards as unusable rather than moving the low bound up, which is
+      // what let a miss drag the search past the target.
+      hi = mid;
+      continue;
+    }
+    double t = cts * tbd;
+    // A timestamp outside the file's own duration means those bytes were not a
+    // cluster header after all.
+    if (t < -1.0 || (duration > 0 && t > duration * 1.05)) {
+      hi = mid;
+      continue;
+    }
+    if (av_add_index_entry(st, cpos, cts, 0, 0, AVINDEX_KEYFRAME) >= 0)
+      added++;
+    if (t <= target_sec) {
+      if (best_pos < 0 || cpos > best_pos)
+        best_pos = cpos;
+      if (target_sec - t < 6.0)
+        break; // a GOP or two of forward reading — cheaper than another probe
+      lo = cpos + 1;
+    } else {
+      hi = mid; // the cluster starts at or after mid, so this always shrinks
+    }
+  }
+
+  js_probe_mode(0);
+  av_free(buf);
+  // The probes left the read cursor wherever the last one landed. Every caller
+  // follows this with a real seek that repositions anyway, but a failed search
+  // must not leave the demuxer reading from a random offset.
+  if (saved >= 0)
+    avio_seek(ctx->fmt_ctx->pb, saved, SEEK_SET);
+  return added > 0 ? 0 : -1;
+}
+
 int movi_seek_to(MoviContext *ctx, double timestamp, int stream_index,
                  int flags) {
   if (!ctx || !ctx->fmt_ctx)
@@ -218,6 +424,26 @@ int movi_seek_to(MoviContext *ctx, double timestamp, int stream_index,
           AVMEDIA_TYPE_VIDEO) {
     anchor = av_find_best_stream(ctx->fmt_ctx, AVMEDIA_TYPE_VIDEO, -1, -1, NULL,
                                  0);
+  }
+
+  // Nothing to look up? Then build the lookup first (see movi_mkv_index_near).
+  // Only when the index cannot serve this seek: a file WITH Cues, or one whose
+  // clusters have already been parsed once, comes through here untouched.
+  if (anchor >= 0 && movi_is_matroska(ctx)) {
+    AVStream *ast = ctx->fmt_ctx->streams[anchor];
+    double atb = av_q2d(ast->time_base);
+    if (atb <= 0)
+      atb = 0.001;
+    int64_t want = (int64_t)(timestamp / atb);
+    int idx = av_index_search_timestamp(ast, want, AVSEEK_FLAG_BACKWARD);
+    int usable = 0;
+    if (idx >= 0) {
+      const AVIndexEntry *e = avformat_index_get_entry(ast, idx);
+      if (e && (double)(want - e->timestamp) * atb <= MOVI_MKV_INDEX_TOLERANCE_S)
+        usable = 1;
+    }
+    if (!usable)
+      movi_mkv_index_near(ctx, anchor, timestamp);
   }
 
   int ret = -1;
