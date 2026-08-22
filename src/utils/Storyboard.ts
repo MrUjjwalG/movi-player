@@ -24,6 +24,15 @@ export interface StoryboardTile {
   y: number;
   width: number;
   height: number;
+  /**
+   * The whole mosaic's size, when it can be worked out — the spec states it,
+   * and a VTT track gives it away through the extents of its own cues. A
+   * caller painting the mosaic behind a window (rather than cropping it) needs
+   * it to scale the image: a tile's size alone says nothing about the sheet
+   * it sits in.
+   */
+  sheetWidth?: number;
+  sheetHeight?: number;
 }
 
 /** Mosaics described by their grid, rather than cue by cue. */
@@ -108,6 +117,25 @@ export class Storyboard {
     }
     if (cues.length === 0) return null;
     cues.sort((a, b) => a.start - b.start);
+    // The sheet is at least as big as the furthest corner any of its cues
+    // reaches. Every tile of a grid is the same size, so for a full sheet this
+    // is exact; for a part-filled last sheet it is the used area, which is what
+    // matters for placing tiles inside it anyway.
+    const extents = new Map<string, { w: number; h: number }>();
+    for (const cue of cues) {
+      const t = cue.tile;
+      const e = extents.get(t.url) ?? { w: 0, h: 0 };
+      e.w = Math.max(e.w, t.x + t.width);
+      e.h = Math.max(e.h, t.y + t.height);
+      extents.set(t.url, e);
+    }
+    for (const cue of cues) {
+      const e = extents.get(cue.tile.url);
+      if (e && e.w > 0 && e.h > 0) {
+        cue.tile.sheetWidth = e.w;
+        cue.tile.sheetHeight = e.h;
+      }
+    }
     return new Storyboard(cues, uniformStep(cues), cues[cues.length - 1].end);
   }
 
@@ -137,6 +165,8 @@ export class Storyboard {
             y: Math.floor(i / spec.columns) * spec.height,
             width: spec.width,
             height: spec.height,
+            sheetWidth: spec.columns * spec.width,
+            sheetHeight: spec.rows * spec.height,
           },
         });
       }

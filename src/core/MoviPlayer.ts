@@ -964,6 +964,25 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
     return this.storyboardSource !== null;
   }
 
+  /**
+   * The tile for a moment, RIGHT NOW — no promise, no crop, no encode.
+   *
+   * Cropping a tile into a blob costs a canvas draw, a JPEG encode and an
+   * image decode on the other side, and the caller has to await all of it. A
+   * caller that can paint the mosaic itself (the seek card, with a background
+   * offset) needs none of that: it needs the rectangle, and it needs it in the
+   * same frame the pointer moved. Returns null until the board is parsed —
+   * asking starts that, so the next move is answered.
+   */
+  getStoryboardTileSync(time: number): StoryboardTile | null {
+    if (!this.storyboardSource) return null;
+    if (!this.storyboard) {
+      void this.ensureStoryboard();
+      return null;
+    }
+    return this.storyboard.tileAt(time);
+  }
+
   private ensureStoryboard(): Promise<Storyboard | null> {
     if (this.storyboard) return Promise.resolve(this.storyboard);
     if (this.storyboardLoad) return this.storyboardLoad;

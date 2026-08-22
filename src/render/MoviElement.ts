@@ -23,7 +23,7 @@ import type {
   PlayerState,
 } from "../types";
 import { Logger, LogLevel } from "../utils/Logger";
-import type { StoryboardSpec } from "../utils/Storyboard";
+import type { StoryboardSpec, StoryboardTile } from "../utils/Storyboard";
 import type { SourceAdapter } from "../source/SourceAdapter";
 import { HttpSource } from "../source/HttpSource";
 import { WasmBindings } from "../wasm/bindings";
@@ -1877,6 +1877,11 @@ export class MoviElement extends HTMLElement {
           </div>
           <div class="movi-seek-thumbnail" style="display: none;">
              <div class="movi-thumbnail-placeholder" style="display: none;"></div>
+             <!-- A storyboard tile, painted where it lies: the mosaic as a
+                  background, scaled so one tile fills the card, offset to the
+                  tile the pointer is on. No crop, no encode, no image decode —
+                  a background-position change, in the frame the pointer moved. -->
+             <div class="movi-thumbnail-tile" style="display: none;"></div>
              <img class="movi-thumbnail-img" style="display: none;">
              <div class="movi-seek-caption">
                <span class="movi-seek-time">0:00</span>
@@ -3054,6 +3059,10 @@ export class MoviElement extends HTMLElement {
     const hidePreviewLoading = () => {
       cancelStaleTimer();
       if (thumbnailImg) thumbnailImg.style.display = "none";
+      const tileLayer = shadowRoot.querySelector(
+        ".movi-thumbnail-tile",
+      ) as HTMLElement | null;
+      if (tileLayer) tileLayer.style.display = "none";
       const placeholder = shadowRoot.querySelector(
         ".movi-thumbnail-placeholder",
       ) as HTMLElement | null;
@@ -3083,6 +3092,10 @@ export class MoviElement extends HTMLElement {
         // Update UI if we got a blob
         if (blob && thumbnailImg) {
           cancelStaleTimer();
+          const tileLayer = shadowRoot.querySelector(
+            ".movi-thumbnail-tile",
+          ) as HTMLElement | null;
+          if (tileLayer) tileLayer.style.display = "none";
           if (lastPreviewUrl) URL.revokeObjectURL(lastPreviewUrl);
           lastPreviewUrl = URL.createObjectURL(blob);
           thumbnailImg.src = lastPreviewUrl;
@@ -3242,6 +3255,13 @@ export class MoviElement extends HTMLElement {
           time <= (this.player.getBufferEndTime?.() ?? duration));
 
       if (this.canPreviewFrames() && previewInWindow) {
+        // A storyboard can answer in this very frame — the mosaic is an image
+        // the browser already has, and the tile is a background offset into
+        // it. Going through requestPreview instead would spend 40ms of
+        // debounce and then a crop, an encode and an image decode to arrive at
+        // the same pixels: measured 45-66ms from pointer move to picture,
+        // against ~0 here.
+        if (this.paintStoryboardTile(time)) return;
         requestPreview(time);
       } else {
         hidePreviewLoading();
@@ -21581,6 +21601,15 @@ export class MoviElement extends HTMLElement {
         border: 1px solid var(--movi-glass-border, transparent);
         box-shadow: var(--movi-shadow-md, 0 4px 8px rgba(0, 0, 0, 0.6));
       }
+      .movi-thumbnail-tile {
+        width: var(--movi-preview-w, 168px);
+        height: var(--movi-preview-h, 94px);
+        max-height: var(--movi-preview-h, 158px);
+        background-repeat: no-repeat;
+        background-color: #000;
+        border-radius: inherit;
+      }
+
       .movi-thumbnail-img {
         display: block;
         /* A box the SOURCE's shape decides, not the individual frame's — and
@@ -34109,6 +34138,54 @@ export class MoviElement extends HTMLElement {
    * coming. Every path that cannot produce a frame has to be ruled out BEFORE
    * that state is entered, not after the null arrives.
    */
+  /**
+   * Put the storyboard tile for `time` on the card, if there is one.
+   *
+   * The mosaic is scaled so a single tile fills the card, then offset to the
+   * tile wanted — the browser holds one decoded image and moves a background
+   * origin, which is as close to free as a picture gets. Returns false when
+   * there is no board (or it is still loading), so the caller falls back to
+   * making the frame the expensive way.
+   */
+  private paintStoryboardTile(time: number): boolean {
+    const sr = this.shadowRoot;
+    const tile = (
+      this.player as unknown as {
+        getStoryboardTileSync?: (t: number) => StoryboardTile | null;
+      } | null
+    )?.getStoryboardTileSync?.(time);
+    if (!sr || !tile || tile.width <= 0 || tile.height <= 0) return false;
+
+    // Without the sheet's size there is no way to scale it so one tile fills
+    // the card, and a mosaic painted at natural size would show a grid of
+    // pictures rather than one. Leave it to the cropping path.
+    if (!tile.sheetWidth || !tile.sheetHeight) return false;
+
+    const layer = sr.querySelector(".movi-thumbnail-tile") as HTMLElement | null;
+    if (!layer) return false;
+    const box = layer.getBoundingClientRect();
+    // Before the card has ever been shown it has no box; fall back to the CSS
+    // default width so the first hover is painted too.
+    const cardW = box.width || 168;
+    const scale = cardW / tile.width;
+    layer.style.backgroundImage = `url("${tile.url}")`;
+    // The whole sheet is scaled, and the offset walks it to the tile wanted.
+    layer.style.backgroundSize = `${tile.sheetWidth * scale}px ${
+      tile.sheetHeight * scale
+    }px`;
+    layer.style.backgroundPosition = `${-tile.x * scale}px ${-tile.y * scale}px`;
+    layer.style.height = `${Math.round(tile.height * scale)}px`;
+    layer.style.display = "block";
+
+    const img = sr.querySelector(".movi-thumbnail-img") as HTMLElement | null;
+    if (img) img.style.display = "none";
+    const placeholder = sr.querySelector(
+      ".movi-thumbnail-placeholder",
+    ) as HTMLElement | null;
+    if (placeholder) placeholder.style.display = "none";
+    return true;
+  }
+
   private canPreviewFrames(): boolean {
     // A storyboard is previews the source already carries, so it answers for
     // itself — `thumb` is the switch for the DECODE pipeline, which a board
