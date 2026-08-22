@@ -102,6 +102,14 @@ typedef struct {
   char *text; // null-terminated, malloc-owned
 } PrefetchedSubCue;
 
+// Seeking a Matroska that carries no usable index: see movi_streams.c. Shared
+// with the thumbnail pipeline, which opens its own AVFormatContext over the
+// same file and would otherwise read forward from the start for every preview.
+int movi_fmt_is_matroska(const AVFormatContext *fmt);
+int movi_mkv_index_misses(AVStream *st, double target_sec);
+int movi_mkv_index_near_fmt(AVFormatContext *fmt, int64_t file_size, int anchor,
+                            double target_sec);
+
 // Demuxer context with custom AVIO
 typedef struct {
   AVFormatContext *fmt_ctx;

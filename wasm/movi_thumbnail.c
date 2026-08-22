@@ -270,6 +270,18 @@ void movi_thumbnail_read_keyframe(struct MoviThumbnailContext *ctx,
     avio_flush(ctx->avio_ctx);
   }
 
+  // A Matroska with no usable index has nothing for the demuxer to look up, so
+  // its seek reads FORWARD from wherever the file happens to be — for a preview
+  // strip that is a gigabyte of download per hovered second. The player's own
+  // seek builds the missing index by bisecting clusters; the previews open
+  // their own AVFormatContext over the same file, so they have to ask for it
+  // too (movi_mkv_index_near_fmt).
+  if (movi_fmt_is_matroska(ctx->fmt_ctx) &&
+      movi_mkv_index_misses(st, timestamp)) {
+    movi_mkv_index_near_fmt(ctx->fmt_ctx, ctx->file_size,
+                            ctx->video_stream_index, timestamp);
+  }
+
   // Use avformat_seek_file like the main player does - it's more robust
   int ret = avformat_seek_file(ctx->fmt_ctx, -1, INT64_MIN, seek_target,
                                seek_target, AVSEEK_FLAG_BACKWARD);

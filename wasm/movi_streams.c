@@ -202,12 +202,14 @@ EM_JS(void, js_probe_mode, (int on), {
     Module.onProbeMode(on);
 });
 
-static int movi_is_matroska(const MoviContext *ctx) {
-  const char *n = (ctx && ctx->fmt_ctx && ctx->fmt_ctx->iformat)
-                      ? ctx->fmt_ctx->iformat->name
-                      : NULL;
+int movi_fmt_is_matroska(const AVFormatContext *fmt) {
+  const char *n = (fmt && fmt->iformat) ? fmt->iformat->name : NULL;
   return n && (strcmp(n, "matroska,webm") == 0 || strcmp(n, "matroska") == 0 ||
                strcmp(n, "webm") == 0);
+}
+
+static int movi_is_matroska(const MoviContext *ctx) {
+  return ctx && movi_fmt_is_matroska(ctx->fmt_ctx);
 }
 
 // One EBML variable-length integer. Element IDs are written WITH their length
@@ -237,11 +239,12 @@ static int64_t movi_ebml_vint(const uint8_t *buf, int len, int *p,
 // Find the first Cluster at or after `from` and read its timestamp, in the
 // stream time base (Matroska scales both by TimecodeScale, so a cluster's
 // stored value IS its pts). Returns 0 on success.
-static int movi_mkv_probe_cluster(MoviContext *ctx, int64_t from, uint8_t *buf,
-                                  int64_t *out_pos, int64_t *out_ts) {
+static int movi_mkv_probe_cluster(AVFormatContext *fmt, int64_t file_size,
+                                  int64_t from, uint8_t *buf, int64_t *out_pos,
+                                  int64_t *out_ts) {
   if (from < 0)
     from = 0;
-  if (ctx->file_size > 0 && from >= ctx->file_size)
+  if (file_size > 0 && from >= file_size)
     return -1;
   // Keep reading forward until a cluster turns up. One window is not enough:
   // this file's clusters run about a megabyte, so a 256KB look at a random
@@ -253,11 +256,11 @@ static int movi_mkv_probe_cluster(MoviContext *ctx, int64_t from, uint8_t *buf,
   // the answer just lies a little past where we looked.
   int64_t scanned = 0;
   while (scanned < MOVI_MKV_PROBE_SCAN) {
-  if (ctx->file_size > 0 && from >= ctx->file_size)
+  if (file_size > 0 && from >= file_size)
     return -1;
-  if (avio_seek(ctx->fmt_ctx->pb, from, SEEK_SET) < 0)
+  if (avio_seek(fmt->pb, from, SEEK_SET) < 0)
     return -1;
-  int got = avio_read(ctx->fmt_ctx->pb, buf, MOVI_MKV_PROBE_WINDOW);
+  int got = avio_read(fmt->pb, buf, MOVI_MKV_PROBE_WINDOW);
   if (got <= 16)
     return -1;
   for (int i = 0; i + 12 < got; i++) {
@@ -301,10 +304,12 @@ static int movi_mkv_probe_cluster(MoviContext *ctx, int64_t from, uint8_t *buf,
 
 // Binary-search the file for the cluster covering `target_sec` and feed what it
 // finds into the stream's index. Returns 0 if the index gained anything.
-static int movi_mkv_index_near(MoviContext *ctx, int anchor, double target_sec) {
-  if (!movi_is_matroska(ctx) || anchor < 0 || ctx->file_size <= 0)
+int movi_mkv_index_near_fmt(AVFormatContext *fmt, int64_t file_size, int anchor,
+                            double target_sec) {
+  if (!movi_fmt_is_matroska(fmt) || anchor < 0 || file_size <= 0 ||
+      anchor >= (int)fmt->nb_streams)
     return -1;
-  AVStream *st = ctx->fmt_ctx->streams[anchor];
+  AVStream *st = fmt->streams[anchor];
   double tbd = av_q2d(st->time_base);
   if (tbd <= 0)
     tbd = 0.001;
@@ -312,14 +317,14 @@ static int movi_mkv_index_near(MoviContext *ctx, int anchor, double target_sec) 
   if (!buf)
     return -1;
 
-  const int64_t saved = avio_tell(ctx->fmt_ctx->pb);
+  const int64_t saved = avio_tell(fmt->pb);
   js_probe_mode(1);
   const int64_t deadline =
       av_gettime_relative() + (int64_t)MOVI_MKV_PROBE_MS * 1000;
-  const double duration = ctx->fmt_ctx->duration != AV_NOPTS_VALUE
-                              ? (double)ctx->fmt_ctx->duration / AV_TIME_BASE
+  const double duration = fmt->duration != AV_NOPTS_VALUE
+                              ? (double)fmt->duration / AV_TIME_BASE
                               : 0.0;
-  int64_t lo = 0, hi = ctx->file_size;
+  int64_t lo = 0, hi = file_size;
   int64_t best_pos = -1;
   int added = 0;
 
@@ -328,7 +333,7 @@ static int movi_mkv_index_near(MoviContext *ctx, int anchor, double target_sec) 
       break;
     int64_t mid = lo + (hi - lo) / 2;
     int64_t cpos = 0, cts = 0;
-    if (movi_mkv_probe_cluster(ctx, mid, buf, &cpos, &cts) < 0) {
+    if (movi_mkv_probe_cluster(fmt, file_size, mid, buf, &cpos, &cts) < 0) {
       // Nothing between here and the end of the scan — treat everything from
       // mid onwards as unusable rather than moving the low bound up, which is
       // what let a miss drag the search past the target.
@@ -361,8 +366,27 @@ static int movi_mkv_index_near(MoviContext *ctx, int anchor, double target_sec) 
   // follows this with a real seek that repositions anyway, but a failed search
   // must not leave the demuxer reading from a random offset.
   if (saved >= 0)
-    avio_seek(ctx->fmt_ctx->pb, saved, SEEK_SET);
+    avio_seek(fmt->pb, saved, SEEK_SET);
   return added > 0 ? 0 : -1;
+}
+
+/**
+ * True when this stream's index cannot answer a seek to `target_sec` — no
+ * entry at or before it, or the nearest one so far behind that landing there
+ * means reading forward through the very stretch the index was meant to skip.
+ */
+int movi_mkv_index_misses(AVStream *st, double target_sec) {
+  double tb = av_q2d(st->time_base);
+  if (tb <= 0)
+    tb = 0.001;
+  int64_t want = (int64_t)(target_sec / tb);
+  int idx = av_index_search_timestamp(st, want, AVSEEK_FLAG_BACKWARD);
+  if (idx < 0)
+    return 1;
+  const AVIndexEntry *e = avformat_index_get_entry(st, idx);
+  if (!e)
+    return 1;
+  return (double)(want - e->timestamp) * tb > MOVI_MKV_INDEX_TOLERANCE_S;
 }
 
 int movi_seek_to(MoviContext *ctx, double timestamp, int stream_index,
@@ -429,21 +453,9 @@ int movi_seek_to(MoviContext *ctx, double timestamp, int stream_index,
   // Nothing to look up? Then build the lookup first (see movi_mkv_index_near).
   // Only when the index cannot serve this seek: a file WITH Cues, or one whose
   // clusters have already been parsed once, comes through here untouched.
-  if (anchor >= 0 && movi_is_matroska(ctx)) {
-    AVStream *ast = ctx->fmt_ctx->streams[anchor];
-    double atb = av_q2d(ast->time_base);
-    if (atb <= 0)
-      atb = 0.001;
-    int64_t want = (int64_t)(timestamp / atb);
-    int idx = av_index_search_timestamp(ast, want, AVSEEK_FLAG_BACKWARD);
-    int usable = 0;
-    if (idx >= 0) {
-      const AVIndexEntry *e = avformat_index_get_entry(ast, idx);
-      if (e && (double)(want - e->timestamp) * atb <= MOVI_MKV_INDEX_TOLERANCE_S)
-        usable = 1;
-    }
-    if (!usable)
-      movi_mkv_index_near(ctx, anchor, timestamp);
+  if (anchor >= 0 && movi_is_matroska(ctx) &&
+      movi_mkv_index_misses(ctx->fmt_ctx->streams[anchor], timestamp)) {
+    movi_mkv_index_near_fmt(ctx->fmt_ctx, ctx->file_size, anchor, timestamp);
   }
 
   int ret = -1;
