@@ -137,6 +137,41 @@ player.addEventListener("ended", () => console.log("done"));
 
 The element implements the same `play()` / `pause()` / `currentTime` / events surface as `<video>`, so most existing logic carries over with a `getElementById` instead of a `videojs()` factory call.
 
+#### The markup carries over as-is
+
+The pieces video.js reads from the element are read here too, so a page can
+usually change `<video class="video-js">` to `<movi-player>` and stop:
+
+```html
+<movi-player class="video-js" controls preload="auto" width="640" height="360"
+             poster="poster.jpg" data-setup='{"muted": true}'>
+  <source src="movie.mp4" type="video/mp4">
+  <track kind="captions" src="en.vtt" srclang="en" label="English" default>
+  <track kind="metadata" label="thumbnails" src="thumbs.vtt">
+  <p class="vjs-no-js">To view this video please enable JavaScript…</p>
+</movi-player>
+```
+
+- `data-setup` is applied as attributes — `controls`, `autoplay`, `muted`,
+  `loop`, `poster`, `preload`, `width`, `height`, the first of `sources`, and
+  `spriteThumbnails`. An attribute written out longhand wins over the JSON.
+- `<track kind="captions">` / `kind="subtitles"` become subtitle tracks, and
+  `default` selects one.
+- `<track kind="metadata" label="thumbnails">` (video.js's spelling) and
+  `kind="thumbnails"` (JW Player's) both become scrub previews — a sprite VTT
+  with `#xywh=` rectangles, or one image per cue.
+- Unslotted children like `<p class="vjs-no-js">` are not rendered.
+
+The `videojs-sprite-thumbnails` options work unchanged, either through
+`data-setup` or as a property:
+
+```js
+player.storyboard = {
+  url: "sprite-{index}.jpg",
+  width: 160, height: 90, columns: 5, rows: 5, interval: 3,
+};
+```
+
 #### Multiple sources / split source
 
 Movi Player accepts child `<source>` elements just like `<video>`, so the `<source>` fallback pattern keeps working:
