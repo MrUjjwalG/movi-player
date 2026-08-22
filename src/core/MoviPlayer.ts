@@ -879,6 +879,108 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
     if (enabled) this.previewInitGaveUp = false;
   }
 
+  /**
+   * The longest edge a preview JPEG is worth encoding at.
+   *
+   * The card is about 160px wide. Encoding the frame at its own size — 1920,
+   * or 3840 on a 4K source — spends the time on pixels the browser then throws
+   * away scaling it down: measured at 519KB and ~45ms a frame on 4K60, per
+   * hovered position, on a fast desktop. Downscaling first costs one draw.
+   */
+  private static readonly PREVIEW_MAX_EDGE = 480;
+  private previewScaleCanvas: OffscreenCanvas | HTMLCanvasElement | null = null;
+
+  /**
+   * Frames already made, kept by the second they belong to.
+   *
+   * Scrubbing asks for a new time every few pixels of pointer travel, and the
+   * pipeline is one decoder: each request seeks, decodes and encodes from
+   * scratch, so a viewer moving back and forth over the same stretch paid for
+   * the same frames again and again — and the card sat on its loading state
+   * every time. A second is finer than the strip can show, so quantising to it
+   * costs nothing and makes the second pass over any stretch instant.
+   *
+   * Bounded and insertion-ordered: the oldest entry goes when it is full, which
+   * for scrubbing is the part of the timeline the pointer has left behind.
+   */
+  private static readonly PREVIEW_CACHE_MAX = 64;
+  private previewCache = new Map<number, Blob>();
+
+  /** The cache key for a time, or null when the frame can't be reused. */
+  private previewKey(time: number, view?: VRView | null): number | null {
+    // A 360 preview is reprojected to wherever the viewer is looking, so the
+    // same second is a different picture from one moment to the next.
+    if (view) return null;
+    if (!Number.isFinite(time)) return null;
+    return Math.round(time);
+  }
+
+  private rememberPreview(key: number, blob: Blob): void {
+    this.previewCache.set(key, blob);
+    while (this.previewCache.size > MoviPlayer.PREVIEW_CACHE_MAX) {
+      const oldest = this.previewCache.keys().next();
+      if (oldest.done) break;
+      this.previewCache.delete(oldest.value);
+    }
+  }
+
+  /** Drop remembered frames — the pictures behind them are no longer the file. */
+  private clearPreviewCache(): void {
+    this.previewCache.clear();
+  }
+
+  /**
+   * Encode what has been rendered into `src` as a preview JPEG, shrinking it
+   * first when it is bigger than a preview needs to be.
+   */
+  private encodePreviewBlob(
+    src: OffscreenCanvas | HTMLCanvasElement,
+  ): Promise<Blob | null> {
+    const w = src.width;
+    const h = src.height;
+    const longest = Math.max(w, h);
+    let out: OffscreenCanvas | HTMLCanvasElement = src;
+    if (longest > MoviPlayer.PREVIEW_MAX_EDGE && w > 0 && h > 0) {
+      const scale = MoviPlayer.PREVIEW_MAX_EDGE / longest;
+      const dw = Math.max(1, Math.round(w * scale));
+      const dh = Math.max(1, Math.round(h * scale));
+      if (
+        !this.previewScaleCanvas ||
+        this.previewScaleCanvas.width !== dw ||
+        this.previewScaleCanvas.height !== dh
+      ) {
+        if (typeof OffscreenCanvas !== "undefined") {
+          this.previewScaleCanvas = new OffscreenCanvas(dw, dh);
+        } else {
+          const c = document.createElement("canvas");
+          c.width = dw;
+          c.height = dh;
+          this.previewScaleCanvas = c;
+        }
+      }
+      const ctx = (
+        this.previewScaleCanvas as HTMLCanvasElement
+      ).getContext("2d") as
+        | CanvasRenderingContext2D
+        | OffscreenCanvasRenderingContext2D
+        | null;
+      if (ctx) {
+        ctx.drawImage(src as CanvasImageSource, 0, 0, dw, dh);
+        out = this.previewScaleCanvas;
+      }
+    }
+    if (typeof OffscreenCanvas !== "undefined" && out instanceof OffscreenCanvas) {
+      return out.convertToBlob({ type: "image/jpeg", quality: 0.7 });
+    }
+    return new Promise<Blob | null>((resolve) => {
+      (out as HTMLCanvasElement).toBlob(
+        (blob) => resolve(blob),
+        "image/jpeg",
+        0.7,
+      );
+    });
+  }
+
   private previewsAllowed(): boolean {
     if (!this.config.enablePreviews) return false;
     // Non-range sources keep previews ON: the thumbnail source borrows frames
@@ -1541,6 +1643,10 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
     if (!this.stateManager.is("idle") && !sourceConfig) {
       throw new Error("Player must be idle to load");
     }
+
+    // …and its own previews: the frames remembered for the last one are not
+    // this one's picture at those times.
+    this.clearPreviewCache();
 
     // A new source gets its own attempts at catching the picture up; what the
     // last one spent says nothing about this one (see _videoLagSince).
@@ -7593,6 +7699,15 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
     // cheaper than the FFmpeg path, which can't byte-range-seek a stream.
     if (this.streamWrapper) return (this.streamWrapper as any).getThumbnailBlob?.(time) ?? null;
     if (this.previewInitGaveUp) return null; // Init failed repeatedly — stop retrying (and re-loading WASM)
+    // Already made this one (see previewCache). Answered before the in-flight
+    // lock below, so a pointer moving back over ground it has already covered
+    // gets its frame at once — even while another one is being decoded, which
+    // during a scrub is most of the time.
+    const key = this.previewKey(time, view);
+    if (key !== null) {
+      const cached = this.previewCache.get(key);
+      if (cached) return cached;
+    }
     if (this.isPreviewGenerating) {
       if (!queue) return null; // Busy — the hover path would rather have nothing
       // Wait it out, then take our turn. Re-entered rather than looped: by the
@@ -8008,21 +8123,13 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
       }
 
       if (rendered) {
-        const canvas = this.thumbnailRenderer!.getCanvas();
-        if ("toBlob" in canvas) {
-          return new Promise<Blob | null>((resolve) => {
-            // @ts-ignore
-            canvas.toBlob((blob) => resolve(blob), "image/jpeg", 0.7);
-          });
-        }
-        // If OffscreenCanvas (unlikely here but possible if strict types used)
-        if ("convertToBlob" in canvas) {
-          // @ts-ignore
-          return await canvas.convertToBlob({
-            type: "image/jpeg",
-            quality: 0.7,
-          });
-        }
+        const blob = await this.encodePreviewBlob(
+          this.thumbnailRenderer!.getCanvas() as
+            | OffscreenCanvas
+            | HTMLCanvasElement,
+        );
+        if (blob && key !== null) this.rememberPreview(key, blob);
+        return blob;
       }
 
       return null;
