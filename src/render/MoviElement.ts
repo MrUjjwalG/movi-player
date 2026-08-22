@@ -8427,6 +8427,19 @@ export class MoviElement extends HTMLElement {
   // keep the error from being raised again on every subsequent tick. Cleared
   // the moment playback actually recovers, alongside _stuckRecoveries.
   private _stuckGaveUp = false;
+  // Rung rescues spent from the STUCK path, separately from the nudge budget.
+  //
+  // A nudge moves the playhead, which is the right move for a byte range that
+  // will not come. It is the wrong move — and can never be the right one — when
+  // the bytes are arriving and it is the DECODE that has stopped: seen on an
+  // 8K AV1 HDR file where ABR climbed 1440p → 2160p, the new decoder configured
+  // (`av01.0.13M.10 3840x2160`, hardware) and then never produced a single
+  // frame, while audio kept decoding and the source kept reading at 4-6 MB/s.
+  // Three nudges later the watchdog declared the video dead of a network fault
+  // it had no evidence for. Dropping a rung is what addresses that, so the
+  // stuck path gets its own small budget for it before it is allowed to give up.
+  private _stuckRungRescues = 0;
+  private static readonly MAX_STUCK_RUNG_RESCUES = 2;
   // Set only by the decode-downshift recreate so its own load() keeps the ceiling
   // (every other load clears it, so the next source re-attempts its top rung).
   private _preserveDecodeCapOnce = false;
@@ -14792,6 +14805,7 @@ export class MoviElement extends HTMLElement {
       // budget now ends playback) primed to give up on its first stall.
       if (st === "playing" || st === "idle" || st === "loading") {
         this._stuckRecoveries = 0;
+        this._stuckRungRescues = 0;
         this._stuckGaveUp = false;
       }
       return;
@@ -14863,20 +14877,69 @@ export class MoviElement extends HTMLElement {
     // the `error` event a host could act on — to say why. Ending here is the
     // honest outcome, and the same overlay a fatal load error already shows.
     if (this._stuckRecoveries >= MoviElement.MAX_STUCK_RECOVERIES) {
-      if (this._stuckGaveUp) return;
-      this._stuckGaveUp = true;
       // Prefer the source's own reason — an expired link, a revoked token —
       // over the generic stall, so the overlay can say something true.
       const failure = p.getSourceFailure?.() ?? null;
+
+      // The source has NO complaint. That is evidence, not an absence of it:
+      // the bytes are fine and something downstream is failing to turn them
+      // into a picture. Nudging cannot reach that, and three nudges have just
+      // proved it — so spend a rung before spending the viewer's session.
+      // Bounded, because a file that decodes at no rung has to end somewhere.
+      if (
+        !failure &&
+        this._stuckRungRescues < MoviElement.MAX_STUCK_RUNG_RESCUES &&
+        this._rescueRung(`stuck in "${st}" with the source reporting no fault`)
+      ) {
+        this._stuckRungRescues++;
+        // A fresh budget for the rung we are dropping to. It is a different
+        // rendition with a different decoder path; it deserves the same
+        // chances the last one got, not the last one's exhausted tally.
+        this._stuckRecoveries = 0;
+        this._stuckRecoverySince = 0;
+        Logger.warn(
+          TAG,
+          `Playback stuck in "${st}" and the source reports no fault — dropping a rung ` +
+            `(rescue ${this._stuckRungRescues}/${MoviElement.MAX_STUCK_RUNG_RESCUES}) before giving up`,
+        );
+        return;
+      }
+
+      if (this._stuckGaveUp) return;
+      this._stuckGaveUp = true;
+      // What to blame, when the source has not named anything.
+      //
+      // "no data arrived" was the only answer here, and on the decode-stall
+      // above it is simply false — it sent a viewer to check a connection that
+      // was delivering several MB/s, and it routes the overlay away from the
+      // one button that could have helped (see the `Playback stalled` branch in
+      // the error handler, which reads it as a byte-starved pipeline). If the
+      // renderer has never presented a frame, the pipeline is not starving; it
+      // is not decoding, and the message has to say so for the overlay to offer
+      // software decoding.
+      // `null` means there is no frame counter to read — the picture is going
+      // through the browser's MSE (HLS/DASH), where movi decodes nothing and
+      // "try software decoding" is not an answer to anything. Only OUR pipeline
+      // can be accused of not decoding, so a null reading keeps the old message.
+      const health = (
+        p as unknown as {
+          getRenderHealth?: () => { framesPresented: number } | null;
+        }
+      ).getRenderHealth?.();
+      const neverDecoded = !!health && health.framesPresented === 0;
+      const stall = neverDecoded
+        ? new Error(
+            "Playback stalled: the decoder produced no frames for this rendition",
+          )
+        : new Error("Playback stalled: no data arrived after repeated retries");
       Logger.error(
         TAG,
-        `Playback stuck in "${st}" after ${MoviElement.MAX_STUCK_RECOVERIES} recovery attempts — giving up`,
+        `Playback stuck in "${st}" after ${MoviElement.MAX_STUCK_RECOVERIES} recovery attempts ` +
+          `and ${this._stuckRungRescues} rung rescue(s) — giving up ` +
+          `(framesPresented=${health ? health.framesPresented : "n/a"})`,
         failure,
       );
-      p.failFatally?.(
-        failure ??
-          new Error("Playback stalled: no data arrived after repeated retries"),
-      );
+      p.failFatally?.(failure ?? stall);
       return;
     }
     this._stuckRecoveries++;
@@ -26528,10 +26591,23 @@ export class MoviElement extends HTMLElement {
       } else if (raw.includes("Stream failed after")) {
         title = "Connection Lost";
         message = "The connection dropped while playing. Check your network, then try again.";
+      } else if (raw.includes("the decoder produced no frames")) {
+        // The stuck watchdog gave up having never seen a frame presented, with
+        // the source reporting no fault — so the bytes were arriving and the
+        // DECODE is what stopped. Seen on 4K/8K AV1 HDR, where the rendition
+        // configures happily on hardware and then emits nothing. "Playback
+        // Error" is the title that classifies as a decoder fault, which is what
+        // puts the "Try Software Decoding" button on the overlay; sending this
+        // to the byte-starved branch below offered a connection check instead,
+        // for a link that was delivering several MB/s.
+        title = "Playback Error";
+        message =
+          "The decoder stopped producing frames for this quality. Try software decoding — it handles more.";
       } else if (raw.includes("Playback stalled")) {
         // The stuck watchdog ran out of nudges without the source naming a
-        // reason. Nothing here points at the decoder, so this must not fall
-        // through to the generic branch — that one offers "Try Software
+        // reason, AND frames had been flowing before it stopped — so this is a
+        // pipeline that ran dry, not one that cannot decode. It must not fall
+        // through to the generic branch: that one offers "Try Software
         // Decoding", which cannot help a pipeline that is receiving no bytes.
         title = "Playback Stopped";
         message = "The video stopped loading. Check your connection, then try again.";
