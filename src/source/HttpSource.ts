@@ -643,11 +643,35 @@ export class HttpSource implements SourceAdapter {
         // treated as "the file is unreachable". Recover the size from a ranged
         // GET (then a plain GET) before retrying/failing — mirrors the 403/401
         // fallback above. (issue #14)
+        //
+        // The question "is this origin refusing US, or is it the HEAD it does
+        // not like?" is asked ALONGSIDE those two, not after them: the answer
+        // takes about as long as they do, and a CORS block fails all three the
+        // same way. Started here, read below — so a refusal costs no more time
+        // than the fallbacks that were going to run anyway.
+        const refusalProbe =
+          (err as { name?: string })?.name === "TypeError" ? this.originRefusesUs() : null;
         const sizeViaRange = await this.resolveSizeViaRange();
         if (sizeViaRange !== null) return sizeViaRange;
         const sizeViaGet = await this.resolveSizeViaPlainGet();
         if (sizeViaGet !== null) return sizeViaGet;
         lastError = err instanceof Error ? err : new Error(String(err));
+
+        // Three ways of asking have all been refused. If the origin answers a
+        // no-cors probe, the file is there and this page is simply not allowed
+        // to read it — a permission, not a hiccup, and no number of retries
+        // turns a permission into a yes. Stop now so whatever comes next
+        // (native fallback, an error the viewer can act on) happens promptly:
+        // measured on archive.org, which redirects to a node with no
+        // Allow-Origin header, this loop spent twelve blocked requests and
+        // 10.5s before handing over to a <video> that plays the file instantly.
+        const online =
+          typeof self === "undefined" || !self.navigator || self.navigator.onLine;
+        if (refusalProbe && online && (await refusalProbe)) {
+          throw new Error(
+            "Failed to fetch video resource. Check your connection or CORS settings.",
+          );
+        }
       }
 
       if (attempt < MAX_ATTEMPTS - 1) {
@@ -1383,6 +1407,26 @@ export class HttpSource implements SourceAdapter {
           if (isOffline) {
             // Clearly offline — not a CORS issue
             consecutiveOnlineFetchFailures = 0;
+          } else if (await this.originRefusesUs()) {
+            // Asked, rather than inferred. "Failed to fetch" reads the same
+            // whether a host refused this page or was not there, and waiting
+            // for three of them to decide costs three round trips plus their
+            // backoff — measured at twelve blocked requests and ~12s before a
+            // player with fallback="native" gave up and handed over, on a file
+            // the browser itself plays instantly. A no-cors probe needs no
+            // permission and only has to answer: if it does, the bytes are
+            // there and the block is CORS, which no amount of retrying fixes.
+            const corsError = new Error(
+              "Failed to fetch video resource. Check your connection or CORS settings."
+            );
+            Logger.error(
+              TAG,
+              `CORS error accessing ${this.url} — the origin answered a no-cors probe but refuses this page`,
+            );
+            this.atomicSetStreaming(false);
+            this.streamError = corsError;
+            this.fatalError = corsError;
+            throw corsError;
           } else {
             // Online but fetch failed — could be transient network drop OR CORS
             consecutiveOnlineFetchFailures++;
@@ -1761,6 +1805,37 @@ export class HttpSource implements SourceAdapter {
         await this.reader.cancel();
       } catch {}
       this.reader = null;
+    }
+  }
+
+  /**
+   * Is the origin there, and simply refusing us?
+   *
+   * A no-cors request is one the browser will send anywhere: the response is
+   * opaque, so nothing can be read from it, but the fact that it RESOLVED means
+   * the server answered. Paired with a CORS-mode fetch that failed, that is the
+   * difference between "this host will not share with this page" (permanent)
+   * and "this host is not reachable" (worth retrying).
+   */
+  private async originRefusesUs(): Promise<boolean> {
+    try {
+      const cutoff = new AbortController();
+      const timer = setTimeout(() => cutoff.abort(), 1500);
+      try {
+        await fetch(this.url, {
+          method: "HEAD",
+          mode: "no-cors",
+          cache: "no-store",
+          signal: cutoff.signal,
+        });
+        return true;
+      } finally {
+        clearTimeout(timer);
+      }
+    } catch {
+      // No answer (or too slow to wait for): treat it as a network problem and
+      // let the ordinary retry path have its go.
+      return false;
     }
   }
 

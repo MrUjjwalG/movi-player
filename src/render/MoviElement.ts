@@ -699,6 +699,11 @@ export class MoviElement extends HTMLElement {
   private _playsinline: boolean = false;
   private _preload: "none" | "metadata" | "auto" = "auto";
   private _poster: string = "";
+  /** Which of the two sizes this element wrote itself (see applySizeAttributes). */
+  private _sizedByAttr: { width: boolean; height: boolean } = {
+    width: false,
+    height: false,
+  };
   private _volume: number = 1.0;
   private _playbackRate: number = 1.0;
   // Subtitle delay in seconds (VLC/mpv sign convention). Not persisted to
@@ -842,6 +847,19 @@ export class MoviElement extends HTMLElement {
       if (kind === "metadata" && named) return src;
     }
     return null;
+  }
+
+  /**
+   * The RemotePlayback object, when there is something that has one.
+   *
+   * Casting an AirPlay/Remote Playback target needs a real media element, and
+   * on the WASM path the picture is a canvas — there is nothing to hand over.
+   * In native fallback the `<video>` underneath is the real thing, so code
+   * written against `video.remote` reaches it. Null otherwise, which is what a
+   * caller has to handle anyway on a browser without the API.
+   */
+  get remote(): unknown {
+    return (this.video as unknown as { remote?: unknown } | null)?.remote ?? null;
   }
 
   /** thumb="precise" — anything else (including a bare `thumb`) is keyframes. */
@@ -1199,6 +1217,7 @@ export class MoviElement extends HTMLElement {
     return [
       "src",
       "storyboard",
+      "autopictureinpicture",
       "autoplay",
       "controls",
       "loop",
@@ -23384,6 +23403,7 @@ export class MoviElement extends HTMLElement {
     // Before anything measures anything: a player given a width and no height
     // has to get its height from its own shape, not from its contents. See
     // applyIntrinsicAspect.
+    this.applySizeAttributes();
     this.applyIntrinsicAspect();
 
     // Remembered settings go on BEFORE the first load, so the player opens on
@@ -24290,6 +24310,12 @@ export class MoviElement extends HTMLElement {
         this._preload = (newValue as "none" | "metadata" | "auto") || "auto";
         break;
       case "poster":
+        // A poster set (or changed) after the handoff has to reach the element
+        // that is actually showing it — see engageNativeFallback.
+        if (this._nativeFallbackActive && this.video) {
+          if (newValue) this.video.setAttribute("poster", newValue);
+          else this.video.removeAttribute("poster");
+        }
         this._poster = newValue || "";
         this.updatePoster();
         break;
@@ -24321,6 +24347,9 @@ export class MoviElement extends HTMLElement {
         break;
       case "width":
       case "height":
+        // The attribute is a size, the way it is on <video> — see
+        // applySizeAttributes.
+        this.applySizeAttributes();
         // A height of the author's own retires the fallback ratio (and setting
         // one back to nothing brings it back) — see applyIntrinsicAspect.
         this.applyIntrinsicAspect();
@@ -24477,6 +24506,43 @@ export class MoviElement extends HTMLElement {
    * given a height of their own — with one, `height: 100%` is definite and CSS
    * ignores `aspect-ratio` anyway, so this stays out of the way.
    */
+  /**
+   * `width` / `height` attributes, as a `<video>` would answer them.
+   *
+   * On a replaced element those are presentational hints the browser turns into
+   * a CSS size. A custom element gets no such treatment: the attribute sits
+   * there meaning nothing, so markup carried over from a `<video>` — or written
+   * by someone who reasonably expects HTML to behave like HTML — rendered at
+   * whatever width the container gave it. A page that said 620 got 1710.
+   *
+   * Written as inline style, and only over a size this element put there
+   * itself: a host that styles the player in its own CSS is saying something
+   * more specific than the attribute, and setting the attribute back to nothing
+   * takes the size away again.
+   */
+  private applySizeAttributes(): void {
+    for (const [attr, prop] of [
+      ["width", "width"],
+      ["height", "height"],
+    ] as const) {
+      const raw = (this.getAttribute(attr) || "").trim();
+      if (!raw) {
+        if (this.style.getPropertyValue(prop) && this._sizedByAttr[attr]) {
+          this.style.removeProperty(prop);
+          this._sizedByAttr[attr] = false;
+        }
+        continue;
+      }
+      // A bare number is pixels, as in HTML; anything else (a percentage, a
+      // calc) is taken as the CSS the author wrote.
+      const value = /^\d+(\.\d+)?$/.test(raw) ? `${raw}px` : raw;
+      const current = this.style.getPropertyValue(prop);
+      if (current && !this._sizedByAttr[attr]) continue; // the host's own size wins
+      this.style.setProperty(prop, value);
+      this._sizedByAttr[attr] = true;
+    }
+  }
+
   private applyIntrinsicAspect(): void {
     if (this.hasAttribute("height") || this.style.height) {
       this.style.removeProperty("aspect-ratio");
@@ -29461,6 +29527,24 @@ export class MoviElement extends HTMLElement {
     if (this.posterElement) this.posterElement.style.display = "none";
     this.setSpinnerVisible(false);
     v.controls = false;
+    // The poster goes WITH the picture.
+    //
+    // Movi paints its own poster over the canvas, and the canvas is what just
+    // went away — so hiding that overlay (above) without handing the poster to
+    // the element now doing the showing left a black box where the artwork was.
+    // The native element has its own poster machinery, and it is better than a
+    // borrowed overlay: it clears itself the moment playback starts, and it
+    // comes along into fullscreen and Picture-in-Picture.
+    const posterUrl = this._poster || this._generatedPosterUrl || "";
+    if (posterUrl) v.setAttribute("poster", posterUrl);
+    else v.removeAttribute("poster");
+    // Auto-PiP is the browser's own behaviour on a media element, not something
+    // a canvas can imitate — so it goes where it can mean something.
+    if (this.hasAttribute("autopictureinpicture")) {
+      v.setAttribute("autopictureinpicture", "");
+    } else {
+      v.removeAttribute("autopictureinpicture");
+    }
     v.style.display = "block";
     v.style.objectFit =
       this._objectFit === "cover" || this._objectFit === "fill"

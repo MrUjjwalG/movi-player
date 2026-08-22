@@ -229,6 +229,13 @@ export interface MoviPlayerAttributes {
    */
   storyboard?: string;
 
+  /**
+   * Enter Picture-in-Picture automatically when the tab is hidden, as the
+   * attribute does on `<video>`. Only meaningful while the native element is
+   * carrying playback — a canvas has no auto-PiP of its own.
+   */
+  autopictureinpicture?: boolean | "";
+
   /** Subtitle timing offset, in seconds (positive = later, VLC/mpv sign). */
   subtitledelay?: number | string;
   /** Subtitle font size — a multiplier, or a percentage above 5. */

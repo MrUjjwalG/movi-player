@@ -135,6 +135,20 @@ function upgradeOne(
     player.setAttribute(name, value);
   }
 
+  // The floor is what was there before.
+  //
+  // This element replaced a native <video>, and a native <video> plays a
+  // cross-origin file without asking anyone's permission. Movi reads the bytes
+  // itself, which needs CORS — so a source the browser was happily playing can
+  // be one Movi cannot open at all. Archive.org is the plain example: it
+  // redirects to a node that serves ranges without an Allow-Origin header, so
+  // the fetch is blocked and the page that worked a moment ago shows an error.
+  // Falling back to native there gives the page back exactly what it had, and
+  // the WASM engine is a gain wherever it can read.
+  if (!player.hasAttribute("fallback")) {
+    player.setAttribute("fallback", "native");
+  }
+
   // The children come across rather than being copied: <source> and <track>
   // carry the sources, the captions and the thumbnails, and the page may well
   // hold references to them.
