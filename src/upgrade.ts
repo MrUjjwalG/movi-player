@@ -93,6 +93,11 @@ const FORWARD_PROPS = [
   "controls",
   "poster",
   "src",
+  // Sizing through the property is how a page resizes a <video> from script —
+  // `myVideo.width = 600`. Without these it set a number on the hidden element
+  // and nothing moved.
+  "width",
+  "height",
 ] as const;
 
 const FORWARD_METHODS = [

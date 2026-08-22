@@ -36590,21 +36590,32 @@ export class MoviElement extends HTMLElement {
     return 4;
   }
 
+  /**
+   * `width` / `height`, reflecting their attributes — what they do on
+   * `<video>`, and what code moved from one expects.
+   *
+   * These used to answer with the CANVAS's size, which is a different number
+   * entirely: a backbuffer in device pixels, sized to the display and the
+   * pixel ratio, so `player.width` on a 620px player could read 1280 and
+   * `player.width += 100` moved it somewhere nobody asked for. The attribute is
+   * the author's number, and 0 when they have not given one — again as on a
+   * media element.
+   */
   get width(): number {
-    return this.canvas.width;
+    return parseInt(this.getAttribute("width") || "", 10) || 0;
   }
 
   set width(value: number) {
-    this.setAttribute("width", value.toString());
+    this.setAttribute("width", String(value));
     this.updateCanvasSize();
   }
 
   get height(): number {
-    return this.canvas.height;
+    return parseInt(this.getAttribute("height") || "", 10) || 0;
   }
 
   set height(value: number) {
-    this.setAttribute("height", value.toString());
+    this.setAttribute("height", String(value));
     this.updateCanvasSize();
   }
 
