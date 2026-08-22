@@ -23327,6 +23327,7 @@ export class MoviElement extends HTMLElement {
         publishPlayerWidth();
         this.syncTinyLayout();
         this.updateCanvasSize();
+        this.refreshChapterGaps();
       });
       resizeObserver.observe(this);
     } else {
@@ -28270,10 +28271,27 @@ export class MoviElement extends HTMLElement {
     }
 
     const half = 1.5; // px either side of the boundary
+
+    // A cut too close to either end eats that end's ROUND.
+    //
+    // The track is a pill, and the last few pixels at each end are the cap that
+    // makes it one. A chapter boundary landing inside that cap opens a gap
+    // straight through it, and what is left reads as a square-ended bar with a
+    // crumb floating beside it — which is exactly how a film with a 21-second
+    // opening chapter in a 2h42m runtime came out: the cut sat 1.3px from the
+    // left of a 620px bar and took the whole left cap with it.
+    //
+    // Nothing is lost by leaving those boundaries uncut: a section thinner than
+    // its own corner has no shape to show anyway. The guard is that corner
+    // (half the track's height) plus the gap the cut would have opened.
+    const geom = bar?.getBoundingClientRect();
+    const capPx = (geom && geom.height > 0 ? geom.height / 2 : 3) + half;
+    const capPct = geom && geom.width > 0 ? (capPx / geom.width) * 100 : 1;
+
     const cuts: number[] = [];
     for (let i = 1; i < chapters.length; i++) {
       const pct = (chapters[i].start / duration) * 100;
-      if (pct > 0 && pct < 100) cuts.push(pct);
+      if (pct > capPct && pct < 100 - capPct) cuts.push(pct);
     }
 
     // Every hole in the track as a percent range, boundary gaps and the raised
@@ -28334,6 +28352,20 @@ export class MoviElement extends HTMLElement {
     const mask = `linear-gradient(to right, ${stops.join(", ")})`;
     paint.style.setProperty("-webkit-mask-image", mask);
     paint.style.maskImage = mask;
+  }
+
+  /**
+   * Re-apply the chapter cuts for the bar's current size. The end-cap guard in
+   * applyChapterGaps is measured in pixels, so a player that changed width may
+   * now want a boundary it was hiding — or want to hide one it was showing.
+   */
+  private refreshChapterGaps(): void {
+    const sr = this.shadowRoot;
+    if (!sr || !this.player) return;
+    const chapters = this.player.getChapters?.() ?? [];
+    const duration = this.player.getDuration?.() ?? 0;
+    if (chapters.length < 2 || duration <= 0) return;
+    this.applyChapterGaps(sr, chapters, duration);
   }
 
   private renderChapterMarkers(): void {
