@@ -33000,7 +33000,18 @@ export class MoviElement extends HTMLElement {
     }
 
     if (wantsMenu) {
-      const menu = this.shadowRoot?.querySelector(".movi-context-menu");
+      // The menu's CURRENT root, not the shadow one it usually lives in.
+      //
+      // The desktop menu is MOVED into the body portal while it is open (see
+      // ensureMenuPortal), so for as long as the viewer is looking at it,
+      // `shadowRoot.querySelector(".movi-context-menu")` is null. Rendering
+      // through that lookup meant a control updated while the menu was open —
+      // toggling Autoplay by its hotkey with the menu up — was torn down from
+      // both roots and then rebuilt into neither: the row simply vanished from
+      // the menu the viewer was reading, and stayed gone until something
+      // re-registered the control. teardownCustomControl already knew about
+      // the portal; this is the other half of that.
+      const menu = this.contextMenuRoot().querySelector(".movi-context-menu");
       if (menu) {
         const item = document.createElement("div");
         item.className = "movi-context-menu-item";
@@ -36198,6 +36209,11 @@ export class MoviElement extends HTMLElement {
   // portal with it, or they'd stay behind and open detached from the menu.
   private _portaledSubs: Element[] = [];
 
+  /** Every panel that travels with the menu. Named once so the trip out and
+   *  the trip back cannot disagree about what counts as a submenu. */
+  private static readonly SUBMENU_SELECTOR =
+    ".movi-context-menu-submenu, .movi-context-menu-submenu-audio, .movi-context-menu-submenu-subtitle, .movi-context-menu-submenu-audiodevice";
+
   /** Move the context menu (+ its submenu panels) into the body portal and mirror theme vars. */
   private portalContextMenu(menu: HTMLElement): void {
     const root = this.ensureMenuPortal();
@@ -36206,9 +36222,7 @@ export class MoviElement extends HTMLElement {
       this._menuHome = menu.parentNode;
       this._portaledSubs = this.shadowRoot
         ? Array.from(
-            this.shadowRoot.querySelectorAll(
-              ".movi-context-menu-submenu, .movi-context-menu-submenu-audio, .movi-context-menu-submenu-subtitle, .movi-context-menu-submenu-audiodevice",
-            ),
+            this.shadowRoot.querySelectorAll(MoviElement.SUBMENU_SELECTOR),
           )
         : [];
       root.appendChild(menu);
@@ -36259,7 +36273,21 @@ export class MoviElement extends HTMLElement {
   private unportalContextMenu(menu: HTMLElement): void {
     if (!this._menuHome) return;
     if (menu.parentNode !== this._menuHome) this._menuHome.appendChild(menu);
-    for (const sub of this._portaledSubs) {
+    // What went out, PLUS anything that appeared while we were out there.
+    //
+    // _portaledSubs is a snapshot taken on the way in, and it stopped being the
+    // whole list once a control could be re-rendered mid-open: a host control
+    // with `items` that is updated while the menu is up builds its panel next
+    // to the menu, which is now the portal. Bringing back only the snapshot
+    // left that panel behind in the portal, orphaned from the menu it belongs
+    // to. Sweeping the portal costs one query and cannot miss.
+    const subs = new Set<Element>(this._portaledSubs);
+    for (const sub of Array.from(
+      this._menuPortalRoot?.querySelectorAll(MoviElement.SUBMENU_SELECTOR) || [],
+    )) {
+      subs.add(sub);
+    }
+    for (const sub of subs) {
       if (sub.parentNode !== this._menuHome) this._menuHome.appendChild(sub);
     }
     this._portaledSubs = [];
