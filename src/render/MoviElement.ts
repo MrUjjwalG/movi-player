@@ -21626,7 +21626,15 @@ export class MoviElement extends HTMLElement {
         max-height: var(--movi-preview-h, 158px);
         background-repeat: no-repeat;
         background-color: #000;
-        border-radius: inherit;
+        /* The image's frame, for the same reason .movi-thumbnail-placeholder
+           wears it: all three of these stand in the same place in the card, so
+           a different corner or lift is visible the moment one replaces
+           another. "inherit" was the odd one out — it takes the value from
+           .movi-seek-thumbnail, which carries no radius of its own, so the
+           storyboard tile was the one preview surface with square corners and
+           no lift while the decoded frame beside it had both. */
+        border-radius: var(--movi-preview-img-radius);
+        box-shadow: var(--movi-shadow-md, 0 4px 8px rgba(0, 0, 0, 0.6));
       }
 
       .movi-thumbnail-img {
