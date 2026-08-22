@@ -850,12 +850,11 @@ export class MoviElement extends HTMLElement {
    *
    * video.js carries scrub previews on `<track kind="metadata"
    * label="thumbnails">`, because `kind` is a fixed HTML enum with no value for
-   * this; JW Player writes `kind="thumbnails"` anyway. Both are read here, so
-   * markup written for either drops in unchanged. A track is the only way to
-   * DECLARE a board, and deliberately so: there is no attribute of our own for
-   * it, because a thumbnail track is a track and every player that has them
-   * already writes one. The `storyboard` PROPERTY takes a spec object, for a
-   * board worked out at runtime rather than written in the markup.
+   * this and `metadata` is the one it does have. That is the spelling read
+   * here, and the only way to DECLARE a board: there is no attribute of our
+   * own for it, because a thumbnail track is a track and the players that have
+   * them already write one. The `storyboard` PROPERTY takes a spec object, for
+   * a board worked out at runtime rather than written in the markup.
    */
   private static thumbnailTrackSrc(host: HTMLElement): string | null {
     for (const track of Array.from(host.querySelectorAll("track"))) {
@@ -864,7 +863,6 @@ export class MoviElement extends HTMLElement {
       const kind = (track.getAttribute("kind") || "").trim().toLowerCase();
       const label = (track.getAttribute("label") || "").trim().toLowerCase();
       const named = /thumbnail|storyboard|sprite/.test(label);
-      if (kind === "thumbnails" || kind === "storyboard") return src;
       if (kind === "metadata" && named) return src;
     }
     return null;
@@ -897,6 +895,10 @@ export class MoviElement extends HTMLElement {
   private _storyboard: string | StoryboardSpec | null = null;
   /** The task in which the board was set, against the counter below. */
   private _storyboardTask = -1;
+  /** …and when, for the swaps that reach the load a microtask later. */
+  private _storyboardSetAt = 0;
+  /** How close to a source change a board still counts as having come with it. */
+  private static readonly STORYBOARD_TOGETHER_MS = 500;
   /** The task the host last wrote a source in, and whether a load owes it an answer. */
   private _srcAssignedTask = -2;
   private _srcAssignedPending = false;
@@ -951,16 +953,29 @@ export class MoviElement extends HTMLElement {
     this._srcAssignedPending = true;
   }
 
-  private dropStaleStoryboard(): void {
+  private dropStaleStoryboard(hadPreviousSource: boolean): void {
     // Only a source the HOST wrote invalidates a board. The reloads the player
     // does for itself — a rendition recreate, walking to the next <source> —
     // are the same video, and its thumbnails are still its thumbnails.
     if (!this._srcAssignedPending) return;
     this._srcAssignedPending = false;
+    // Nothing to be stale against on a first load: there is no previous video
+    // whose pictures could be shown, so a board set well before the source —
+    // prepared, then started — is simply this video's board.
+    const cameWithIt =
+      !hadPreviousSource ||
+      this._storyboardTask === this._srcAssignedTask ||
+      // A swap declared through the CHILDREN reaches the reload a microtask
+      // later than the render that wrote them, so the task no longer matches
+      // even when the board was handed over in the same breath. Written within
+      // a moment of the source is the same statement; a board from the video
+      // before this one was written seconds ago, with that video.
+      performance.now() - this._storyboardSetAt <
+        MoviElement.STORYBOARD_TOGETHER_MS;
     if (
+      !cameWithIt &&
       typeof this._storyboard === "object" &&
-      this._storyboard !== null &&
-      this._storyboardTask !== this._srcAssignedTask
+      this._storyboard !== null
     ) {
       this._storyboard = null;
       this.player?.setStoryboard(null);
@@ -1013,6 +1028,7 @@ export class MoviElement extends HTMLElement {
     // change decide from that whether the board came with it or belongs to the
     // video before it (see dropStaleStoryboard).
     this._storyboardTask = this.currentTaskId();
+    this._storyboardSetAt = performance.now();
     this.player?.setStoryboard(this._storyboard);
     // A board is cheap enough to be worth showing without `thumb` being asked
     // for; the decode pipeline behind that attribute is what was expensive.
@@ -8897,6 +8913,12 @@ export class MoviElement extends HTMLElement {
 
   private _reloadFromSourceChildren(): void {
     Logger.info(TAG, "Source children changed — reloading in place");
+    // Swapping the children IS writing a new source — it is the only way to
+    // change video without losing fullscreen, and the host that does it is
+    // making the same statement as one that writes `src`. Without this, the
+    // one thing the src path invalidates and this one did not was the
+    // storyboard: the new video scrubbed through the old video's pictures.
+    this.noteSourceAssigned();
     // A bare `src` attribute hides the children, so it has to go first; the
     // same clearing the source-error rebuild does before re-parsing.
     if (this.hasAttribute("src")) this.removeAttribute("src");
@@ -27531,7 +27553,7 @@ export class MoviElement extends HTMLElement {
     this._playFired = false;
     this._seekAnnouncedFor = null;
     // The previous video's thumbnails go with the previous video.
-    this.dropStaleStoryboard();
+    this.dropStaleStoryboard(hadMedia);
     this.clearPreviewSurfaces();
     // A genuine video→audio source change must still be able to reach audio
     // mode, so this memory is per-source.

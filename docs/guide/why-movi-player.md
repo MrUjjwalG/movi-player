@@ -195,9 +195,8 @@ usually change `<video class="video-js">` to `<movi-player>` and stop:
   `spriteThumbnails`. An attribute written out longhand wins over the JSON.
 - `<track kind="captions">` / `kind="subtitles"` become subtitle tracks, and
   `default` selects one.
-- `<track kind="metadata" label="thumbnails">` (video.js's spelling) and
-  `kind="thumbnails"` (JW Player's) both become scrub previews — a sprite VTT
-  with `#xywh=` rectangles, or one image per cue.
+- `<track kind="metadata" label="thumbnails">` — video.js's spelling — becomes
+  scrub previews: a sprite VTT with `#xywh=` rectangles, or one image per cue.
 - Unslotted children like `<p class="vjs-no-js">` are not rendered.
 
 The `videojs-sprite-thumbnails` options work unchanged, either through

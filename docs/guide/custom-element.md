@@ -114,8 +114,7 @@ Ship a full multi-quality + multi-language + multi-subtitle setup as plain HTML 
   <track src="subs-en.vtt" srclang="en" label="English" kind="subtitles" default>
   <track src="subs-jp.srt" srclang="ja" label="Japanese" kind="subtitles" data-format="srt">
 
-  <!-- Storyboard: scrub previews cropped out of a sprite, no decode at all.
-       video.js's spelling; JW Player's kind="thumbnails" is read too. -->
+  <!-- Storyboard: scrub previews cropped out of a sprite, no decode at all. -->
   <track kind="metadata" label="thumbnails" src="thumbs.vtt">
 </movi-player>
 ```

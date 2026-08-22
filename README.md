@@ -325,15 +325,15 @@ has. Declare one the way every other player does, as a thumbnail track:
 ```html
 <movi-player controls>
   <source src="video.mp4" type="video/mp4">
-  <!-- video.js's spelling -->
   <track kind="metadata" label="thumbnails" src="thumbs.vtt">
-  <!-- JW Player's `kind="thumbnails"` is read too -->
 </movi-player>
 ```
 
-The VTT's cues carry an image URL and the rectangle to take from it
-(`sprite.jpg#xywh=160,0,160,90`); one cue per whole image works as well.
-There is no attribute for this — a thumbnail track is a track.
+`kind="metadata"` with a `thumbnails` label is video.js's spelling and the one
+read here — `kind` is a fixed HTML enum with no value of its own for this. The
+VTT's cues carry an image URL and the rectangle to take from it
+(`sprite.jpg#xywh=160,0,160,90`); one cue per whole image works as well. There
+is no attribute for this — a thumbnail track is a track.
 
 For a board worked out at runtime, set the `storyboard` PROPERTY to a tile
 spec instead — `{columns, rows, width, height, fragments}`, the shape YouTube
