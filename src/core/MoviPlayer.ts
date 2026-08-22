@@ -9325,10 +9325,70 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
       !this.isLinearPlayback() &&
       !audioAnchored
     ) {
-      this.seek(savedTime, {
-        suppressSpinner: true,
-        preservePlaying: true,
-      }).catch(() => {});
+      // …but a SPLIT source does not need the video pipeline rewound to fix an
+      // audio read-ahead. Audio has its own demuxer there, and the seek that
+      // rewinds it also flushes the video decoder, clears the frame queue and
+      // waits on a keyframe — which on a 4K60 rendition is the whole cost of
+      // the operation. Measured on a YouTube ladder: 2636ms from a speed change
+      // to playing again, 2504ms of it with the sound stopped, for a rewind
+      // that only ever concerned the sound. Rewind just the audio; the picture
+      // never stops.
+      if (this.audioDemuxer) {
+        void this.rewindSplitAudioTo(savedTime);
+      } else {
+        this.seek(savedTime, {
+          suppressSpinner: true,
+          preservePlaying: true,
+        }).catch(() => {});
+      }
+    }
+  }
+
+  /**
+   * Put the split audio pipeline back to a media time, and touch nothing else.
+   *
+   * The video demuxer, decoder, frame queue and the clock are all left running
+   * — this is the audio-side twin of resyncVideoToAudio, for the one thing a
+   * rate change actually disturbs: AudioRenderer's re-anchor drops the audio
+   * scheduled at the old rate, and those packets are already spent from the
+   * demuxer, so without a rewind the next chunk arrives from the read-ahead
+   * position and the clock pivots onto it (seconds of the film skipped).
+   */
+  private async rewindSplitAudioTo(time: number): Promise<void> {
+    const dm = this.audioDemuxer;
+    if (!dm) return;
+    const t = Math.max(0, time);
+    this.stopAudioLoop();
+    let guard = 0;
+    while (this.audioDemuxInFlight && guard++ < 200) {
+      await new Promise((r) => setTimeout(r, 5));
+    }
+    // The wait can outlive the pipeline it was waiting for.
+    if (this._destroyed || this.audioDemuxer !== dm) return;
+    this.audioDecoder.flush();
+    this.audioRenderer.reset();
+    try {
+      // Drop whatever lands before the target: the renderer was just reset, so
+      // anything earlier would be a fraction of a second played twice. In the
+      // video PTS scale, which is what the split pump compares against.
+      this._splitAudioSkipBefore = t + this.startTime;
+      // …and seek in the audio source's own baseline, which may differ.
+      await dm.seek(t + this._splitAudioStartTime);
+    } catch (e) {
+      Logger.warn(
+        TAG,
+        `Rate-change audio rewind to ${t.toFixed(2)}s failed: ${(e as { message?: string })?.message ?? e}`,
+      );
+      this._splitAudioSkipBefore = -1;
+    }
+    this._splitAudioEof = false;
+    this._lastSplitAudioPts = t;
+    if (this._destroyed || this.audioDemuxer !== dm) return;
+    if (this.stateManager.is("playing") || this.stateManager.is("buffering")) {
+      if (!this.disableAudio && !this.audioRenderer.isAudioPlaying()) {
+        this.audioRenderer.play();
+      }
+      this.startAudioLoop();
     }
   }
 
