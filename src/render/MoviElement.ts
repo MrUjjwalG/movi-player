@@ -3038,8 +3038,21 @@ export class MoviElement extends HTMLElement {
       nextTime: null as number | null,
     };
 
+    // How long the picture already on the card is allowed to stand in for the
+    // one being made. Under it, nothing on screen changes; over it, the card
+    // admits it is working.
+    const STALE_PREVIEW_GRACE_MS = 220;
+    let stalePreviewTimer: number | null = null;
+    const cancelStaleTimer = () => {
+      if (stalePreviewTimer !== null) {
+        clearTimeout(stalePreviewTimer);
+        stalePreviewTimer = null;
+      }
+    };
+
     /** Drop the card back to time-only: no frame, and no spinner promising one. */
     const hidePreviewLoading = () => {
+      cancelStaleTimer();
       if (thumbnailImg) thumbnailImg.style.display = "none";
       const placeholder = shadowRoot.querySelector(
         ".movi-thumbnail-placeholder",
@@ -3069,6 +3082,7 @@ export class MoviElement extends HTMLElement {
 
         // Update UI if we got a blob
         if (blob && thumbnailImg) {
+          cancelStaleTimer();
           if (lastPreviewUrl) URL.revokeObjectURL(lastPreviewUrl);
           lastPreviewUrl = URL.createObjectURL(blob);
           thumbnailImg.src = lastPreviewUrl;
@@ -3122,9 +3136,29 @@ export class MoviElement extends HTMLElement {
       // Cancel pending timer
       if (previewDebounce) clearTimeout(previewDebounce);
 
-      // Always switch to static noise when invalidating/debouncing
-      thumbnailImg.style.display = "none";
-      if (thumbnailPlaceholder) thumbnailPlaceholder.style.display = "block";
+      // Keep the picture that is up while the next one is made.
+      //
+      // Blanking to the placeholder on every pointer move meant a scrub was a
+      // strobe: frame, static, frame, static, at one flash per few pixels of
+      // travel — and the frames themselves now arrive in single-digit
+      // milliseconds off a storyboard, so the "loading" state was on screen
+      // longer than the loading was. A frame a fraction of a second stale is a
+      // better answer than no frame at all; only when the next one really is
+      // taking a while does the card admit it.
+      cancelStaleTimer();
+      const showingPicture =
+        !!thumbnailImg.getAttribute("src") &&
+        thumbnailImg.style.display !== "none";
+      if (!showingPicture) {
+        thumbnailImg.style.display = "none";
+        if (thumbnailPlaceholder) thumbnailPlaceholder.style.display = "block";
+      } else {
+        stalePreviewTimer = window.setTimeout(() => {
+          stalePreviewTimer = null;
+          thumbnailImg.style.display = "none";
+          if (thumbnailPlaceholder) thumbnailPlaceholder.style.display = "block";
+        }, STALE_PREVIEW_GRACE_MS);
+      }
 
       // Schedule this time
       previewLoopState.nextTime = time;
