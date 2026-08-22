@@ -12317,6 +12317,14 @@ export class MoviElement extends HTMLElement {
       this.announceControls(true);
       this.syncBarCollapsedClass();
 
+      // The bar is on screen again, so its capsules can finally be measured
+      // for what they hold. syncEmptyCapsules refuses to judge a row it cannot
+      // see — otherwise a hidden bar would report every capsule as empty — so
+      // without this the only thing that ever re-measured them was a RESIZE.
+      // A capsule that had been called empty by mistake therefore stayed
+      // hidden for the rest of the session, however many controls were in it.
+      if (wasHidden) this.syncEmptyCapsules();
+
       // Restore cursor — clear the inline `none` on the host so the
       // CSS-driven cursor (default on the visible-controls path)
       // takes back over. Mirrors what hideControls does in reverse.
@@ -24389,15 +24397,41 @@ export class MoviElement extends HTMLElement {
   private syncEmptyCapsules(): void {
     const sr = this.shadowRoot;
     if (!sr) return;
-    const capsules = sr.querySelectorAll<HTMLElement>(
-      ".movi-controls-right, .movi-seek-group, .movi-control-group",
+    const capsules = Array.from(
+      sr.querySelectorAll<HTMLElement>(
+        ".movi-controls-right, .movi-seek-group, .movi-control-group",
+      ),
     );
-    for (const capsule of Array.from(capsules)) {
+    const was = capsules.map((c) => c.classList.contains("movi-capsule-empty"));
+
+    // Measure from the UN-hidden state, or the verdict feeds itself.
+    //
+    // `movi-capsule-empty` is `display:none`, and a child of a display:none
+    // parent has an offsetWidth of 0 whatever it is. So the moment a capsule
+    // was called empty ONCE, every later measurement agreed with it and it
+    // could never come back. Seen on the watch page: the whole right-hand
+    // cluster — gear, aspect ratio, PiP, fullscreen — gone, with the capsule
+    // still holding five perfectly visible controls, because one early sync
+    // had measured it before the row was laid out.
+    for (const capsule of capsules) {
+      capsule.classList.remove("movi-capsule-empty");
+    }
+
+    capsules.forEach((capsule, i) => {
+      // Nothing on this row is laid out at all — the bar is hidden (auto-hide,
+      // a poster still up), or this is running before the first paint. Every
+      // capsule would measure empty and every capsule would be hidden, which is
+      // how the latch got set in the first place. Keep what we had and leave
+      // the decision to a sync that can actually see the row.
+      if (capsule.getClientRects().length === 0) {
+        capsule.classList.toggle("movi-capsule-empty", was[i]);
+        return;
+      }
       const filled = Array.from(capsule.children).some(
         (child) => (child as HTMLElement).offsetWidth > 0,
       );
       capsule.classList.toggle("movi-capsule-empty", !filled);
-    }
+    });
   }
 
   private fitControlsRow(): void {
