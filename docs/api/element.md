@@ -248,6 +248,25 @@ unaffected — they keep working as normal. (This replaces the deprecated
 
 ---
 
+#### `autopictureinpicture`
+
+Enter Picture-in-Picture automatically when the tab is hidden, and leave it on
+return — the same attribute `<video>` takes, carried through for markup moved
+over from one.
+
+It applies only while the **native element** is carrying playback (a
+`fallback="native"` handoff, or `engine="native"`): auto-PiP is a behaviour the
+browser performs on a media element, and Movi's own path draws to a canvas,
+which has none. On the WASM path the attribute is inert rather than emulated —
+Picture-in-Picture itself still works there, through the control or
+`requestPictureInPicture()`.
+
+```html
+<movi-player src="video.mp4" fallback="native" autopictureinpicture></movi-player>
+```
+
+---
+
 ### UI Configuration
 
 #### `controls`
