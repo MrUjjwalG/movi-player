@@ -176,6 +176,21 @@ export class Storyboard {
     return new Storyboard(cues, uniformStep(cues), at);
   }
 
+  /**
+   * The mosaics, in the order they cover the video. A caller that paints them
+   * itself warms them from this — one image serves dozens of previews, and the
+   * one after the pointer is the one about to be needed.
+   */
+  sheets(): string[] {
+    const seen: string[] = [];
+    for (const cue of this.cues) {
+      if (seen[seen.length - 1] !== cue.tile.url && !seen.includes(cue.tile.url)) {
+        seen.push(cue.tile.url);
+      }
+    }
+    return seen;
+  }
+
   /** The picture that belongs to a moment, or null past the end of the board. */
   tileAt(time: number): StoryboardTile | null {
     if (!(time >= 0) || this.cues.length === 0) return null;

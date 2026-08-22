@@ -957,6 +957,23 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
     this.storyboardLoad = null;
     this.storyboardImages.clear();
     this.clearPreviewCache();
+    // Load it now rather than on the first hover. A board is a few KB of text
+    // (or nothing at all, for a spec), and waiting until the pointer arrives
+    // means the one hover that matters most — the first — is the one that has
+    // to wait for it.
+    if (source) {
+      void this.ensureStoryboard().then((board) => {
+        // …and pull the first mosaic in behind it, so that hover has its
+        // picture too. The rest are fetched as the pointer reaches them.
+        const first = board?.sheets()[0];
+        if (first) void this.loadStoryboardImage(first);
+      });
+    }
+  }
+
+  /** The board's mosaics in order, for a caller that paints them itself. */
+  getStoryboardSheets(): string[] {
+    return this.storyboard?.sheets() ?? [];
   }
 
   /** True while a storyboard is standing in for the decode path. */

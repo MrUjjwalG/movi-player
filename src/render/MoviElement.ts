@@ -3569,6 +3569,13 @@ export class MoviElement extends HTMLElement {
         // Hover Logic
         if (thumbnail.classList.contains("visible")) {
           updateScrubbingUI(e.clientX);
+        } else if (this.hasInstantPreviews()) {
+          // Nothing to wait and see about. The intent delay is there so a
+          // pointer merely crossing the bar doesn't start work — and with a
+          // storyboard there is no work to start: the tile is a rectangle in
+          // an image already in hand. Waiting 150ms to show a picture that is
+          // ready now is the whole of what makes the first hover feel slow.
+          updateScrubbingUI(e.clientX);
         } else {
           if (!hoverIntentTimer) {
             hoverIntentTimer = window.setTimeout(() => {
@@ -34139,6 +34146,34 @@ export class MoviElement extends HTMLElement {
    * that state is entered, not after the null arrives.
    */
   /**
+   * Mosaics the browser has been asked to hold, so a tile from one paints
+   * without a fetch. Keyed by URL; the Image objects are kept alive
+   * deliberately — dropping them is what lets the cache evict the decode.
+   */
+  private _sheetWarm = new Map<string, HTMLImageElement>();
+
+  /**
+   * True when a preview costs nothing to produce — a storyboard whose board
+   * has loaded, where the answer is a background offset rather than a decode.
+   */
+  private hasInstantPreviews(): boolean {
+    if (!this._storyboard) return false;
+    const sheets = (
+      this.player as unknown as { getStoryboardSheets?: () => string[] } | null
+    )?.getStoryboardSheets?.();
+    return !!sheets && sheets.length > 0;
+  }
+
+  /** Ask the browser for a mosaic now, so it is there when a tile needs it. */
+  private warmSheet(url: string | undefined): void {
+    if (!url || this._sheetWarm.has(url)) return;
+    const img = new Image();
+    img.decoding = "async";
+    img.src = url;
+    this._sheetWarm.set(url, img);
+  }
+
+  /**
    * Put the storyboard tile for `time` on the card, if there is one.
    *
    * The mosaic is scaled so a single tile fills the card, then offset to the
@@ -34176,6 +34211,19 @@ export class MoviElement extends HTMLElement {
     layer.style.backgroundPosition = `${-tile.x * scale}px ${-tile.y * scale}px`;
     layer.style.height = `${Math.round(tile.height * scale)}px`;
     layer.style.display = "block";
+
+    // Hold this mosaic, and the one after it: a scrub crosses a sheet boundary
+    // at some point, and the sheet it crosses into is a fetch the pointer
+    // should not have to wait through.
+    const sheets = (
+      this.player as unknown as { getStoryboardSheets?: () => string[] } | null
+    )?.getStoryboardSheets?.() ?? [];
+    const at = sheets.indexOf(tile.url);
+    this.warmSheet(tile.url);
+    if (at >= 0) {
+      this.warmSheet(sheets[at + 1]);
+      this.warmSheet(sheets[at - 1]);
+    }
 
     const img = sr.querySelector(".movi-thumbnail-img") as HTMLElement | null;
     if (img) img.style.display = "none";
