@@ -750,6 +750,100 @@ export class MoviElement extends HTMLElement {
    */
   private _thumbPrecise: boolean = false;
 
+  /**
+   * video.js's `data-setup`: the options a page would otherwise pass to a
+   * constructor, written on the element as JSON.
+   *
+   * Markup written for that player should work here with the tag name changed
+   * and nothing else, and `data-setup` is the one piece of it that is not an
+   * attribute this element already answers to. So the keys are turned into
+   * those attributes — and an attribute already written wins, since it is the
+   * more specific statement of the two.
+   */
+  private applyDataSetup(): void {
+    const raw = this.getAttribute("data-setup");
+    if (!raw || !raw.trim()) return;
+    let setup: Record<string, unknown>;
+    try {
+      setup = JSON.parse(raw) as Record<string, unknown>;
+    } catch {
+      Logger.warn(TAG, "data-setup is not valid JSON — ignoring it");
+      return;
+    }
+    const put = (attr: string, value: unknown) => {
+      if (value === undefined || value === null || this.hasAttribute(attr)) return;
+      if (typeof value === "boolean") {
+        if (value) this.setAttribute(attr, "");
+        return;
+      }
+      this.setAttribute(attr, String(value));
+    };
+    put("controls", setup.controls);
+    put("autoplay", setup.autoplay);
+    put("loop", setup.loop);
+    put("muted", setup.muted);
+    put("poster", setup.poster);
+    put("preload", setup.preload);
+    put("playsinline", setup.playsinline);
+    put("width", setup.width);
+    put("height", setup.height);
+
+    // sources: [{ src, type }] — the first playable one, since the element
+    // takes a single src (a ladder goes in <source> children, as it does there).
+    const sources = setup.sources;
+    if (Array.isArray(sources) && sources.length > 0 && !this.hasAttribute("src")) {
+      const first = sources.find(
+        (s) => s && typeof (s as { src?: string }).src === "string",
+      ) as { src?: string } | undefined;
+      if (first?.src) this.setAttribute("src", first.src);
+    }
+
+    // spriteThumbnails: the videojs-sprite-thumbnails plugin's options, which
+    // this player takes as a storyboard spec unchanged.
+    const sprite = setup.spriteThumbnails as
+      | {
+          url?: string;
+          width?: number;
+          height?: number;
+          columns?: number;
+          rows?: number;
+          interval?: number;
+        }
+      | undefined;
+    if (sprite?.url && sprite.width && sprite.height && sprite.columns) {
+      this.storyboard = {
+        url: sprite.url,
+        width: sprite.width,
+        height: sprite.height,
+        columns: sprite.columns,
+        ...(sprite.rows ? { rows: sprite.rows } : {}),
+        ...(sprite.interval ? { interval: sprite.interval } : {}),
+      };
+    }
+  }
+
+  /**
+   * A thumbnail track declared the way other players declare it.
+   *
+   * video.js carries scrub previews on `<track kind="metadata"
+   * label="thumbnails">`, because `kind` is a fixed HTML enum with no value for
+   * this; JW Player writes `kind="thumbnails"` anyway. Both are read here, so
+   * markup written for either drops in unchanged — the `storyboard` attribute
+   * is this player's own spelling, not a requirement.
+   */
+  private static thumbnailTrackSrc(host: HTMLElement): string | null {
+    for (const track of Array.from(host.querySelectorAll("track"))) {
+      const src = track.getAttribute("src");
+      if (!src) continue;
+      const kind = (track.getAttribute("kind") || "").trim().toLowerCase();
+      const label = (track.getAttribute("label") || "").trim().toLowerCase();
+      const named = /thumbnail|storyboard|sprite/.test(label);
+      if (kind === "thumbnails" || kind === "storyboard") return src;
+      if (kind === "metadata" && named) return src;
+    }
+    return null;
+  }
+
   /** thumb="precise" — anything else (including a bare `thumb`) is keyframes. */
   private static wantsPrecisePreviews(value: string | null): boolean {
     return (value || "").trim().toLowerCase() === "precise";
@@ -8690,6 +8784,21 @@ export class MoviElement extends HTMLElement {
       }))
       .filter((t) => t.src);
     if (replace || parsed.length > 0) this._subtitleTracks = parsed;
+
+    // `default` on a track means "show this one" — it is how every player that
+    // takes <track> children says it, and markup written for one of those
+    // arrives here expecting the same. Carried rather than applied: the tracks
+    // do not exist until the source has loaded, and _restoreTrackSelection is
+    // already the place that waits for that. A selection the viewer (or the
+    // host) has already made outranks it.
+    const marked = Array.from(trackEls).find(
+      (el) => el.hasAttribute("default") && el.getAttribute("src"),
+    );
+    if (marked && !this._carrySubtitleLang && this._carrySubtitleTrackId === null) {
+      const lang =
+        marked.getAttribute("srclang") || marked.getAttribute("lang") || "";
+      if (lang) this._carrySubtitleLang = lang;
+    }
   }
 
   /**
@@ -8752,6 +8861,11 @@ export class MoviElement extends HTMLElement {
   private static readonly AUDIO_LINK_SHARE = 0.15;
 
   private _parseChildSources(): void {
+    // The <track> children come with them. This is the FIRST-load path (the
+    // source-swap path re-reads them itself), and without it markup that
+    // declares its captions as children — which is how video.js, and HTML
+    // itself, says it — arrived with an empty subtitle menu.
+    this._parseChildSubtitleTracks();
     if (!this._src && !this._encrypted) {
       const sourceEls = this.querySelectorAll("source");
       if (sourceEls.length > 0) {
@@ -23263,6 +23377,10 @@ export class MoviElement extends HTMLElement {
     // the first load with every attribute already applied.
     this._hasConnected = true;
 
+    // …and `data-setup` is attributes too, just written as JSON. Applied first
+    // so everything below reads one settled set.
+    this.applyDataSetup();
+
     // Before anything measures anything: a player given a width and no height
     // has to get its height from its own shape, not from its contents. See
     // applyIntrinsicAspect.
@@ -23342,7 +23460,8 @@ export class MoviElement extends HTMLElement {
     // A spec set through the property outranks the attribute — the property is
     // the richer form, and a wrapper that sets both means the object.
     if (typeof this._storyboard !== "object" || this._storyboard === null) {
-      this._storyboard = this.getAttribute("storyboard");
+      this._storyboard =
+        this.getAttribute("storyboard") ?? MoviElement.thumbnailTrackSrc(this);
     }
     this._hdr = this.hasAttribute("hdr") || this.getAttribute("hdr") === null; // Default to true if attribute is missing
     const themeAttr = this.getAttribute("theme");
@@ -25396,6 +25515,10 @@ export class MoviElement extends HTMLElement {
       this._thumbPrecise = MoviElement.wantsPrecisePreviews(
         this.getAttribute("thumb"),
       );
+      if (typeof this._storyboard !== "object" || this._storyboard === null) {
+        this._storyboard =
+          this.getAttribute("storyboard") ?? MoviElement.thumbnailTrackSrc(this);
+      }
 
       // Create MoviPlayer instance
       // Configure MoviPlayer options
@@ -34211,12 +34334,29 @@ export class MoviElement extends HTMLElement {
   }
 
   /** Ask the browser for a mosaic now, so it is there when a tile needs it. */
-  private warmSheet(url: string | undefined): void {
-    if (!url || this._sheetWarm.has(url)) return;
+  private warmSheet(url: string | undefined): HTMLImageElement | null {
+    if (!url) return null;
+    const held = this._sheetWarm.get(url);
+    if (held) return held;
     const img = new Image();
     img.decoding = "async";
     img.src = url;
     this._sheetWarm.set(url, img);
+    return img;
+  }
+
+  /**
+   * Has this mosaic actually arrived?
+   *
+   * Setting a background to an image the browser has not fetched yet paints the
+   * layer's own colour until it lands — a black card for as long as the fetch
+   * takes, which on the first tile of a sheet is about a second. Better to keep
+   * showing the picture that is already up: the caller falls back to the slower
+   * path, which repaints when it has something real.
+   */
+  private sheetReady(url: string): boolean {
+    const img = this.warmSheet(url);
+    return !!img && img.complete && img.naturalWidth > 0;
   }
 
   /**
@@ -34235,15 +34375,38 @@ export class MoviElement extends HTMLElement {
         getStoryboardTileSync?: (t: number) => StoryboardTile | null;
       } | null
     )?.getStoryboardTileSync?.(time);
-    if (!sr || !tile || tile.width <= 0 || tile.height <= 0) return false;
-
-    // Without the sheet's size there is no way to scale it so one tile fills
-    // the card, and a mosaic painted at natural size would show a grid of
-    // pictures rather than one. Leave it to the cropping path.
-    if (!tile.sheetWidth || !tile.sheetHeight) return false;
+    // A tile with no rectangle is not a failure — it is a whole picture, which
+    // the branch below paints. Only a missing board is a reason to stand down.
+    if (!sr || !tile) return false;
 
     const layer = sr.querySelector(".movi-thumbnail-tile") as HTMLElement | null;
     if (!layer) return false;
+
+    // Not here yet — hold what is on the card and let the crop path answer,
+    // which repaints once the picture exists rather than showing black while
+    // it is fetched (see sheetReady).
+    if (!this.sheetReady(tile.url)) return false;
+
+    // A cue with no rectangle is a whole picture — one image per thumbnail,
+    // which is the other half of what a VTT thumbnail track may carry. Nothing
+    // to scale or offset: fit it to the card.
+    if (!tile.sheetWidth || !tile.sheetHeight || tile.width <= 0) {
+      layer.style.backgroundImage = `url("${tile.url}")`;
+      layer.style.backgroundSize = "contain";
+      layer.style.backgroundPosition = "center";
+      layer.style.removeProperty("height");
+      layer.style.display = "block";
+      const wholeImg = sr.querySelector(
+        ".movi-thumbnail-img",
+      ) as HTMLElement | null;
+      if (wholeImg) wholeImg.style.display = "none";
+      const wholePh = sr.querySelector(
+        ".movi-thumbnail-placeholder",
+      ) as HTMLElement | null;
+      if (wholePh) wholePh.style.display = "none";
+      this.warmSheet(tile.url);
+      return true;
+    }
 
     // Crop in PERCENTAGES, and let the stylesheet keep the box.
     //

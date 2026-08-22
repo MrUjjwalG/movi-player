@@ -1006,6 +1006,20 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
     const source = this.storyboardSource;
     if (!source) return Promise.resolve(null);
 
+    // A spec needs no fetch — and, in the sprite form, needs the video's length,
+    // which may not be known yet. Answer it here rather than inside the cached
+    // promise below: caching a "not yet" would make it the answer forever.
+    if (typeof source !== "string") {
+      const board = Storyboard.fromSpec(source, this.getDuration());
+      if (!board) return Promise.resolve(null);
+      this.storyboard = board;
+      Logger.info(
+        TAG,
+        `Storyboard ready: ${board.coverage.toFixed(0)}s covered`,
+      );
+      return Promise.resolve(board);
+    }
+
     this.storyboardLoad = (async () => {
       try {
         if (typeof source === "string") {
@@ -1016,8 +1030,6 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
           if (!res.ok) throw new Error(`HTTP ${res.status}`);
           const url = res.url || source;
           this.storyboard = Storyboard.parseVtt(await res.text(), url);
-        } else {
-          this.storyboard = Storyboard.fromSpec(source);
         }
         if (!this.storyboard) {
           Logger.warn(TAG, "Storyboard had no usable cues — falling back to decoding previews");

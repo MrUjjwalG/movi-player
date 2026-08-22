@@ -35,16 +35,40 @@ export interface StoryboardTile {
   sheetHeight?: number;
 }
 
-/** Mosaics described by their grid, rather than cue by cue. */
+/**
+ * Mosaics described by their grid, rather than cue by cue.
+ *
+ * Two ways to say it, because two are in use:
+ *
+ *   • the mosaics listed outright, each with the stretch of video it covers —
+ *     what YouTube publishes and yt-dlp reports
+ *   • a sprite and a clock: one URL (optionally with an `{index}` placeholder
+ *     for a sequence), a tile size, a column count, and how many seconds a tile
+ *     stands for — the videojs-sprite-thumbnails configuration, tile for tile
+ *
+ * The second form needs the video's duration to know how many tiles there are,
+ * so it is expanded when that is known rather than when it is set.
+ */
 export interface StoryboardSpec {
-  /** Tiles across and down in each mosaic. */
+  /** Tiles across each mosaic. */
   columns: number;
-  rows: number;
+  /**
+   * Tiles down each mosaic. Omitted in the sprite form means one sheet holds
+   * the whole video, and the row count follows from its length.
+   */
+  rows?: number;
   /** One tile's size in the mosaic. */
   width: number;
   height: number;
   /** The mosaics in order, each covering `duration` seconds of the video. */
-  fragments: Array<{ url: string; duration: number }>;
+  fragments?: Array<{ url: string; duration: number }>;
+  /**
+   * Sprite form: the sheet's URL, with an optional `{index}` placeholder that
+   * counts from 0 for a sequence of sheets.
+   */
+  url?: string;
+  /** Sprite form: seconds one tile stands for. Defaults to 1, as video.js does. */
+  interval?: number;
 }
 
 interface Cue {
@@ -144,11 +168,19 @@ export class Storyboard {
    * holds `columns * rows` pictures, so a tile is one division and two
    * remainders away from any time.
    */
-  static fromSpec(spec: StoryboardSpec): Storyboard | null {
-    const perMosaic = Math.max(1, spec.columns * spec.rows);
+  static fromSpec(spec: StoryboardSpec, duration = 0): Storyboard | null {
+    const fragments = Storyboard.fragmentsOf(spec, duration);
+    if (!fragments) return null;
+    const rows =
+      spec.rows ??
+      Math.max(
+        1,
+        Math.ceil(duration / ((spec.interval || 1) * Math.max(1, spec.columns))),
+      );
+    const perMosaic = Math.max(1, spec.columns * rows);
     const cues: Cue[] = [];
     let at = 0;
-    for (const fragment of spec.fragments) {
+    for (const fragment of fragments) {
       const duration = fragment.duration > 0 ? fragment.duration : 0;
       const step = duration / perMosaic;
       for (let i = 0; i < perMosaic; i++) {
@@ -166,7 +198,7 @@ export class Storyboard {
             width: spec.width,
             height: spec.height,
             sheetWidth: spec.columns * spec.width,
-            sheetHeight: spec.rows * spec.height,
+            sheetHeight: rows * spec.height,
           },
         });
       }
@@ -174,6 +206,37 @@ export class Storyboard {
     }
     if (cues.length === 0) return null;
     return new Storyboard(cues, uniformStep(cues), at);
+  }
+
+  /**
+   * The mosaics a spec describes — listed outright, or worked out from a sprite
+   * and an interval the way videojs-sprite-thumbnails does: a sheet holds
+   * `columns × rows` tiles of `interval` seconds each, and `{index}` counts
+   * sheets from zero. Without `rows` the sheet is however tall it needs to be
+   * to hold the whole video, which is that plugin's single-sprite case.
+   */
+  private static fragmentsOf(
+    spec: StoryboardSpec,
+    duration: number,
+  ): Array<{ url: string; duration: number }> | null {
+    if (spec.fragments && spec.fragments.length > 0) return spec.fragments;
+    if (!spec.url || !(spec.columns > 0)) return null;
+    // Nothing to expand against yet — the caller asks again once the duration
+    // is known, which is the tick after the source opens.
+    if (!(duration > 0)) return null;
+    const interval = spec.interval && spec.interval > 0 ? spec.interval : 1;
+    const rowDuration = interval * spec.columns;
+    const rows = spec.rows ?? Math.ceil(duration / rowDuration);
+    const sheetDuration = rowDuration * Math.max(1, rows);
+    const sheets = Math.max(1, Math.ceil(duration / sheetDuration));
+    const out: Array<{ url: string; duration: number }> = [];
+    for (let i = 0; i < sheets; i++) {
+      out.push({
+        url: spec.url.replace("{index}", String(i)),
+        duration: Math.min(sheetDuration, duration - i * sheetDuration),
+      });
+    }
+    return out;
   }
 
   /**
