@@ -218,6 +218,25 @@ Or with npm:
 <movi-player src="video.mp4" controls autoplay muted></movi-player>
 ```
 
+### Existing `<video>` Tags
+
+A page already built around `<video>` (or video.js, which is a `<video>` with a
+script on it) does not have to be rewritten — take the elements over:
+
+```js
+import { upgradeVideoElements } from "movi-player";
+
+upgradeVideoElements();                 // every <video> on the page
+upgradeVideoElements("video.hero");     // only these
+upgradeVideoElements({ watch: true });  // …and any added later (SPA routes)
+```
+
+Each one is replaced by a `<movi-player>` carrying its attributes and children
+(sources, caption tracks, thumbnail tracks, poster, `data-setup`), and its `id`,
+so `getElementById` keeps finding the player. The original element stays hidden
+with its API pointed at the new one, so `video.play()`, `video.currentTime = 60`
+and `video.addEventListener(…)` in existing code keep working.
+
 ### Local File
 
 ```html

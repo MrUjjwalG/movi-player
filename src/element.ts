@@ -41,6 +41,12 @@ export type {
 } from './types';
 
 // Utilities
+export {
+  upgradeVideoElements,
+  playerFor,
+  type UpgradeOptions,
+  type UpgradedVideo,
+} from './upgrade';
 export { Logger, LogLevel } from './utils/Logger';
 export { Time, TIME_BASE } from './utils/Time';
 

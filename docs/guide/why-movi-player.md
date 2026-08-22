@@ -137,6 +137,34 @@ player.addEventListener("ended", () => console.log("done"));
 
 The element implements the same `play()` / `pause()` / `currentTime` / events surface as `<video>`, so most existing logic carries over with a `getElementById` instead of a `videojs()` factory call.
 
+#### Or change nothing at all
+
+If the markup is not yours to edit — a CMS template, a third-party embed, a
+page you would rather not touch — take the `<video>` elements over instead:
+
+```js
+import { upgradeVideoElements } from "movi-player";
+
+upgradeVideoElements();                          // every <video> on the page
+upgradeVideoElements("video.hero");              // only these
+upgradeVideoElements({ watch: true });           // …and any added later
+upgradeVideoElements({ attributes: { thumb: "" } });   // with extras applied
+```
+
+Each `<video>` is replaced by a `<movi-player>` carrying its attributes and its
+children — sources, caption tracks, thumbnail tracks, poster, `data-setup`. The
+element's `id` moves too, so `getElementById` keeps finding "the player".
+
+The original element stays in the page, hidden, with its API pointed at the new
+one, so code that still holds it keeps working:
+
+```js
+const video = document.getElementById("hero-native"); // the old element
+video.play();                 // plays through movi-player
+video.currentTime = 60;       // seeks it
+video.addEventListener("ended", …);   // fires from the player
+```
+
 #### The markup carries over as-is
 
 The pieces video.js reads from the element are read here too, so a page can
