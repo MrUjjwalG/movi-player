@@ -278,6 +278,45 @@ export function upgradeVideoElements(
   return done;
 }
 
+/**
+ * `data-upgrade` on the script tag that loads this bundle — the takeover with
+ * no JavaScript of your own:
+ *
+ * ```html
+ * <script type="module" src="https://cdn…/element.js" data-upgrade></script>
+ * <video src="movie.mkv" controls></video>
+ * ```
+ *
+ * The attribute's value is a selector when you want to narrow it
+ * (`data-upgrade="video.hero"`); `data-upgrade-watch` keeps upgrading elements
+ * that appear later, and `data-upgrade-attrs` is JSON put on every player it
+ * makes. Module scripts run after the document is parsed, so the `<video>`
+ * elements are already there when this fires.
+ */
+function autoUpgradeFromScriptTag(): void {
+  if (typeof document === "undefined") return;
+  const tag = document.querySelector("script[data-upgrade]");
+  if (!tag) return;
+  const selector = (tag.getAttribute("data-upgrade") || "").trim();
+  let attributes: Record<string, string> | undefined;
+  const raw = tag.getAttribute("data-upgrade-attrs");
+  if (raw) {
+    try {
+      attributes = JSON.parse(raw) as Record<string, string>;
+    } catch {
+      Logger.warn(TAG, "data-upgrade-attrs is not valid JSON — ignoring it");
+    }
+  }
+  const options: UpgradeOptions = {
+    watch: tag.hasAttribute("data-upgrade-watch"),
+    ...(attributes ? { attributes } : {}),
+  };
+  if (selector) upgradeVideoElements(selector, options);
+  else upgradeVideoElements(options);
+}
+
+autoUpgradeFromScriptTag();
+
 /** The player that took over a given `<video>`, if one did. */
 export function playerFor(video: HTMLVideoElement): HTMLElement | null {
   return (

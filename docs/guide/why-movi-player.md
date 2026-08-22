@@ -142,6 +142,16 @@ The element implements the same `play()` / `pause()` / `currentTime` / events su
 If the markup is not yours to edit — a CMS template, a third-party embed, a
 page you would rather not touch — take the `<video>` elements over instead:
 
+From a CDN this needs no JavaScript at all — `data-upgrade` on the script tag
+does it:
+
+```html
+<script type="module" src="https://cdn.jsdelivr.net/npm/movi-player/dist/element.js"
+        data-upgrade data-upgrade-watch></script>
+```
+
+Or call it:
+
 ```js
 import { upgradeVideoElements } from "movi-player";
 

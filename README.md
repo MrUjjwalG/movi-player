@@ -223,6 +223,21 @@ Or with npm:
 A page already built around `<video>` (or video.js, which is a `<video>` with a
 script on it) does not have to be rewritten — take the elements over:
 
+From a CDN, with no JavaScript of your own — `data-upgrade` on the script tag:
+
+```html
+<script type="module" src="https://cdn.jsdelivr.net/npm/movi-player/dist/element.js"
+        data-upgrade></script>
+
+<video src="movie.mkv" controls></video>
+```
+
+`data-upgrade="video.hero"` narrows it to a selector, `data-upgrade-watch` keeps
+upgrading elements added later, and `data-upgrade-attrs='{"thumb":""}'` puts
+attributes on every player it makes.
+
+Or call it yourself:
+
 ```js
 import { upgradeVideoElements } from "movi-player";
 
