@@ -3261,8 +3261,12 @@ export class MoviElement extends HTMLElement {
         // debounce and then a crop, an encode and an image decode to arrive at
         // the same pixels: measured 45-66ms from pointer move to picture,
         // against ~0 here.
-        if (this.paintStoryboardTile(time)) return;
-        requestPreview(time);
+        // Skip the DECODE, not the card. `return` here left the tile painted
+        // into a container that the code below had not shown yet — so a source
+        // with a storyboard scrubbed against a picture nobody could see, while
+        // one without a board (falling through to requestPreview) worked. The
+        // only thing a painted tile makes unnecessary is the request.
+        if (!this.paintStoryboardTile(time)) requestPreview(time);
       } else {
         hidePreviewLoading();
       }
@@ -34232,18 +34236,39 @@ export class MoviElement extends HTMLElement {
 
     const layer = sr.querySelector(".movi-thumbnail-tile") as HTMLElement | null;
     if (!layer) return false;
-    const box = layer.getBoundingClientRect();
-    // Before the card has ever been shown it has no box; fall back to the CSS
-    // default width so the first hover is painted too.
-    const cardW = box.width || 168;
-    const scale = cardW / tile.width;
+
+    // Crop in PERCENTAGES, and let the stylesheet keep the box.
+    //
+    // Measuring the card to scale the sheet cannot work here: this paints
+    // BEFORE updatePreviewBox and before the card is shown, so the width read
+    // was the previous hover's — or nothing at all on the first — and the
+    // sheet ended up scaled for a card of the wrong size. What that looks like
+    // is the neighbouring frame leaking in down one side, because a sheet
+    // scaled too small no longer has one tile covering the box.
+    //
+    // Percentages need no measurement. `background-size` in percent scales the
+    // sheet so exactly one tile covers the element whatever size it settles
+    // at, and percentage `background-position` walks the grid in units of
+    // "tiles from the start" rather than pixels — so the same two numbers are
+    // right before layout, after layout, and after a resize.
+    //
+    // The inline `height` went with it: .movi-thumbnail-tile is already sized
+    // from --movi-preview-w/h, which the card derives from the SOURCE's shape
+    // (see updatePreviewBox). Writing a pixel height here fought that, and the
+    // pixel value — computed from the same stale width — is what left the box
+    // looking square.
+    const columns = tile.sheetWidth / tile.width;
+    const rows = tile.sheetHeight / tile.height;
+    const col = tile.x / tile.width;
+    const row = tile.y / tile.height;
     layer.style.backgroundImage = `url("${tile.url}")`;
-    // The whole sheet is scaled, and the offset walks it to the tile wanted.
-    layer.style.backgroundSize = `${tile.sheetWidth * scale}px ${
-      tile.sheetHeight * scale
-    }px`;
-    layer.style.backgroundPosition = `${-tile.x * scale}px ${-tile.y * scale}px`;
-    layer.style.height = `${Math.round(tile.height * scale)}px`;
+    layer.style.backgroundSize = `${columns * 100}% ${rows * 100}%`;
+    // A single-column (or single-row) sheet has nothing to walk along, and the
+    // division would be by zero.
+    layer.style.backgroundPosition = `${
+      columns > 1 ? (col / (columns - 1)) * 100 : 0
+    }% ${rows > 1 ? (row / (rows - 1)) * 100 : 0}%`;
+    layer.style.removeProperty("height");
     layer.style.display = "block";
 
     // Hold this mosaic, and the one after it: a scrub crosses a sheet boundary
