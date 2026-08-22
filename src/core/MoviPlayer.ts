@@ -1040,6 +1040,27 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
    *  not to the link, and the ABR must not read it as the rung failing. */
   private _lastAudioSwitchAt: number = 0;
   private _lastSeekResumeAt: number = 0;
+  /** When an in-place rendition swap actually LANDED, and when a picture
+   *  catch-up started. Both leave the video pipeline re-priming while the sound
+   *  plays on, so a stall in the moments after is ours, not the link's. */
+  private _lastRenditionSwapAt: number = 0;
+  private _lastVideoCatchUpAt: number = 0;
+  /**
+   * How long after a swap its catch-up still owns a stall.
+   *
+   * The hard path deliberately lands RENDITION_SWAP_LOOKBACK_S behind the
+   * playhead, so the new rendition has that much to fetch and decode before it
+   * reaches the sound. At 4K60 that is not the blink it is at 720p, and the
+   * stall it ends in was read as the rung failing — which dropped a rung, whose
+   * own swap stalled the same way, all the way down the ladder.
+   */
+  private static readonly POST_SWAP_CATCHUP_MS = 10000;
+  /**
+   * How little must be buffered ahead for a stall to be about the LINK. A link
+   * that cannot carry the rung starves the buffer to nothing; anything above
+   * this and the bytes were already there.
+   */
+  private static readonly ABR_STALL_STARVED_S = 5;
   /** How long after a rate change or a seek's resume an audio stall is still
    *  attributable to the flush/re-anchor that operation performed itself. */
   private static readonly SELF_INFLICTED_STALL_WINDOW_MS = 1500;
@@ -2515,6 +2536,10 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
     try { oldDemuxer.close(); } catch {}
     try { oldSource?.close(); } catch {}
 
+    // The catch-up starts here, at the landing (see _lastRenditionSwapAt). A
+    // seamless handover has no catch-up — its frames were decoded past the
+    // playhead before the swap — so only the hard path arms it.
+    if (!primed) this._lastRenditionSwapAt = performance.now();
     Logger.info(
       TAG,
       `in-place quality switch → ${newVideoTrack.width}x${newVideoTrack.height}${primed ? " (seamless)" : ""}`,
@@ -2865,8 +2890,19 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
     // 480p → 360p → 240p on a link carrying 25.9s of buffer, each downshift
     // clearing the frame queue the hold was waiting to see fill — the ladder
     // collapse and the wait sustaining each other.
+    // …and only when the link is what ran out. Playback can stall with seconds
+    // of the rung already ON THE MACHINE — the frame queue empties while the
+    // decoder re-primes, or the picture is catching up — and a downshift is a
+    // bandwidth remedy for a problem that is not bandwidth. Measured on a 4K60
+    // rung: three stalls with 7.1s, 9.5s and 67.2s buffered ahead, each read as
+    // the rung failing, walking 2160p → 1440p → 1080p → 720p while the bytes
+    // for 2160p sat in hand. A rung the DEVICE cannot decode still drops, via
+    // the decode-bound branch that owns that case.
+    const linkStarved = bufferAhead < MoviPlayer.ABR_STALL_STARVED_S;
     const stalling =
-      this.stateManager.is("buffering") && !this._bufferingSelfInflicted;
+      this.stateManager.is("buffering") &&
+      !this._bufferingSelfInflicted &&
+      linkStarved;
     // An in-place quality switch resets the buffered range to ~0 at the current
     // playhead, so bufferAhead reads low for the first several seconds while the
     // new rendition re-primes — that's a REFILL, not the network failing to
@@ -5701,7 +5737,14 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
             now - this._lastSeekResumeAt <
               MoviPlayer.SELF_INFLICTED_STALL_WINDOW_MS ||
             now - this._lastAudioSwitchAt <
-              MoviPlayer.SELF_INFLICTED_STALL_WINDOW_MS;
+              MoviPlayer.SELF_INFLICTED_STALL_WINDOW_MS ||
+            // …and so is the catch-up after an in-place rendition swap, and the
+            // one that pulls a lagging picture up to the sound. Both empty the
+            // video queue on purpose, at a moment we chose (see
+            // POST_SWAP_CATCHUP_MS).
+            now - this._lastRenditionSwapAt < MoviPlayer.POST_SWAP_CATCHUP_MS ||
+            now - this._lastVideoCatchUpAt <
+              MoviPlayer.SELF_INFLICTED_STALL_WINDOW_MS * 3;
           this.stateManager.setState("buffering");
           this.clock.pause();
           // Suspend AudioContext so already-scheduled audio doesn't play ahead of video.
@@ -5806,6 +5849,16 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
         // instant budget refill, which is the opposite of what it measures.
         this._videoLagHealthySince = 0;
       }
+      // A hard rendition swap lands RENDITION_SWAP_LOOKBACK_S behind the sound
+      // on purpose, expecting the frames in between to be eaten far faster than
+      // real time. At 2160p60 they are not — measured on a YouTube ladder, the
+      // picture ran seconds behind for most of a switch. There is nothing to
+      // wait and see about there: the lag is known the moment the swap lands,
+      // so halve the patience and get the picture back sooner.
+      const sustainMs =
+        nowLag - this._lastRenditionSwapAt < MoviPlayer.POST_SWAP_CATCHUP_MS
+          ? MoviPlayer.VIDEO_LAG_SUSTAIN_MS / 2
+          : MoviPlayer.VIDEO_LAG_SUSTAIN_MS;
       if (
         videoBehind >= MoviPlayer.VIDEO_LAG_S &&
         // A seek's own re-prime trails the sound for a moment by design; only
@@ -5815,7 +5868,7 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
         if (this._videoLagSince === 0) {
           this._videoLagSince = nowLag;
         } else if (
-          nowLag - this._videoLagSince > MoviPlayer.VIDEO_LAG_SUSTAIN_MS &&
+          nowLag - this._videoLagSince > sustainMs &&
           nowLag - this._lastVideoLagResyncAt >
             MoviPlayer.VIDEO_LAG_COOLDOWN_MS &&
           this._videoLagResyncs < MoviPlayer.MAX_VIDEO_LAG_RESYNCS
@@ -11257,6 +11310,9 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
    * skipped by seekTargetTime.
    */
   private async resyncVideoToAudio(reason: string): Promise<void> {
+    // Flushing the video decoder and re-seeking empties the queue by design, so
+    // the stall that may follow is this call's, not the link's.
+    this._lastVideoCatchUpAt = performance.now();
     // clock.getTime() falls back to wall-clock when the audio output is
     // suspended in background, so it can race far ahead of the audio that has
     // actually been rendered. Resolve the real audio position from the
