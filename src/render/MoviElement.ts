@@ -16246,10 +16246,14 @@ export class MoviElement extends HTMLElement {
       /* An empty capsule is a dot. Groups come and go with the controls in
          them — a host removing its last one, or controlslist switching a
          built-in pair off — and a capsule with nothing left inside it stayed in
-         the row as a 4px mark with no meaning. */
+         the row as a 4px mark with no meaning. The :empty half catches a
+         group with no children at all; the class is set by syncEmptyCapsules
+         for the commoner case, where the children are still there and every one
+         of them is hidden. */
       .movi-control-group:empty,
+      .movi-capsule-empty,
       :host([controlslist~="noseekbuttons"]) .movi-seek-group {
-        display: none;
+        display: none !important;
       }
 
       .movi-seek-group {
@@ -24245,6 +24249,35 @@ export class MoviElement extends HTMLElement {
    * added — and it always measures from the un-hidden state, so a row that
    * gains space takes its clock back.
    */
+  /**
+   * Hide any control capsule that has nothing visible left in it.
+   *
+   * The bar's capsules are pills with 2px of padding, and they are drawn by the
+   * container, not by the controls inside it. Take the controls away — a
+   * `controlslist` token, a `fastseek` mode, a source with no track to offer —
+   * and the container stays: 4px of rounded background sitting in the row as a
+   * dot with no meaning. It showed up between play and volume when the ±10s
+   * pair was off, and as the entire right-hand cluster when a host switched
+   * every control in it off.
+   *
+   * Emptiness is measured, not inferred: a child that lays out to nothing is
+   * gone whatever hid it, so this covers hiding done in the stylesheet, in an
+   * attribute and at runtime without having to know which.
+   */
+  private syncEmptyCapsules(): void {
+    const sr = this.shadowRoot;
+    if (!sr) return;
+    const capsules = sr.querySelectorAll<HTMLElement>(
+      ".movi-controls-right, .movi-seek-group, .movi-control-group",
+    );
+    for (const capsule of Array.from(capsules)) {
+      const filled = Array.from(capsule.children).some(
+        (child) => (child as HTMLElement).offsetWidth > 0,
+      );
+      capsule.classList.toggle("movi-capsule-empty", !filled);
+    }
+  }
+
   private fitControlsRow(): void {
     const sr = this.shadowRoot;
     if (!sr) return;
@@ -24336,6 +24369,7 @@ export class MoviElement extends HTMLElement {
       this.updateCoverArtOverlay();
       // The row got wider or narrower; re-decide what still fits in it.
       this.fitControlsRow();
+      this.syncEmptyCapsules();
     }
   }
 
@@ -36575,6 +36609,8 @@ export class MoviElement extends HTMLElement {
         ? ""
         : "none";
     });
+    // …and whatever capsule they left behind (see syncEmptyCapsules).
+    this.syncEmptyCapsules();
     // The panel is a promise about what the keyboard does. Arrow-seek and its
     // frame-step companion only answer when the key channel is on, and a
     // shortcut listed but dead is worse than one not listed.
