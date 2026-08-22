@@ -1643,6 +1643,39 @@ export class ThumbnailBindings {
   }
 
   /**
+   * The next video packet after the last one handed over — the walk forward
+   * from a keyframe to the frame the pointer is actually on. Same callback
+   * shape as readKeyframe; a negative size means EOF or a broken read.
+   */
+  async readNextPacket(): Promise<number> {
+    if (!this.contextPtr || !this.isOpened) return -1;
+    let packetSize = -1;
+    let packetPts = -1;
+    (this.module as any)._pendingThumbnail = {
+      resolve: (result: { size: number; pts: number }) => {
+        packetSize = result.size;
+        packetPts = result.pts;
+      },
+    };
+    try {
+      await this.module.ccall(
+        "movi_thumbnail_read_next_packet",
+        "void",
+        ["number"],
+        [this.contextPtr],
+        { async: true },
+      );
+      if (packetSize > 0) this.lastPacketPts = packetPts;
+      return packetSize;
+    } catch (e) {
+      Logger.error(TAG, "readNextPacket error", e);
+      return -1;
+    } finally {
+      (this.module as any)._pendingThumbnail = null;
+    }
+  }
+
+  /**
    * Get packet data pointer
    */
   getPacketData(): number {

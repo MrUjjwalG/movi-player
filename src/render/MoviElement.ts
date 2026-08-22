@@ -742,6 +742,17 @@ export class MoviElement extends HTMLElement {
   private _rotate = 0;
   private _currentFit: "contain" | "cover" | "fill" | "zoom" = "contain"; // Actual fit being applied
   private _thumb: boolean = false;
+  /**
+   * thumb="precise": show the frame the pointer is ON rather than the keyframe
+   * before it. Opt-in, because it decodes the run of frames in between — see
+   * MoviPlayer.setPrecisePreviews.
+   */
+  private _thumbPrecise: boolean = false;
+
+  /** thumb="precise" — anything else (including a bare `thumb`) is keyframes. */
+  private static wantsPrecisePreviews(value: string | null): boolean {
+    return (value || "").trim().toLowerCase() === "precise";
+  }
   // True once the source falls back to linear (forward-only) playback: server
   // has no Range support and the file is too big to cache whole. Hides the
   // timeline and disables seeking + thumbnails.
@@ -23211,6 +23222,9 @@ export class MoviElement extends HTMLElement {
     this.updateFitMode();
 
     this._thumb = this.hasAttribute("thumb");
+    this._thumbPrecise = MoviElement.wantsPrecisePreviews(
+      this.getAttribute("thumb"),
+    );
     this._hdr = this.hasAttribute("hdr") || this.getAttribute("hdr") === null; // Default to true if attribute is missing
     const themeAttr = this.getAttribute("theme");
     if (themeAttr === "light" || themeAttr === "dark") {
@@ -23666,6 +23680,8 @@ export class MoviElement extends HTMLElement {
         break;
       case "thumb":
         this._thumb = newValue !== null;
+        this._thumbPrecise = MoviElement.wantsPrecisePreviews(newValue);
+        this.player?.setPrecisePreviews(this._thumbPrecise);
         // Sync an already-created player so toggling `thumb` at runtime — or
         // declaring it after `src` (whose callback builds the player first) —
         // enables/disables scrub previews live instead of silently no-opping.
@@ -25225,6 +25241,9 @@ export class MoviElement extends HTMLElement {
       // point and previews would silently never enable. hasAttribute reads the
       // live parsed attribute, which is already present, so order stops mattering.
       this._thumb = this.hasAttribute("thumb");
+      this._thumbPrecise = MoviElement.wantsPrecisePreviews(
+        this.getAttribute("thumb"),
+      );
 
       // Create MoviPlayer instance
       // Configure MoviPlayer options
@@ -25363,6 +25382,9 @@ export class MoviElement extends HTMLElement {
       }
       Logger.info(TAG, `Initializing MoviPlayer (${mode} Mode)`);
       created = new MoviPlayer(playerConfig);
+      // enablePreviews rides in the config; the precise flag is a runtime
+      // switch, so it has to be handed over once the instance exists.
+      created.setPrecisePreviews(this._thumbPrecise);
       this.player = created;
 
       // Re-apply a host subtitle renderer to the fresh player (it's registered on
@@ -31689,6 +31711,7 @@ export class MoviElement extends HTMLElement {
         frameRate: this._fps || undefined,
         ...(this._headers && { headers: this._headers }),
       });
+      this.player.setPrecisePreviews(this._thumbPrecise);
 
       if (this._chapters) this.player.setChapters(this._chapters);
     // The renderer is new, and the crop setting lives on it — an attribute set

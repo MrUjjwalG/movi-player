@@ -981,6 +981,28 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
     });
   }
 
+  /**
+   * Walk forward from the keyframe to the frame the pointer is actually on.
+   *
+   * A preview is normally the keyframe at or before the hovered time, because
+   * that is the one frame a seek can hand over for free. On a long-GOP source
+   * — a WEB-DL with 5-10s between keyframes — that is a picture from seconds
+   * away from where the viewer is pointing. Precise mode decodes the frames in
+   * between and shows the one that belongs to the hovered second instead.
+   *
+   * Off by default: it is the same decode the player does for playback, on the
+   * hover path, so it costs a run of frames per preview rather than one.
+   */
+  private precisePreviews = false;
+  /** Frames to walk before giving up and showing the keyframe. */
+  private static readonly PRECISE_MAX_FRAMES = 120;
+  /** …and how long to spend doing it, so a hover never hangs on a slow GOP. */
+  private static readonly PRECISE_BUDGET_MS = 900;
+
+  setPrecisePreviews(enabled: boolean): void {
+    this.precisePreviews = enabled;
+  }
+
   private previewsAllowed(): boolean {
     if (!this.config.enablePreviews) return false;
     // Non-range sources keep previews ON: the thumbnail source borrows frames
@@ -7814,13 +7836,62 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
       // 1. Try WebCodecs (Hardware) through Renderer
       let rendered = false;
 
+      // Precise mode walks from the keyframe to the frame the pointer is
+      // actually on. The packets are collected FIRST and decoded as one run,
+      // because the decoder has to be flushed to get a frame out and a flush
+      // ends the run: Chrome answers the next delta with "A key frame is
+      // required after configure() or flush()".
+      //
+      // Bounded twice over — a frame count and a wall-clock budget — since the
+      // distance to the next keyframe is the source's business, not ours.
+      // Running out of either leaves the keyframe, which is what this mode
+      // replaces and never worse than it.
+      const run: Array<{ data: Uint8Array; pts: number; key: boolean }> = [
+        { data: packetData, pts: timestamp, key: true },
+      ];
+      if (this.precisePreviews && timestamp < time - 0.02) {
+        const deadline = performance.now() + MoviPlayer.PRECISE_BUDGET_MS;
+        while (
+          run.length <= MoviPlayer.PRECISE_MAX_FRAMES &&
+          performance.now() < deadline
+        ) {
+          const size = await this.thumbnailBindings.readNextPacket();
+          if (size <= 0) break; // EOF, or a read that went wrong
+          const pts = this.thumbnailBindings.getPacketPts();
+          const data = this.thumbnailBindings.getPacketDataCopy(size);
+          if (!data) break;
+          run.push({ data, pts, key: false });
+          // Decoding stops AT the hovered moment, not before it: this packet
+          // may be the frame being asked for, and in a stream with B-frames
+          // the ones around it are needed to build it anyway.
+          if (pts >= time) break;
+        }
+      }
+
       try {
-        rendered = await this.thumbnailRenderer!.decodeAndRender(
-          packetData,
-          timestamp,
-        );
+        rendered = await this.thumbnailRenderer!.decodeSequenceAndRender(run);
+        if (run.length > 1) {
+          Logger.debug(
+            TAG,
+            `Precise preview: decoded ${run.length} frames from the keyframe at ` +
+              `${timestamp.toFixed(2)}s up to ${time.toFixed(2)}s`,
+          );
+        }
       } catch (e) {
         Logger.warn(TAG, "Thumbnail WebCodecs decode failed", e);
+      }
+
+      // The walk left the demuxer holding the LAST packet it read, and the
+      // software path below decodes whatever the context is holding. A delta
+      // on its own decodes to nothing, so put the keyframe back before handing
+      // over — the software fallback then shows the keyframe, which is what it
+      // showed before this mode existed.
+      if (!rendered && run.length > 1) {
+        try {
+          await this.thumbnailBindings.readKeyframe(time);
+        } catch {
+          /* the fallback reports its own failure */
+        }
       }
 
       /* REMOVED OLD LOGIC START

@@ -700,10 +700,77 @@ export class ThumbnailRenderer {
   /**
    * Decode and render a packet using WebCodecs
    */
+  /**
+   * Decode a RUN of packets — a keyframe and the frames that follow it — and
+   * leave the last one on the canvas.
+   *
+   * Sent together and flushed once, because a flush is the one thing that
+   * breaks a run: Chrome answers the first delta after it with "A key frame is
+   * required after configure() or flush()". Each frame is rendered as it comes
+   * out, so the final render is the final frame, and there is nothing to pick.
+   */
+  async decodeSequenceAndRender(
+    items: Array<{ data: Uint8Array; pts: number; key: boolean }>,
+  ): Promise<boolean> {
+    if (items.length === 0) return false;
+    if (items.length === 1) {
+      return this.decodeAndRender(items[0].data, items[0].pts, undefined, {
+        key: items[0].key,
+      });
+    }
+    let decoder = this.decoder;
+    if (!decoder || decoder.state === "closed") {
+      if (this.decoderRevivedUnproven) return false;
+      const revived = await this.recreateDecoder();
+      if (!revived) return false;
+      this.decoderRevivedUnproven = true;
+      decoder = this.decoder;
+      if (!decoder || decoder.state === "closed") return false;
+    }
+
+    let rendered = false;
+    // The per-frame resolver is for single decodes; here the answer is the
+    // flush, so mark each frame as it lands and let the flush settle it.
+    this.pendingDecodeResolve = () => {
+      rendered = true;
+    };
+    try {
+      for (const item of items) {
+        let data = item.data;
+        if (this.isAnnexBSource) {
+          data = MoviVideoDecoder.annexBToLengthPrefixed(data);
+        } else if (item.key) {
+          data = MoviVideoDecoder.stripAudLengthPrefixed(data);
+        }
+        decoder.decode(
+          new EncodedVideoChunk({
+            type: item.key ? "key" : "delta",
+            timestamp: item.pts * 1_000_000,
+            data,
+          }),
+        );
+      }
+      await decoder.flush();
+    } catch (e) {
+      Logger.warn(TAG, "Thumbnail sequence decode failed", e);
+    } finally {
+      this.pendingDecodeResolve = null;
+    }
+    if (rendered) this.decoderRevivedUnproven = false;
+    return rendered;
+  }
+
   async decodeAndRender(
     packetData: Uint8Array,
     pts: number,
     duration?: number,
+    /**
+     * A frame that is NOT the keyframe the seek landed on — one of the frames
+     * between it and where the pointer actually is (see the precise preview
+     * mode). Sent as a delta chunk, because that is what it is: telling the
+     * decoder a P-frame is a keyframe makes it reject the whole run.
+     */
+    opts?: { key?: boolean },
   ): Promise<boolean> {
     let decoder = this.decoder;
     if (!decoder || decoder.state === "closed") {
@@ -753,7 +820,9 @@ export class ThumbnailRenderer {
         }
 
         const chunk = new EncodedVideoChunk({
-          type: "key", // Thumbnails are always keyframes in this context
+          // A preview is normally the keyframe the seek landed on; the precise
+          // mode walks forward from it, and those frames are deltas.
+          type: opts?.key === false ? "delta" : "key",
           timestamp: pts * 1_000_000,
           duration: duration,
           data: data,

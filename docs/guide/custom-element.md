@@ -45,7 +45,7 @@ The `<movi-player>` custom element is a drop-in replacement for the native `<vid
 | `renderer`    | `string`            | `canvas` (only)                    | Rendering backend (HLS/DRM auto-pick separately)  |
 | `sw`          | `boolean`, `string` | `auto`                             | Decoder mode (`auto`, `true`/`software`, `false`) |
 | `fps`         | `number`            | -                                  | Custom frame rate override                        |
-| `thumb`       | `boolean`           | -                                  | Enable seek preview thumbnails                    |
+| `thumb`       | `boolean`, `string` | -                                  | Seek preview thumbnails; `thumb="precise"` decodes to the hovered frame instead of the keyframe before it |
 | `fastseek`    | `boolean`           | -                                  | Enable skip buttons and gestures                  |
 | `showtitle`   | `boolean`           | -                                  | Show video title bar                              |
 | `titlemode`   | `string`            | `both`                             | Where the title bar shows — `both`, `fullscreen`, `windowed`; add `back` for a back arrow that fires a `back` event (scope it with `back-mobile`, `back-fullscreen`, `back-mobile-fullscreen`) |

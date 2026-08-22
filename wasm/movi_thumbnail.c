@@ -396,6 +396,53 @@ void movi_thumbnail_read_keyframe(struct MoviThumbnailContext *ctx,
   av_packet_free(&best_pkt);
 }
 
+/**
+ * The next VIDEO packet after the one just handed over.
+ *
+ * The keyframe reader answers with the keyframe at or before the hovered time,
+ * which is the frame the preview shows — on a long-GOP source that can be
+ * seconds away from where the pointer actually is. Walking forward from there
+ * needs the packets in between, so this hands them over one at a time and lets
+ * the caller stop when it reaches the frame it wanted. Reports through the same
+ * callback as the keyframe read: size and pts, or a negative size at EOF.
+ */
+EMSCRIPTEN_KEEPALIVE
+void movi_thumbnail_read_next_packet(struct MoviThumbnailContext *ctx) {
+  if (!ctx || !ctx->fmt_ctx || !ctx->pkt || ctx->video_stream_index < 0) {
+    js_thumbnail_packet_ready(-1, 0.0);
+    return;
+  }
+  AVStream *st = ctx->fmt_ctx->streams[ctx->video_stream_index];
+  av_packet_unref(ctx->pkt);
+
+  // Non-video packets are skipped rather than returned: an interleaved file
+  // hands over audio and subtitles here too, and the caller only counts video.
+  int guard = 256;
+  while (guard-- > 0) {
+    int ret = av_read_frame(ctx->fmt_ctx, ctx->pkt);
+    if (ret < 0) {
+      js_thumbnail_packet_ready(-6, 0.0);
+      return;
+    }
+    if (ctx->pkt->stream_index == ctx->video_stream_index && ctx->pkt->size > 0)
+      break;
+    av_packet_unref(ctx->pkt);
+    if (guard == 0) {
+      js_thumbnail_packet_ready(-6, 0.0);
+      return;
+    }
+  }
+
+  double pts = 0.0;
+  if (ctx->pkt->pts != AV_NOPTS_VALUE)
+    pts = ctx->pkt->pts * av_q2d(st->time_base);
+  else if (ctx->pkt->dts != AV_NOPTS_VALUE)
+    pts = ctx->pkt->dts * av_q2d(st->time_base);
+  ctx->last_packet_size = ctx->pkt->size;
+  ctx->last_packet_pts = pts;
+  js_thumbnail_packet_ready(ctx->pkt->size, pts);
+}
+
 EMSCRIPTEN_KEEPALIVE
 uint8_t *movi_thumbnail_get_packet_data(struct MoviThumbnailContext *ctx) {
   return (ctx && ctx->pkt) ? ctx->pkt->data : NULL;

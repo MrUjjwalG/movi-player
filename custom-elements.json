@@ -149,7 +149,7 @@
             },
             {
               "name": "thumb",
-              "description": "Generates thumbnails on demand (used internally for preview)."
+              "description": "Generates thumbnails on demand for seek-bar previews. Set to \"precise\" to decode forward from the keyframe to the frame under the pointer instead of showing the keyframe before it."
             },
             {
               "name": "hdr",
