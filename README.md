@@ -632,6 +632,7 @@ Every attribute can also be read and set as a JS property (`el.rotate = 90`). Gr
 |---|---|---|
 | `fastseek` | `fastseek="keys gestures"` | ±10s skip affordances. Bare = all; or narrow to `buttons`, `keys`, `gestures` (aliases: `touch`, `nontouch`, `keyonly`, `controls`, `none`) |
 | `doubletap` | `doubletap="true"` | Double-tap to seek ±10s |
+| `storyboard` | `storyboard` | URL of a WebVTT thumbnail track (`sprite.jpg#xywh=x,y,w,h`). Previews become a crop out of a mosaic — no seek, no decode, and the second WASM module is never opened. The `storyboard` property also accepts a tile spec (`{columns, rows, width, height, fragments}`), the shape YouTube publishes |
 | `thumb` | `thumb` | Generate on-demand thumbnails for seek-bar previews. `thumb="precise"` decodes forward from the keyframe to the frame under the pointer — exact, at the cost of a run of frames per preview |
 | `nohotkeys` | `nohotkeys` | Disable all keyboard shortcuts |
 | `controlslist` | `controlslist="nofullscreen nopip nospeed"` | Switch built-in controls off, as `no<name>` tokens (`noplay`, `nocc`, `noquality`, `nosettings`, … or the `id` of an `addControl()` control) |

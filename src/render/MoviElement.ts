@@ -23,6 +23,7 @@ import type {
   PlayerState,
 } from "../types";
 import { Logger, LogLevel } from "../utils/Logger";
+import type { StoryboardSpec } from "../utils/Storyboard";
 import type { SourceAdapter } from "../source/SourceAdapter";
 import { HttpSource } from "../source/HttpSource";
 import { WasmBindings } from "../wasm/bindings";
@@ -753,6 +754,28 @@ export class MoviElement extends HTMLElement {
   private static wantsPrecisePreviews(value: string | null): boolean {
     return (value || "").trim().toLowerCase() === "precise";
   }
+
+  /**
+   * Scrub previews the source already has: a WebVTT thumbnail track (the
+   * attribute), or a tile spec (the property, which is the shape YouTube
+   * publishes). Either way the preview becomes a crop out of a mosaic instead
+   * of a seek and a decode — see MoviPlayer.setStoryboard.
+   */
+  private _storyboard: string | StoryboardSpec | null = null;
+
+  get storyboard(): string | StoryboardSpec | null {
+    return this._storyboard;
+  }
+
+  set storyboard(value: string | StoryboardSpec | null) {
+    this._storyboard = value ?? null;
+    this.player?.setStoryboard(this._storyboard);
+    // A board is cheap enough to be worth showing without `thumb` being asked
+    // for; the decode pipeline behind that attribute is what was expensive.
+    this.player?.setPreviewsEnabled(
+      (this._thumb || !!this._storyboard) && !this._audioOnly,
+    );
+  }
   // True once the source falls back to linear (forward-only) playback: server
   // has no Range support and the file is too big to cache whole. Hides the
   // timeline and disables seeking + thumbnails.
@@ -1081,6 +1104,7 @@ export class MoviElement extends HTMLElement {
   static get observedAttributes() {
     return [
       "src",
+      "storyboard",
       "autoplay",
       "controls",
       "loop",
@@ -23225,6 +23249,11 @@ export class MoviElement extends HTMLElement {
     this._thumbPrecise = MoviElement.wantsPrecisePreviews(
       this.getAttribute("thumb"),
     );
+    // A spec set through the property outranks the attribute — the property is
+    // the richer form, and a wrapper that sets both means the object.
+    if (typeof this._storyboard !== "object" || this._storyboard === null) {
+      this._storyboard = this.getAttribute("storyboard");
+    }
     this._hdr = this.hasAttribute("hdr") || this.getAttribute("hdr") === null; // Default to true if attribute is missing
     const themeAttr = this.getAttribute("theme");
     if (themeAttr === "light" || themeAttr === "dark") {
@@ -23677,6 +23706,13 @@ export class MoviElement extends HTMLElement {
         // same-tick set still beats the fetch — and a connect-time attribute
         // just calls this with the same value.
         setWasmUrl(newValue);
+        break;
+      case "storyboard":
+        // The attribute carries a URL; the property can carry a spec object,
+        // and setting one must not wipe the other out — an attribute only ever
+        // replaces a URL it set itself.
+        if (newValue === null && typeof this._storyboard !== "string") break;
+        this.storyboard = newValue;
         break;
       case "thumb":
         this._thumb = newValue !== null;
@@ -25253,7 +25289,7 @@ export class MoviElement extends HTMLElement {
         cache: { type: "lru", maxSizeMB: 520 },
         // Audio-only disables scrub-preview thumbnails too — they'd decode video
         // frames and defeat the CPU saving.
-        enablePreviews: this._thumb && !this._audioOnly,
+        enablePreviews: (this._thumb || !!this._storyboard) && !this._audioOnly,
         ...(this._fps > 0 && { frameRate: this._fps }),
         ...(this._headers && { headers: this._headers }),
         ...(this._audioOnly && { audioOnly: true }),
@@ -25382,9 +25418,10 @@ export class MoviElement extends HTMLElement {
       }
       Logger.info(TAG, `Initializing MoviPlayer (${mode} Mode)`);
       created = new MoviPlayer(playerConfig);
-      // enablePreviews rides in the config; the precise flag is a runtime
-      // switch, so it has to be handed over once the instance exists.
+      // enablePreviews rides in the config; these two are runtime switches, so
+      // they have to be handed over once the instance exists.
       created.setPrecisePreviews(this._thumbPrecise);
+      created.setStoryboard(this._storyboard);
       this.player = created;
 
       // Re-apply a host subtitle renderer to the fresh player (it's registered on
@@ -31707,11 +31744,12 @@ export class MoviElement extends HTMLElement {
         renderer: "canvas",
         decoder: this._sw,
         canvas: this.canvas,
-        enablePreviews: this._thumb,
+        enablePreviews: this._thumb || !!this._storyboard,
         frameRate: this._fps || undefined,
         ...(this._headers && { headers: this._headers }),
       });
       this.player.setPrecisePreviews(this._thumbPrecise);
+      this.player.setStoryboard(this._storyboard);
 
       if (this._chapters) this.player.setChapters(this._chapters);
     // The renderer is new, and the crop setting lives on it — an attribute set
@@ -34038,7 +34076,11 @@ export class MoviElement extends HTMLElement {
    * that state is entered, not after the null arrives.
    */
   private canPreviewFrames(): boolean {
-    if (!this._thumb || this._audioOnly) return false;
+    // A storyboard is previews the source already carries, so it answers for
+    // itself — `thumb` is the switch for the DECODE pipeline, which a board
+    // makes unnecessary.
+    if (!this._thumb && !this._storyboard) return false;
+    if (this._audioOnly) return false;
     // The native <video> fallback has no decoder of its own to thumbnail with:
     // NativeVideoWrapper.getPreviewFrame() is a hard null, whatever the source.
     if (this._nativeFallbackActive) return false;

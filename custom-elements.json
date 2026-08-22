@@ -148,6 +148,10 @@
               }
             },
             {
+              "name": "storyboard",
+              "description": "URL of a WebVTT thumbnail track (cues whose payload is an image URL with a #xywh= media fragment). Scrub previews are then cropped out of the sprite instead of being decoded, and the thumbnail decode pipeline is never started. The matching property also accepts a tile spec object ({columns, rows, width, height, fragments})."
+            },
+            {
               "name": "thumb",
               "description": "Generates thumbnails on demand for seek-bar previews. Set to \"precise\" to decode forward from the keyframe to the frame under the pointer instead of showing the keyframe before it."
             },

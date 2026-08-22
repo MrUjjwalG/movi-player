@@ -39,6 +39,11 @@ import { TrackManager } from "./TrackManager";
 import { Clock } from "./Clock";
 import { PlayerStateManager } from "./PlayerState";
 import { Logger, LogLevel } from "../utils/Logger";
+import {
+  Storyboard,
+  type StoryboardSpec,
+  type StoryboardTile,
+} from "../utils/Storyboard";
 import { probeLinkBandwidth } from "../utils/bandwidthProbe";
 import { MoviVideoDecoder } from "../decode/VideoDecoder";
 import { MoviAudioDecoder } from "../decode/AudioDecoder";
@@ -927,6 +932,126 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
   /** Drop remembered frames — the pictures behind them are no longer the file. */
   private clearPreviewCache(): void {
     this.previewCache.clear();
+  }
+
+  /**
+   * Pictures the source brought with it (see utils/Storyboard).
+   *
+   * When a source has a storyboard, a preview costs a crop out of an image the
+   * browser already has, instead of a seek, a decode and an encode — and the
+   * second WASM module the decode path needs is never opened at all. Set from
+   * the element's `storyboard` attribute or property; a URL is a WebVTT
+   * thumbnail track, an object is a tile spec.
+   */
+  private storyboardSource: string | StoryboardSpec | null = null;
+  private storyboard: Storyboard | null = null;
+  private storyboardLoad: Promise<Storyboard | null> | null = null;
+  /** Mosaics already fetched, by URL — one image serves dozens of previews. */
+  private storyboardImages = new Map<string, Promise<ImageBitmap | null>>();
+  private storyboardCanvas: OffscreenCanvas | HTMLCanvasElement | null = null;
+
+  setStoryboard(source: string | StoryboardSpec | null): void {
+    if (source === this.storyboardSource) return;
+    this.storyboardSource = source;
+    this.storyboard = null;
+    this.storyboardLoad = null;
+    this.storyboardImages.clear();
+    this.clearPreviewCache();
+  }
+
+  /** True while a storyboard is standing in for the decode path. */
+  hasStoryboard(): boolean {
+    return this.storyboardSource !== null;
+  }
+
+  private ensureStoryboard(): Promise<Storyboard | null> {
+    if (this.storyboard) return Promise.resolve(this.storyboard);
+    if (this.storyboardLoad) return this.storyboardLoad;
+    const source = this.storyboardSource;
+    if (!source) return Promise.resolve(null);
+
+    this.storyboardLoad = (async () => {
+      try {
+        if (typeof source === "string") {
+          const res = await fetch(source, {
+            signal: this.lifetimeSignal,
+            ...(this.config.headers ? { headers: this.config.headers } : {}),
+          });
+          if (!res.ok) throw new Error(`HTTP ${res.status}`);
+          const url = res.url || source;
+          this.storyboard = Storyboard.parseVtt(await res.text(), url);
+        } else {
+          this.storyboard = Storyboard.fromSpec(source);
+        }
+        if (!this.storyboard) {
+          Logger.warn(TAG, "Storyboard had no usable cues — falling back to decoding previews");
+        } else {
+          Logger.info(
+            TAG,
+            `Storyboard ready: ${this.storyboard.coverage.toFixed(0)}s covered`,
+          );
+        }
+      } catch (e) {
+        // A storyboard is an optimisation, never a requirement: losing it costs
+        // speed, and the decode path answers exactly as it did before.
+        Logger.warn(TAG, `Storyboard load failed: ${(e as Error)?.message ?? e}`);
+        this.storyboard = null;
+        this.storyboardSource = null;
+      }
+      return this.storyboard;
+    })();
+    return this.storyboardLoad;
+  }
+
+  private loadStoryboardImage(url: string): Promise<ImageBitmap | null> {
+    const existing = this.storyboardImages.get(url);
+    if (existing) return existing;
+    const pending = (async () => {
+      try {
+        const res = await fetch(url, {
+          signal: this.lifetimeSignal,
+          ...(this.config.headers ? { headers: this.config.headers } : {}),
+        });
+        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+        return await createImageBitmap(await res.blob());
+      } catch (e) {
+        Logger.warn(TAG, `Storyboard mosaic failed: ${(e as Error)?.message ?? e}`);
+        return null;
+      }
+    })();
+    this.storyboardImages.set(url, pending);
+    return pending;
+  }
+
+  /** Cut one tile out of its mosaic and hand it over as a preview. */
+  private async cropStoryboardTile(
+    tile: StoryboardTile,
+  ): Promise<Blob | null> {
+    const image = await this.loadStoryboardImage(tile.url);
+    if (!image) return null;
+    const w = tile.width > 0 ? tile.width : image.width;
+    const h = tile.height > 0 ? tile.height : image.height;
+    if (
+      !this.storyboardCanvas ||
+      this.storyboardCanvas.width !== w ||
+      this.storyboardCanvas.height !== h
+    ) {
+      if (typeof OffscreenCanvas !== "undefined") {
+        this.storyboardCanvas = new OffscreenCanvas(w, h);
+      } else {
+        const c = document.createElement("canvas");
+        c.width = w;
+        c.height = h;
+        this.storyboardCanvas = c;
+      }
+    }
+    const ctx = (this.storyboardCanvas as HTMLCanvasElement).getContext("2d") as
+      | CanvasRenderingContext2D
+      | OffscreenCanvasRenderingContext2D
+      | null;
+    if (!ctx) return null;
+    ctx.drawImage(image, tile.x, tile.y, w, h, 0, 0, w, h);
+    return this.encodePreviewBlob(this.storyboardCanvas);
   }
 
   /**
@@ -7730,6 +7855,23 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
       const cached = this.previewCache.get(key);
       if (cached) return cached;
     }
+    // Pictures the source came with beat pictures we have to make: a crop out
+    // of a mosaic the browser has already fetched, with no seek, no decode and
+    // no second WASM module behind it. Answered before the in-flight lock too,
+    // because nothing here is in flight — a storyboard has no single decoder
+    // to queue behind. A 360 view is the exception: those frames are
+    // reprojected per angle, which a flat tile cannot be.
+    if (this.storyboardSource && !view) {
+      const board = await this.ensureStoryboard();
+      const tile = board?.tileAt(time) ?? null;
+      if (tile) {
+        const blob = await this.cropStoryboardTile(tile);
+        if (blob) {
+          if (key !== null) this.rememberPreview(key, blob);
+          return blob;
+        }
+      }
+    }
     if (this.isPreviewGenerating) {
       if (!queue) return null; // Busy — the hover path would rather have nothing
       // Wait it out, then take our turn. Re-entered rather than looped: by the
@@ -8320,6 +8462,12 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
   private schedulePreviewWarm(delayMs: number): void {
     if (this._previewWarmTimer) return;
     if (!this.previewsAllowed()) return;
+    // A source with a storyboard has no use for the decode pipeline, and that
+    // pipeline is the expensive half of previews: a second WASM module and its
+    // own FFmpeg context, warmed in the background for previews that will be
+    // crops out of a JPEG. The lazy path is still there if the board turns out
+    // not to cover a position.
+    if (this.storyboardSource) return;
     this._previewWarmTimer = setTimeout(() => {
       this._previewWarmTimer = null;
       if (this._destroyed || this.previewInitPromise || this.thumbnailBindings) {
