@@ -501,8 +501,21 @@ async function handleDocs(url) {
   // Text (HTML/JS/CSS/JSON/XML): rewrite the base path so /movi-player/ → /docs/.
   // The rel=canonical is an absolute moviplayer.com/docs URL (set in VitePress),
   // so it contains no "/movi-player/" and is left intact.
+  //
+  // Only where it STARTS a path, which is the only place the VitePress base
+  // appears: quoted in markup and JSON, or inside a CSS url(). A plain replace
+  // of every "/movi-player/" also caught the ones sitting in the middle of an
+  // absolute URL that has nothing to do with this site's base — the docs' own
+  // CDN examples became cdn.jsdelivr.net/npm/docs/dist/element.js, and every
+  // "Edit this page" link became github.com/MrUjjwalG/docs/edit/... — served
+  // that way to every reader while the GitHub Pages copy underneath was
+  // perfectly correct. Measured against the built site: 1873 references belong
+  // to the base and 54 do not.
   if (isText) {
-    const body = (await res.text()).split("/movi-player/").join("/docs/");
+    const body = (await res.text()).replace(
+      /(^|[\s"'`(=,;])\/movi-player\//g,
+      "$1/docs/",
+    );
     return new Response(body, {
       status: res.status,
       headers: {
