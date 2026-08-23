@@ -375,7 +375,7 @@ int movi_mkv_index_near_fmt(AVFormatContext *fmt, int64_t file_size, int anchor,
  * entry at or before it, or the nearest one so far behind that landing there
  * means reading forward through the very stretch the index was meant to skip.
  */
-int movi_mkv_index_misses(AVStream *st, double target_sec) {
+int movi_index_misses(AVStream *st, double target_sec, double tolerance_s) {
   double tb = av_q2d(st->time_base);
   if (tb <= 0)
     tb = 0.001;
@@ -386,7 +386,292 @@ int movi_mkv_index_misses(AVStream *st, double target_sec) {
   const AVIndexEntry *e = avformat_index_get_entry(st, idx);
   if (!e)
     return 1;
-  return (double)(want - e->timestamp) * tb > MOVI_MKV_INDEX_TOLERANCE_S;
+  return (double)(want - e->timestamp) * tb > tolerance_s;
+}
+
+int movi_mkv_index_misses(AVStream *st, double target_sec) {
+  return movi_index_misses(st, target_sec, MOVI_MKV_INDEX_TOLERANCE_S);
+}
+
+// ---------------------------------------------------------------------------
+// MPEG-TS: land on the keyframe that OWNS the target, not the one after it.
+//
+// A transport stream carries no index. FFmpeg seeks it by bisecting on
+// timestamps, which finds a byte position whose time is near the target — but
+// "near" is measured over ANY frame, so the position it settles on is
+// routinely a little PAST the random-access point the target belongs to. The
+// decoder is flushed by then and needs a keyframe, so it drops everything
+// until the NEXT one: a whole GOP later.
+//
+// Read off a 120fps HEVC DoVi stream with two-second keyframes: the seek
+// landed just past the CRA it was aiming at, 249 packets were skipped hunting
+// for a keyframe, the picture stood still for 1.17 seconds and then resumed
+// two seconds further on — with the sound, which needed no keyframe, playing
+// that stretch to nobody.
+//
+// The container does say where its random-access points are, in a bit that
+// costs nothing to find: every TS packet's adaptation field carries a
+// random_access_indicator, set on the packet that begins one. So do what the
+// Matroska path does for clusters — walk the file in small windows, read the
+// points out of the bytes, and hand them to FFmpeg as index entries through
+// the public API. ff_seek_frame_binary consults the index to bound its search,
+// so an entry at the target IS the position it seeks to, and the decoder gets
+// its keyframe in the first packet.
+#define MOVI_TS_PACKET 188
+#define MOVI_TS_PROBE_WINDOW (256 * 1024)
+// A run of TS packets long enough to cross a GOP on any sane muxer. 4K120 runs
+// about 6MB a second, so this is a couple of seconds of the heaviest stream
+// this player opens.
+#define MOVI_TS_PROBE_SCAN (16 * 1024 * 1024)
+#define MOVI_TS_PROBE_BUDGET 24
+#define MOVI_TS_PROBE_MS 4000
+int movi_fmt_is_mpegts(const AVFormatContext *fmt) {
+  const char *n = (fmt && fmt->iformat) ? fmt->iformat->name : NULL;
+  return n && (strcmp(n, "mpegts") == 0 || strcmp(n, "mpegtsraw") == 0);
+}
+
+static int movi_is_mpegts(const MoviContext *ctx) {
+  return ctx && movi_fmt_is_mpegts(ctx->fmt_ctx);
+}
+
+// Where the 188-byte grid starts inside a window. A read lands mid-packet far
+// more often than not, and one 0x47 proves nothing — it is an ordinary byte
+// value. Three in a row at the right spacing is the standard test.
+static int movi_ts_sync(const uint8_t *buf, int len) {
+  for (int i = 0; i + 2 * MOVI_TS_PACKET < len; i++) {
+    if (buf[i] == 0x47 && buf[i + MOVI_TS_PACKET] == 0x47 &&
+        buf[i + 2 * MOVI_TS_PACKET] == 0x47)
+      return i;
+  }
+  return -1;
+}
+
+// The PTS of a PES packet, in 90kHz, or -1 when it carries none. `p` points at
+// the payload of a packet whose payload_unit_start_indicator was set, so a PES
+// header starts there: 00 00 01 <stream_id>, a length, two flag bytes, a header
+// length, and then the PTS in five bytes with four marker bits woven through
+// it (ISO 13818-1, 2.4.3.7).
+static int64_t movi_ts_pes_pts(const uint8_t *p, int len) {
+  if (len < 14 || p[0] != 0x00 || p[1] != 0x00 || p[2] != 0x01)
+    return -1;
+  if (!(p[7] & 0x80)) // PTS_DTS_flags
+    return -1;
+  const uint8_t *q = p + 9;
+  int64_t pts = ((int64_t)(q[0] & 0x0e)) << 29;
+  pts |= ((int64_t)q[1]) << 22;
+  pts |= ((int64_t)(q[2] & 0xfe)) << 14;
+  pts |= ((int64_t)q[3]) << 7;
+  pts |= ((int64_t)(q[4] & 0xfe)) >> 1;
+  return pts;
+}
+
+// The first random-access point at or after `from` on `pid`: its byte offset
+// and its PTS. Reads forward in windows until one turns up, because a probe
+// lands wherever the bisection puts it and the nearest point can be a GOP away.
+static int movi_ts_probe_rap(AVFormatContext *fmt, int64_t file_size,
+                             int64_t from, int pid, uint8_t *buf,
+                             int64_t *out_pos, int64_t *out_pts) {
+  if (from < 0)
+    from = 0;
+  if (file_size > 0 && from >= file_size)
+    return -1;
+  int64_t scanned = 0;
+  while (scanned < MOVI_TS_PROBE_SCAN) {
+    if (avio_seek(fmt->pb, from, SEEK_SET) < 0)
+      return -1;
+    int got = avio_read(fmt->pb, buf, MOVI_TS_PROBE_WINDOW);
+    if (got <= 2 * MOVI_TS_PACKET)
+      return -1;
+    int base = movi_ts_sync(buf, got);
+    if (base < 0) {
+      // Not a readable grid here — step on by most of a window rather than
+      // giving up, since a damaged or padded stretch is still only a stretch.
+      from += got - 2 * MOVI_TS_PACKET;
+      scanned += got;
+      continue;
+    }
+    for (int off = base; off + MOVI_TS_PACKET <= got; off += MOVI_TS_PACKET) {
+      const uint8_t *pkt = buf + off;
+      if (pkt[0] != 0x47)
+        break; // grid lost; the next window re-syncs
+      int this_pid = ((pkt[1] & 0x1f) << 8) | pkt[2];
+      if (this_pid != pid)
+        continue;
+      int pusi = pkt[1] & 0x40;
+      int afc = (pkt[3] >> 4) & 0x03;
+      if (!pusi || afc < 2)
+        continue; // a point begins a PES packet and carries an adaptation field
+      int af_len = pkt[4];
+      if (af_len < 1 || 5 + af_len > MOVI_TS_PACKET)
+        continue;
+      if (!(pkt[5] & 0x40))
+        continue; // random_access_indicator
+      const uint8_t *payload = pkt + 5 + af_len;
+      int payload_len = MOVI_TS_PACKET - (5 + af_len);
+      int64_t pts = movi_ts_pes_pts(payload, payload_len);
+      if (pts < 0)
+        continue; // a point we cannot place is no use as an index entry
+      *out_pos = from + off;
+      *out_pts = pts;
+      return 0;
+    }
+    from += got - (got % MOVI_TS_PACKET);
+    scanned += got;
+    if (file_size > 0 && from >= file_size)
+      return -1;
+  }
+  return -1;
+}
+
+// Binary-search the file for the random-access point covering `target_sec` and
+// feed everything it touches into the stream's index. Returns 0 if the index
+// gained anything.
+int movi_ts_index_near_fmt(AVFormatContext *fmt, int64_t file_size, int anchor,
+                           double target_sec) {
+  if (!movi_fmt_is_mpegts(fmt) || anchor < 0 || file_size <= 0 ||
+      anchor >= (int)fmt->nb_streams)
+    return -1;
+  AVStream *st = fmt->streams[anchor];
+  // For a transport stream FFmpeg keeps the PID in AVStream.id, and the stream
+  // time base is the 90kHz PES clock — so a PTS read out of the bytes needs no
+  // conversion to be an index entry.
+  const int pid = st->id;
+  if (pid <= 0 || pid > 0x1fff)
+    return -1;
+  double tbd = av_q2d(st->time_base);
+  if (tbd <= 0)
+    tbd = 1.0 / 90000.0;
+  uint8_t *buf = av_malloc(MOVI_TS_PROBE_WINDOW);
+  if (!buf)
+    return -1;
+
+  const int64_t saved = avio_tell(fmt->pb);
+  js_probe_mode(1);
+  const int64_t deadline =
+      av_gettime_relative() + (int64_t)MOVI_TS_PROBE_MS * 1000;
+  const double duration = fmt->duration != AV_NOPTS_VALUE
+                              ? (double)fmt->duration / AV_TIME_BASE
+                              : 0.0;
+  // The stream's own start, which a transport stream rarely puts at zero.
+  const double start =
+      st->start_time != AV_NOPTS_VALUE ? st->start_time * tbd : 0.0;
+  int64_t lo = 0, hi = file_size;
+  int64_t best_pos = -1;
+  double best_t = 0.0;
+  int added = 0;
+
+  for (int i = 0; i < MOVI_TS_PROBE_BUDGET && lo < hi; i++) {
+    if (av_gettime_relative() > deadline)
+      break;
+    int64_t mid = lo + (hi - lo) / 2;
+    int64_t ppos = 0, ppts = 0;
+    if (movi_ts_probe_rap(fmt, file_size, mid, pid, buf, &ppos, &ppts) < 0) {
+      hi = mid;
+      continue;
+    }
+    double t = ppts * tbd;
+    // A timestamp outside the file's own span means those bytes were not what
+    // they looked like — or the 33-bit PES clock has wrapped, which is the same
+    // answer either way: do not index it.
+    if (t < start - 1.0 || (duration > 0 && t > start + duration * 1.05)) {
+      hi = mid;
+      continue;
+    }
+    if (av_add_index_entry(st, ppos, ppts, 0, 0, AVINDEX_KEYFRAME) >= 0)
+      added++;
+    if (t <= target_sec) {
+      if (ppos > best_pos) {
+        best_pos = ppos;
+        best_t = t;
+      }
+      // Close enough that another bisection is not worth its read; the walk
+      // below closes the rest of the distance in single windows.
+      if (target_sec - t < 2.5)
+        break;
+      lo = ppos + 1;
+    } else {
+      hi = mid;
+    }
+  }
+
+  // Walk forward to the LAST point at or before the target.
+  //
+  // The bisection stops as soon as it is within a couple of seconds, and the
+  // points are a GOP apart — so what it settles on can be one or two GOPs
+  // earlier than it needs to be, and every one of those is a GOP of frames
+  // decoded and thrown away before the picture reaches the playhead. Each step
+  // here is one small read, and there are never many: the loop stops at the
+  // first point past the target.
+  for (int i = 0; i < 4 && best_pos >= 0; i++) {
+    if (av_gettime_relative() > deadline)
+      break;
+    int64_t npos = 0, npts = 0;
+    if (movi_ts_probe_rap(fmt, file_size, best_pos + MOVI_TS_PACKET, pid, buf,
+                          &npos, &npts) < 0)
+      break;
+    double nt = npts * tbd;
+    if (nt > target_sec)
+      break;
+    if (av_add_index_entry(st, npos, npts, 0, 0, AVINDEX_KEYFRAME) >= 0)
+      added++;
+    if (npos <= best_pos)
+      break; // no forward progress; nothing more to find
+    best_pos = npos;
+    best_t = nt;
+  }
+  (void)best_t;
+
+  js_probe_mode(0);
+  av_free(buf);
+  // The probes left the cursor where the last one landed; the caller's real
+  // seek repositions, but a failed search must not leave it adrift.
+  if (saved >= 0)
+    avio_seek(fmt->pb, saved, SEEK_SET);
+  return added > 0 ? 0 : -1;
+}
+
+/**
+ * Put the demuxer ON the random-access point that owns `target_sec`.
+ *
+ * Indexing the points is not enough by itself: the mpegts demuxer answers a
+ * seek with its own timestamp bisection and never consults the index, so it
+ * lands AT the target — mid-GOP — and the flushed decoder then throws away
+ * every packet until the next point. Measured on a 120fps stream with
+ * two-second keyframes: 46 to 166 packets skipped and the picture resuming
+ * 0.42s to 1.42s PAST where it was asked to go.
+ *
+ * The index is still what makes this possible, because it holds the one thing
+ * the demuxer cannot work out — where the point starts. Seek to that BYTE and
+ * the very first packet is the keyframe. The frames between it and the target
+ * are decoded and dropped, which is what seeking into a GOP costs in every
+ * container; nothing is skipped and nothing waits.
+ *
+ * Returns 0 when the demuxer was moved.
+ */
+int movi_ts_seek_to_rap(AVFormatContext *fmt, int anchor, double target_sec) {
+  if (!movi_fmt_is_mpegts(fmt) || anchor < 0 ||
+      anchor >= (int)fmt->nb_streams)
+    return -1;
+  AVStream *st = fmt->streams[anchor];
+  double tb = av_q2d(st->time_base);
+  if (tb <= 0)
+    return -1;
+  int idx = av_index_search_timestamp(st, (int64_t)(target_sec / tb),
+                                      AVSEEK_FLAG_BACKWARD);
+  if (idx < 0)
+    return -1;
+  const AVIndexEntry *e = avformat_index_get_entry(st, idx);
+  if (!e || e->pos < 0)
+    return -1;
+  // Far enough behind and the decode-and-drop costs more than the GOP wait it
+  // is replacing. That is the scan's own tolerance: past it, the ordinary seek
+  // is the better answer.
+  if (target_sec - e->timestamp * tb > MOVI_TS_INDEX_TOLERANCE_S)
+    return -1;
+  return av_seek_frame(fmt, anchor, e->pos,
+                       AVSEEK_FLAG_BYTE | AVSEEK_FLAG_BACKWARD) >= 0
+             ? 0
+             : -1;
 }
 
 int movi_seek_to(MoviContext *ctx, double timestamp, int stream_index,
@@ -458,8 +743,21 @@ int movi_seek_to(MoviContext *ctx, double timestamp, int stream_index,
     movi_mkv_index_near_fmt(ctx->fmt_ctx, ctx->file_size, anchor, timestamp);
   }
 
+  // A transport stream has no index at all, and the bisection that stands in
+  // for one lands past the random-access point as often as on it. Find the
+  // point itself and index it (see movi_ts_index_near_fmt) — the seek that
+  // follows then starts the decoder on a keyframe instead of a GOP of packets
+  // it has to throw away.
   int ret = -1;
-  if (anchor >= 0) {
+  if (anchor >= 0 && movi_is_mpegts(ctx)) {
+    if (movi_index_misses(ctx->fmt_ctx->streams[anchor], timestamp,
+                          MOVI_TS_INDEX_TOLERANCE_S)) {
+      movi_ts_index_near_fmt(ctx->fmt_ctx, ctx->file_size, anchor, timestamp);
+    }
+    ret = movi_ts_seek_to_rap(ctx->fmt_ctx, anchor, timestamp);
+  }
+
+  if (ret < 0 && anchor >= 0) {
     // avformat_seek_file reads min/ts/max in the ANCHOR stream's time base
     // once a stream index is given — not AV_TIME_BASE.
     AVRational tb = ctx->fmt_ctx->streams[anchor]->time_base;

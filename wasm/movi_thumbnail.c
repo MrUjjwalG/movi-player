@@ -282,9 +282,28 @@ void movi_thumbnail_read_keyframe(struct MoviThumbnailContext *ctx,
                             ctx->video_stream_index, timestamp);
   }
 
+  // A transport stream has the same problem for a different reason: it has no
+  // index either, and the timestamp bisection that stands in for one lands
+  // past the random-access point as often as on it — which for a preview means
+  // decoding a GOP to reach a frame, per hover. Same answer, same shared
+  // helper (movi_ts_index_near_fmt).
+  int ts_landed = -1;
+  if (movi_fmt_is_mpegts(ctx->fmt_ctx)) {
+    if (movi_index_misses(st, timestamp, MOVI_TS_INDEX_TOLERANCE_S)) {
+      movi_ts_index_near_fmt(ctx->fmt_ctx, ctx->file_size,
+                             ctx->video_stream_index, timestamp);
+    }
+    // …and land ON the point rather than at the target, which for a preview is
+    // the difference between decoding a few frames and decoding a whole GOP.
+    ts_landed = movi_ts_seek_to_rap(ctx->fmt_ctx, ctx->video_stream_index,
+                                    timestamp);
+  }
+
   // Use avformat_seek_file like the main player does - it's more robust
-  int ret = avformat_seek_file(ctx->fmt_ctx, -1, INT64_MIN, seek_target,
-                               seek_target, AVSEEK_FLAG_BACKWARD);
+  int ret = ts_landed == 0
+                ? 0
+                : avformat_seek_file(ctx->fmt_ctx, -1, INT64_MIN, seek_target,
+                                     seek_target, AVSEEK_FLAG_BACKWARD);
   
   if (ret < 0) {
     av_log(NULL, AV_LOG_WARNING, "[THUMB] avformat_seek_file failed, trying av_seek_frame\n");

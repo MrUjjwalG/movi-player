@@ -110,6 +110,26 @@ int movi_mkv_index_misses(AVStream *st, double target_sec);
 int movi_mkv_index_near_fmt(AVFormatContext *fmt, int64_t file_size, int anchor,
                             double target_sec);
 
+// The same question, and the same answer, for a transport stream: no index,
+// and a timestamp bisection that lands past the random-access point the target
+// belongs to. See movi_streams.c.
+// How far behind the target an indexed point may sit before it is worth
+// scanning for a closer one. About a GOP: landing further back than that means
+// decoding a stretch of frames only to drop them, which is the cost the scan
+// exists to remove — and the scan is a few small reads, cheaper than the
+// decode it saves. Seeks inside the same GOP still answer from the index.
+#define MOVI_TS_INDEX_TOLERANCE_S 2.0
+int movi_fmt_is_mpegts(const AVFormatContext *fmt);
+int movi_ts_index_near_fmt(AVFormatContext *fmt, int64_t file_size, int anchor,
+                           double target_sec);
+// Can this stream's index answer a seek to `target_sec`, or is the nearest
+// entry so far behind that landing there means reading through the stretch the
+// index was meant to skip?
+int movi_index_misses(AVStream *st, double target_sec, double tolerance_s);
+// Move the demuxer onto the random-access point that owns `target_sec`, by the
+// byte offset the index holds for it. 0 when it moved.
+int movi_ts_seek_to_rap(AVFormatContext *fmt, int anchor, double target_sec);
+
 // Demuxer context with custom AVIO
 typedef struct {
   AVFormatContext *fmt_ctx;
