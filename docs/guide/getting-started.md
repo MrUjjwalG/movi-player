@@ -95,7 +95,7 @@ Perfect for quick prototypes or testing.
 
 ```html
 <script type="module">
-  import "https://unpkg.com/movi-player@latest/dist/element.js";
+  import "https://cdn.jsdelivr.net/npm/movi-player/dist/element.js";
 </script>
 
 <movi-player src="video.mp4" controls></movi-player>

@@ -331,17 +331,17 @@ Use specific modules via CDN:
 ```html
 <!-- Full element (recommended for quick start) -->
 <script type="module">
-  import "https://unpkg.com/movi-player@latest/dist/element.js";
+  import "https://cdn.jsdelivr.net/npm/movi-player/dist/element.js";
 </script>
 
 <!-- Slim element: WASM streams from movi.wasm next to the JS -->
 <script type="module">
-  import "https://unpkg.com/movi-player@latest/dist/element.slim.js";
+  import "https://cdn.jsdelivr.net/npm/movi-player/dist/element.slim.js";
 </script>
 
 <!-- Player only (for custom UI) -->
 <script type="module">
-  import { MoviPlayer } from "https://unpkg.com/movi-player@latest/dist/player.js";
+  import { MoviPlayer } from "https://cdn.jsdelivr.net/npm/movi-player/dist/player.js";
 </script>
 
 <!-- Demuxer only (for metadata) -->
@@ -349,7 +349,7 @@ Use specific modules via CDN:
   import {
     Demuxer,
     HttpSource,
-  } from "https://unpkg.com/movi-player@latest/dist/demuxer.js";
+  } from "https://cdn.jsdelivr.net/npm/movi-player/dist/demuxer.js";
 </script>
 ```
 
