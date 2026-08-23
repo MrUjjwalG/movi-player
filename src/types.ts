@@ -394,6 +394,13 @@ export interface PlayerEventMap {
   renditionSwitch: { active: boolean; label?: string };
   seeking: number;
   seeked: number;
+  /**
+   * A seek finished — INCLUDING the ones the player performs for itself, which
+   * `seeked` deliberately stays quiet about (rendering a poster frame, the
+   * first-play realignment). Internal to the element's own bookkeeping: a host
+   * wants `seeked`, which answers for what it asked for.
+   */
+  seekcomplete: number;
   bufferUpdate: { start: number; end: number }[];
   ended: void;
   preloadcomplete: void;

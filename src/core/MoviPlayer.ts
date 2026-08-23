@@ -4998,9 +4998,18 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
     const announceSeeked = () => {
       if (seekedAnnounced) return;
       seekedAnnounced = true;
-      if (this._seekIsInternal) return;
       // Media time back to UI time.
-      this.emit("seeked", Math.max(0, time - this.startTime));
+      const at = Math.max(0, time - this.startTime);
+      // The pipeline's own completion, which fires for EVERY seek. `seeked` is
+      // the page's event and stays quiet for the ones nobody asked for; the
+      // element still has to know when its poster frame has landed, and
+      // borrowing the public event for that meant suppressing the event
+      // silently broke the poster: the clock was never reset off the poster
+      // timestamp, so playback began there and the readout — held at zero for
+      // the length of the poster seek — was held there for good.
+      this.emit("seekcomplete", at);
+      if (this._seekIsInternal) return;
+      this.emit("seeked", at);
     };
 
     // A genuine frame-driven completion (forced=false) means a real picture
@@ -7443,6 +7452,7 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
       }
       if (!this._seekIsInternal) this.emit("seeking", t);
       this.emit("timeUpdate", t);
+      this.emit("seekcomplete", t);
       if (!this._seekIsInternal) this.emit("seeked", t);
       return;
     }

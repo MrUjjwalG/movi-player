@@ -26276,10 +26276,12 @@ export class MoviElement extends HTMLElement {
           // and loses it. Instead wait for the "seeked" event (fired from
           // notifySeekCompletion once the frame has actually landed), THEN
           // reset the clock to 0 with the poster frame already on the canvas.
+          // On `seekcomplete` rather than `seeked`, because a poster seek is
+          // the player's own business and does not announce itself.
           // _posterSeekActive blocks resume-saves through this window so the
           // poster timestamp isn't persisted as the resume position.
           this._posterSeekActive = true;
-          this.player.once("seeked", () => {
+          this.player.once("seekcomplete", () => {
             this.player?.resetClockToStartForPoster();
             this._posterSeekActive = false;
             // Poster frame is now on the canvas — snapshot it for lock-screen art.
@@ -26293,7 +26295,9 @@ export class MoviElement extends HTMLElement {
         } else {
           // Frame 0 lands on the canvas when "seeked" fires (the seek promise
           // resolves earlier, before paint) — snapshot it there for artwork.
-          this.player.once("seeked", () => this.captureMediaSessionArtwork());
+          // `seekcomplete`, not `seeked`: this seek is the player's own and
+          // says nothing to the page.
+          this.player.once("seekcomplete", () => this.captureMediaSessionArtwork());
           this.player
             .seek(0, { suppressSpinner: true, internal: true })
             .catch(() => {});
