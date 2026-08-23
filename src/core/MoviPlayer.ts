@@ -1362,6 +1362,14 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
    *  attributable to the flush/re-anchor that operation performed itself. */
   private static readonly SELF_INFLICTED_STALL_WINDOW_MS = 1500;
   /**
+   * Buffered ahead of the playhead, past which a stall is not about supply.
+   * Comfortably more than the cushion the floor exists to rebuild, so a link
+   * that is genuinely struggling never reads as fine.
+   */
+  private static readonly SUPPLY_FINE_AHEAD_S = 5.0;
+  /** Set at stall entry: the bytes were already there, so only decode is short. */
+  private _bufferingSupplyIsFine = false;
+  /**
    * The picture running behind the sound, and staying there.
    *
    * Frame selection normally makes this self-healing: the presentation loop
@@ -5708,7 +5716,8 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
       // seconds ahead and the video queue is full. Holding the freeze for a
       // fixed 1.5s (every speed change, and again on every change back) was
       // the entire stall. Let the readiness checks below decide instead.
-      const dwellFloor = this._bufferingSelfInflicted ? 0 : 1500;
+      const dwellFloor =
+        this._bufferingSelfInflicted || this._bufferingSupplyIsFine ? 0 : 1500;
       const minDwell = dwellFloor; // Wait at least 1.5s to accumulate buffer
       // Cap the prime startup so a very CPU-bound decoder doesn't spin forever;
       // it starts with whatever cushion it built (a residual stall is possible
@@ -5795,6 +5804,7 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
       if (canResume) {
         this._primingAudio = false;
         this._bufferingSelfInflicted = false;
+        this._bufferingSupplyIsFine = false;
         this._seekResumeQueueWait = false;
         // Stamp the resume so the stall detector can tell this — a warm
         // pipeline picking back up — from a cold first play, and not hand it
@@ -6099,6 +6109,24 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
             now - this._lastRenditionSwapAt < MoviPlayer.POST_SWAP_CATCHUP_MS ||
             now - this._lastVideoCatchUpAt <
               MoviPlayer.SELF_INFLICTED_STALL_WINDOW_MS * 3;
+          // Is there anything to wait FOR?
+          //
+          // The dwell floor is a supply measure: it holds a starved pipeline
+          // still for a moment so it does not resume onto a thin buffer and
+          // stall straight back. Where the bytes are already in hand — a local
+          // file, or a network buffer comfortably ahead of the playhead — there
+          // is no supply to wait for. What is short is decode, and decode is
+          // exactly what the readiness checks measure; the floor adds nothing
+          // to it but a frozen picture.
+          //
+          // Read off a 4K60 HEVC file whose decoder throws every few seconds:
+          // the decoder was back in 107ms and the queue refilled behind it, and
+          // then the picture sat frozen for a further 1500ms serving the floor
+          // alone — the whole visible stall, repeating every five seconds.
+          this._bufferingSupplyIsFine =
+            this.isFileSource() ||
+            this.getBufferEndTime() - this.getCurrentTime() >
+              MoviPlayer.SUPPLY_FINE_AHEAD_S;
           this.stateManager.setState("buffering");
           this.clock.pause();
           // Suspend AudioContext so already-scheduled audio doesn't play ahead of video.
