@@ -119,6 +119,12 @@ int movi_mkv_index_near_fmt(AVFormatContext *fmt, int64_t file_size, int anchor,
 // exists to remove — and the scan is a few small reads, cheaper than the
 // decode it saves. Seeks inside the same GOP still answer from the index.
 #define MOVI_TS_INDEX_TOLERANCE_S 2.0
+// …but a point THIS far back is still worth landing on once the scan has said
+// there is nothing closer: decoding a few seconds of frames and dropping them
+// costs less than what the alternative does, which is to wait out a GOP and
+// then resume PAST the playhead. Two separate numbers because they answer two
+// separate questions — the first is "look again?", this one is "use it?".
+#define MOVI_TS_LAND_MAX_S 5.0
 int movi_fmt_is_mpegts(const AVFormatContext *fmt);
 int movi_ts_index_near_fmt(AVFormatContext *fmt, int64_t file_size, int anchor,
                            double target_sec);

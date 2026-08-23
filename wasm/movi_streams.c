@@ -424,6 +424,9 @@ int movi_mkv_index_misses(AVStream *st, double target_sec) {
 // this player opens.
 #define MOVI_TS_PROBE_SCAN (16 * 1024 * 1024)
 #define MOVI_TS_PROBE_BUDGET 24
+// How much of an access unit to read before deciding what it is. The delimiter,
+// the parameter sets and the first slice header live at the very front.
+#define MOVI_TS_AU_SCAN 1024
 #define MOVI_TS_PROBE_MS 4000
 int movi_fmt_is_mpegts(const AVFormatContext *fmt) {
   const char *n = (fmt && fmt->iformat) ? fmt->iformat->name : NULL;
@@ -465,12 +468,57 @@ static int64_t movi_ts_pes_pts(const uint8_t *p, int len) {
   return pts;
 }
 
+/**
+ * Does this access unit begin at a random-access point, read from the video
+ * itself?
+ *
+ * The adaptation field's random_access_indicator is the cheap answer, and many
+ * streams simply do not set it — the file this was written for has keyframes
+ * every two seconds and not one marked packet in sixty megabytes. The picture
+ * still says so: an access unit that starts with an IRAP NAL is a random-access
+ * point whatever the container flags. `au` is the start of the elementary
+ * stream for one access unit (the PES payload, and as much of the packets
+ * following it as was gathered).
+ */
+static int movi_ts_au_is_irap(const uint8_t *au, int len, enum AVCodecID codec) {
+  for (int i = 0; i + 4 < len; i++) {
+    if (au[i] || au[i + 1] || au[i + 2] != 1)
+      continue;
+    uint8_t b = au[i + 3];
+    if (codec == AV_CODEC_ID_HEVC) {
+      int type = (b >> 1) & 0x3f;
+      // BLA_W_LP(16) … CRA_NUT(21): every IRAP the spec defines. A CRA is a
+      // usable entry point even where a decoder later needs its leading
+      // pictures dropped — that is handled downstream.
+      if (type >= 16 && type <= 21)
+        return 1;
+      // Parameter sets and the access unit delimiter come first; keep walking.
+      if (type == 32 || type == 33 || type == 34 || type == 35 || type == 39)
+        continue;
+      if (type < 32)
+        return 0; // a non-IRAP slice: this access unit is not an entry point
+    } else if (codec == AV_CODEC_ID_H264) {
+      int type = b & 0x1f;
+      if (type == 5)
+        return 1;
+      if (type == 7 || type == 8 || type == 9 || type == 6)
+        continue;
+      if (type == 1)
+        return 0;
+    } else {
+      return 0; // other codecs keep to the container's own flag
+    }
+  }
+  return 0;
+}
+
 // The first random-access point at or after `from` on `pid`: its byte offset
 // and its PTS. Reads forward in windows until one turns up, because a probe
 // lands wherever the bisection puts it and the nearest point can be a GOP away.
 static int movi_ts_probe_rap(AVFormatContext *fmt, int64_t file_size,
                              int64_t from, int pid, uint8_t *buf,
-                             int64_t *out_pos, int64_t *out_pts) {
+                             enum AVCodecID codec, int64_t *out_pos,
+                             int64_t *out_pts) {
   if (from < 0)
     from = 0;
   if (file_size > 0 && from >= file_size)
@@ -498,19 +546,63 @@ static int movi_ts_probe_rap(AVFormatContext *fmt, int64_t file_size,
       if (this_pid != pid)
         continue;
       int pusi = pkt[1] & 0x40;
+      if (!pusi)
+        continue; // a point begins an access unit, which begins a PES packet
       int afc = (pkt[3] >> 4) & 0x03;
-      if (!pusi || afc < 2)
-        continue; // a point begins a PES packet and carries an adaptation field
-      int af_len = pkt[4];
-      if (af_len < 1 || 5 + af_len > MOVI_TS_PACKET)
+      int af_len = (afc >= 2) ? pkt[4] : -1;
+      if (afc >= 2 && (af_len < 0 || 5 + af_len > MOVI_TS_PACKET))
         continue;
-      if (!(pkt[5] & 0x40))
-        continue; // random_access_indicator
-      const uint8_t *payload = pkt + 5 + af_len;
-      int payload_len = MOVI_TS_PACKET - (5 + af_len);
+      const uint8_t *payload = (afc >= 2) ? pkt + 5 + af_len : pkt + 4;
+      int payload_len = MOVI_TS_PACKET - (int)(payload - pkt);
+      if (payload_len <= 0)
+        continue;
       int64_t pts = movi_ts_pes_pts(payload, payload_len);
       if (pts < 0)
         continue; // a point we cannot place is no use as an index entry
+
+      // The container's own word, when it gives one.
+      int rap = (afc >= 2 && af_len >= 1 && (pkt[5] & 0x40)) ? 1 : 0;
+      if (!rap) {
+        // …and when it does not, ask the picture. Gather this access unit's
+        // elementary stream — the rest of this packet, and the packets of the
+        // same PID that follow it until the next one starts — and read the NAL
+        // types out of it. Bounded: the parameter sets and the first slice
+        // header sit at the front, so a few packets is always enough.
+        uint8_t au[MOVI_TS_AU_SCAN];
+        int au_len = 0;
+        int hdr = (payload_len > 8) ? 9 + payload[8] : payload_len;
+        if (hdr < payload_len) {
+          int n = payload_len - hdr;
+          if (n > MOVI_TS_AU_SCAN)
+            n = MOVI_TS_AU_SCAN;
+          memcpy(au, payload + hdr, n);
+          au_len = n;
+        }
+        for (int nx = off + MOVI_TS_PACKET;
+             nx + MOVI_TS_PACKET <= got && au_len < MOVI_TS_AU_SCAN;
+             nx += MOVI_TS_PACKET) {
+          const uint8_t *nb = buf + nx;
+          if (nb[0] != 0x47)
+            break;
+          int npid = ((nb[1] & 0x1f) << 8) | nb[2];
+          if (npid != pid)
+            continue;
+          if (nb[1] & 0x40)
+            break; // the next access unit has started
+          int nafc = (nb[3] >> 4) & 0x03;
+          const uint8_t *np = (nafc >= 2) ? nb + 5 + nb[4] : nb + 4;
+          int nlen = MOVI_TS_PACKET - (int)(np - nb);
+          if (nlen <= 0 || np < nb || np + nlen > nb + MOVI_TS_PACKET)
+            break;
+          if (nlen > MOVI_TS_AU_SCAN - au_len)
+            nlen = MOVI_TS_AU_SCAN - au_len;
+          memcpy(au + au_len, np, nlen);
+          au_len += nlen;
+        }
+        rap = movi_ts_au_is_irap(au, au_len, codec);
+      }
+      if (!rap)
+        continue;
       *out_pos = from + off;
       *out_pts = pts;
       return 0;
@@ -538,6 +630,7 @@ int movi_ts_index_near_fmt(AVFormatContext *fmt, int64_t file_size, int anchor,
   const int pid = st->id;
   if (pid <= 0 || pid > 0x1fff)
     return -1;
+  const enum AVCodecID codec = st->codecpar->codec_id;
   double tbd = av_q2d(st->time_base);
   if (tbd <= 0)
     tbd = 1.0 / 90000.0;
@@ -565,7 +658,8 @@ int movi_ts_index_near_fmt(AVFormatContext *fmt, int64_t file_size, int anchor,
       break;
     int64_t mid = lo + (hi - lo) / 2;
     int64_t ppos = 0, ppts = 0;
-    if (movi_ts_probe_rap(fmt, file_size, mid, pid, buf, &ppos, &ppts) < 0) {
+    if (movi_ts_probe_rap(fmt, file_size, mid, pid, buf, codec, &ppos, &ppts) <
+        0) {
       hi = mid;
       continue;
     }
@@ -607,7 +701,7 @@ int movi_ts_index_near_fmt(AVFormatContext *fmt, int64_t file_size, int anchor,
       break;
     int64_t npos = 0, npts = 0;
     if (movi_ts_probe_rap(fmt, file_size, best_pos + MOVI_TS_PACKET, pid, buf,
-                          &npos, &npts) < 0)
+                          codec, &npos, &npts) < 0)
       break;
     double nt = npts * tbd;
     if (nt > target_sec)
@@ -664,9 +758,11 @@ int movi_ts_seek_to_rap(AVFormatContext *fmt, int anchor, double target_sec) {
   if (!e || e->pos < 0)
     return -1;
   // Far enough behind and the decode-and-drop costs more than the GOP wait it
-  // is replacing. That is the scan's own tolerance: past it, the ordinary seek
-  // is the better answer.
-  if (target_sec - e->timestamp * tb > MOVI_TS_INDEX_TOLERANCE_S)
+  // is replacing — but that line sits well past the scan's own "look again"
+  // threshold. A two-second GOP hands back a point up to two seconds early by
+  // definition, and refusing it there sent the seek straight back to the
+  // behaviour this exists to replace.
+  if (target_sec - e->timestamp * tb > MOVI_TS_LAND_MAX_S)
     return -1;
   return av_seek_frame(fmt, anchor, e->pos,
                        AVSEEK_FLAG_BYTE | AVSEEK_FLAG_BACKWARD) >= 0
