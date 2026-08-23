@@ -1377,6 +1377,8 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
    */
   /** Set per seek() call: true while a seek nobody asked for is in flight. */
   private _seekIsInternal = false;
+  /** The seek target the audio-crossed-it line was last said for. */
+  private _audioTargetLoggedFor = -1;
   private _videoLagSince: number = 0;
   private _videoLagHealthySince: number = 0;
   private _lastVideoLagResyncAt: number = 0;
@@ -7071,10 +7073,20 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
                 this.seekTargetTime !== -1 &&
                 packet.timestamp >= this.seekTargetTime
               ) {
-                Logger.debug(
-                  TAG,
-                  `Audio reached seek target: ${packet.timestamp.toFixed(3)}s (target: ${this.seekTargetTime.toFixed(3)}s)`,
-                );
+                // Once per target, not once per packet. This guard stays
+                // armed until a VIDEO frame passes the target and clears it,
+                // so while the decoder is hunting for a keyframe — seconds, on
+                // a source with two-second keyframes — every audio packet came
+                // through here and said the same thing. One session logged it
+                // 96 times in a second and a half, which is noise sitting
+                // exactly where the real problem is being diagnosed.
+                if (this._audioTargetLoggedFor !== this.seekTargetTime) {
+                  this._audioTargetLoggedFor = this.seekTargetTime;
+                  Logger.debug(
+                    TAG,
+                    `Audio reached seek target: ${packet.timestamp.toFixed(3)}s (target: ${this.seekTargetTime.toFixed(3)}s)`,
+                  );
+                }
                 if (
                   !this.trackManager.getActiveVideoTrack() ||
                   this.isInAudioOnlyTail(this.seekTargetTime) ||
