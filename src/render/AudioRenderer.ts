@@ -289,9 +289,33 @@ export class AudioRenderer {
   async init(): Promise<boolean> {
     try {
       // Reuse the session-wide context so a resumed (unmuted) state survives
-      // source/video switches — see sharedAudioContext above. Only mint a new
-      // one on first use or if a prior one somehow ended up closed.
-      if (!sharedAudioContext || sharedAudioContext.state === "closed") {
+      // source/video switches — see sharedAudioContext above. Mint a new one on
+      // first use, if a prior one somehow ended up closed, or if the one we
+      // inherited runs at the wrong rate for this source.
+      //
+      // That last case is what the sharing costs. The context is opened at the
+      // FIRST source's rate and then kept for the life of the page, so the
+      // second source at a different rate has every one of its buffers
+      // resampled per node — the "pit pit" described below, the very thing
+      // opening at the source rate was meant to cure. Reproduced directly: play
+      // a 44.1kHz source, then a 48kHz one, and all ten of the second source's
+      // scheduled nodes come back bufSr=48000 against ctxSr=44100. Playing the
+      // 48kHz source alone gives zero mismatches, which is why this only ever
+      // shows up partway through a session and clears on a reload.
+      //
+      // Re-minting is only free once the session has been activated by a
+      // gesture: from then on a fresh context can be resumed without one, which
+      // is the entire reason the sharing exists (see sharedContextActivated).
+      // Before that first gesture the mismatch stays — a resampled seam is a
+      // smaller price than sound that will not start at all.
+      const inheritedRateWrong =
+        !!sharedAudioContext &&
+        sharedAudioContext.state !== "closed" &&
+        this._sourceSampleRate > 0 &&
+        sharedAudioContext.sampleRate !== this._sourceSampleRate;
+      const remintForRate = inheritedRateWrong && sharedContextActivated;
+      const retiringContext = remintForRate ? sharedAudioContext : null;
+      if (!sharedAudioContext || sharedAudioContext.state === "closed" || remintForRate) {
         // Open at the SOURCE's sample rate when we know it. Every decoded
         // packet becomes its own AudioBufferSourceNode, and a buffer whose rate
         // differs from the context's is resampled PER NODE — each one resampled
@@ -321,16 +345,27 @@ export class AudioRenderer {
         }
       }
       this.audioContext = sharedAudioContext;
-      // A shared context minted for an earlier source keeps its rate. Worth
-      // knowing when a "pit pit" report comes back: this line says the
-      // per-buffer resampling is still in play for this source.
+      if (retiringContext && retiringContext !== sharedAudioContext) {
+        Logger.info(
+          TAG,
+          `Retired the ${retiringContext.sampleRate}Hz context for a ${this.audioContext.sampleRate}Hz one to match this ${this._sourceSampleRate}Hz source`,
+        );
+        // Only after the replacement is in hand, so there is never a moment
+        // without a context. Best-effort: a context another player still holds
+        // will simply refuse, and the worst that costs is one idle device
+        // stream.
+        retiringContext.close().catch(() => {});
+      }
+      // A shared context we could NOT re-mint (audio not unlocked yet) keeps
+      // its rate, and this says so at a level someone chasing a "pit pit"
+      // report will actually see: the per-buffer resampling is still in play.
       if (
         this._sourceSampleRate > 0 &&
         this.audioContext.sampleRate !== this._sourceSampleRate
       ) {
-        Logger.debug(
+        Logger.warn(
           TAG,
-          `Context runs at ${this.audioContext.sampleRate}Hz, source is ${this._sourceSampleRate}Hz — buffers will be resampled per node`,
+          `Context runs at ${this.audioContext.sampleRate}Hz, source is ${this._sourceSampleRate}Hz — buffers will be resampled per node (clicking at buffer seams). Kept because audio has not been unlocked by a gesture yet.`,
         );
       }
       // Inheriting an already-running shared context (a prior player kept it
