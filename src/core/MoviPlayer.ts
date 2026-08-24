@@ -1588,6 +1588,59 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
   // buffers on AudioContext which would start audio playback early.
   private pendingPrebufferPackets: Packet[] = [];
 
+  // Video packets read ahead of the renderer's frame cap so that the AUDIO
+  // buried between them can be decoded. Held compressed and fed to the decoder
+  // in order as soon as the frame queue has room — deferred, never discarded,
+  // so the reference chain stays whole. See the read-ahead note in processLoop.
+  private _videoAheadStash: Packet[] = [];
+  private _videoAheadStashBytes: number = 0;
+  private _videoAheadActive: boolean = false;
+
+  /**
+   * The ONE way the read-ahead stash is emptied. Every caller goes through here
+   * — the flush sites, the seek/poster/teardown resets, and processLoop's
+   * point-of-use guard — because emptying it has a consequence that is easy to
+   * forget at any single call site, and forgetting it is a decoder error two
+   * seconds later with nothing nearby to blame.
+   */
+  private dropVideoReadAhead(): void {
+    if (this._videoAheadStash.length === 0) return;
+    this._videoAheadStash = [];
+    this._videoAheadStashBytes = 0;
+    this._videoAheadActive = false;
+    // Those packets were a CONTIGUOUS run of the picture, so dropping them
+    // punches a hole in the reference chain exactly like an audio-starve skip
+    // does — and the deltas that follow are orphans. Without this latch the
+    // decoder was handed 5.856s and then 7.975s with no keyframe between and
+    // no flush anywhere in sight, and closed itself on the first orphan: a
+    // spurious EncodingError on resume that looked nothing like its cause.
+    // Latch the same chain-break the skip path uses; it clears on the next
+    // true IDR (or on a CRA once its RASL are dropped, see the field's note).
+    this.videoChainBrokenUntilKeyframe = true;
+  }
+
+  // Bounds on that stash. 180 packets is ~3s at 60fps; the byte ceiling is what
+  // actually matters on a high-bitrate source (74 Mbps 4K60 runs ~150KB/frame,
+  // so the packet count alone would allow ~27MB and an 8K source far more).
+  // Hitting either bound turns read-ahead off, which drops the loop back to
+  // plain backpressure and, if audio still starves, to the GOP-skip last resort.
+  private static readonly VIDEO_AHEAD_MAX_PACKETS = 180;
+  // Stand read-ahead down this far from the end — comfortably more than the
+  // stash's own ~3s depth, so it is always empty by the time EOF arrives.
+  private static readonly VIDEO_AHEAD_TAIL_GUARD_S = 6;
+  // Hysteresis on when to read ahead at all. `audioBuffered < maxAudioBuffered`
+  // is true almost always — audio rarely reaches target on a source whose frame
+  // cap is the shallower window — so using it left read-ahead permanently on,
+  // and permanently stashing costs main-thread time for demux work that was not
+  // needed yet. Measured on 8K60 AV1, where the cap is 16 frames and audio sits
+  // at a low but SAFE 0.3-0.8s: always-on read-ahead held ~140 packets and cost
+  // 2.6fps (57.3 vs 59.9) to fix a starve that was not happening. So engage
+  // only once audio is genuinely near the 0.1s starve line, and stand down once
+  // it has recovered — a burst when it is needed rather than a permanent tax.
+  private static readonly VIDEO_AHEAD_ENGAGE_AUDIO_S = 0.5;
+  private static readonly VIDEO_AHEAD_RELEASE_AUDIO_S = 1.25;
+  private static readonly VIDEO_AHEAD_MAX_BYTES = 48 * 1024 * 1024;
+
   // Audio packets collected during the current demux burst, handed to the
   // decoder as ONE batch when the tick ends. Only used when the software path
   // is active (see AudioDecoder.canBatch): TrueHD/MLP emits a 40-sample access
@@ -2818,6 +2871,7 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
     } else {
       // Flush + reconfigure the video decoder/renderer for the new resolution.
       try { await this.videoDecoder.flush(); } catch {}
+      this.dropVideoReadAhead();
       this.videoRenderer?.clearQueue();
       const extradata = newDemuxer.getExtradata(newVideoTrack.id) ?? undefined;
       await this.videoDecoder.configure(
@@ -4516,6 +4570,7 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
       // and forcing video to skip ahead to catch up — the first-play
       // stutter. Mirrors the replay path which flushes + resets first.
       await this.videoDecoder.flush();
+      this.dropVideoReadAhead();
       await this.audioDecoder.flush();
       if (this.videoRenderer) this.videoRenderer.clearQueue();
       this.audioRenderer.reset();
@@ -4562,6 +4617,7 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
       // so stashed packets are stale (would feed later timestamps into the
       // decoder, making first frame jump ahead instead of starting at targetTime).
       this.pendingPrebufferPackets = [];
+      this.dropVideoReadAhead();
       this.eofReached = false;
       this.eofSince = 0;
     } else {
@@ -5351,6 +5407,7 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
       // would be processed before fresh audio at 0s).
       this.pendingAudioPackets = [];
       this.pendingPrebufferPackets = [];
+      this.dropVideoReadAhead();
 
       // Don't start clock or audio — but continue buffering ahead
       this.startPauseBuffering();
@@ -6501,6 +6558,7 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
       } else if (performance.now() - this._decoderStuckSince > 5000) {
         Logger.warn(TAG, `Video decoder stuck for 5s (queue=${this.videoDecoder.queueSize}, output=0), flushing`);
         this.videoDecoder.flush().catch(() => {});
+        this.dropVideoReadAhead();
         this._decoderStuckSince = 0;
       }
     } else {
@@ -6566,6 +6624,80 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
     const skipVideoDecodeForAudio =
       audioInPipeline && (videoBufferFull || videoDecoderFull) && audioStarving;
 
+    // The renderer's frame cap is a VRAM bound, and on a 4K60 source it is a
+    // much SHORTER window than the audio the loop is trying to buffer: 48
+    // frames is 0.8s of picture against a 2s audio target. From a single
+    // interleaved stream those two cannot both hold — reading 2s of audio means
+    // reading 2s of video — so the video cap stops the loop first, every time,
+    // and audio never gets near its target. Measured on 4K60 HEVC Main10 at 74
+    // Mbps: 794 of 795 backpressure stops were the video cap, not one was the
+    // audio cap, and audio oscillated 0.14–0.85s against a 0.1s starve line.
+    // Every dip under that line handed the picture to skipVideoDecodeForAudio,
+    // which discards video to the next keyframe — the 1–2s freezes, several
+    // times a minute, on a file nothing was actually struggling to decode.
+    //
+    // So when the frame cap is the ONLY thing holding the loop shut and audio
+    // is below target, keep reading and STASH the video packets instead of
+    // decoding them. Compressed, a GOP costs ~12MB of RAM where the same frames
+    // decoded cost ~2.6GB of VRAM, which is the whole reason the frame cap is
+    // 48. Nothing is discarded, so the reference chain stays whole and there is
+    // no keyframe to wait for; the stash feeds the decoder in order the moment
+    // the renderer has room.
+    //
+    // Gated on the decoder being able to keep up (`!videoDecoderFull`): if
+    // video decode is the real bottleneck, reading further ahead only grows the
+    // stash. Both bounds turn it off and hand back to plain backpressure.
+    // Engage/release the read-ahead latch on audio's distance from starving,
+    // clamped so a source whose audio target is below the release mark can still
+    // stand down. See the constants for the measurement behind the numbers.
+    const engageAt = Math.min(
+      MoviPlayer.VIDEO_AHEAD_ENGAGE_AUDIO_S,
+      maxAudioBuffered * 0.5,
+    );
+    const releaseAt = Math.min(
+      MoviPlayer.VIDEO_AHEAD_RELEASE_AUDIO_S,
+      maxAudioBuffered * 0.9,
+    );
+    if (this._videoAheadActive) {
+      if (audioBuffered >= releaseAt) this._videoAheadActive = false;
+    } else if (audioBuffered < engageAt) {
+      this._videoAheadActive = true;
+    }
+
+    const videoAheadStashFull =
+      this._videoAheadStash.length >= MoviPlayer.VIDEO_AHEAD_MAX_PACKETS ||
+      this._videoAheadStashBytes >= MoviPlayer.VIDEO_AHEAD_MAX_BYTES;
+    // Steady continuous playback only. That is the whole of what this is for —
+    // the starve-and-freeze cycle it fixes only exists while the picture is
+    // running — and it is also the only state where the stash has no one to
+    // disagree with. Pause owns the packet stash for its own buffering, and
+    // near EOF a stash is the tail of the picture with nothing left to read to
+    // trigger a drain; read-ahead in either state bought nothing and cost a
+    // spurious decoder error on resume and a clipped last half-second.
+    // ...and not into the last few seconds. Read-ahead holds up to ~3s of
+    // picture, and at EOF there is nothing left to read that would trigger a
+    // drain, so whatever is still stashed when the file ends never reaches the
+    // decoder and the tail freezes on the last queued frame. Standing down
+    // before then costs nothing — the starve cycle this fixes needs minutes of
+    // runway, not the closing seconds.
+    const readAheadDuration = this.getDuration();
+    const readAheadNearEnd =
+      readAheadDuration > 0 &&
+      readAheadDuration - this.getCurrentTime() <=
+        MoviPlayer.VIDEO_AHEAD_TAIL_GUARD_S;
+    const videoReadAheadForAudio =
+      this.stateManager.is("playing") &&
+      !this.eofReached &&
+      !readAheadNearEnd &&
+      gateOnAudio &&
+      audioInPipeline &&
+      !skipVideoBackpressure &&
+      videoBufferFull &&
+      !videoDecoderFull &&
+      !videoAheadStashFull &&
+      this._videoAheadActive &&
+      this.pendingPrebufferPackets.length === 0;
+
     // Audio's cushion must not hold the loop shut while the PICTURE has
     // nothing at all. Coming back from a backgrounded tab the two are at
     // opposite extremes by construction: the background timer kept decoding
@@ -6608,7 +6740,10 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
         !catchingUpVideo &&
         !bufferingForVideo &&
         audioBuffered > maxAudioBuffered) ||
-      (!skipVideoBackpressure && !skipVideoDecodeForAudio && videoBuffered > maxVideoBuffered)
+      (!skipVideoBackpressure &&
+        !skipVideoDecodeForAudio &&
+        !videoReadAheadForAudio &&
+        videoBuffered > maxVideoBuffered)
     ) {
       if (
         this.waitingForVideoSync &&
@@ -6793,9 +6928,45 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
 
         // Drain prebuffered packets first so play() doesn't re-read them
         // from the source. Stashed packets are pre-seek and always safe.
+        // A flush — seek, resume, resolution change, stuck-decoder recovery —
+        // resets the decoder's reference chain, and everything already stashed
+        // was read against the OLD one. Feeding it afterwards is exactly the
+        // orphaned-delta EncodingError the stash exists to avoid; it fired twice
+        // on resume when this was checked once per tick instead, because a flush
+        // lands mid-burst. So check it at the point of USE, and key the stash's
+        // lifetime on the decoder waiting for a keyframe — the one signal that
+        // covers every flush path, including ones added later.
+        //
+        // The prebuffer/pause stash invalidates it for the same reason without
+        // ever touching the decoder: those packets are read by a seek or a
+        // pause AFTER the ones sitting here, and they drain FIRST (below). Both
+        // stashes holding at once therefore feeds newer packets and then older
+        // ones — which is the out-of-order garbage that errored on every
+        // resume. They must never coexist, and the newer stash wins.
+        if (
+          this.videoDecoder.isWaitingForKeyframe ||
+          this.pendingPrebufferPackets.length > 0
+        ) {
+          this.dropVideoReadAhead();
+        }
+
         let packet: Packet | null;
+        let fromAheadStash = false;
         if (this.pendingPrebufferPackets.length > 0) {
           packet = this.pendingPrebufferPackets.shift()!;
+        } else if (
+          this._videoAheadStash.length > 0 &&
+          ((this.videoRenderer?.getQueueSize() ?? 0) <= maxVideoBuffered ||
+            this.eofReached)
+        ) {
+          fromAheadStash = true;
+          // Room in the renderer again — hand back the video that was read past
+          // it, oldest first, before pulling anything new off the demuxer.
+          packet = this._videoAheadStash.shift()!;
+          this._videoAheadStashBytes = Math.max(
+            0,
+            this._videoAheadStashBytes - packet.data.length,
+          );
         } else {
           // When separate audio demuxer exists, primary demuxer only provides video/subtitle
           packet = await this.demuxer.readPacket();
@@ -6860,6 +7031,16 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
             this.notifySeekCompletion(this.seekTargetTime, true);
           }
 
+          // The read-ahead stash still holds the tail of the picture: those
+          // packets were read PAST the renderer's cap to get at the audio
+          // behind them, and nothing further will be read now to trigger a
+          // drain. Breaking here strands them and the last second freezes on
+          // whatever frame was already queued. eofReached is set above, which
+          // opens the drain branch unconditionally, so go round again.
+          if (this._videoAheadStash.length > 0) {
+            continue;
+          }
+
           Logger.debug(TAG, "EOF reached");
           break;
         }
@@ -6889,6 +7070,22 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
             // but the GPU/CPU video pipeline stays idle. Toggling back to video
             // re-seeks to recover a keyframe (see setAudioOnly).
             if (this._audioOnly) {
+              continue;
+            }
+
+            // Read-ahead: the renderer's frame queue is full but audio is still
+            // hungry, so this packet was read only to get at the audio behind
+            // it. Hold it compressed rather than decoding it into a queue with
+            // no room — or discarding it, which is what breaks the chain and
+            // freezes the picture. It goes to the decoder, in order, as soon as
+            // the renderer drains. See videoReadAheadForAudio above.
+            if (
+              videoReadAheadForAudio &&
+              !fromAheadStash &&
+              (this.videoRenderer?.getQueueSize() ?? 0) > maxVideoBuffered
+            ) {
+              this._videoAheadStash.push(packet);
+              this._videoAheadStashBytes += packet.data.length;
               continue;
             }
             // In background (not PiP), skip video decoding entirely.
@@ -7653,6 +7850,7 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
       // Flush decoders
       Logger.info(TAG, `seek: flushing video decoder...`);
       await this.videoDecoder.flush();
+      this.dropVideoReadAhead();
       Logger.info(TAG, `seek: flushing audio decoder...`);
       await this.audioDecoder.flush();
       // Drop the host subtitle renderer's pending state — its cues are for the
@@ -7780,6 +7978,7 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
       this.pendingAudioPackets = [];
       // Stashed prebuffer packets are pre-seek and now stale
       this.pendingPrebufferPackets = [];
+      this.dropVideoReadAhead();
 
       // Enable post-seek throttling to prevent overwhelming low-end devices
       // BUT skip throttling when seeking within already-buffered data — the bytes
@@ -9361,6 +9560,7 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
     this._primingAudio = false;
     this.pendingAudioPackets = []; // poster-era audio is stale; play() re-seeks
     this.pendingPrebufferPackets = [];
+    this.dropVideoReadAhead();
     // The poster seek advanced HttpSource's monotonic buffered-end to ~poster
     // time; reset it (as a real seek does) so the buffer bar starts from 0
     // instead of showing a false prebuffer at the poster timestamp. The range
@@ -11265,6 +11465,7 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
       // Flush decoders + clear queue since the demuxer is in an
       // undefined-for-playback state.
       await this.videoDecoder.flush();
+      this.dropVideoReadAhead();
       await this.audioDecoder.flush();
       if (this.videoRenderer) this.videoRenderer.clearQueue();
       this.audioRenderer.reset();
@@ -11272,6 +11473,7 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
       this.clock.seek(resumeTime);
       this.pendingAudioPackets = [];
       this.pendingPrebufferPackets = [];
+      this.dropVideoReadAhead();
       this.eofReached = false;
       this.eofSince = 0;
     } catch (err) {
@@ -12090,6 +12292,7 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
       // Flush video decoder only — audio decoder and renderer untouched
       if (this.videoDecoder) {
         await this.videoDecoder.flush();
+        this.dropVideoReadAhead();
       }
       if (this.videoRenderer) {
         this.videoRenderer.clearQueue();
@@ -13221,6 +13424,7 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
     }
 
     this.pendingPrebufferPackets = [];
+    this.dropVideoReadAhead();
 
     // Close resources
     this.videoDecoder.close();
