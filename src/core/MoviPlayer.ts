@@ -1425,6 +1425,15 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
   private static readonly VIDEO_LAG_S = 0.5;
   /** Long enough that an ordinary hitch heals itself first. */
   private static readonly VIDEO_LAG_SUSTAIN_MS = 2000;
+  /**
+   * How long after a speed change the picture may trail the sound without us
+   * reaching for a seek. Longer than the seek window above because a rate
+   * change can BE a seek plus an audio re-anchor, and the pipeline it re-primes
+   * is the whole of it. The sustain timer only starts once this is past, so the
+   * earliest a catch-up can fire after a speed change is this plus
+   * VIDEO_LAG_SUSTAIN_MS.
+   */
+  private static readonly RATE_CHANGE_SETTLE_MS = 4000;
   private static readonly VIDEO_LAG_COOLDOWN_MS = 6000;
   /**
    * A catch-up that keeps being needed isn't catching up. Past this the device
@@ -6375,7 +6384,24 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
         videoBehind >= MoviPlayer.VIDEO_LAG_S &&
         // A seek's own re-prime trails the sound for a moment by design; only
         // start counting once that is behind us.
-        nowLag - this._lastSeekResumeAt > MoviPlayer.VIDEO_LAG_SUSTAIN_MS
+        nowLag - this._lastSeekResumeAt > MoviPlayer.VIDEO_LAG_SUSTAIN_MS &&
+        // A speed change is the same story and was not covered. It re-anchors
+        // the audio in place, and on a source heavy enough to need one it also
+        // runs a corrective seek — it disturbs the pipeline on purpose, at a
+        // moment we chose, exactly as the buffering path already recognises
+        // through this same stamp (see _bufferingSelfInflicted). The lag that
+        // follows is ours, and it clears itself: measured on 8K60 AV1, a 2x to
+        // 1x change settled back to 12ms behind and stayed there.
+        //
+        // Left uncovered it does real damage on this shape of source. The
+        // catch-up is a seek, and on a long-GOP 8K AV1 the keyframe before the
+        // target is far behind it — captured on one: a rate change to 1x, then
+        // "Picture fell behind: video-only seek to 24.69s", and the first
+        // packet the seek could resume from was 3.608s EARLIER than the target
+        // it was aiming at. All of that has to be demuxed and decoded before
+        // anything reaches the screen, and the renderer threw away 28 stale
+        // frames and re-anchored twice on the way out.
+        nowLag - this._lastRateChangeAt > MoviPlayer.RATE_CHANGE_SETTLE_MS
       ) {
         if (this._videoLagSince === 0) {
           this._videoLagSince = nowLag;
