@@ -3110,6 +3110,29 @@ export class CanvasRenderer {
       const frame = this.frameQueue[i];
       const frameTime = frame.timestamp / 1_000_000;
 
+      // Never go backwards. "Due" only asked whether a frame sits at or before
+      // the clock, never whether we had already shown something LATER — and
+      // after a rate change we routinely have. The corrective seek repositions
+      // the demuxer to the playhead without clearing this queue, so the frames
+      // that arrive next start from the keyframe BEFORE that point while the
+      // picture has already run on past it. Every one of them is "due", and
+      // showing them rewinds the picture and replays it.
+      //
+      // Measured on 8K60 AV1, 2x: the renderer had presented up to 9.283s, then
+      // showed 6.267s and walked forward from there while the clock ran 9.32,
+      // 9.35, 9.45 — a three second rewind, sixty-two backward presentations in
+      // one run, which is the flicker where frames "come and then go".
+      //
+      // Skipping them leaves them for the prune below, which drops anything
+      // more than maxBehind behind the clock — it could not reach them before
+      // because it stops at the frame this loop selected. The three sites that
+      // legitimately restart the picture somewhere else (an empty queue, the
+      // stale-frame drop, clearQueue on a real seek) all reset lastPresentedPts
+      // to -1, so a genuine backward seek is untouched.
+      if (this.lastPresentedPts >= 0 && frameTime < this.lastPresentedPts - 0.0005) {
+        continue;
+      }
+
       // Frame is due if its timestamp is at or before currentTime (with small tolerance)
       if (frameTime <= currentTime + 0.005) {
         // 5ms tolerance
@@ -3127,8 +3150,17 @@ export class CanvasRenderer {
       const firstFrame = this.frameQueue[0];
       const firstFrameTime = firstFrame.timestamp / 1_000_000;
 
+      // Same rule as the loop above, and it has to be repeated here: this
+      // fallback reaches straight for the head of the queue, so without it the
+      // no-going-backwards test is simply stepped around — which is exactly
+      // what a first attempt at this did, leaving the count of backward
+      // presentations unchanged at sixty-odd.
+      const wouldGoBackwards =
+        this.lastPresentedPts >= 0 &&
+        firstFrameTime < this.lastPresentedPts - 0.0005;
+
       // If first frame is coming up soon (within one frame interval), present it
-      if (firstFrameTime <= currentTime + frameInterval) {
+      if (!wouldGoBackwards && firstFrameTime <= currentTime + frameInterval) {
         bestFrame = firstFrame;
         bestIndex = 0;
       }
