@@ -129,6 +129,29 @@ export class CanvasRenderer {
   private _adaptDprChecked: boolean = false;
   private static readonly PAINT_SAMPLE_COUNT = 60; // ~1 second @ 60Hz
   private static readonly PAINT_THRESHOLD_MS = 8; // >50% of 16.67ms frame budget
+  /**
+   * The second rung of the same ladder, and it counts the TAIL rather than the
+   * average, because the average is not what hurts.
+   *
+   * A 12-bit source uploads RGBA16F — 3840x2160x4x2 is ~66MB a frame — and on a
+   * machine that cannot absorb that the cost does not show up as a slow mean.
+   * Measured on hevc_4k24P_rext_12bit_444_pq.mp4 over 30s, DPR already capped:
+   * mean paint 3.03ms and p90 2.5ms, both healthy, while the MAX was 126.8ms
+   * and twelve individual paints ran past 24ms. The mean-based rung above
+   * cannot see that; twelve blocks longer than the audio output buffer is what
+   * the viewer hears as crackle. The same file forced to RGBA8: max 2.5ms, and
+   * not one paint over 16.7ms.
+   *
+   * So: a handful of genuinely long paints inside one window and the 16-bit
+   * texture goes. Banding on a 12-bit HDR source is a real cost and this pays
+   * it only on hardware that has already proved it cannot hold the frame.
+   */
+  private static readonly LONG_PAINT_MS = 20;
+  private static readonly LONG_PAINT_WINDOW = 240; // ~10s at 24fps, ~4s at 60
+  private static readonly LONG_PAINT_LIMIT = 4;
+  private _longPaints = 0;
+  private _paintsSeenSinceWindow = 0;
+  private _bitDepthDowngraded = false;
 
   // Adaptive frame-rate cap — the second-stage degrade after adaptive DPR.
   // Some devices (low-end mobile on 4K60) can't hold the source rate even at
@@ -1456,8 +1479,30 @@ export class CanvasRenderer {
    * GPU-bound devices (360 raycasting is fragment-heavy at 4K).
    */
   private sampleAdaptiveDpr(paintStart: number): void {
-    if (this._adaptDprChecked || paintStart <= 0) return;
+    if (paintStart <= 0) return;
     const paintDuration = performance.now() - paintStart;
+
+    // Rung two: the long-paint tail. Runs for as long as the 16-bit texture is
+    // still in play, including long after the one-shot DPR check has closed.
+    if (this.isHighBitDepth && !this._bitDepthDowngraded) {
+      this._paintsSeenSinceWindow++;
+      if (paintDuration > CanvasRenderer.LONG_PAINT_MS) this._longPaints++;
+      if (this._longPaints >= CanvasRenderer.LONG_PAINT_LIMIT) {
+        Logger.info(
+          TAG,
+          `Adaptive bit depth: ${this._longPaints} paints over ${CanvasRenderer.LONG_PAINT_MS}ms in ${this._paintsSeenSinceWindow} frames — dropping RGBA16F to RGBA8`,
+        );
+        this.isHighBitDepth = false;
+        this._bitDepthDowngraded = true;
+      } else if (
+        this._paintsSeenSinceWindow >= CanvasRenderer.LONG_PAINT_WINDOW
+      ) {
+        this._paintsSeenSinceWindow = 0;
+        this._longPaints = 0;
+      }
+    }
+
+    if (this._adaptDprChecked) return;
     this._paintSamples.push(paintDuration);
     if (this._paintSamples.length >= CanvasRenderer.PAINT_SAMPLE_COUNT) {
       const sum = this._paintSamples.reduce((a, b) => a + b, 0);
@@ -3201,7 +3246,13 @@ export class CanvasRenderer {
   private drawFrame(frame: RenderSource, force: boolean = false): void {
     if (!this.gl || !this.program || !this.texture) return;
     const gl = this.gl;
-    const paintStart = this._adaptDprChecked ? 0 : performance.now();
+    // Keep timing while ANY adaptation is still available — the bit-depth rung
+    // below outlives the one-shot DPR check. Two performance.now() calls a
+    // frame cost nothing next to what they are measuring.
+    const canStillAdapt =
+      !this._adaptDprChecked ||
+      (this.isHighBitDepth && !this._bitDepthDowngraded);
+    const paintStart = canStillAdapt ? performance.now() : 0;
 
     try {
       // Update current time. A <video> source carries its own playhead;
