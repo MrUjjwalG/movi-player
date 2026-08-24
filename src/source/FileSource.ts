@@ -563,12 +563,31 @@ export class FileSource implements SourceAdapter {
     requestedLength: number,
   ): ArrayBuffer | null {
     const requestedEnd = requestedOffset + requestedLength;
-    const result = new ArrayBuffer(requestedLength);
-    const resultView = new Uint8Array(result);
-    let filled = 0;
 
     // Sort by offset
     overlapping.sort((a, b) => a.offset - b.offset);
+
+    // Decide BEFORE allocating. A miss used to allocate the full request — half
+    // a megabyte on the demuxer's avio buffer — copy every overlapping byte
+    // into it, and then throw the whole thing away by returning null. On a file
+    // larger than the cache that is the common case, and at the read rate a 4K
+    // source demands it is megabytes a second of garbage for nothing. Walk the
+    // ranges first; only a request the cache can satisfy end to end is worth a
+    // buffer.
+    let covered = requestedOffset;
+    for (const chunk of overlapping) {
+      if (chunk.offset > covered) break; // hole — the cache cannot serve this
+      const chunkEnd = chunk.offset + chunk.length;
+      if (chunkEnd > covered) covered = chunkEnd;
+      if (covered >= requestedEnd) break;
+    }
+    if (covered < requestedEnd) {
+      return null; // partial fill — trigger a file read
+    }
+
+    const result = new ArrayBuffer(requestedLength);
+    const resultView = new Uint8Array(result);
+    let filled = 0;
 
     for (const chunk of overlapping) {
       const chunkEnd = chunk.offset + chunk.length;

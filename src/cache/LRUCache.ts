@@ -13,6 +13,11 @@ interface CacheEntry {
   key: string;
   data: ArrayBuffer;
   accessTime: number;
+  /** The byte range this entry holds. Carried on the entry because
+   *  findOverlapping scans EVERY entry on every read, and re-deriving these
+   *  from the key cost a split() and two parseInt() per entry per scan. */
+  offset: number;
+  length: number;
 }
 
 export class LRUCache {
@@ -73,6 +78,8 @@ export class LRUCache {
       key,
       data,
       accessTime: performance.now(),
+      offset,
+      length,
     };
     
     this.cache.set(key, entry);
@@ -92,26 +99,28 @@ export class LRUCache {
   }> {
     const results: Array<{ offset: number; length: number; data: ArrayBuffer }> = [];
     const end = offset + length;
-    
-    for (const [key, entry] of this.cache) {
-      if (!key.startsWith(sourceKey + ':')) continue;
-      
-      const parts = key.split(':');
-      const entryOffset = parseInt(parts[parts.length - 2], 10);
-      const entryLength = parseInt(parts[parts.length - 1], 10);
-      const entryEnd = entryOffset + entryLength;
-      
-      // Check for overlap
-      if (entryOffset < end && entryEnd > offset) {
+    // A whole-cache scan runs on EVERY read, and the cache is sized in
+    // hundreds of megabytes — 520MB of 2MB chunks is 260 entries. This used to
+    // rebuild each entry's range from its key: `key.split(':')` allocates an
+    // array and a string per segment, then two parseInt on top, for every
+    // entry on every scan. That is on the order of a thousand short-lived
+    // allocations per read and tens of thousands a second, which is a garbage
+    // firehose — and `(garbage collector)` showed up as a 39ms main-thread
+    // block in the profile of a session whose audio was crackling. The range
+    // is known at set() time, so keep it there and read it.
+    const prefix = sourceKey + ':';
+    for (const entry of this.cache.values()) {
+      if (!entry.key.startsWith(prefix)) continue;
+      if (entry.offset < end && entry.offset + entry.length > offset) {
         entry.accessTime = performance.now();
         results.push({
-          offset: entryOffset,
-          length: entryLength,
+          offset: entry.offset,
+          length: entry.length,
           data: entry.data,
         });
       }
     }
-    
+
     return results;
   }
 
