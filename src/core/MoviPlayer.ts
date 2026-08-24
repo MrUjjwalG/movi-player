@@ -4826,6 +4826,11 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
   private _lastFedVideoDts = -1;
   /** Decoded picture, in seconds at the new rate, that makes an audio-only rewind safe. */
   private static readonly REWIND_PICTURE_CUSHION_S = 0.8;
+  // How full the renderer queue has to be, as a fraction of its own cap, to
+  // count as "this is all the picture there is going to be" — see
+  // hasPictureToCarryARewind(). Not 1.0: the queue drains between decodes, so
+  // it sits a few frames under the cap in normal steady playback.
+  private static readonly REWIND_QUEUE_AT_CAP_FRACTION = 0.7;
   private _rewindVideoUntilDts = -1;
   private _rewindAudioFrom = -1;
   private static readonly DEMUX_TIMEOUT = 35000; // 35 seconds timeout (slightly more than HTTP timeout of 30s)
@@ -6502,36 +6507,11 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
     //     was the "audio drift" symptom).
     //
     // When both apply (e.g. 8K on mobile), use the tighter of the two.
-    const activeVideo = this.trackManager.getActiveVideoTrack();
-    const pixels = (activeVideo?.width ?? 0) * (activeVideo?.height ?? 0);
-    const fps = Math.max(15, Math.min(120, activeVideo?.frameRate ?? 30));
-    const is8KPlus = pixels >= 7680 * 4320;
-    const isHighRes = pixels >= 3840 * 2160; // 4K and above
-    const isMobile = MoviPlayer._isMobileDevice;
-    let baseHwQueue: number;
-    if (is8KPlus) {
-      // 8K+ desktop: 16 frames is a VRAM-bound sweet spot (8K HDR frames are
-      // ~50MB each; deeper queues stall the compositor and 100 × 50MB ≈ 5GB
-      // VRAM was the original starvation cause). Mobile shifts to software
-      // dav1d so a shallow queue helps the decoder catch up.
-      if (isMobile) baseHwQueue = isPostSeek ? 8 : 12;
-      else baseHwQueue = isPostSeek ? 12 : 16;
-    } else if (isHighRes) {
-      // 4K (not 8K) desktop: 4K HDR RGBA8 frames are ~33MB so 48 × 33MB ≈
-      // 1.6GB VRAM — bounded but deep enough to absorb 250-500ms GC/decode
-      // hiccups without draining the renderer queue. The previous uniform
-      // 16-frame cap (267ms @60fps) was too shallow for 4K60 HEVC HDR: any
-      // jitter emptied the queue, paused demuxing, and starved audio.
-      if (isMobile) baseHwQueue = isPostSeek ? 8 : 16;
-      else baseHwQueue = isPostSeek ? 24 : 48;
-    } else if (isMobile) {
-      // 1080p (and lighter) on mobile is smooth at the 800ms target — keep it.
-      const targetMs = isPostSeek ? 400 : 800;
-      baseHwQueue = Math.max(12, Math.round((fps * targetMs) / 1000));
-    } else {
-      baseHwQueue = isPostSeek ? 20 : 100; // desktop default
-    }
-    const maxVideoBuffered = Math.round((isSoftware ? 60 : baseHwQueue) * rateScale);
+    const maxVideoBuffered = this.videoQueueCapFrames(
+      isPostSeek,
+      isSoftware,
+      rateScale,
+    );
 
     // Skip video backpressure only where video genuinely isn't being consumed:
     // backgrounded (not PiP), where decode is skipped outright.
@@ -10217,12 +10197,84 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
    * old full seek is the safer answer, because a rewind that outlasts the
    * queue stops the picture anyway and without a spinner to explain it.
    */
+  /**
+   * How many decoded frames the renderer queue is ALLOWED to hold.
+   *
+   * Extracted so the number lives in one place. It is a VRAM bound counted in
+   * FRAMES, and two callers need it for different reasons: the demux loop uses
+   * it as backpressure, and the rate-change rewind needs to know whether a
+   * shallow queue means "not buffered yet" or "as full as it will ever get" —
+   * those look identical from the queue size alone and lead to opposite
+   * decisions. See hasPictureToCarryARewind().
+   */
+  private videoQueueCapFrames(
+    isPostSeek: boolean,
+    isSoftware: boolean,
+    rateScale: number,
+  ): number {
+    const activeVideo = this.trackManager.getActiveVideoTrack();
+    const pixels = (activeVideo?.width ?? 0) * (activeVideo?.height ?? 0);
+    const fps = Math.max(15, Math.min(120, activeVideo?.frameRate ?? 30));
+    const is8KPlus = pixels >= 7680 * 4320;
+    const isHighRes = pixels >= 3840 * 2160; // 4K and above
+    const isMobile = MoviPlayer._isMobileDevice;
+    let baseHwQueue: number;
+    if (is8KPlus) {
+      // 8K+ desktop: 16 frames is a VRAM-bound sweet spot (8K HDR frames are
+      // ~50MB each; deeper queues stall the compositor and 100 × 50MB ≈ 5GB
+      // VRAM was the original starvation cause). Mobile shifts to software
+      // dav1d so a shallow queue helps the decoder catch up.
+      if (isMobile) baseHwQueue = isPostSeek ? 8 : 12;
+      else baseHwQueue = isPostSeek ? 12 : 16;
+    } else if (isHighRes) {
+      // 4K (not 8K) desktop: 4K HDR RGBA8 frames are ~33MB so 48 × 33MB ≈
+      // 1.6GB VRAM — bounded but deep enough to absorb 250-500ms GC/decode
+      // hiccups without draining the renderer queue. The previous uniform
+      // 16-frame cap (267ms @60fps) was too shallow for 4K60 HEVC HDR: any
+      // jitter emptied the queue, paused demuxing, and starved audio.
+      if (isMobile) baseHwQueue = isPostSeek ? 8 : 16;
+      else baseHwQueue = isPostSeek ? 24 : 48;
+    } else if (isMobile) {
+      // 1080p (and lighter) on mobile is smooth at the 800ms target — keep it.
+      const targetMs = isPostSeek ? 400 : 800;
+      baseHwQueue = Math.max(12, Math.round((fps * targetMs) / 1000));
+    } else {
+      baseHwQueue = isPostSeek ? 20 : 100; // desktop default
+    }
+    return Math.round((isSoftware ? 60 : baseHwQueue) * rateScale);
+  }
+
   private hasPictureToCarryARewind(rate: number): boolean {
     const queued = this.videoRenderer?.getQueueSize?.() ?? 0;
     if (queued <= 0) return false;
     const fps = this.trackManager?.getActiveVideoTrack()?.frameRate || 24;
     const seconds = queued / Math.max(1, fps) / Math.max(1, rate);
-    return seconds >= MoviPlayer.REWIND_PICTURE_CUSHION_S;
+    if (seconds >= MoviPlayer.REWIND_PICTURE_CUSHION_S) return true;
+
+    // 0.8s of decoded picture is a wall a high-res source can never climb. The
+    // cushion is in SECONDS but the queue cap is in FRAMES — a VRAM bound of 16
+    // at 8K and 48 at 4K — so at 60fps the deepest queue 8K is ALLOWED to hold
+    // is 0.27s. The bar could not be met at any rate above ~0.34x, which made
+    // the expensive full seek GUARANTEED on exactly the sources where it costs
+    // the most, while 1080p30 (100 frames = 3.3s) always got the cheap path.
+    // Measured on 8K60 AV1: six of nine rebuffers in one session were
+    // rate-change seeks, each flushing both decoders, clearing the queue and
+    // refilling 16 frames of 8K from an IDR — the freeze on every press of the
+    // speed control. The 0.25x change in that same session took the cheap path,
+    // and only because rateScale multiplies the cap by 4 at that rate.
+    //
+    // A queue at its cap is not "not buffered yet", it is "as full as it will
+    // ever get", and those are opposite situations that look identical from the
+    // queue size alone. Waiting for 0.8s there is waiting for something that
+    // cannot arrive, so rewind the sound and let the picture keep running: a
+    // small hitch is strictly better than stopping it outright.
+    const rateScale = rate < 1.0 ? 1.0 / rate : Math.min(2.0, rate);
+    const cap = this.videoQueueCapFrames(
+      false,
+      this.videoDecoder?.isSoftware ?? false,
+      rateScale,
+    );
+    return cap > 0 && queued >= cap * MoviPlayer.REWIND_QUEUE_AT_CAP_FRACTION;
   }
 
   /**
