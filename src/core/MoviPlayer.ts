@@ -6471,7 +6471,18 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
           return;
         }
       }
-      return; // Don't demux more, just wait for playback to finish
+      // Don't demux more, just wait for playback to finish — unless the
+      // read-ahead stash still holds picture. Those packets were demuxed long
+      // before EOF and deliberately deferred; "don't demux more" is about
+      // READING, and handing over what was already read is not reading. This
+      // return stranded them: measured on a 61.6 Mbps 4K60 HEVC .ts, 93 packets
+      // — the closing 1.3 seconds of the film — sat in the stash while the
+      // renderer queue read zero for thirteen straight samples and the picture
+      // stood still all the way to `ended`. The burst's own stash branch
+      // already special-cases eofReached; it simply never got to run.
+      if (this._videoAheadStash.length === 0) {
+        return;
+      }
     }
 
     // Check backpressure - relax limits for better throughput
@@ -6752,12 +6763,48 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
       this.stateManager.is("buffering") &&
       !!this.videoRenderer &&
       !this._audioOnly;
+    // The third case, and the one that actually bites on a single interleaved
+    // stream: the picture the loop already read is sitting in the read-ahead
+    // stash, the renderer has room for it, and the audio cushion — the very
+    // cushion that stash was filled to protect — holds the loop shut so it can
+    // never be handed over. The drain lives INSIDE the burst, past this return,
+    // so "audio has enough" stops video that costs nothing to deliver: it is
+    // demuxed, it is in memory, and the decoder is idle.
+    //
+    // Measured on a 61.6 Mbps 4K60 HEVC .ts, hardware decode, nothing
+    // struggling: the renderer queue hit ZERO five times in forty seconds —
+    // 22.1s, 28.1s, 34.1s, 40.1s, 46.1s, almost exactly 6s apart — and at every
+    // one of them the stash was holding 176 to 197 packets (~3s of picture) and
+    // the audio buffer read 2.07 to 2.23s against a 2.0s cap. The picture
+    // stopped while three seconds of it sat one function call away. Then audio
+    // drained under the cap, the gate opened, the stash flooded back, the
+    // renderer jumped to ~66, read-ahead re-engaged, audio overshot 2.0 again,
+    // and the whole cycle repeated for the length of the file.
+    //
+    // Same shape and same reasoning as the two carve-outs above: bounded (the
+    // stash only shrinks), self-clearing (once it is empty the cap applies
+    // again next tick), and the audio DECODER queue gate above still holds, so
+    // this cannot flood anything.
+    const stashCanFeedThePicture =
+      this._videoAheadStash.length > 0 && videoBuffered <= maxVideoBuffered;
+    // …and this tick is running ONLY on that exemption when the audio cap is
+    // the one thing it stepped over. The burst below must then stop the moment
+    // the stash is empty: the exemption was granted to hand over picture
+    // already in memory, not to read further bytes past a cushion that is
+    // already full.
+    const stashOnlyPass =
+      stashCanFeedThePicture &&
+      gateOnAudio &&
+      !catchingUpVideo &&
+      !bufferingForVideo &&
+      audioBuffered > maxAudioBuffered;
     if (
       (!skipVideoBackpressure && !skipVideoDecodeForAudio && this.videoDecoder.queueSize > maxVideoQueue) ||
       (gateOnAudio && this.audioDecoder.queueSize > maxAudioQueue) ||
       (gateOnAudio &&
         !catchingUpVideo &&
         !bufferingForVideo &&
+        !stashCanFeedThePicture &&
         audioBuffered > maxAudioBuffered) ||
       (!skipVideoBackpressure &&
         !skipVideoDecodeForAudio &&
@@ -6889,6 +6936,18 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
       }
 
       for (let i = 0; i < burstSize; i++) {
+        // Handing over the stash was the whole reason this tick got past the
+        // audio cap — see stashOnlyPass — or past the EOF return above. With
+        // the stash empty the exemption is spent: reading on would push a
+        // cushion that is already over its target further over it, or ask an
+        // exhausted demuxer for bytes that aren't there.
+        if (
+          (stashOnlyPass || this.eofReached) &&
+          this._videoAheadStash.length === 0
+        ) {
+          break;
+        }
+
         // Video-only throttle: if renderer queue is full enough, stop submitting
         // and let the presentation loop consume frames before adding more.
         if (!hasAudioForBurst && this.videoRenderer && this.videoRenderer.getQueueSize() > maxRendererQueue) {
@@ -7098,10 +7157,31 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
             // no room — or discarding it, which is what breaks the chain and
             // freezes the picture. It goes to the decoder, in order, as soon as
             // the renderer drains. See videoReadAheadForAudio above.
+            //
+            // "In order" is the whole contract, and it needs the second clause
+            // to hold. The read-ahead flag is decided ONCE per tick, so a tick
+            // that reads video while the flag is off — the latch released
+            // because audio recovered, say — sent its packet straight to the
+            // decoder while the stash still held older ones. The decoder then
+            // got the file's closing packets and, once the stash finally
+            // drained, three seconds of the middle behind them. Captured on a
+            // 61.6 Mbps 4K60 HEVC .ts: pts 47.4964, then 48.3306 — the last
+            // packet in the stream — then 45.4778, and WebCodecs answered with
+            // EncodingError, closed the decoder, and dropped the 175-packet
+            // stash on the keyframe wait that followed. That is the "decoder
+            // error out of nowhere" this stash was supposed to prevent.
+            //
+            // So: while anything is stashed, nothing may overtake it. A
+            // freshly-read packet goes to the back of the queue, and the
+            // decoder is fed only from the front (the drain branch above).
+            const mustQueueBehindStash =
+              !fromAheadStash && this._videoAheadStash.length > 0;
             if (
-              videoReadAheadForAudio &&
               !fromAheadStash &&
-              (this.videoRenderer?.getQueueSize() ?? 0) > maxVideoBuffered
+              (mustQueueBehindStash ||
+                (videoReadAheadForAudio &&
+                  (this.videoRenderer?.getQueueSize() ?? 0) >
+                    maxVideoBuffered))
             ) {
               this._videoAheadStash.push(packet);
               this._videoAheadStashBytes += packet.data.length;
@@ -7131,6 +7211,48 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
             // until audio recovers, then full-rate decode resumes at the next
             // keyframe with the reference chain intact.
             if (skipVideoDecodeForAudio && !packet.keyframe) {
+              // Spend the non-reference pictures first. Nothing in the stream
+              // points at them, so dropping one leaves the reference chain whole
+              // and every delta behind it still decodes — the picture keeps
+              // moving on the reference frames in between instead of holding
+              // still. On the 4K60 HEVC Main 10 source this was measured
+              // against, the GOP runs one reference picture to every two
+              // non-reference ones (978 of 1475 deltas over 25s), so this covers
+              // two thirds of what the starve needs at no cost to the chain.
+              if (packet.disposable) {
+                continue;
+              }
+              // A reference delta is not free: dropping one orphans everything
+              // after it until a keyframe, and on that same source keyframes run
+              // ~2s apart, so the cost of a drop here is up to two seconds of
+              // frozen picture. Defer it instead — compressed in the read-ahead
+              // stash a GOP costs ~12MB against the ~2.6GB the same frames cost
+              // decoded, and the drain above feeds it back in order the moment
+              // the renderer has room. Dropping is what's left when the stash is
+              // full too.
+              //
+              // Measured live, not from the tick's snapshot: the stash grows
+              // inside this burst, and a stale "not full" would push past the
+              // bound it exists to hold.
+              const stashFull =
+                this._videoAheadStash.length >=
+                  MoviPlayer.VIDEO_AHEAD_MAX_PACKETS ||
+                this._videoAheadStashBytes >= MoviPlayer.VIDEO_AHEAD_MAX_BYTES;
+              if (!stashFull) {
+                if (fromAheadStash) {
+                  // This packet came OUT of the stash a moment ago (the renderer
+                  // had room, the decoder queue did not). Appending it would put
+                  // it behind everything still queued — out of decode order,
+                  // which is its own EncodingError. Put it back where it was and
+                  // let the next tick retry.
+                  this._videoAheadStash.unshift(packet);
+                  this._videoAheadStashBytes += packet.data.length;
+                  break;
+                }
+                this._videoAheadStash.push(packet);
+                this._videoAheadStashBytes += packet.data.length;
+                continue;
+              }
               // A delta was skipped, so every following delta is now orphaned
               // until the next keyframe rebuilds the reference chain. Latch this
               // so that even after the starve clears we keep skipping deltas
