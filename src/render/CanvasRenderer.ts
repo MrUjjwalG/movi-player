@@ -3488,6 +3488,19 @@ export class CanvasRenderer {
    * Read the latest mirrored frame as a 16×16 RGBA buffer. Synchronous and
    * cheap (256-pixel readPixels). Returns null if ambient mirror isn't
    * enabled or no frame has been drawn yet.
+   *
+   * NOTE: `readPixels` is a GPU synchronisation point — it flushes the command
+   * queue and waits — so its cost is set by whatever is already queued, not by
+   * the 256 pixels. On a 4K 12-bit source (RGBA16F, ~66MB a frame) samples were
+   * measured at up to 21ms of blocked main thread here, and MoviElement's
+   * ambient loop has seen 44ms in the field.
+   *
+   * A PBO + fenceSync rewrite was tried to make that asynchronous and was
+   * MEASURABLY WORSE, on the same machine and file: p90 11.5ms -> 23.5ms, max
+   * 21.4ms -> 121.7ms, main-thread long tasks 5 -> 20 over the same 40s. In
+   * Chrome the WebGL context lives in the GPU process, so clientWaitSync and
+   * getBufferSubData are each an IPC round trip — the "asynchronous" path adds
+   * two blocking hops where the direct read had one. Don't reintroduce it.
    */
   readAmbientPixels(): Uint8Array | null {
     if (!this.ambientEnabled || !this.gl || !this.ambientFbo || !this.ambientPixels) {
