@@ -1301,6 +1301,30 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
    * spinner.
    */
   private _bindAV: boolean = true;
+
+  /**
+   * Does this source actually have a picture to wait for?
+   *
+   * Canvas mode builds a CanvasRenderer for EVERY source, audio-only included —
+   * the strip a music file plays behind is that same renderer. So
+   * `!!this.videoRenderer` says "we could draw", never "there is anything to
+   * draw", and every place that read it as the latter was asking a video-less
+   * file to produce a frame. Its queue is empty forever, which is
+   * indistinguishable from a video source whose queue has just run dry.
+   *
+   * Measured on a FLAC-only .mka: the stall detector's `videoEmpty` was
+   * permanently true and `_bindAV` defaults to true, so `videoStalled` held
+   * from the first tick — and `bufferingForVideo`, also gated on the renderer
+   * merely existing, lifted the audio ceiling for the whole of the buffering
+   * that followed. The file played 0.51s, stalled, swallowed 141 SECONDS of
+   * audio in one uninterrupted read, sat in buffering for 5.5s, resumed, and
+   * did it again: five cycles in 5.6s of media.
+   *
+   * The honest question is whether the SOURCE carries video, so ask that.
+   */
+  private get hasPicture(): boolean {
+    return !!this.videoRenderer && !!this.trackManager?.getActiveVideoTrack();
+  }
   private wasPlayingBeforeRebuffer: boolean = false; // Track if we were playing before entering rebuffering state
   private _stallStartTime: number = 0; // When stall was first detected
   /** performance.now() of the last frame decoded while a seek waited for sync —
@@ -5114,8 +5138,9 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
     // the seek bookkeeping but resume into "buffering" with the play intent
     // latched, so the normal buffering→resume path flips to "playing" the
     // moment the first frame is actually decoded — no user interaction needed.
+    // Only a source that HAS a picture can be waiting for one — see hasPicture.
     const noVideoFrameYet =
-      !!this.videoRenderer && this.videoRenderer.getQueueSize() === 0;
+      this.hasPicture && this.videoRenderer!.getQueueSize() === 0;
     // …but NOT while the tab is hidden, where there is no picture to wait for.
     // Video decode is skipped there on purpose, so "resume into buffering until
     // a frame decodes" is a wait that cannot end: the next video after a
@@ -6021,7 +6046,11 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
     // the genuine end of playback is already covered by `nearEnd` below.
     const eofSilencesStall = this.eofReached && !boundToAudio;
     if (this.stateManager.getState() === "playing" && !eofSilencesStall && !this.waitingForVideoSync && !nearEnd && !this.isBackgrounded) {
-      const videoEmpty = this.videoRenderer ? this.videoRenderer.getQueueSize() === 0 : false;
+      // `hasPicture`, not `videoRenderer` — a source with no video track has
+      // an empty queue forever and must never read as a stalled picture.
+      const videoEmpty = this.hasPicture
+        ? this.videoRenderer!.getQueueSize() === 0
+        : false;
       // Split (separate-URL) audio has no track in the MAIN demuxer's
       // trackManager — it's decoded from its own demuxer into audioRenderer. So
       // count audioDemuxer too, else hasAudio is false, audioLow is always true,
@@ -6307,11 +6336,11 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
       !this.disableAudio &&
       !inPlayGrace &&
       !this.isBackgrounded &&
-      !!this.videoRenderer &&
+      this.hasPicture &&
       // A decoder that cannot hold the rate at all will just lose the ground
       // again, and each attempt costs the source's read-ahead. That case has
       // its own answers: the renderer's own degrade, and the ABR downshift.
-      !this.videoRenderer.isDecodeBound?.() &&
+      !this.videoRenderer!.isDecodeBound?.() &&
       Math.abs(this.clock.getPlaybackRate() - 1.0) < 0.01
     ) {
       const nowLag = performance.now();
@@ -6761,7 +6790,7 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
     // the picture the wait is waiting for.
     const bufferingForVideo =
       this.stateManager.is("buffering") &&
-      !!this.videoRenderer &&
+      this.hasPicture &&
       !this._audioOnly;
     // The third case, and the one that actually bites on a single interleaved
     // stream: the picture the loop already read is sitting in the read-ahead
