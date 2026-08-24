@@ -239,6 +239,14 @@ export class CanvasRenderer {
   private presentationStartPts: number = 0;
   private lastPresentedPts: number = -1;
   private syncedToAudio: boolean = false;
+
+  // Set when the picture's anchor was dropped ON PURPOSE — a rate change, or an
+  // audio pipeline that was just rewound under it — as opposed to noticing we
+  // had drifted. The difference matters at the re-sync below: a spontaneous
+  // unsync is usually output jitter and re-anchoring on it stutters, so it is
+  // gated behind a large drift; a REQUESTED one has no old anchor worth
+  // keeping, and declining to re-anchor there is what left the offset in place.
+  private reanchorRequested: boolean = false;
   private lastKnownAudioTime: number = -1;
   private playbackRate: number = 1.0;
   private justSeeked: boolean = false; // Track if we just seeked (for post-seek frame handling)
@@ -2854,7 +2862,20 @@ export class CanvasRenderer {
           // 2. Very early playback (≤3 frames) AND drift is significant (>30ms)
           //    This gives Bluetooth audio time to stabilize before hard sync
           // 3. Drift is very large (> 400ms) - critical desync recovery
-          if (videoTime < 0 || (isVeryEarlyPlayback && drift > 0.03) || drift > 0.4) {
+          // A drift too small for the 400ms bar below but too small for the
+          // continuous correction's own 150ms threshold has nowhere to go: the
+          // else-branch marks us synced and the offset becomes permanent. That
+          // is audible — measured on a 4K60 file, speed changes settled the
+          // picture 120-148ms off the sound and it stayed there. When the
+          // unsync was REQUESTED there is no old anchor worth protecting, so
+          // re-anchor whatever the drift is.
+          if (
+            this.reanchorRequested ||
+            videoTime < 0 ||
+            (isVeryEarlyPlayback && drift > 0.03) ||
+            drift > 0.4
+          ) {
+            this.reanchorRequested = false;
             this.presentationStartTime =
               performance.now() + this.audioStartLeadMs();
             this.presentationStartPts = audioTime;
@@ -2865,6 +2886,7 @@ export class CanvasRenderer {
             // We're already playing, just mark as synced without resetting
             // This prevents stuttering when Bluetooth latency causes audio clock fluctuations
             this.syncedToAudio = true;
+            this.reanchorRequested = false;
             Logger.debug(TAG, `Soft A/V sync (no reset): videoTime=${videoTime.toFixed(3)}s, audioTime=${audioTime.toFixed(3)}s, framesPresented=${this.framesPresented}, drift=${(drift * 1000).toFixed(0)}ms`);
           }
         }
@@ -4663,8 +4685,22 @@ export class CanvasRenderer {
       this.presentationStartPts = currentTime;
     }
 
-    // Mark as not synced so we can re-sync to audio with new rate
+    // Mark as not synced so we can re-sync to audio with new rate — and say
+    // that this one was asked for, so the re-sync actually re-anchors instead
+    // of accepting whatever offset the rate change introduced.
     this.syncedToAudio = false;
+    this.reanchorRequested = true;
+  }
+
+  /**
+   * The audio pipeline was rebuilt underneath a picture that never stopped —
+   * the rate-change rewind does exactly this. The sound now starts from a media
+   * time the video's anchor knows nothing about, so re-anchor the picture on it
+   * rather than leaving the two a fixed distance apart forever.
+   */
+  requestAudioReanchor(): void {
+    this.syncedToAudio = false;
+    this.reanchorRequested = true;
   }
 
   /**

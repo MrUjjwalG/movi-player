@@ -10174,6 +10174,12 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
     ) {
       this.audioRenderer.play();
     }
+    // The sound now restarts from `time` while the picture has been running
+    // this whole while on an anchor that predates the rewind. Whatever offset
+    // that leaves is fixed, and small enough to fall through both the re-sync's
+    // 400ms bar and the continuous correction's 150ms threshold — so it never
+    // closes on its own. Ask the renderer to re-anchor on the new audio clock.
+    this.videoRenderer?.requestAudioReanchor?.();
     this.animationFrameId = requestAnimationFrame(this.processLoop);
     return true;
   }
