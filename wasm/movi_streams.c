@@ -1022,8 +1022,18 @@ double movi_scan_duration(MoviContext *ctx, int budget_ms) {
 // always misclassifies — we must walk every NAL and inspect the first VCL one.
 // Packets may be Annex B (00 00 01 start codes) or length-prefixed (4-byte
 // big-endian, hvcC/avcC). We detect which by probing for a leading start code.
-static int movi_first_vcl_nal_type(enum AVCodecID codec_id, const uint8_t *data,
-                                   int size) {
+//
+// `out_hdr`, when non-NULL, receives the slice's raw NAL header bytes: [0] is
+// the first byte (H.264 keeps nal_ref_idc there), [1] the second (HEVC keeps
+// nuh_temporal_id_plus1 there; 0 for H.264, whose header is one byte). Neither
+// can carry an emulation-prevention byte — those are only inserted after two
+// zero bytes inside the payload — so they can be read raw.
+static int movi_first_vcl_nal(enum AVCodecID codec_id, const uint8_t *data,
+                              int size, uint8_t out_hdr[2]) {
+  if (out_hdr) {
+    out_hdr[0] = 0;
+    out_hdr[1] = 0;
+  }
   if (!data || size < 5)
     return -1; // too small to inspect
 
@@ -1048,8 +1058,13 @@ static int movi_first_vcl_nal_type(enum AVCodecID codec_id, const uint8_t *data,
                                                : (hdr & 0x1F);
         int is_vcl = (codec_id == AV_CODEC_ID_HEVC) ? (t >= 0 && t <= 31)
                                                     : (t >= 1 && t <= 5);
-        if (is_vcl)
+        if (is_vcl) {
+          if (out_hdr) {
+            out_hdr[0] = (uint8_t)hdr;
+            out_hdr[1] = (nal_off + 1 < size) ? data[nal_off + 1] : 0;
+          }
           return t; // first VCL slice decides
+        }
         i = nal_off + 1;
       } else {
         i++;
@@ -1061,20 +1076,150 @@ static int movi_first_vcl_nal_type(enum AVCodecID codec_id, const uint8_t *data,
       uint32_t nal_len = ((uint32_t)data[i] << 24) | ((uint32_t)data[i + 1] << 16) |
                          ((uint32_t)data[i + 2] << 8) | (uint32_t)data[i + 3];
       int nal_off = i + 4;
-      if (nal_len == 0 || nal_off >= size)
+      // A length that doesn't fit is a length we can't walk past: `i = nal_off
+      // + nal_len` would land beyond the buffer, and for a large enough value
+      // wrap negative through the (int) cast and step the loop BACKWARDS out of
+      // the allocation. Packets from FFmpeg are well formed, but the read path
+      // already guards against corrupt ones near EOF (see the size check in
+      // readFrame), and this is the one place that trusted the bytes.
+      if (nal_len == 0 || nal_off >= size ||
+          nal_len > (uint32_t)(size - nal_off))
         break;
       int hdr = data[nal_off];
       int t = (codec_id == AV_CODEC_ID_HEVC) ? ((hdr >> 1) & 0x3F)
                                              : (hdr & 0x1F);
       int is_vcl = (codec_id == AV_CODEC_ID_HEVC) ? (t >= 0 && t <= 31)
                                                   : (t >= 1 && t <= 5);
-      if (is_vcl)
+      if (is_vcl) {
+        if (out_hdr) {
+          out_hdr[0] = (uint8_t)hdr;
+          out_hdr[1] = (nal_off + 1 < size) ? data[nal_off + 1] : 0;
+        }
         return t;
+      }
       i = nal_off + (int)nal_len; // advance past this NAL
     }
   }
 
   return -1; // no VCL slice found
+}
+
+static int movi_first_vcl_nal_type(enum AVCodecID codec_id, const uint8_t *data,
+                                   int size) {
+  return movi_first_vcl_nal(codec_id, data, size, NULL);
+}
+
+// sps_max_sub_layers_minus1 sits in the first RBSP byte of an HEVC SPS —
+// sps_video_parameter_set_id u(4) | sps_max_sub_layers_minus1 u(3) |
+// sps_temporal_id_nesting_flag u(1) — i.e. two bytes past the NAL header. That
+// byte can never be an emulation-prevention byte (those need two zero bytes
+// ahead of them inside the payload, and there is no payload ahead of it), so it
+// reads raw. Returns the sub-layer COUNT, or 0 if `nal` is too short.
+static int movi_hevc_sps_sub_layers(const uint8_t *nal, int len) {
+  if (!nal || len < 3)
+    return 0;
+  return ((nal[2] >> 1) & 0x07) + 1;
+}
+
+// How many temporal sub-layers an HEVC stream carries. Returns 0 for "don't
+// know" — callers must not read that as "one".
+//
+// The hvcC record has a field for exactly this (byte 21 is
+// constantFrameRate(2) | numTemporalLayers(3) | temporalIdNested(1) |
+// lengthSizeMinusOne(2)), but it is optional and encoders routinely leave it at
+// 0. The 4K60 HEVC Main 10 source this was written for does: byte 21 = 0x07,
+// numTemporalLayers = 0, while its SPS plainly says one sub-layer. So when the
+// field is silent, walk the record's parameter-set arrays to the first SPS and
+// ask the bitstream. Extradata that isn't an hvcC at all (raw Annex B, as
+// mpegts hands over) is walked by start code instead.
+static int movi_hevc_num_temporal_layers(const AVCodecParameters *par) {
+  if (!par || par->codec_id != AV_CODEC_ID_HEVC || !par->extradata)
+    return 0;
+  const uint8_t *e = par->extradata;
+  int n = par->extradata_size;
+
+  if (n >= 23 && e[0] == 1) {
+    int declared = (e[21] >> 3) & 0x07;
+    if (declared > 0)
+      return declared;
+    // Silent field — walk numOfArrays worth of parameter-set arrays looking
+    // for the SPS. Each array is
+    //   array_completeness(1) reserved(1) NAL_unit_type(6) | numNalus u(16)
+    // followed by numNalus × (nalUnitLength u(16) | that many bytes).
+    int p = 22;
+    int arrays = e[p++];
+    for (int a = 0; a < arrays && p < n; a++) {
+      int nal_type = e[p++] & 0x3F;
+      if (p + 1 >= n)
+        break;
+      int count = (e[p] << 8) | e[p + 1];
+      p += 2;
+      for (int k = 0; k < count && p + 1 < n; k++) {
+        int len = (e[p] << 8) | e[p + 1];
+        p += 2;
+        if (len <= 0 || p + len > n)
+          return 0; // malformed — say nothing
+        if (nal_type == 33)
+          return movi_hevc_sps_sub_layers(e + p, len); // 33 = SPS_NUT
+        p += len;
+      }
+    }
+    return 0;
+  }
+
+  // Raw Annex B extradata: find the SPS by start code.
+  for (int i = 0; i + 4 < n; i++) {
+    if (e[i] == 0 && e[i + 1] == 0 && e[i + 2] == 1) {
+      int off = i + 3;
+      if (((e[off] >> 1) & 0x3F) == 33)
+        return movi_hevc_sps_sub_layers(e + off, n - off);
+      i = off;
+    }
+  }
+  return 0;
+}
+
+// Can this picture be dropped without orphaning anything that follows it?
+//
+// Containers are supposed to say so — AV_PKT_FLAG_DISPOSABLE comes off MP4's
+// `sdtp` sample-dependency table or a fragment's `trun` sample flags — but
+// plenty of files carry neither, and then every frame looks load-bearing. A
+// plain (non-fragmented) MP4 written without an sdtp box is the common case:
+// measured on a 4K60 HEVC Main 10 source, two of every three pictures are
+// TRAIL_N and not one of them was flagged. So read the answer out of the
+// bitstream instead, in the same NAL scan the IDR/RASL classification already
+// does.
+//
+//   H.264: nal_ref_idc == 0 means the picture is not used for reference by ANY
+//   later picture. Unconditional, so it needs no further qualification.
+//
+//   HEVC: an even VCL NAL type in 0..14 is a "_N" picture — TRAIL_N, TSA_N,
+//   STSA_N, RADL_N, RASL_N — which the spec defines as not referenced by
+//   subsequent pictures OF THE SAME SUB-LAYER. Pictures in a HIGHER sub-layer
+//   may still reference it, so "_N" alone is not enough: it is only free to
+//   drop when it already sits in the highest sub-layer the stream has. Nothing
+//   can reference upward, so at the top there is no one left to orphan.
+//
+// Returns 0 whenever the codec, the NAL, or the sub-layer count can't be
+// established — an unknown picture is treated as load-bearing.
+static int movi_packet_is_non_ref(enum AVCodecID codec_id, const uint8_t *data,
+                                  int size, int num_temporal_layers) {
+  uint8_t hdr[2] = {0, 0};
+  int t = movi_first_vcl_nal(codec_id, data, size, hdr);
+  if (t < 0)
+    return 0;
+
+  if (codec_id == AV_CODEC_ID_H264)
+    return (((hdr[0] >> 5) & 0x03) == 0) ? 1 : 0; // nal_ref_idc == 0
+
+  if (codec_id != AV_CODEC_ID_HEVC)
+    return 0;
+  if (num_temporal_layers <= 0)
+    return 0; // sub-layer count unknown — can't prove it's the top one
+  if (t > 14 || (t & 1))
+    return 0; // not a sub-layer non-reference ("_N") picture
+  int tid = (hdr[1] & 0x07) - 1; // nuh_temporal_id_plus1
+  return (tid == num_temporal_layers - 1) ? 1 : 0;
 }
 
 // Classify whether a keyframe packet is a TRUE random-access point that a
@@ -1151,10 +1296,17 @@ int movi_read_frame(MoviContext *ctx, PacketInfo *info, uint8_t *buffer,
           : movi_packet_is_rasl(stream->codecpar->codec_id, ctx->pkt->data,
                                 ctx->pkt->size);
   // Non-reference frame: safe for JS to drop under load (nothing references it).
-  // Keyframes are never disposable.
+  // Keyframes are never disposable. The container's own flag is authoritative
+  // when it is there; when it isn't — a plain MP4 with no sdtp box, which is
+  // most of them — fall back to reading it off the bitstream, which costs one
+  // more walk to the first VCL NAL of a packet we are already walking.
   info->disposable =
       (!info->keyframe && (ctx->pkt->flags & AV_PKT_FLAG_DISPOSABLE) != 0) ? 1
                                                                            : 0;
+  if (!info->keyframe && !info->disposable)
+    info->disposable = movi_packet_is_non_ref(
+        stream->codecpar->codec_id, ctx->pkt->data, ctx->pkt->size,
+        movi_hevc_num_temporal_layers(stream->codecpar));
   if (ctx->pkt->pts != AV_NOPTS_VALUE)
     info->timestamp = ctx->pkt->pts * av_q2d(stream->time_base);
   else if (ctx->pkt->dts != AV_NOPTS_VALUE)

@@ -85,10 +85,14 @@ typedef struct {
   // Growing the struct here bumps sizeof(PacketInfo) 40 -> 48 (double alignment
   // pads the trailing 44 to 48); PACKET_INFO_SIZE in types.ts must match.
   int is_rasl;
-  // 1 for a disposable (non-reference) frame — AV_PKT_FLAG_DISPOSABLE. Nothing
-  // in the stream references it, so it can be dropped without breaking decode.
+  // 1 for a disposable (non-reference) frame. Nothing in the stream references
+  // it, so it can be dropped without breaking decode. Taken from
+  // AV_PKT_FLAG_DISPOSABLE where the container carries the sample-dependency
+  // information, and otherwise derived from the bitstream — most plain MP4s
+  // have no sdtp box and flag nothing at all (see movi_packet_is_non_ref).
   // JS drops these before WebCodecs on the hardware/software-in-browser path
-  // when the renderer reports the device can't sustain the source rate. Fills
+  // when the renderer reports the device can't sustain the source rate, and
+  // spends them first when an audio starve forces it to skip video. Fills
   // the 4 padding bytes after is_rasl, so sizeof(PacketInfo) stays 48.
   int disposable;
 } PacketInfo;
