@@ -6723,7 +6723,17 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
     // audio DECODER's own queue gate above still applies, so this cannot flood
     // it; all it allows is reading ahead by the few hundred ms the catch-up
     // takes.
-    const catchingUpVideo = this._videoResumeTarget !== -1;
+    // `>= 0`, not `!== -1`. The field has THREE states — -1 none, a real time
+    // while a catch-up is in flight, and -Infinity once it has finished (see
+    // the gate in onFrame) — and only the middle one is "catching up". Reading
+    // it as `!== -1` made a FINISHED catch-up look permanently in flight, and
+    // since this flag lifts the audio ceiling below, the ceiling then stayed
+    // lifted for the rest of playback. Measured after a 12s background tab, on
+    // return: audio buffered 29.5s against a 2s target and never came down,
+    // holding 51 live source nodes — the exact shape that makes a phone's audio
+    // thread miss its deadline. A background tab arms a video-only catch-up
+    // (see the resume path), so every trip away from the tab left it stuck on.
+    const catchingUpVideo = this._videoResumeTarget >= 0;
     // Buffering is the same trap, and the worse one, because it can never end
     // on its own.
     //
