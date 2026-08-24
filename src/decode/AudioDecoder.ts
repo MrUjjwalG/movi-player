@@ -217,45 +217,45 @@ export class MoviAudioDecoder {
   }
 
   /**
-   * Nothing is forced to software up front any more. Every codec is offered to
-   * WebCodecs first and reaches FFmpeg WASM only by failing, through the chain
-   * configure() already runs, in order:
+   * Every codec, in software. FFmpeg WASM decodes all of them; WebCodecs is not
+   * asked for any.
    *
-   *   1. mapCodecToWebCodecs() returns null — DTS/DCA, TrueHD/MLP, PCM, ALAC
-   *      and anything else WebCodecs has no codec string for. They never leave
-   *      software, and this is the gate that decides it.
-   *   2. more than 2 channels — a separate, older guard just below.
-   *   3. AudioDecoder.isConfigSupported() says no.
-   *   4. configure() throws.
-   *   5. the decoder errors at runtime — one automatic switch, mid-playback.
+   * This is where it started, and it is where it has come back to. The reasons
+   * on both legs of that trip are worth keeping, because the trip will look
+   * tempting again.
    *
-   * The history this replaces is worth keeping, because it is the risk. The
-   * software side used to be a list — eac3, ac3, dts, dca, truehd, mlp, opus,
-   * flac — and each entry was added after its own WebCodecs failure: packet
-   * gaps it choked on, a FLAC description it would not accept, channel layouts
-   * it dropped. What that list recorded is that the browser's audio decoders
-   * disagree with each other and with the demuxer feeding them, and that every
-   * disagreement was found by a user hearing it rather than by a test.
+   * The software side used to be a list — eac3, ac3, dts, dca, truehd, mlp,
+   * opus, flac — and each entry was added after its own WebCodecs failure:
+   * packet gaps it choked on, a FLAC description it would not accept, channel
+   * layouts it dropped. What the list really recorded is that the browser's
+   * audio decoders disagree with each other and with the demuxer feeding them,
+   * and that every disagreement was found by a user HEARING it rather than by
+   * a test. It only ever grew, so eventually it swallowed everything.
    *
-   * So be clear about what steps 1-5 can and cannot catch: they catch a codec
-   * the browser refuses, and they catch a decoder that errors. They do NOT
-   * catch a decoder that accepts everything and produces WRONG AUDIO. If a
-   * codec regresses in the field, put it back by returning true for it here —
-   * that is what this hook is for, and what the one entry below is.
+   * It was then opened back up, offering each codec to WebCodecs and letting it
+   * fall through to WASM only on failure. The motivation was real and still is:
+   * WASM audio decode runs on the same thread as demux and render, and on a
+   * heavy source that thread is the scarce one — measured on 4K60 HEVC at 74
+   * Mbps, software AAC left the audio buffer oscillating against its starve
+   * line and each dip cost the picture a couple of seconds of dropped video.
    *
-   * FLAC is that entry, and it is not a guess. WebCodecs configures it, then
-   * throws EncodingError on the first packet — step 5 fires and the switch to
-   * software LOOKS clean here and in headless Chromium. It is not clean in a
-   * real browser: the fallback lands silent, and forcing FLAC to software from
-   * the start was what fixed it everywhere (found on FLAC 24-bit in MKV). So
-   * FLAC never gets offered. Treat a passing fallback test for it as a false
-   * positive, because that is exactly what it was last time.
+   * What the reopening got wrong is the shape of the evidence. FLAC failed
+   * immediately and audibly, in all three browsers, so it went back at once.
+   * Opus passed everything put to it — three real music-video MKVs with seeks,
+   * across Chrome, Firefox and Safari, thousands of decodes, not one error —
+   * and broke in the owner's hands within hours. The tests used well-formed
+   * local files; the failure the original note described was packet gaps in
+   * this player's TYPICAL inputs, which is the split-audio path those tests
+   * never touched. Clean files passing said nothing about the files that
+   * matter.
    *
-   * What bought the change: WASM audio runs on the same thread as demux and
-   * render, and on a heavy source that thread is the scarce one.
+   * So: one path again, for every codec. If audio CPU becomes the problem, the
+   * lever is not putting WebCodecs back — it is fewer live source nodes, or
+   * moving software decode off the main thread. Anyone reopening this owes a
+   * reproduction of the failure case, not another sweep of the files to hand.
    */
-  private needsSoftwareDecoding(codec: string): boolean {
-    return codec.toLowerCase() === "flac";
+  private needsSoftwareDecoding(_codec: string): boolean {
+    return true;
   }
 
   /**
