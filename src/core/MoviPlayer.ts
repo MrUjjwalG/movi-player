@@ -1523,6 +1523,16 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
   // the next keyframe, which rebuilds the chain. See the demux loop.
   private videoChainBrokenUntilKeyframe: boolean = false;
 
+  // Set when the chain-break above is released by an open-GOP CRA rather than a
+  // true IDR. A CRA reaches the decoder as `delta` (WebCodecs rejects a CRA sent
+  // as `key`), so it is only a clean restart for the pictures that TRAIL it: the
+  // RASL leading pictures that follow still reference the pre-CRA GOP the starve
+  // just dropped, and feeding those orphans throws the very EncodingError the
+  // chain-break latch exists to prevent. While true the demux loop keeps
+  // dropping RASL packets until the first trailing picture. Nothing outside the
+  // CRA's own leading set references a RASL, so dropping them costs nothing.
+  private videoSkipRaslAfterChainCra: boolean = false;
+
   // Prebuffer targets — accumulate this much before reporting "ready" so
   // play() doesn't immediately stall on short videos where the demux burst
   // outruns the HTTP stream.
@@ -6920,6 +6930,20 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
                 continue;
               }
               this.videoChainBrokenUntilKeyframe = false;
+              // Not every keyframe rebuilds the chain. An open-GOP CRA is fed to
+              // the decoder as `delta`, and the RASL leading pictures that trail
+              // it still point at the GOP this starve just dropped — feeding them
+              // closes the decoder. Keep dropping until the first trailing
+              // picture, which references the CRA onward. Measured on 4K60 HEVC
+              // Main10 (CRA on roughly every other GOP): a 2s starve resumed on
+              // the CRA at 15.482s and EncodingError closed the decoder ~35
+              // frames later, mid-GOP, far from anything that looked related.
+              this.videoSkipRaslAfterChainCra = !packet.isIdr;
+            } else if (this.videoSkipRaslAfterChainCra) {
+              if (packet.isRasl) {
+                continue;
+              }
+              this.videoSkipRaslAfterChainCra = false;
             }
 
             // After seek, skip non-keyframe video packets until we find a keyframe
@@ -7722,6 +7746,7 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
       // A seek is a fresh keyframe-anchored start; any pending starve-induced
       // chain break is moot.
       this.videoChainBrokenUntilKeyframe = false;
+      this.videoSkipRaslAfterChainCra = false;
 
       // IMPORTANT: Set seek target time for accurate seek positioning
       // FFmpeg seeks to the nearest keyframe BEFORE the target time,
@@ -12107,6 +12132,7 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
       this.seekKeyframeScanned = 0;
       this.seekCraSeen = 0;
       this.videoChainBrokenUntilKeyframe = false;
+      this.videoSkipRaslAfterChainCra = false;
 
       // Restart video pipeline. If the hold went up while we were waiting, the
       // presentation loop stays down: the resume gate is measuring the queue
