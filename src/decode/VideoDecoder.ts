@@ -50,6 +50,13 @@ export class MoviVideoDecoder {
   // ... (fields same) ...
   private isConfigured: boolean = false;
   private onFrame: ((frame: VideoFrame) => void) | null = null;
+
+  // When the decoder last handed out a frame. This is the honest answer to
+  // "is the picture still coming?", and it is asked at the SOURCE rather than
+  // at the renderer, whose queue reads empty and whose presented-frame count
+  // resets on every clear — both of which make a slow-but-working pipeline
+  // look identical to a dead one.
+  private lastFrameOutAt: number = 0;
   private onError: ((error: Error) => void) | null = null;
   private waitingForKeyframe: boolean = false;
   // When the current keyframe wait began (0 while not waiting). The wait itself
@@ -478,6 +485,7 @@ export class MoviVideoDecoder {
     // Create decoder
     this.decoder = new VideoDecoder({
       output: (frame) => {
+        this.lastFrameOutAt = performance.now();
         this.openGopErrorCount = 0;
         this.errorCount = 0;
         this.isResurrecting = false; // Success!
@@ -540,6 +548,7 @@ export class MoviVideoDecoder {
 
     this.swDecoder = new SoftwareVideoDecoder(this.bindings);
     this.swDecoder.setOnFrame((frame) => {
+      this.lastFrameOutAt = performance.now();
       if (this.onFrame) this.onFrame(frame);
       else {
         this.pendingFrames.push(frame);
@@ -659,6 +668,7 @@ export class MoviVideoDecoder {
     // Create new
     this.decoder = new VideoDecoder({
       output: (frame) => {
+        this.lastFrameOutAt = performance.now();
         this.openGopErrorCount = 0;
         this.errorCount = 0;
         this.isResurrecting = false; // Success!
@@ -1687,6 +1697,18 @@ export class MoviVideoDecoder {
   // (observed: high-bitrate 1080p H.264) throw a transient EncodingError on
   // each IDR; recreate recovers within ~1 GOP, but the brief empty queue would
   // otherwise trip stall detection into a buffering loop.
+  /**
+   * Milliseconds since the decoder last produced a frame, or Infinity if it
+   * has produced none yet. A pipeline that is merely SLOW keeps this small —
+   * the frames are late, not absent — which is what tells a capability
+   * shortfall apart from a supply one.
+   */
+  msSinceLastFrame(): number {
+    return this.lastFrameOutAt === 0
+      ? Number.POSITIVE_INFINITY
+      : performance.now() - this.lastFrameOutAt;
+  }
+
   isRecentlyRecovering(graceMs: number = 1200): boolean {
     if (this.waitingForKeyframe) return true;
     if (this.lastRecreateTime === 0) return false;

@@ -1322,6 +1322,12 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
    *  running at 30, or a 24fps one dropping half its frames, is comfortably
    *  over it; a picture that has actually stopped presents nothing at all. */
   private static readonly STALL_MOVING_FPS = 5;
+  // How recently the video decoder must have produced a frame for the picture
+  // to count as alive-but-slow rather than stalled. Generous on purpose: at the
+  // ~20fps a struggling 8K decode manages, frames are 50ms apart, and even a
+  // GOP-sized hiccup stays well inside this. Past it, nothing is coming and the
+  // stall is real.
+  private static readonly DECODE_ALIVE_WINDOW_MS = 400;
   private _bufferingEntryTime: number = 0; // When we entered buffering state
   // True while the current buffering spell is the post-seek wait for the frame
   // queue rather than a real stall — see needsSeekResumeQueue().
@@ -6087,10 +6093,33 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
           this._blackRecoverySeeks = 0;
         }
       }
+      // A decoder that is merely too SLOW for the source is not a stall, and
+      // treating it as one is worse than doing nothing. Measured on 8K60 AV1 on
+      // an M4: the hardware decoder tops out at ~20fps against a 60fps source,
+      // whatever config it is given — prefer-hardware, no-preference and
+      // optimizeForLatency all land within 0.3fps of each other. Supply is
+      // fine; the machine simply cannot decode it in real time.
+      //
+      // Buffering cannot fix that. It stops the sound, flashes through paused,
+      // discards the picture that HAD arrived, and resumes into the same
+      // shortfall — measured at 11 to 20 of those cycles a minute, none of
+      // which ever caught up, because catching up was never possible.
+      //
+      // The existing pictureMoving guard is meant for exactly this, but it
+      // reads framesPresented, and in this state almost nothing is presented:
+      // frames arrive later than the audio clock and the renderer discards
+      // them. So ask the DECODER instead. If it handed out a frame recently
+      // the picture is alive and merely behind — show it, choppy, rather than
+      // stopping everything to wait for a recovery that cannot come.
+      const decodeIsSlowNotStuck =
+        !!this.videoDecoder &&
+        this.videoDecoder.msSinceLastFrame() <
+          MoviPlayer.DECODE_ALIVE_WINDOW_MS;
       const videoStalled =
         videoEmpty &&
         (audioLow || this._bindAV) &&
         !decoderRecovering &&
+        !decodeIsSlowNotStuck &&
         !inPlayGrace &&
         !this.isInAudioOnlyTail() &&
         !this._soundCarryingAlone;
