@@ -1432,6 +1432,30 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
    *  queue is taken to mean the picture is finished rather than between
    *  callbacks. Several frame intervals at any rate we play. */
   private static readonly EOF_PICTURE_SETTLE_MS = 150;
+  /**
+   * A speed-UP asked for but not applied yet, while the pipeline fills for it.
+   *
+   * Only ever set on the one path that stalls today. A rate change re-anchors
+   * the audio, and when a healthy anchor survives that, setPlaybackRate skips
+   * the corrective seek entirely and the change is already smooth — that case
+   * is left exactly as it was. When the anchor is NOT healthy the seek runs:
+   * decoders flushed, frame queue cleared, a keyframe waited for. That is the
+   * "playback stops dead, lags, then runs fine at 2x" on a device that plays
+   * 1080p perfectly well at 1x — it simply has no cushion to spare, and
+   * doubling the rate halves what it has in wall-clock terms.
+   *
+   * So on that path, keep playing at the CURRENT rate for a moment and let the
+   * loop fill against the new rate's targets instead. When the anchor comes
+   * good the change applies and the seek is skipped; if it never does, it
+   * applies anyway at the cap and nothing is worse than before.
+   */
+  private _pendingRate = 0;
+  private _pendingRateSince = 0;
+  /** True while the deferred rate is being handed back to setPlaybackRate, so
+   *  it applies instead of deferring itself all over again. */
+  private _applyingPendingRate = false;
+  /** Longest the pipeline may prepare before the rate is applied regardless. */
+  private static readonly RATE_PREPARE_MAX_MS = 1500;
   /** One-shot: the decoder is asked for its reorder tail once per EOF. */
   private _eofFlushRequested = false;
   /** When the video-only ending was armed (timeDone first true), so the drain
@@ -6454,6 +6478,11 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
       }
     }
 
+    // A speed-up held back until the pipeline could take it — see _pendingRate.
+    // No-op unless one is pending, which it never is on a machine whose anchor
+    // survives a rate change.
+    this.maybeApplyPendingRate();
+
     // Check if we've reached EOF and decoders are empty - transition to ended
     if (this.eofReached) {
       // Ask the decoder for its tail, once. WebCodecs holds reordered frames in
@@ -6643,7 +6672,12 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
     // Buffer targets — scale up at slow speeds so both audio and video buffers
     // hold the same wall-clock duration as at 1x. Without this, at 0.5x the 100-frame
     // video buffer lasts 3.3s wall-time while 2s audio buffer starves after 2s → stutter.
-    const rate = Math.max(0.25, this.clock.getPlaybackRate());
+    // While a speed-up is being prepared, fill for the rate we are ABOUT to run
+    // at, not the one still on the clock — that preparation is the whole point.
+    const rate = Math.max(
+      0.25,
+      Math.max(this.clock.getPlaybackRate(), this._pendingRate),
+    );
     // Slow rates: keep the same wall-clock buffer duration (so a 2s audio
     // target doesn't underrun at 0.5x). Fast rates: give the video pipeline
     // proportional headroom too — at 1.5x the decoder is producing frames
@@ -10278,6 +10312,45 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
     // still intact.
     const audioAnchored = this.hasHealthyAudioAnchor();
 
+    // The one case that stalls, and the branch below already names it: with
+    // enough decoded picture in hand the rewind carries the change and the
+    // picture never stops, and without it the whole thing falls to fullSeek —
+    // decoders flushed, frame queue thrown away, a keyframe waited for. That is
+    // the dead stop, the lag, and then 2x running fine, on a device that plays
+    // 1080p perfectly well at 1x. It simply has no cushion to spare, and asking
+    // for twice the speed halves what the cushion is worth in wall-clock terms
+    // AND doubles the queue cap it is measured against.
+    //
+    // So when the picture cannot carry the rewind YET, don't take the stop —
+    // hold the rate and let the loop fill for it (the buffer targets already
+    // read _pendingRate). maybeApplyPendingRate applies the moment the cushion
+    // is there, and at RATE_PREPARE_MAX_MS regardless, which is exactly what
+    // happens today.
+    //
+    // A machine that already has the picture in hand — which is what "smooth on
+    // this Mac" means — never enters this at all: hasPictureToCarryARewind is
+    // already true at the press, so the rate applies in the same tick and the
+    // path below is untouched.
+    if (
+      !this._applyingPendingRate &&
+      rate > this.clock.getPlaybackRate() &&
+      playingNow &&
+      !this.streamWrapper &&
+      !this.audioDemuxer &&
+      !this.hasPictureToCarryARewind(rate)
+    ) {
+      if (this._pendingRate !== rate) {
+        this._pendingRate = rate;
+        this._pendingRateSince = performance.now();
+        Logger.info(
+          TAG,
+          `Speed ${rate}x: not enough decoded picture to carry the rewind — filling for it first`,
+        );
+      }
+      return;
+    }
+    this._pendingRate = 0;
+
     this.clock.setPlaybackRate(rate);
 
     // Update audio renderer playback rate
@@ -10582,6 +10655,41 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
    * re-anchors the rate change in place). Used to keep rate changes seek-free
    * — and therefore native-video-smooth — in the common case.
    */
+  /**
+   * Hand a deferred speed-up back to setPlaybackRate once the pipeline can take
+   * it — see _pendingRate. Called every tick; a no-op when nothing is pending,
+   * which is every tick on a machine that never needed to defer.
+   */
+  private maybeApplyPendingRate(): void {
+    const target = this._pendingRate;
+    if (!target) return;
+    // Not rolling any more: apply it outright. The branch that made deferring
+    // worthwhile is gated on active playback, so there is nothing left to
+    // protect — and dropping the request instead would leave the control
+    // showing a speed the engine is not running at.
+    const rolling = this.stateManager.is("playing");
+    const waited = performance.now() - this._pendingRateSince;
+    const ready = this.hasPictureToCarryARewind(target);
+    if (!rolling || ready || waited > MoviPlayer.RATE_PREPARE_MAX_MS) {
+      Logger.info(
+        TAG,
+        `Applying ${target}x after ${waited.toFixed(0)}ms — ` +
+          (ready
+            ? "picture can carry the rewind"
+            : rolling
+              ? "prepare window elapsed"
+              : "no longer rolling"),
+      );
+      this._pendingRate = 0;
+      this._applyingPendingRate = true;
+      try {
+        this.setPlaybackRate(target);
+      } finally {
+        this._applyingPendingRate = false;
+      }
+    }
+  }
+
   private hasHealthyAudioAnchor(): boolean {
     // Software-mixed path deliberately does NOT skip the seek, however healthy
     // the buffer looks. AudioRenderer's re-anchor drops the scheduled audio,
@@ -10847,7 +10955,12 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
     // filling the lead over a few ticks instead of one blocking gulp. Hold a
     // few seconds of lead (scaled with rate); the audio bitrate is tiny so the
     // time-cushion costs almost no bytes.
-    const rate = Math.max(0.25, this.clock.getPlaybackRate());
+    // While a speed-up is being prepared, fill for the rate we are ABOUT to run
+    // at, not the one still on the clock — that preparation is the whole point.
+    const rate = Math.max(
+      0.25,
+      Math.max(this.clock.getPlaybackRate(), this._pendingRate),
+    );
     const bufferedTarget = 5 * (rate < 1 ? 1 / rate : Math.min(2, rate));
 
     // Bound the audio decode lead against the CLOCK, not the AudioRenderer
