@@ -4815,6 +4815,12 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
       return;
     }
 
+    // A pause ends whatever a seek was still working through, including the
+    // spinner suppression its own re-prime buffering holds (see
+    // notifySeekCompletion). Left latched, a genuine stall much later would
+    // show no spinner at all.
+    this.suppressSeekSpinner = false;
+
     if (!this.stateManager.canPause()) {
       Logger.warn(TAG, "Cannot pause in current state");
       return;
@@ -5216,7 +5222,18 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
     this.seekingToKeyframe = false; // Also clear keyframe skip flag
     // First-play/replay seek has produced its first frame — drop spinner
     // suppression so any later genuine rebuffer shows the loading UI.
-    this.suppressSeekSpinner = false;
+    //
+    // …but not while this same seek is about to buffer for its own re-prime.
+    // The state sequence is seeking -> buffering -> paused -> playing, and the
+    // buffering in the middle belongs to the seek, not to a later stall. Clearing
+    // here handed the element a spinner for exactly that window: invisible on a
+    // fast machine, where the element's own 400ms seek grace covers it, and a
+    // half-second flash on one where the re-prime takes longer — which is where
+    // it was reported, on a speed change that no longer stops the picture but
+    // still flashed a loading ring at it. The resume below clears it instead.
+    if (!this.needsSeekResumeQueue()) {
+      this.suppressSeekSpinner = false;
+    }
 
     // How far past the requested target did the first frame actually land?
     // Long-GOP .ts files can land seconds late; subtract that in
@@ -5967,6 +5984,10 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
           this.audioRenderer.resumeFromBuffering();
         }
         Logger.info(TAG, "Buffers refilled, resuming playback");
+        // The seek that armed this buffering is finally done — see the note in
+        // notifySeekCompletion. Anything that stalls from here is genuinely new
+        // and deserves its spinner.
+        this.suppressSeekSpinner = false;
         this.play().catch((err) => {
           Logger.error(TAG, "Failed to resume playback after rebuffering:", err);
         });
@@ -10331,9 +10352,15 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
     // this Mac" means — never enters this at all: hasPictureToCarryARewind is
     // already true at the press, so the rate applies in the same tick and the
     // path below is untouched.
+    //
+    // Not only speed-ups. Coming back DOWN takes the same branch and the same
+    // stop, because the test is about the cushion the pipeline is holding and a
+    // pipeline that was struggling at 2x is holding very little of it. Reported
+    // exactly that way: "1x pe wapas aane pe ekdam ruk ja rha hai". A slower
+    // rate wants a SMALLER cushion, so this resolves quickly there — but it has
+    // to be allowed to resolve at all.
     if (
       !this._applyingPendingRate &&
-      rate > this.clock.getPlaybackRate() &&
       playingNow &&
       !this.streamWrapper &&
       !this.audioDemuxer &&
