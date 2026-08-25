@@ -957,23 +957,40 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
     this.storyboardLoad = null;
     this.storyboardImages.clear();
     this.clearPreviewCache();
-    // Load it now rather than on the first hover. A board is a few KB of text
-    // (or nothing at all, for a spec), and waiting until the pointer arrives
-    // means the one hover that matters most — the first — is the one that has
-    // to wait for it.
-    if (source) {
-      void this.ensureStoryboard().then((board) => {
-        // …and pull the first mosaic in behind it, so that hover has its
-        // picture too. The rest are fetched as the pointer reaches them.
-        const first = board?.sheets()[0];
-        if (first) void this.loadStoryboardImage(first);
-      });
-    }
+    // Load the BOARD now rather than on the first hover. It is a few KB of
+    // text (or nothing at all, for a spec), and waiting until the pointer
+    // arrives means the one hover that matters most — the first — is the one
+    // that has to wait for it.
+    //
+    // The mosaics it names are a different matter: those are real pictures,
+    // and pulling one here put a fetch of hundreds of KB alongside the opening
+    // buffer, which is bandwidth the video needs more than a hover nobody has
+    // made yet. They are warmed once playback is running instead — by the
+    // element, which paints them and knows when that moment arrives (see
+    // MoviElement.flushStoryboardWarm). Nothing is lost if there is no element:
+    // cropStoryboardTile fetches the sheet it needs on demand, as it always
+    // did.
+    if (source) void this.ensureStoryboard();
   }
 
   /** The board's mosaics in order, for a caller that paints them itself. */
   getStoryboardSheets(): string[] {
     return this.storyboard?.sheets() ?? [];
+  }
+
+  /**
+   * The same list, but once the board has actually been parsed — for a caller
+   * that wants to pull the pictures in before anybody hovers.
+   *
+   * getStoryboardSheets answers from what is in hand, so at load time (the one
+   * moment worth warming at) it answers with nothing: a VTT track is still in
+   * flight. Resolves to an empty list when there is no board, or when it turns
+   * out not to have one — never rejects, because a storyboard is an
+   * optimisation and its absence is not an error.
+   */
+  whenStoryboardReady(): Promise<string[]> {
+    if (!this.storyboardSource) return Promise.resolve([]);
+    return this.ensureStoryboard().then((board) => board?.sheets() ?? []);
   }
 
   /** True while a storyboard is standing in for the decode path. */

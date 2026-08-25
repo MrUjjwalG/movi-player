@@ -1030,6 +1030,7 @@ export class MoviElement extends HTMLElement {
     this._storyboardTask = this.currentTaskId();
     this._storyboardSetAt = performance.now();
     this.player?.setStoryboard(this._storyboard);
+    this.warmStoryboardSheets();
     // A board is cheap enough to be worth showing without `thumb` being asked
     // for; the decode pipeline behind that attribute is what was expensive.
     this.player?.setPreviewsEnabled(
@@ -25990,6 +25991,7 @@ export class MoviElement extends HTMLElement {
       created.setPrecisePreviews(this._thumbPrecise);
       created.setStoryboard(this._storyboard);
       this.player = created;
+      this.warmStoryboardSheets();
 
       // Re-apply a host subtitle renderer to the fresh player (it's registered on
       // the element, which outlives per-source player recreates).
@@ -26919,6 +26921,7 @@ export class MoviElement extends HTMLElement {
           this.maybeShowResumeDialog();
         }
         this._hasEverPlayed = true;
+        this.flushStoryboardWarm();
         this.announcePlay();
         // Autoplay had no user gesture, so there's no click to confirm —
         // hide the controls immediately rather than running the 200ms
@@ -29979,6 +29982,7 @@ export class MoviElement extends HTMLElement {
       // own 4Hz, for as long as the bar was up.
       if (state === "playing") {
         this._hasEverPlayed = true;
+        this.flushStoryboardWarm();
         // The standard "it is actually running now" event, which the WASM path
         // sends from the same place — with the intent that precedes it, so a
         // handed-off source reports play/pause and `paused` the way it did
@@ -32502,6 +32506,7 @@ export class MoviElement extends HTMLElement {
       });
       this.player.setPrecisePreviews(this._thumbPrecise);
       this.player.setStoryboard(this._storyboard);
+      this.warmStoryboardSheets();
 
       if (this._chapters) this.player.setChapters(this._chapters);
     // The renderer is new, and the crop setting lives on it — an attribute set
@@ -34856,6 +34861,110 @@ export class MoviElement extends HTMLElement {
     img.src = url;
     this._sheetWarm.set(url, img);
     return img;
+  }
+
+  /**
+   * Pull the board's first mosaics in NOW, rather than on the first hover.
+   *
+   * The player already fetches the first sheet when the board is set, but that
+   * copy is an ImageBitmap for the crop path — the card paints the mosaic as a
+   * CSS background, which is the browser's own copy of the image and a
+   * separate thing to warm. And warming it at paint time cannot help the paint
+   * that asked for it: an Image is never `complete` in the same task its `src`
+   * was assigned, cached or not, so sheetReady said no and the very first
+   * hover of every source fell back to the slow path and showed the loading
+   * card. Every hover after it was instant, which is exactly the shape of a
+   * cache that is filled one moment too late.
+   *
+   * So fill it ahead of the pointer instead — once playback is running (see
+   * flushStoryboardWarm), and the WHOLE board, not just its opening. A long video's board is several mosaics, and the first hover is
+   * as likely to land in the middle of the timeline as at its start; warming
+   * only the first sheet left every one of those hovers on the slow path,
+   * which is the same symptom one sheet further along.
+   *
+   * The first two go out at once — the sheet a hover lands on, and the one a
+   * scrub reaches next. The rest trickle in one at a time, each starting when
+   * the one before it lands: a board can be a dozen mosaics, and firing them
+   * all at the video is bandwidth taken from the thing being watched. Skipped
+   * entirely under Save-Data or a 2g link, where pictures nobody has asked for
+   * are not worth the bytes.
+   */
+  private warmStoryboardSheets(): void {
+    this._storyboardWarmPending = true;
+    this.flushStoryboardWarm();
+  }
+
+  /**
+   * True while a board is waiting for playback to start before it warms.
+   *
+   * Cleared when the warm actually goes out, and re-armed by every board that
+   * is set — a source change resets `_hasEverPlayed`, so the next video's
+   * mosaics wait for the next video to start the same way.
+   */
+  private _storyboardWarmPending = false;
+
+  /**
+   * Let the warm go, once there is something to spare.
+   *
+   * Mosaics are pictures nobody has asked for yet, and a load has exactly one
+   * thing that matters: the video starting. Fetched alongside it they are
+   * bandwidth taken from the opening buffer, and what that buys is a slower
+   * start for every viewer in exchange for a faster hover for the few who
+   * scrub. So the warm waits for playback to be running — by then the startup
+   * burst is done and the link has room.
+   *
+   * Called from both "playing" handlers (the WASM path and the native
+   * wrapper), and harmless when there is nothing armed.
+   */
+  private flushStoryboardWarm(): void {
+    if (!this._storyboardWarmPending || !this._hasEverPlayed) return;
+    this._storyboardWarmPending = false;
+    this.runStoryboardWarm();
+  }
+
+  private runStoryboardWarm(): void {
+    const owner = this.player;
+    const p = owner as unknown as {
+      whenStoryboardReady?: () => Promise<string[]>;
+    } | null;
+    void p?.whenStoryboardReady?.().then((sheets) => {
+      // A source swapped while the board was loading: those mosaics belong to
+      // a video that is no longer on screen.
+      if (this.player !== owner) return;
+      const head = this.warmSheet(sheets[0]);
+      const second = this.warmSheet(sheets[1]);
+      if (sheets.length < 3) return;
+
+      const link = (
+        navigator as unknown as {
+          connection?: { effectiveType?: string; saveData?: boolean };
+        }
+      ).connection;
+      if (link?.saveData || /^(slow-)?2g$/.test(link?.effectiveType ?? "")) {
+        return;
+      }
+
+      const warmFrom = (i: number): void => {
+        if (this.player !== owner || i >= sheets.length) return;
+        const img = this.warmSheet(sheets[i]);
+        // Already in hand (or nothing to fetch): straight on to the next.
+        if (!img || img.complete) {
+          warmFrom(i + 1);
+          return;
+        }
+        const next = () => warmFrom(i + 1);
+        img.addEventListener("load", next, { once: true });
+        img.addEventListener("error", next, { once: true });
+      };
+
+      const after = second ?? head;
+      if (!after || after.complete) warmFrom(2);
+      else {
+        const go = () => warmFrom(2);
+        after.addEventListener("load", go, { once: true });
+        after.addEventListener("error", go, { once: true });
+      }
+    });
   }
 
   /**
