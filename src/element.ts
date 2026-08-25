@@ -104,6 +104,8 @@ export { MoviPlayer } from './core/MoviPlayer';
 export { MoviElement } from './render/MoviElement';
 // Host-supplied bar buttons / context-menu rows — see MoviElement.addControl.
 export type { MoviControlSpec, MoviControlItem } from './render/MoviElement';
+// One entry in the queue — see MoviElement.playlist.
+export type { MoviPlaylistItem } from './render/MoviElement';
 import type { MoviElement as MoviElementType } from './render/MoviElement';
 
 // Package version, baked in at build time. `import { VERSION } from
@@ -195,6 +197,29 @@ export interface MoviPlayerAttributes {
    *  tile shows instead of decoding a frame at `start`. Use the `chapters`
    *  property to pass the array directly. */
   chapters?: string;
+  /**
+   * A queue, as a JSON array of `{ src?, id?, title?, poster?, startAt? }` — or
+   * of bare source strings — or a URL to fetch that array from. Setting one
+   * loads its first item, unless `src` already names one of them. Use the
+   * `playlist` property to pass the array directly.
+   *
+   * Items may leave `src` off, for a queue the HOST loads: the element still
+   * owns the buttons, the keys and the lock-screen skip pair, and announces
+   * every move as a cancelable `itemchange`. That is the shape to use when a
+   * source is more than a URL — a `<source>` quality ladder, per-language
+   * audio, `<track>` subtitles — or when each item is its own route.
+   */
+  playlist?: string;
+  /** Which item to open on. Default 0. */
+  playlistindex?: number | string;
+  /**
+   * Let the end of one item start the next. Off by default. A number is the
+   * gap in seconds (`autoadvance="5"`), `loop` joins the ends of the queue
+   * (`autoadvance="loop"`, or `"5 loop"` for both). `loop` on the ELEMENT is a
+   * different thing and wins: it repeats the item, so nothing ever ends.
+   */
+  autoadvance?: boolean | "" | number | string;
+
   /** Enable ±10s fast-seek. Bare = every affordance; a token list narrows it to
    *  `buttons` (the bottom-bar pair), `keys` (arrow keys) and/or `gestures`
    *  (double-tap and drag-to-seek) — e.g. `fastseek="keys gestures"`. Aliases:

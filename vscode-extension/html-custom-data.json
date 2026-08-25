@@ -1101,6 +1101,45 @@
               "url": "https://moviplayer.com/docs/api/element#disableremoteplayback"
             }
           ]
+        },
+        {
+          "name": "playlist",
+          "description": {
+            "kind": "markdown",
+            "value": "A queue. The bar grows Previous and Next, `Shift+P` / `Shift+N` walk it, and the"
+          },
+          "references": [
+            {
+              "name": "Documentation",
+              "url": "https://moviplayer.com/docs/api/element#playlist"
+            }
+          ]
+        },
+        {
+          "name": "playlistindex",
+          "description": {
+            "kind": "markdown",
+            "value": "Which item to open on. Default `0`. Readable and writable as the"
+          },
+          "references": [
+            {
+              "name": "Documentation",
+              "url": "https://moviplayer.com/docs/api/element#playlistindex"
+            }
+          ]
+        },
+        {
+          "name": "autoadvance",
+          "description": {
+            "kind": "markdown",
+            "value": "Let the end of one item start the next. **Off by default** — a queue a page"
+          },
+          "references": [
+            {
+              "name": "Documentation",
+              "url": "https://moviplayer.com/docs/api/element#autoadvance"
+            }
+          ]
         }
       ],
       "references": [

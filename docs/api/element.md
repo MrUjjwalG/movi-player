@@ -435,6 +435,143 @@ Only the timeline tile reads it — markers and the seek preview are unchanged. 
 
 ---
 
+#### `playlist`
+
+A queue. The bar grows Previous and Next, `Shift+P` / `Shift+N` walk it, and the
+OS lock screen gets its skip pair — none of which exist for a player with one
+thing to play.
+
+```html
+<movi-player controls
+  playlist='[{"src":"ep1.mkv","title":"Pilot"},{"src":"ep2.mkv","title":"The Return"}]'>
+</movi-player>
+
+<!-- bare strings, where all you have is URLs -->
+<movi-player controls playlist='["ep1.mkv","ep2.mkv","ep3.mkv"]'></movi-player>
+
+<!-- anything that is not a JSON array is a URL the array comes from -->
+<movi-player controls playlist="/season-1.json"></movi-player>
+```
+
+```js
+player.playlist = [
+  { src: 'ep1.mkv', title: 'Pilot', poster: '/art/1.jpg' },
+  { src: 'ep2.mkv', title: 'The Return', startAt: 92 },
+];
+player.playlist = [];   // no queue; the buttons leave the bar
+```
+
+**Value:** JSON array (attribute), the array itself (property), or a URL. Items
+are `{ src?, id?, title?, poster?, startAt? }`; a bare string means `{ src }`.
+`url` and `source` are accepted as spellings of `src`. A fetched URL may return
+the bare array or `{ "items": [...] }`. Anything else you put on a row is
+carried through untouched and comes back on `itemchange`. A row that gives
+neither a source nor an `id`/`title` is dropped — an index that lands on nothing
+is worse than a shorter queue.
+
+An item **owns** those four fields, in the strict sense: an item with no title
+clears the title the last item set, so nothing leaks from one video into the
+next. Anything you set for the whole player — a `poster` on the element, a
+`title` you never varied — is left alone.
+
+Setting a list opens its first item, unless the element is already playing one
+of them:
+
+```html
+<!-- opens on episode 2, and knows it is the second of three -->
+<movi-player src="ep2.mkv" playlist='["ep1.mkv","ep2.mkv","ep3.mkv"]' controls></movi-player>
+```
+
+A single-item list is not a queue: the buttons stay off the bar, because a Next
+that can never be pressed is only taking up room.
+
+See [`next()`](#next-boolean), [`previous()`](#previous-boolean),
+[`playItem()`](#playitem-index-number-boolean), and the
+`itemchange` / `playlistend` events.
+
+##### Queues the host loads
+
+An item's `src` is **optional**, and a queue of src-less items is one the
+element never loads. It still owns the queue as a control surface — the two bar
+buttons, `Shift+N` / `Shift+P`, the lock-screen skip pair, which end is dead —
+and announces every move as a **cancelable** `itemchange`. Cancel it and load
+the item your own way:
+
+```js
+player.playlist = videos.map((v) => ({
+  id: v.id, title: v.title, poster: v.thumbnail,
+}));
+
+player.addEventListener('itemchange', (e) => {
+  e.preventDefault();                      // the element writes nothing
+  router.push(`/watch/${e.detail.item.id}`);
+});
+```
+
+Use this shape whenever a source is more than a URL. `<source>` / `<track>`
+children — a quality ladder, per-language audio, subtitle tracks — cannot be
+said in an item's one `src`, and an item that *has* a `src` would hide those
+children outright: the children are only read when there is no `src` on the
+element. Swapping the children yourself from the handler keeps the ladder, and
+keeps fullscreen and the unlocked `AudioContext` that a source swap keeps too.
+
+Two details that make this work:
+
+- **Opening such a queue is silent.** The first item is adopted, not announced —
+  the host is already showing it, and an `itemchange` there would send it
+  navigating to where it already is.
+- **The move is settled before the event fires.** `preventDefault()` takes back
+  the *load*, not the move: `playlistIndex`, `hasNext`, the buttons and the lock
+  screen all report the new item either way. Reading `player.src` in the handler
+  still gives the OUTGOING source; the incoming item is `e.detail.item`.
+
+A src-less item that nobody cancels loads nothing, and says so in the console.
+
+---
+
+#### `playlistindex`
+
+Which item to open on. Default `0`. The `playlistIndex` property reads and
+writes the same position — but **writing it does not play anything**: it says
+where the queue *is*. [`playItem()`](#playitem-index-number-boolean) is the one
+that moves. The two have to be separable, or a host that answers `itemchange` by
+navigating and then reports where it landed would send the move straight back.
+
+```html
+<movi-player playlist="/season-1.json" playlistindex="3" controls></movi-player>
+```
+
+The property reads `-1` when the current source did not come from the queue —
+no queue, or a `src` you assigned yourself — and `-1` may be written to say so.
+`next()` from there starts the queue at the top rather than resuming from an
+index that no longer describes anything.
+
+---
+
+#### `autoadvance`
+
+Let the end of one item start the next. **Off by default** — a queue a page
+steps through itself and a queue that plays itself out are both ordinary, and
+only one of them can be the behaviour nobody asked for.
+
+```html
+<movi-player playlist="/season-1.json" autoadvance controls></movi-player>
+<movi-player playlist="/season-1.json" autoadvance="5" controls></movi-player>
+<movi-player playlist="/season-1.json" autoadvance="loop" controls></movi-player>
+<movi-player playlist="/season-1.json" autoadvance="5 loop" controls></movi-player>
+```
+
+**Value:** presence for "the moment it ends", a number for a gap in seconds, and
+`loop` to join the ends of the list — which the buttons and the keys read too,
+so Next on the last item wraps for all three of them or none. Tokens combine in
+any order. An explicit `autoadvance="false"` is the attribute present and
+declining, which is how a framework writes it off.
+
+`loop` on the **element** is a different thing and wins over this one: it
+repeats the item, so nothing ever ends and nothing ever advances.
+
+---
+
 #### `disablepictureinpicture`
 
 Boolean. Refuses Picture-in-Picture, the same as `<video disablepictureinpicture>`:
@@ -457,17 +594,20 @@ Switches built-in controls off, as `no<name>` tokens — the same shape
              controlslist="nofullscreen nopip nospeed"></movi-player>
 ```
 
-**Tokens:** `noplay`, `noseekbuttons`, `novolume`, `notime`, `noprogress`,
-`noaudio`, `nocc`, `noquality`, `nospeed`, `nostableaudio`, `nohdr`, `noloop`,
-`nosettings`, `noaspect`, `nopip`, `nofullscreen`, `nomore`, `nostats`,
-`noshortcuts`, `noambient`, `nocrop`, `nosnapshot`, `norotate`, `notimeline`
+**Tokens:** `noplay`, `noplaylist`, `noseekbuttons`, `novolume`, `notime`,
+`noprogress`, `noaudio`, `nocc`, `noquality`, `nospeed`, `nostableaudio`,
+`nohdr`, `noloop`, `nosettings`, `noaspect`, `nopip`, `nofullscreen`, `nomore`,
+`nostats`, `noshortcuts`, `noambient`, `nocrop`, `nosnapshot`, `norotate`,
+`notimeline`
 — plus the `id` of any control added with
 [`addControl()`](#addcontrol-spec), which is simply not added.
 
 A switched-off control goes everywhere it lives: the button, its context-menu
 row, and — for the ones the availability check knows (`aspect`, `pip`,
-`snapshot`, `rotate`, `hdr`, `ambient`, `timeline`, `stableaudio`) — its
-keyboard shortcut. Ask the same question in code with
+`snapshot`, `rotate`, `hdr`, `ambient`, `timeline`, `stableaudio`, `playlist`)
+— its keyboard shortcut. `noplaylist` also clears the queue's skip pair from
+the OS lock screen, which is the one surface a page cannot restyle its way out
+of. Ask the same question in code with
 `player.isControlDisabled("pip")`.
 
 ---
@@ -1774,6 +1914,64 @@ await player.loadEncrypted({
 
 ---
 
+### Playlist
+
+All four are no-ops without a [`playlist`](#playlist), and each returns `false`
+rather than throwing, so a UI can call them without asking first. They return
+`true` for a move a host cancelled — the queue moved; only the load was taken
+back.
+
+#### `next(): boolean`
+
+Plays the next item. `false` when there isn't one — the last item with no
+`loop` on [`autoadvance`](#autoadvance), or no queue at all — and nothing
+changes in that case.
+
+```typescript
+if (!player.next()) showRecommendations();
+```
+
+---
+
+#### `previous(): boolean`
+
+Plays the previous item. `false` when there isn't one.
+
+---
+
+#### `playItem(index: number): boolean`
+
+Plays the item at that index. Out of range is `false` and no change; the index
+already playing **restarts** it, which is what clicking the row you are on means
+everywhere else.
+
+```typescript
+list.addEventListener('click', (e) => player.playItem(rowIndex(e.target)));
+```
+
+---
+
+#### `hasNext` / `hasPrevious` (properties)
+
+Whether there is anything that way — the same question the buttons ask, so your
+own controls grey out with theirs.
+
+```typescript
+nextBtn.disabled = !player.hasNext;
+player.addEventListener('itemchange', () => {
+  nextBtn.disabled = !player.hasNext;
+});
+```
+
+---
+
+#### `playlistItem` (property)
+
+The item playing right now, or `null` when the current source did not come from
+the queue.
+
+---
+
 ### Track Selection
 
 ::: info
@@ -2296,6 +2494,9 @@ The element re-exposes player activity as DOM events so you can wire `addEventLi
 | `ambientchange`        | `{ enabled: boolean }`               | Ambient glow toggled                               |
 | `rotatechange`         | `{ degrees: number }`                | Picture rotated (menu, hotkey or property)         |
 | `audioonlychange`      | `{ enabled: boolean }`               | Audio-only (data saver) toggled                    |
+| `playlistchange`       | `{ items: MoviPlaylistItem[] }`      | The queue was replaced (see [`playlist`](#playlist))               |
+| `itemchange`           | `{ index, previousIndex, item }`     | **Cancelable** — the queue moved to another item (a button, a key, `playItem()`, an auto-advance), and is about to load it. `preventDefault()` takes back the load, not the move; see [Queues the host loads](#queues-the-host-loads). `previousIndex` is `-1` when nothing in the queue was playing |
+| `playlistend`          | `{ index: number }`                  | The last item ended with nothing after it. Fires whether or not [`autoadvance`](#autoadvance) is on, so a page driving the queue itself still hears it run out |
 | `coverart`             | `ImageBitmap \| null`                | Embedded cover art extracted at load (close the bitmap when done) |
 | `preloadcomplete`      | —                                    | Initial preload buffer filled, ready to play       |
 | `linearmode`           | —                                    | Source server ignores `Range` (`200`, not `206`) — playback is forward-only via a sliding RAM window; hide seek-dependent UI like the thumbnail strip |
@@ -2402,6 +2603,25 @@ player.addEventListener("qualitychange", (e: CustomEvent) => {
   console.log("Quality switched to track:", e.detail.trackId);
 });
 ```
+
+---
+
+### Playlist
+
+```typescript
+player.addEventListener("itemchange", (e: CustomEvent) => {
+  highlightRow(e.detail.index);
+  nextBtn.disabled = !player.hasNext;
+  console.log("Now playing:", e.detail.item.title ?? e.detail.item.src);
+});
+
+player.addEventListener("playlistend", () => showRecommendations());
+```
+
+`itemchange` and `playlistchange` both fire during element upgrade for a queue
+declared in markup, before a listener added in a script has had a chance to
+attach. Read `player.playlistIndex` once on start-up rather than waiting for the
+first event.
 
 ---
 
@@ -2600,6 +2820,7 @@ Press `?` during playback to view the shortcuts panel.
 | `H` | Toggle HDR | `P` | Picture-in-Picture |
 | `+` / `-` | Speed up / down | `Z` / `X` | Subtitle delay -/+ 100ms |
 | `C` | Crop black bars | `1` – `9` | Seek to 10%–90% |
+| `Shift+N` | Next in queue | `Shift+P` | Previous in queue |
 
 ---
 

@@ -323,6 +323,18 @@
             {
               "name": "disableremoteplayback",
               "description": "Boolean. Turns off remote playback targets (AirPlay, Cast) for the element, the same"
+            },
+            {
+              "name": "playlist",
+              "description": "A queue. The bar grows Previous and Next, `Shift+P` / `Shift+N` walk it, and the"
+            },
+            {
+              "name": "playlistindex",
+              "description": "Which item to open on. Default `0`. Readable and writable as the"
+            },
+            {
+              "name": "autoadvance",
+              "description": "Let the end of one item start the next. **Off by default** — a queue a page"
             }
           ],
           "events": [
@@ -597,6 +609,27 @@
               "description": "Subtitle offset changed via property/attribute",
               "type": {
                 "text": "CustomEvent<{ subtitleDelay: number }>"
+              }
+            },
+            {
+              "name": "playlistchange",
+              "description": "The queue was replaced (see playlist)",
+              "type": {
+                "text": "CustomEvent<{ items: MoviPlaylistItem[] }>"
+              }
+            },
+            {
+              "name": "itemchange",
+              "description": "Cancelable — the queue moved to another item and is about to load it. preventDefault() takes back the load, not the move, so a host whose sources are <source>/<track> children (or whose items are routes) can own what plays. See Queues the host loads",
+              "type": {
+                "text": "CustomEvent<{ index, previousIndex, item }>"
+              }
+            },
+            {
+              "name": "playlistend",
+              "description": "The last item ended with nothing after it. Fires whether or not autoadvance is on",
+              "type": {
+                "text": "CustomEvent<{ index: number }>"
               }
             },
             {

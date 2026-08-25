@@ -131,6 +131,40 @@ function parseByteSize(value: string | null): number {
   return Math.max(0, Math.floor(n * mult));
 }
 
+/**
+ * One entry in a queue of things to play.
+ *
+ * `src` is the only part that must be there. The rest is what the PLAYER would
+ * otherwise have to guess between items — the heading over the picture, the
+ * still shown before the first frame, where in the video to come in — and each
+ * is owned by the item rather than the element, so it goes away again when the
+ * queue moves on to something that doesn't carry one.
+ *
+ * A bare string is accepted anywhere an item is, and means `{ src }`.
+ */
+export interface MoviPlaylistItem {
+  /**
+   * What to play. Optional, because a page whose sources are `<source>` /
+   * `<track>` children — a quality ladder, per-language audio, subtitle tracks
+   * — cannot say any of that in one URL, and neither can a page where each
+   * item is its own route. Those queues leave `src` off, cancel `itemchange`,
+   * and load the item themselves; see MoviElement.playlist.
+   */
+  src?: string | File;
+  /** The host's own name for this item, handed back on `itemchange`. The
+   *  element never reads it — it is there so a queue of src-less items has
+   *  something to be identified BY. */
+  id?: string;
+  /** Heading over the picture, and the name the OS media session announces. */
+  title?: string;
+  /** Still shown before this item's first frame. */
+  poster?: string;
+  /** Where to come in, in seconds. */
+  startAt?: number;
+  /** Anything else the host put on the item is carried through untouched. */
+  [key: string]: unknown;
+}
+
 /** One row of a custom control's submenu. */
 export interface MoviControlItem {
   /** Handed back to onPick. */
@@ -386,6 +420,15 @@ const SHORTCUT_ACTIONS: Record<
   speedup: { keys: ["+", "="], canonical: "+", label: "Speed up" },
   speeddown: { keys: ["-"], canonical: "-", label: "Speed down" },
   shortcuts: { keys: ["?"], canonical: "?", label: "Shortcuts panel" },
+  /* Shift, because N and P on their own are worth more to a host than they are
+     to a queue most sources never have — and because Shift+N/Shift+P is what
+     every viewer who has used a playlist already has in their fingers. */
+  nexttrack: { keys: ["shift+n"], canonical: "shift+n", label: "Next in queue" },
+  prevtrack: {
+    keys: ["shift+p"],
+    canonical: "shift+p",
+    label: "Previous in queue",
+  },
 };
 
 /** Every key the table above claims by default, for deciding whether a press
@@ -1474,6 +1517,9 @@ export class MoviElement extends HTMLElement {
       "controlslist",
       "disablepictureinpicture",
       "disableremoteplayback",
+      "playlist",
+      "playlistindex",
+      "autoadvance",
     ];
   }
 
@@ -2192,6 +2238,16 @@ export class MoviElement extends HTMLElement {
         
         <div class="movi-buttons-row">
           <div class="movi-controls-left">
+            <!-- The queue's two ends. Absent from the bar until there IS a
+                 queue: a Previous button on a single video is a control that
+                 can never do anything, and the commonest case by far is a
+                 single video. Filled glyphs, like Play beside them. -->
+            <button class="movi-btn movi-prev-btn" aria-label="Previous in queue">
+              <svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
+                <path d="M6 6h2.4v12H6V6zm12 0v12l-9-6 9-6z"></path>
+              </svg>
+            </button>
+
             <button class="movi-btn movi-play-pause" aria-label="Play/Pause">
               <!-- Rounded the same way as the centre one — see there. -->
               <svg class="movi-icon-play" viewBox="0 0 24 24" fill="currentColor" stroke="currentColor" stroke-width="2.6" stroke-linejoin="round">
@@ -2199,6 +2255,12 @@ export class MoviElement extends HTMLElement {
               </svg>
               <svg class="movi-icon-pause" viewBox="0 0 24 24" fill="currentColor" style="display: none;">
                 <path d="M6 19h4V5H6v14zm8-14v14h4V5h-4z"></path>
+              </svg>
+            </button>
+
+            <button class="movi-btn movi-next-btn" aria-label="Next in queue">
+              <svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
+                <path d="M18 6h-2.4v12H18V6zM6 6v12l9-6-9-6z"></path>
               </svg>
             </button>
 
@@ -2819,6 +2881,8 @@ export class MoviElement extends HTMLElement {
           <div class="movi-shortcut-row" data-video-only><kbd data-shortcut-action="snapshot">S</kbd><span>Snapshot</span></div>
           <div class="movi-shortcut-row"><kbd data-shortcut-action="stats">I</kbd><span>Stats for Nerds</span></div>
           <div class="movi-shortcut-row" data-video-only><kbd data-shortcut-action="timeline">T</kbd><span>Timeline</span></div>
+          <div class="movi-shortcut-row" data-playlist-only><kbd data-shortcut-action="nexttrack">Shift+N</kbd><span>Next in Queue</span></div>
+          <div class="movi-shortcut-row" data-playlist-only><kbd data-shortcut-action="prevtrack">Shift+P</kbd><span>Previous in Queue</span></div>
           <div class="movi-shortcut-row"><kbd data-shortcut-action="shortcuts">?</kbd><span>This Panel</span></div>
         </div>
       </div>
@@ -3104,6 +3168,16 @@ export class MoviElement extends HTMLElement {
     const k = (action: string) => this.shortcutLabel(action);
     if (is("movi-play-pause"))
       return { text: this.paused ? "Play" : "Pause", key: k("playpause") };
+    // The title of what the click leads to, when the queue knows it — the
+    // point of a Next button is what is next, and "Next" alone is the one
+    // thing the arrow already said.
+    if (is("movi-prev-btn"))
+      return {
+        text: this.neighbourItemTitle(-1) || "Previous",
+        key: k("prevtrack"),
+      };
+    if (is("movi-next-btn"))
+      return { text: this.neighbourItemTitle(1) || "Next", key: k("nexttrack") };
     if (is("movi-seek-backward"))
       return { text: "Back 10 seconds", key: k("seekback") };
     if (is("movi-seek-forward"))
@@ -3190,6 +3264,20 @@ export class MoviElement extends HTMLElement {
     const seekForwardBtn = shadowRoot.querySelector(
       ".movi-seek-forward",
     ) as HTMLElement;
+    const prevBtn = shadowRoot.querySelector(".movi-prev-btn") as HTMLElement;
+    const nextBtn = shadowRoot.querySelector(".movi-next-btn") as HTMLElement;
+
+    // The queue's two ends. Both are display:none until there is a queue, and
+    // disabled at the end they point past, so neither can be clicked into a
+    // no-op — the guards inside previous()/next() are the second half of that.
+    prevBtn?.addEventListener("click", (e) => {
+      e.stopPropagation();
+      this.previous();
+    });
+    nextBtn?.addEventListener("click", (e) => {
+      e.stopPropagation();
+      this.next();
+    });
 
     let ignoreHover = false; // Prevent hover immediately after click from re-showing thumb
 
@@ -5622,7 +5710,17 @@ export class MoviElement extends HTMLElement {
         // single audio-mode chokepoint, and the h case no-ops because the
         // hdr-toggle item is display:none for non-HDR (audio) content.
         const VIDEO_ONLY_KEYS = "aprgstv";
-        if (e.key.length === 1 && VIDEO_ONLY_KEYS.includes(e.key.toLowerCase())) {
+        // Bare presses only. These letters are the keys of video-only controls
+        // when nothing is held with them; Shift+P is a different shortcut that
+        // happens to be spelled with one of them, and an audio queue is the
+        // most ordinary queue there is.
+        const bareKey =
+          !e.shiftKey && !e.ctrlKey && !e.metaKey && !e.altKey;
+        if (
+          bareKey &&
+          e.key.length === 1 &&
+          VIDEO_ONLY_KEYS.includes(e.key.toLowerCase())
+        ) {
           return;
         }
       }
@@ -5670,6 +5768,22 @@ export class MoviElement extends HTMLElement {
           }
           break;
         }
+        // The queue, by key. Both no-op when there is nothing that way — the
+        // guard lives in next()/previous(), so the key and the button can never
+        // disagree about where the ends are.
+        case "shift+n":
+          // controlslist="noplaylist" takes the keys with the buttons — a
+          // control the host switched off is off everywhere, not just where it
+          // could be seen.
+          if (this.isControlDisabled("playlist")) break;
+          e.preventDefault();
+          if (this.next()) this.showControls();
+          break;
+        case "shift+p":
+          if (this.isControlDisabled("playlist")) break;
+          e.preventDefault();
+          if (this.previous()) this.showControls();
+          break;
         case "ArrowLeft":
           // Left Arrow: Seek backward 5 seconds or single frame (if Ctrl)
           // Only when fastseek names the key channel. In linear mode the seek
@@ -16860,6 +16974,8 @@ export class MoviElement extends HTMLElement {
       .movi-control-group,
       .movi-controls-left > .movi-play-pause,
       .movi-controls-left > .movi-custom-btn,
+      .movi-controls-left > .movi-prev-btn,
+      .movi-controls-left > .movi-next-btn,
       .movi-controls-left > .movi-seek-group,
       .movi-controls-left > .movi-volume-container,
       .movi-controls-left > .movi-chapter-pill,
@@ -16940,6 +17056,8 @@ export class MoviElement extends HTMLElement {
          A host's button on this side is the same shape of thing: its own
          capsule, so its own ring. */
       :host .movi-controls-left > .movi-play-pause,
+      :host .movi-controls-left > .movi-prev-btn,
+      :host .movi-controls-left > .movi-next-btn,
       :host .movi-controls-left > .movi-custom-btn {
         --movi-btn-size: 42px;
         width: var(--movi-btn-size);
@@ -21696,6 +21814,12 @@ export class MoviElement extends HTMLElement {
          line rather than generated, so a token that does not exist matches
          nothing instead of half-working. */
       :host([controlslist~="noplay"]) .movi-play-pause,
+      :host([controlslist~="noplaylist"]) .movi-prev-btn,
+      :host([controlslist~="noplaylist"]) .movi-next-btn,
+      /* …and the rows in the shortcuts sheet that name keys the token has just
+         switched off, which would otherwise be the sheet teaching a press that
+         does nothing. */
+      :host([controlslist~="noplaylist"]) [data-playlist-only],
       :host([controlslist~="noseekbuttons"]) .movi-seek-backward,
       :host([controlslist~="noseekbuttons"]) .movi-seek-forward,
       :host([controlslist~="novolume"]) .movi-volume-container,
@@ -21730,6 +21854,25 @@ export class MoviElement extends HTMLElement {
       :host([controlslist~="nostats"]) .movi-context-menu-item[data-action="nerd-stats"],
       :host([controlslist~="noshortcuts"]) .movi-context-menu-item[data-action="keyboard-shortcuts"] {
         display: none !important;
+      }
+
+      /* No queue, no queue controls. This is the default state of nearly every
+         player on the page, so the two buttons and their shortcut rows start
+         hidden and the class is what brings them in - not the other way round,
+         which would flash them onto the bar of every single video for the one
+         frame before the playlist was read. */
+      :host(:not(.movi-has-playlist)) .movi-prev-btn,
+      :host(:not(.movi-has-playlist)) .movi-next-btn,
+      :host(:not(.movi-has-playlist)) [data-playlist-only] {
+        display: none !important;
+      }
+      /* An end of the queue. Dimmed rather than removed: a Next that vanishes
+         on the last item moves Play under the pointer that was aiming at it. */
+      .movi-prev-btn[disabled],
+      .movi-next-btn[disabled] {
+        opacity: 0.4;
+        cursor: default;
+        pointer-events: none;
       }
 
       .movi-custom-btn .movi-custom-btn-text {
@@ -24279,6 +24422,9 @@ export class MoviElement extends HTMLElement {
       clearInterval(this.nerdStatsInterval);
       this.nerdStatsInterval = null;
     }
+    // A queued next item, for a player that is no longer in the document.
+    // Removal is not a reason to load another video.
+    this.cancelAutoAdvance();
 
     // Save position and stop resume saving
     if (this._resume) this.saveResumePosition();
@@ -24445,6 +24591,21 @@ export class MoviElement extends HTMLElement {
         break;
       case "chapters":
         this.applyChapters(newValue);
+        break;
+      case "playlist":
+        this.applyPlaylist(newValue);
+        break;
+      case "playlistindex": {
+        // Only ever a REQUEST to be at an index. Before the list has arrived it
+        // is remembered and applied with it — markup order puts playlistindex
+        // before playlist as often as not.
+        const n = newValue == null ? 0 : parseInt(newValue, 10);
+        this._playlistStartIndex = Number.isFinite(n) && n > 0 ? n : 0;
+        if (this._playlist.length) this.playItem(this._playlistStartIndex);
+        break;
+      }
+      case "autoadvance":
+        this.applyAutoAdvance(newValue);
         break;
       case "resume":
         this._resume = newValue !== null;
@@ -27203,6 +27364,10 @@ export class MoviElement extends HTMLElement {
         // that shows a replay button on ended never saw one, and neither
         // should it here.
         if (!this._loop) this.dispatchEvent(new Event("ended"));
+        // …and the queue's turn, after the host has been told. `loop` never
+        // reaches here, which is the whole of how the two settle: an item set
+        // to repeat has no end for the next item to follow.
+        if (!this._loop) this.handleItemEnded();
         // Only surface the chrome when the player is actually
         // stopping. With `loop` on, the player immediately restarts
         // playback, so popping the bar for the brief end→play
@@ -28146,7 +28311,10 @@ export class MoviElement extends HTMLElement {
     this.closeAllBottomMenus();
     this.closeSettingsPage();
 
-    // Cancel any queued play intent
+    // Cancel any queued play intent — and any queued NEXT ITEM with it. The
+    // advance was scheduled by the source being torn down here; whatever
+    // replaces it has already decided what plays.
+    this.cancelAutoAdvance();
     this._pendingPlay = false;
     this._preloadGateActive = false;
     this._resumeDialogPending = false;
@@ -30200,6 +30368,10 @@ export class MoviElement extends HTMLElement {
       } else {
         this.announcePause();
         this.dispatchEvent(new Event("ended"));
+        // The wrapper engines end their own way, so the queue is joined on
+        // both paths — a fallback to native is not a reason for a playlist to
+        // stop halfway through.
+        this.handleItemEnded();
       }
     });
     // Native can't render it either (unreadable, OR a codec the browser can't
@@ -32262,6 +32434,9 @@ export class MoviElement extends HTMLElement {
 
   set src(value: string | File | null) {
     this.noteSourceAssigned();
+    // A source the QUEUE did not choose means the queue is no longer describing
+    // what is playing — unless the host happened to assign one of its items.
+    if (!this._playlistSwitching) this.notePlaylistDetached(value);
     // Save position before switching source, then stop saving
     if (this._resume) this.saveResumePosition();
     this.stopResumeSaving();
@@ -33401,6 +33576,8 @@ export class MoviElement extends HTMLElement {
   /** Built-in controls a custom one can be positioned against. */
   private static readonly CONTROL_ANCHORS: Record<string, string> = {
     play: ".movi-play-pause",
+    prev: ".movi-prev-btn",
+    next: ".movi-next-btn",
     back10: ".movi-seek-backward",
     forward10: ".movi-seek-forward",
     volume: ".movi-volume-container",
@@ -33889,17 +34066,25 @@ export class MoviElement extends HTMLElement {
     ]
       .filter(Boolean)
       .join("+");
+    // The full combination first, so a host can bind Shift+M — and across EVERY
+    // action before any of them is offered the bare key, not per action. Those
+    // two passes used to be one, which quietly meant "the earlier action wins"
+    // rather than "the more specific binding wins": Shift+P reached the pip
+    // case, because pip claims a bare "p" and is declared above anything that
+    // could claim the combination. Whoever asked for both keys gets both.
     for (const action of Object.keys(SHORTCUT_ACTIONS)) {
-      const keys = this.getShortcut(action);
-      // The full combination first, so a host can bind Shift+M. Then the bare
-      // key, but only when nothing beyond Shift is held: Shift is how "+" and
-      // "?" are typed in the first place, and the switch has always treated a
-      // shifted letter as its lowercase self.
-      if (
-        keys.includes(combo) ||
-        (!e.ctrlKey && !e.metaKey && !e.altKey && keys.includes(bare))
-      ) {
+      if (this.getShortcut(action).includes(combo)) {
         return SHORTCUT_ACTIONS[action].canonical;
+      }
+    }
+    // Then the bare key, but only when nothing beyond Shift is held: Shift is
+    // how "+" and "?" are typed in the first place, and the switch has always
+    // treated a shifted letter as its lowercase self.
+    if (!e.ctrlKey && !e.metaKey && !e.altKey) {
+      for (const action of Object.keys(SHORTCUT_ACTIONS)) {
+        if (this.getShortcut(action).includes(bare)) {
+          return SHORTCUT_ACTIONS[action].canonical;
+        }
       }
     }
     // Claimed by nobody. If it is a key the player ships with, the host has
@@ -36912,6 +37097,609 @@ export class MoviElement extends HTMLElement {
    * decided here, since the pseudo and host-driven fullscreen routes aren't
    * visible to a media query.
    */
+  // ——— The queue ———————————————————————————————————————————————————————
+  //
+  // A player plays one thing. A page that has a next thing has always had to
+  // build the join itself: listen for `ended`, write a new `src`, remember to
+  // move the title and the poster with it, and then draw its own Next button
+  // because the bar has none. Every host wrote the same forty lines, and each
+  // one wrote them slightly differently.
+  //
+  // The queue is a list of items and an index into it. It owns four things per
+  // item — the source, the title, the poster and where to come in — and it owns
+  // them in the strict sense: an item without a title clears the title the last
+  // item set, rather than inheriting it. What it deliberately does NOT own is
+  // anything the host set for the whole player, which is why every one of those
+  // four is only cleared when the queue is the thing that set it.
+
+  private _playlist: MoviPlaylistItem[] = [];
+  /** Where in the list we are; -1 means the current source is not from it. */
+  private _playlistIndex: number = -1;
+  /** `playlistindex`, which is a request to start somewhere other than the top
+   *  and can arrive either side of the list itself. */
+  private _playlistStartIndex: number = 0;
+  /** Which of the item-owned attributes the queue is currently the author of.
+   *  See the note above: this is what separates "this item has no poster" from
+   *  "this player has a poster, for all of them". */
+  private _playlistOwnsTitle: boolean = false;
+  private _playlistOwnsPoster: boolean = false;
+  private _playlistOwnsStartAt: boolean = false;
+  private _autoAdvance: boolean = false;
+  /** Seconds of quiet between one item ending and the next starting. */
+  private _autoAdvanceDelay: number = 0;
+  /** Whether the ends of the list join up — for the buttons as much as for
+   *  auto-advance, so Next on the last item and the key that does the same
+   *  thing never disagree. */
+  private _playlistWraps: boolean = false;
+  private _autoAdvanceTimer: number | null = null;
+  /** Set only while the queue itself is writing `src`, so the setter can tell
+   *  its own source change from a host stepping outside the queue. */
+  private _playlistSwitching: boolean = false;
+  /** Bumped per `playlist` attribute write; a fetch whose token is stale has
+   *  been superseded and must not land. */
+  private _playlistFetchToken: number = 0;
+
+  /**
+   * The queue.
+   *
+   *   el.playlist = ["ep1.mkv", "ep2.mkv"]
+   *   el.playlist = [{ src: "ep1.mkv", title: "Pilot", poster: "1.jpg" }]
+   *   <movi-player playlist='[{"src":"ep1.mkv","title":"Pilot"}]'>
+   *   <movi-player playlist="/season-1.json">
+   *
+   * A bare string is `{ src }`. The attribute takes the same array as JSON, or
+   * a URL to fetch it from — anything not starting with `[` is read as one.
+   *
+   * Setting a list loads its first item, unless the element is ALREADY playing
+   * one of them: `<movi-player src="ep2.mkv" playlist="…">` opens on episode 2
+   * and knows it is the second of the queue, rather than restarting at one.
+   *
+   * ### Queues the host loads
+   *
+   * An item's `src` is optional, and a queue of src-less items is one the
+   * ELEMENT never loads. It still owns the queue as a control surface — the two
+   * bar buttons, Shift+N / Shift+P, the lock-screen skip pair, which end is
+   * dead — and announces every move as a cancelable `itemchange`; the host
+   * cancels it and loads the item its own way:
+   *
+   *   el.playlist = videos.map((v) => ({ id: v.id, title: v.title,
+   *                                      poster: v.thumbnail }));
+   *   el.addEventListener("itemchange", (e) => {
+   *     e.preventDefault();            // nothing is written here
+   *     router.push(`/watch/${e.detail.item.id}`);
+   *   });
+   *
+   * This is the shape to use whenever a source is more than a URL. `<source>` /
+   * `<track>` children — a quality ladder, per-language audio, subtitle tracks
+   * — cannot be said in one `src`, and an item that HAS a src would hide those
+   * children outright (_parseChildSources only reads them when there is none).
+   * Swapping the children yourself, from the `itemchange` handler, keeps
+   * fullscreen and the unlocked AudioContext that a src write would keep too —
+   * and keeps the ladder.
+   *
+   * Opening such a queue is deliberately silent: the first item is adopted, not
+   * announced, because the host is already showing it.
+   */
+  get playlist(): MoviPlaylistItem[] {
+    return [...this._playlist];
+  }
+  set playlist(
+    value: Array<MoviPlaylistItem | string> | string | null | undefined,
+  ) {
+    if (typeof value === "string") {
+      this.applyPlaylist(value);
+      return;
+    }
+    this._playlistFetchToken++;
+    this.setPlaylistItems(MoviElement.normalisePlaylistItems(value ?? []));
+  }
+
+  /**
+   * Which item is playing, or -1 when the current source did not come from the
+   * queue (no queue at all, or a host that assigned `src` itself).
+   *
+   * Writing it says where the queue IS. It is not a request to go there —
+   * `playItem()` is that, and it announces the move. The two have to be
+   * separable: a host driving its own loads answers `itemchange` by navigating,
+   * and then has to tell the element where it landed. Saying that with a move
+   * would send the move straight back to it.
+   *
+   * -1 is allowed, and means the current source is not from the queue.
+   */
+  get playlistIndex(): number {
+    return this._playlistIndex;
+  }
+  set playlistIndex(value: number) {
+    if (!Number.isFinite(value)) return;
+    const i = Math.trunc(value);
+    if (i < -1 || i >= this._playlist.length) return;
+    if (i === this._playlistIndex) return;
+    this._playlistIndex = i;
+    // The advance that was queued belonged to where we were, not where the host
+    // has just said we are.
+    this.cancelAutoAdvance();
+    this.refreshPlaylistUi();
+  }
+
+  /** The item playing right now, if it came from the queue. */
+  get playlistItem(): MoviPlaylistItem | null {
+    return this._playlist[this._playlistIndex] ?? null;
+  }
+
+  /** Whether there is anything that way — the same question the buttons and
+   *  the keys ask, so a host's own controls grey out with theirs. */
+  get hasNext(): boolean {
+    return this.resolvePlaylistStep(1) >= 0;
+  }
+  get hasPrevious(): boolean {
+    return this.resolvePlaylistStep(-1) >= 0;
+  }
+
+  /**
+   * Play the next item. Returns false when there isn't one — the last item
+   * with no wrap, or no queue at all — and changes nothing in that case.
+   */
+  next(): boolean {
+    const target = this.resolvePlaylistStep(1);
+    return target < 0 ? false : this.loadPlaylistItem(target, true);
+  }
+
+  /** Play the previous item. False when there isn't one. */
+  previous(): boolean {
+    const target = this.resolvePlaylistStep(-1);
+    return target < 0 ? false : this.loadPlaylistItem(target, true);
+  }
+
+  /**
+   * Play the item at this index. Out of range is false and no change; the
+   * index the queue is already on RESTARTS it, which is what a click on the
+   * row you are already playing means everywhere else.
+   */
+  playItem(index: number): boolean {
+    if (!Number.isFinite(index)) return false;
+    const i = Math.trunc(index);
+    if (i < 0 || i >= this._playlist.length) return false;
+    return this.loadPlaylistItem(i, true);
+  }
+
+  /**
+   * Whether the end of one item starts the next, and how long it waits.
+   *
+   *   <movi-player autoadvance>          the moment it ends
+   *   <movi-player autoadvance="5">      five seconds later
+   *   <movi-player autoadvance="loop">   …and the last item leads to the first
+   *   <movi-player autoadvance="5 loop">
+   *
+   * Off by default: a queue a host wants to step through itself, and a queue
+   * that plays itself out, are both ordinary, and only one of them can be the
+   * behaviour nobody asked for. `loop` on the element is a different thing and
+   * wins over this one — it repeats the item, so nothing ever ends.
+   */
+  get autoAdvance(): boolean {
+    return this._autoAdvance;
+  }
+  set autoAdvance(value: boolean | number | string) {
+    if (value === false || value == null) {
+      this.removeAttribute("autoadvance");
+      return;
+    }
+    this.setAttribute("autoadvance", value === true ? "" : String(value));
+  }
+
+  /** Attribute form of the queue: a JSON array, or a URL to fetch one from. */
+  private applyPlaylist(raw: string | null): void {
+    const trimmed = raw?.trim();
+    // Any write supersedes a fetch still in the air, including a write that
+    // starts one of its own.
+    const token = ++this._playlistFetchToken;
+    if (!trimmed) {
+      this.setPlaylistItems([]);
+      return;
+    }
+    if (trimmed.startsWith("[")) {
+      try {
+        this.setPlaylistItems(
+          MoviElement.normalisePlaylistItems(JSON.parse(trimmed)),
+        );
+      } catch {
+        Logger.warn(TAG, `playlist: ignoring unparseable value ${trimmed}`);
+        this.setPlaylistItems([]);
+      }
+      return;
+    }
+    // Anything else is a URL the same array comes back from. `{ items: […] }`
+    // is accepted alongside a bare array — it is what an API tends to return,
+    // and refusing it would only mean every host writing the same unwrap.
+    void fetch(trimmed)
+      .then((r) =>
+        r.ok ? r.json() : Promise.reject(new Error(`HTTP ${r.status}`)),
+      )
+      .then((data) => {
+        if (token !== this._playlistFetchToken) return;
+        const arr = Array.isArray(data) ? data : (data as any)?.items;
+        this.setPlaylistItems(MoviElement.normalisePlaylistItems(arr));
+      })
+      .catch((err) => {
+        if (token !== this._playlistFetchToken) return;
+        Logger.warn(TAG, `playlist: ${trimmed} could not be read (${err})`);
+      });
+  }
+
+  /** Attribute form of auto-advance: presence, a delay in seconds, `loop`, or
+   *  a delay and `loop` together. An explicit false/off/no is the attribute
+   *  present and declining, which is how a framework writes it. */
+  private applyAutoAdvance(raw: string | null): void {
+    this.cancelAutoAdvance();
+    const tokens = (raw ?? "")
+      .toLowerCase()
+      .split(/[\s,]+/)
+      .filter(Boolean);
+    const declined = tokens.some(
+      (t) => t === "false" || t === "off" || t === "no" || t === "none",
+    );
+    if (raw === null || declined) {
+      this._autoAdvance = false;
+      this._autoAdvanceDelay = 0;
+      this._playlistWraps = false;
+      this.refreshPlaylistUi();
+      return;
+    }
+    this._playlistWraps = tokens.includes("loop") || tokens.includes("wrap");
+    const delay = tokens
+      .map((t) => parseFloat(t))
+      .find((n) => Number.isFinite(n));
+    this._autoAdvanceDelay = delay && delay > 0 ? delay : 0;
+    this._autoAdvance = true;
+    // The wrap moved, so the ends of the list did too.
+    this.refreshPlaylistUi();
+  }
+
+  /** Anything list-shaped, turned into items.
+   *
+   *  A row is kept if it says what to play OR says what it IS — a `src`, or an
+   *  `id`/`title` for the src-less kind the host loads itself. A row that does
+   *  neither is dropped rather than kept as a hole: an index that lands on
+   *  nothing is a worse answer than a shorter queue. */
+  private static normalisePlaylistItems(value: unknown): MoviPlaylistItem[] {
+    if (!Array.isArray(value)) return [];
+    const out: MoviPlaylistItem[] = [];
+    for (const raw of value) {
+      if (typeof raw === "string") {
+        if (raw) out.push({ src: raw });
+        continue;
+      }
+      if (typeof File !== "undefined" && raw instanceof File) {
+        out.push({ src: raw });
+        continue;
+      }
+      if (!raw || typeof raw !== "object") continue;
+      const row = raw as Record<string, unknown>;
+      // `url` and `source` alongside `src`: the three names every feed in the
+      // world uses for the same field.
+      const rawSrc = row.src ?? row.url ?? row.source;
+      const src =
+        (typeof rawSrc === "string" && rawSrc.length > 0) ||
+        (typeof File !== "undefined" && rawSrc instanceof File)
+          ? (rawSrc as string | File)
+          : undefined;
+      const id = typeof row.id === "string" && row.id ? row.id : undefined;
+      const title = typeof row.title === "string" ? row.title : undefined;
+      if (!src && !id && !title) continue;
+      const startRaw = row.startAt ?? row.startat ?? row.start;
+      const start =
+        typeof startRaw === "number"
+          ? startRaw
+          : typeof startRaw === "string"
+            ? parseFloat(startRaw)
+            : NaN;
+      // The host's row is kept underneath, so whatever else it carries — a
+      // channel, a duration, an id of its own shape — comes back on
+      // `itemchange` instead of having to be looked up by index.
+      out.push({
+        ...row,
+        src,
+        id,
+        title,
+        poster: typeof row.poster === "string" ? row.poster : undefined,
+        startAt: Number.isFinite(start) ? start : undefined,
+      });
+    }
+    return out;
+  }
+
+  /** Replace the queue and decide where it opens. */
+  private setPlaylistItems(items: MoviPlaylistItem[]): void {
+    this.cancelAutoAdvance();
+    this._playlist = items;
+    this._playlistIndex = -1;
+    this.dispatchEvent(
+      new CustomEvent("playlistchange", {
+        detail: { items: [...items] },
+        bubbles: true,
+        composed: true,
+      }),
+    );
+    if (!items.length) {
+      this.refreshPlaylistUi();
+      return;
+    }
+
+    // Where the queue opens. An explicit index outranks the adoption below: a
+    // host that says which item it wants has answered the question first.
+    let start = 0;
+    if (this._playlistStartIndex > 0) {
+      start = Math.min(this._playlistStartIndex, items.length - 1);
+    } else {
+      // A source already on the element that IS one of these items is where we
+      // are, not a video to be replaced by itself restarted. This is the common
+      // shape of a page that renders `src` from its own state and hands the same
+      // state over as a queue.
+      const current = this._src;
+      const adopted = current ? items.findIndex((i) => i.src === current) : -1;
+      if (adopted >= 0) {
+        this._playlistIndex = adopted;
+        this.refreshPlaylistUi();
+        return;
+      }
+    }
+
+    // An item with no source is one the HOST loads — see the `itemchange`
+    // contract on `playlist`. The element cannot open it, and announcing a move
+    // to the item the host is already showing would send that host navigating
+    // to where it already is. Adopt the index and say nothing.
+    if (!items[start]?.src) {
+      this._playlistIndex = start;
+      this.refreshPlaylistUi();
+      return;
+    }
+    // Otherwise open it. Not a play: whether the first item starts on its own
+    // is `autoplay`'s question, exactly as it is for a plain `src`.
+    this.loadPlaylistItem(start, false);
+  }
+
+  /** The index `dir` away, or -1 when there is nothing that way. */
+  private resolvePlaylistStep(dir: 1 | -1): number {
+    const n = this._playlist.length;
+    if (n < 2) return -1;
+    // Outside the queue — a host assigned its own `src`. Next starts the queue
+    // rather than resuming it from an index that no longer describes anything;
+    // Previous, with nothing behind it, is nothing.
+    if (this._playlistIndex < 0) return dir > 0 ? 0 : -1;
+    const target = this._playlistIndex + dir;
+    if (target >= 0 && target < n) return target;
+    if (!this._playlistWraps) return -1;
+    return dir > 0 ? 0 : n - 1;
+  }
+
+  /** What the button one step that way is about to play, for its tooltip. */
+  private neighbourItemTitle(dir: 1 | -1): string {
+    const i = this.resolvePlaylistStep(dir);
+    return i < 0 ? "" : this._playlist[i]?.title || "";
+  }
+
+  /**
+   * Move to an item.
+   *
+   * `itemchange` is announced FIRST, and it is cancelable. The move itself is
+   * settled by the time it fires — the buttons, the lock screen and
+   * `playlistIndex` all report the new item either way — but the LOAD is still
+   * the host's to take back. `preventDefault()` means "I own what plays", and
+   * the element then writes nothing at all: not the source, not the title, not
+   * the poster, not the offset.
+   *
+   * That is not an escape hatch, it is the only workable answer for two very
+   * ordinary shapes. A page whose sources are `<source>` / `<track>` children —
+   * a quality ladder, per-language audio, subtitle tracks — cannot say any of
+   * that in an item's one `src`, and writing `src` would HIDE those children
+   * (see _parseChildSources, which only reads them when there is no `src`). A
+   * page where each item is its own route has a URL, a history entry and half a
+   * page of its own to move, none of which a source swap knows about.
+   *
+   * When the load does go ahead, the order of the four writes is not cosmetic.
+   * `startat` goes in FIRST because a File source stands the player up
+   * synchronously inside the `src` setter, and an offset written after that is
+   * an offset for the item after this one. The title and the poster go in LAST
+   * because the same setter runs dispose(), which is entitled to clear both.
+   */
+  private loadPlaylistItem(index: number, autoplay: boolean): boolean {
+    const item = this._playlist[index];
+    if (!item) return false;
+    this.cancelAutoAdvance();
+    const previousIndex = this._playlistIndex;
+    this._playlistIndex = index;
+
+    const proceed = this.dispatchEvent(
+      new CustomEvent("itemchange", {
+        detail: { index, previousIndex, item: { ...item } },
+        bubbles: true,
+        composed: true,
+        cancelable: true,
+      }),
+    );
+    if (!proceed) {
+      // The host is loading it. The ends of the queue still moved.
+      this.refreshPlaylistUi();
+      return true;
+    }
+    if (!item.src) {
+      // A src-less item that nobody claimed. Said out loud rather than left as
+      // a Next button that visibly does nothing: the queue was built for a host
+      // to drive and no host took the wheel.
+      Logger.warn(
+        TAG,
+        `playlist: item ${index} carries no src and itemchange was not prevented — nothing to load`,
+      );
+      this.refreshPlaylistUi();
+      return true;
+    }
+
+    if (item.startAt != null && Number.isFinite(item.startAt)) {
+      this._playlistOwnsStartAt = true;
+      this.setAttribute("startat", String(item.startAt));
+    } else if (this._playlistOwnsStartAt) {
+      this._playlistOwnsStartAt = false;
+      this.removeAttribute("startat");
+    }
+
+    this._playlistSwitching = true;
+    try {
+      this.src = item.src;
+    } finally {
+      this._playlistSwitching = false;
+    }
+
+    if (item.poster) {
+      this._playlistOwnsPoster = true;
+      this.setAttribute("poster", item.poster);
+    } else if (this._playlistOwnsPoster) {
+      this._playlistOwnsPoster = false;
+      this.removeAttribute("poster");
+    }
+
+    // The title is set on the field rather than through the attribute: the
+    // attribute strips itself once applied (so the browser's own tooltip never
+    // appears), which leaves nothing behind to remove when the next item has no
+    // title of its own. _titleAutoLoaded goes false with it — this title came
+    // from the host, so the next dispose() must not treat it as the container's
+    // and throw it away.
+    if (item.title != null) {
+      this._playlistOwnsTitle = true;
+      this._title = item.title;
+      this._titleAutoLoaded = false;
+      this.updateTitle();
+    } else if (this._playlistOwnsTitle) {
+      this._playlistOwnsTitle = false;
+      this._title = null;
+      this.updateTitle();
+    }
+
+    if (autoplay) {
+      // There is nothing to play yet — the load the `src` write scheduled is a
+      // microtask away — so this is the flag the load flushes when it lands.
+      // The play() beside it is for the File path, where the player already
+      // exists by the time we get here, and for the `play` event either way.
+      this._pendingPlay = true;
+      void this.play().catch(() => {});
+    }
+
+    this.refreshPlaylistUi();
+    return true;
+  }
+
+  /**
+   * An item finished. Fires `playlistend` at the end of the list whether or
+   * not auto-advance is on — a host driving the queue itself still wants to
+   * know it ran out — and only then decides whether to move.
+   */
+  private handleItemEnded(): void {
+    if (this._playlist.length < 2) return;
+    const target = this.resolvePlaylistStep(1);
+    if (target < 0) {
+      this.dispatchEvent(
+        new CustomEvent("playlistend", {
+          detail: { index: this._playlistIndex },
+          bubbles: true,
+          composed: true,
+        }),
+      );
+      return;
+    }
+    if (!this._autoAdvance) return;
+    // Through the timer even with no delay at all. This runs from inside the
+    // state change that ended the item, and the first thing the next item does
+    // is dispose() the player that is still mid-transition; a zero timeout is
+    // what keeps the switch out of its own notification.
+    this._autoAdvanceTimer = window.setTimeout(
+      () => {
+        this._autoAdvanceTimer = null;
+        this.loadPlaylistItem(target, true);
+      },
+      Math.max(0, this._autoAdvanceDelay * 1000),
+    );
+  }
+
+  /** Drop a pending advance. Anything that replaces the source has already
+   *  decided what plays next, so the timer from the last one is stale. */
+  private cancelAutoAdvance(): void {
+    if (this._autoAdvanceTimer !== null) {
+      clearTimeout(this._autoAdvanceTimer);
+      this._autoAdvanceTimer = null;
+    }
+  }
+
+  /** A host assigned `src` itself while a queue was up. The index no longer
+   *  describes what is playing, unless the new source happens to be in the
+   *  list — in which case it describes it exactly. */
+  private notePlaylistDetached(value: string | File | null): void {
+    if (!this._playlist.length) return;
+    const found = value ? this._playlist.findIndex((i) => i.src === value) : -1;
+    if (found === this._playlistIndex) return;
+    this._playlistIndex = found;
+    this.cancelAutoAdvance();
+    this.refreshPlaylistUi();
+  }
+
+  /**
+   * Everything that reads the queue: whether the two buttons are on the bar at
+   * all, whether each of them can do anything, and the lock screen's own pair.
+   */
+  private refreshPlaylistUi(): void {
+    // One item is not a queue. The buttons stay off the bar for it — a Next
+    // that can never be pressed is a control that only takes up room.
+    this.classList.toggle("movi-has-playlist", this._playlist.length > 1);
+    const sr = this.shadowRoot;
+    const prev = sr?.querySelector(".movi-prev-btn") as HTMLButtonElement | null;
+    const next = sr?.querySelector(".movi-next-btn") as HTMLButtonElement | null;
+    if (prev) prev.disabled = !this.hasPrevious;
+    if (next) next.disabled = !this.hasNext;
+    // A tooltip naming the item it was about to play, still open across the
+    // switch that played it.
+    const tipped = this.controlTipFor;
+    if (tipped && (tipped === prev || tipped === next)) {
+      this.showControlTip(tipped);
+    }
+    this.updatePlaylistMediaSession();
+  }
+
+  /**
+   * The lock screen's skip pair. Set and cleared rather than registered once:
+   * a handler is what MAKES the button appear, so leaving one in place at the
+   * end of the queue offers a Next that does nothing.
+   */
+  private updatePlaylistMediaSession(): void {
+    if (!("mediaSession" in navigator)) return;
+    const ms = navigator.mediaSession;
+    const set = (
+      action: MediaSessionAction,
+      handler: MediaSessionActionHandler | null,
+    ) => {
+      try {
+        ms.setActionHandler(action, handler);
+      } catch {
+        // Same reason as setupMediaSession: a build without the action.
+      }
+    };
+    // …and off entirely where the host switched the queue off. The lock screen
+    // is the one surface a page cannot restyle its way out of.
+    const off = this.isControlDisabled("playlist");
+    set(
+      "previoustrack",
+      !off && this.hasPrevious
+        ? () => {
+            this.previous();
+          }
+        : null,
+    );
+    set(
+      "nexttrack",
+      !off && this.hasNext
+        ? () => {
+            this.next();
+          }
+        : null,
+    );
+  }
+
   /** Chapters given by the host, kept so a source/player rebuild can re-apply
    *  them — the player instance is recreated on quality switches and recovery,
    *  and a fresh one only knows about the container's own chapters. */

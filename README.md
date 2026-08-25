@@ -409,6 +409,65 @@ player.chapters = [
 
 A URL that fails to load falls back to the same title-only tile a missing frame gets.
 
+### Playlists
+
+A list of things to play, and the bar grows the two buttons that walk it. `Shift+N` / `Shift+P` do the same, and so do the skip controls on the lock screen.
+
+```html
+<movi-player controls autoadvance
+  playlist='[
+    {"src":"ep1.mkv","title":"Pilot","poster":"1.jpg"},
+    {"src":"ep2.mkv","title":"The Return","startAt":92}
+  ]'>
+</movi-player>
+```
+
+Bare strings work where you have nothing but URLs — `playlist='["ep1.mkv","ep2.mkv"]'` — and anything that isn't a JSON array is read as a URL the array is fetched from (`playlist="/season-1.json"`, a bare array or `{ "items": [...] }`).
+
+Or as a property, which is where the rest of the API lives:
+
+```js
+player.playlist = [{ src: "ep1.mkv", title: "Pilot" }, { src: "ep2.mkv" }];
+
+player.next();            // false if there is nothing next
+player.previous();
+player.playItem(3);
+player.playlistIndex;     // where the queue is; writing it syncs, playItem() moves
+player.playlistItem;      // { src, title?, poster?, startAt? }
+player.hasNext;           // what the buttons grey out on
+
+player.addEventListener("itemchange", (e) => {
+  highlight(e.detail.index);            // also .previousIndex, .item
+});
+player.addEventListener("playlistend", () => showRecommendations());
+```
+
+An item owns four things — `src`, `title`, `poster`, `startAt` — and owns them strictly: an item without a title clears the title the last one set. Anything you set for the whole player is left alone.
+
+**Queues the host loads.** `src` is optional. Leave it off and the element never loads anything — it just owns the queue as a control surface (the two buttons, the keys, the lock-screen pair, which end is dead) and announces every move as a **cancelable** `itemchange`:
+
+```js
+player.playlist = videos.map(v => ({ id: v.id, title: v.title, poster: v.thumbnail }));
+
+player.addEventListener("itemchange", (e) => {
+  e.preventDefault();                        // the element writes nothing
+  router.push(`/watch/${e.detail.item.id}`);
+});
+```
+
+Use this whenever a source is more than a URL. A `<source>` quality ladder, per-language audio and `<track>` subtitles can't be said in one `src` — and an item that *has* a `src` would hide those children outright, since they're only read when the element has none. Swapping the children yourself from the handler keeps the ladder, and keeps fullscreen and the unlocked `AudioContext` with it. Opening such a queue is silent: the first item is adopted, not announced, because you're already showing it.
+
+`autoadvance` is off by default. Bare, the next item starts the moment one ends; `autoadvance="5"` waits five seconds; `autoadvance="loop"` joins the ends of the list, for the buttons as much as for the advance; `autoadvance="5 loop"` does both. The element's own `loop` is a different thing and wins over all of it — it repeats the item, so nothing ever ends.
+
+Setting a list opens its first item, *unless* the element is already playing one of them:
+
+```html
+<!-- opens on episode 2, and knows it is the second of three -->
+<movi-player src="ep2.mkv" playlist='["ep1.mkv","ep2.mkv","ep3.mkv"]' controls></movi-player>
+```
+
+Hide the pair with `controlslist="noplaylist"` — which takes the keys and the lock-screen buttons with it.
+
 ### Remembering Viewer Settings
 
 By default the player remembers volume, mute, speed, and its toggles on its own. The `persist` attribute takes over that decision explicitly — an opt-in list of exactly what is remembered:
@@ -742,13 +801,16 @@ Every attribute can also be read and set as a JS property (`el.rotate = 90`). Gr
 </details>
 
 <details>
-<summary><b>Chapters & persistence</b> — <code>chapters</code>, <code>persist</code>, <code>persistkey</code></summary>
+<summary><b>Chapters, playlists & persistence</b> — <code>chapters</code>, <code>playlist</code>, <code>autoadvance</code>, <code>persist</code>, <code>persistkey</code></summary>
 
 <br />
 
 | Attribute | Example | Description |
 |---|---|---|
 | `chapters` | `chapters='[{"title":"Intro","start":0}]'` | Chapters from outside the media file — JSON array of `{title, start, end?, image?}` (seconds); `image` is artwork for the timeline tile, in place of a decoded frame. The property takes the array directly |
+| `playlist` | `playlist='[{"src":"ep1.mkv","title":"Pilot"}]'` | A queue — JSON array of `{src, title?, poster?, startAt?}`, of bare source strings, or a URL to fetch that array from. Adds Previous/Next to the bar, `Shift+P`/`Shift+N`, and the lock screen's skip pair. See [Playlists](#playlists) |
+| `playlistindex` | `playlistindex="2"` | Which item to open on. Default 0 |
+| `autoadvance` | `autoadvance="5 loop"` | Let the end of one item start the next. Off by default; a number is the gap in seconds, `loop` joins the ends of the queue. The element's own `loop` wins — it repeats the item, so nothing ends |
 | `persist` | `persist="volume speed audiolang"` | Which settings to remember across loads — space-separated, opt-in per setting; see [Remembering Viewer Settings](#remembering-viewer-settings) |
 | `persistkey` | `persistkey="my-app"` | Namespace for everything `persist` stores |
 

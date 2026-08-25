@@ -539,6 +539,9 @@ The custom element re-exposes player activity as DOM events so you can wire `add
 | `leavepictureinpicture` | —                                   | `HTMLVideoElement` alias, fired alongside `pipchange` |
 | `qualitychange`        | `{ trackId: number }`                | Active video quality / track switched              |
 | `subtitledelaychange`  | `{ subtitleDelay: number }`          | Subtitle offset changed via property/attribute     |
+| `playlistchange`       | `{ items: MoviPlaylistItem[] }`      | The queue was replaced (see [`playlist`](./element.md#playlist)) |
+| `itemchange`           | `{ index, previousIndex, item }`     | **Cancelable** — the queue moved to another item and is about to load it. `preventDefault()` takes back the load, not the move, so a host whose sources are `<source>`/`<track>` children (or whose items are routes) can own what plays. See [Queues the host loads](./element.md#queues-the-host-loads) |
+| `playlistend`          | `{ index: number }`                  | The last item ended with nothing after it. Fires whether or not [`autoadvance`](./element.md#autoadvance) is on |
 | `coverart`             | `ImageBitmap \| null`                | Embedded cover art extracted at load (close the bitmap when done) |
 | `preloadcomplete`      | —                                    | Initial preload buffer filled, ready to play       |
 | `linearmode`           | —                                    | Source server ignores `Range` (`200`, not `206`) — playback is forward-only via a sliding RAM window; hide seek-dependent UI |
