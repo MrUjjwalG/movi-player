@@ -1695,6 +1695,37 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
    * forget at any single call site, and forgetting it is a decoder error two
    * seconds later with nothing nearby to blame.
    */
+  /**
+   * Drop stashed video the picture has already gone past, up to the first
+   * keyframe that is still ahead of it. Cheap: a scan of a queue that is only
+   * ever a few hundred entries, and only while it is non-empty.
+   */
+  private trimOvertakenReadAhead(): void {
+    const stash = this._videoAheadStash;
+    if (stash.length === 0) return;
+    const onScreen = this.videoRenderer?.getCurrentTime?.() ?? -1;
+    if (!(onScreen > 0)) return;
+    if (stash[0].timestamp >= onScreen) return; // head is still ahead — nothing stale
+    // The first keyframe at or past the screen is the only place the run can be
+    // cut without orphaning what follows.
+    let cut = -1;
+    for (let i = 0; i < stash.length; i++) {
+      if (stash[i].timestamp >= onScreen && stash[i].keyframe) {
+        cut = i;
+        break;
+      }
+    }
+    if (cut <= 0) return; // nothing to cut, or the keyframe is already the head
+    let bytes = 0;
+    for (let i = 0; i < cut; i++) bytes += stash[i].data.length;
+    this._videoAheadStash = stash.slice(cut);
+    this._videoAheadStashBytes = Math.max(0, this._videoAheadStashBytes - bytes);
+    Logger.debug(
+      TAG,
+      `Read-ahead: dropped ${cut} packet(s) the picture had passed (up to keyframe ${stash[cut].timestamp.toFixed(3)}s, screen ${onScreen.toFixed(3)}s)`,
+    );
+  }
+
   private dropVideoReadAhead(): void {
     if (this._videoAheadStash.length === 0) return;
     this._videoAheadStash = [];
@@ -7248,6 +7279,22 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
         ) {
           this.dropVideoReadAhead();
         }
+
+        // Ground the picture has already passed. The stash is a queue of video
+        // read ahead, and on a long enough run the picture overtakes its head:
+        // measured on 8K60 AV1 after coming back from 2x, 460 packets with the
+        // OLDEST at 35.133s while the screen was showing 41.283s — six seconds
+        // behind. Every frame those make is refused as older than what is on
+        // screen, then pruned, so the decoder spends itself producing pictures
+        // that can never be shown while the one thing it is short of is time.
+        // That is what holds the picture still for seconds after a speed
+        // change; it starts again only when the head finally passes the screen.
+        //
+        // So skip them — but only as far as a keyframe, because everything
+        // after the cut needs its references. No keyframe in the stale run
+        // means no clean cut is available and it is left alone; better a hold
+        // than an orphaned decoder.
+        this.trimOvertakenReadAhead();
 
         let packet: Packet | null;
         let fromAheadStash = false;
