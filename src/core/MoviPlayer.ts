@@ -6710,7 +6710,18 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
         // demuxer can reach EOF seconds earlier on a small, fully-buffered file,
         // and measuring from there would expire the wait before it began. Same
         // shape as the audio watchdog above.
-        if (this._eofPictureDrainSince === 0) {
+        //
+        // ARMED means timeDone — the clock has reached the end of the content.
+        // Without that gate this stamped the moment `eofReached` went true, and
+        // that only says the DEMUXER ran out. On a transport stream read ahead
+        // into a deep stash it runs out minutes before the picture gets there,
+        // so the watchdog armed early and forced `ended` two seconds later with
+        // most of the file unplayed. Reported as "EOF happens far too soon" on
+        // a 457s 4K HEVC .ts. Reset while not armed, so a spell of eofReached
+        // that the clock never catches up to cannot bank time towards it.
+        if (!timeDone) {
+          this._eofPictureDrainSince = 0;
+        } else if (this._eofPictureDrainSince === 0) {
           this._eofPictureDrainSince = performance.now();
         } else if (
           performance.now() - this._eofPictureDrainSince >
@@ -7342,6 +7353,16 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
           // again — it drains as soon as the sound is comfortable.
           (this.eofReached ||
             !gateOnAudio ||
+            // No audio track means no sound to hold the drain open for, and
+            // its buffer reads 0 forever — so this rule, meant to keep the
+            // loop reading while the sound runs low, instead never let the
+            // stash drain at all. Measured on a video-only 4K HEVC transport
+            // stream: the loop swallowed the ENTIRE file into the stash in 4.4
+            // seconds — 11,131 packets, one null read, and not a single read
+            // afterwards — then played the next minute out of memory with the
+            // demuxer idle and eofReached latched. Whatever the stash could not
+            // hold was the rest of the film.
+            !hasAudioToStarve ||
             this.audioRenderer.getBufferedDuration() >=
               maxAudioBuffered * MoviPlayer.STASH_DRAIN_AUDIO_FRACTION)
         ) {
