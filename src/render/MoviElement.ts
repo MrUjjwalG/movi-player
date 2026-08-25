@@ -535,6 +535,8 @@ export class MoviElement extends HTMLElement {
   private isOverControls: boolean = false;
   /** Document-level "you tapped somewhere else" — see where it is set up. */
   private _outsideTapHandler: ((e: Event) => void) | null = null;
+  /** The bar's post-touch re-show, pending — cancellable by a tap elsewhere. */
+  private _barTouchReshowTimer: number | undefined;
   private isSeeking: boolean = false;
   private pendingSeekTarget: number | null = null; // Coalesces rapid currentTime sets while a seek is in flight
   private _pendingSeek: number | null = null; // Seek requested before the player was ready; applied on the next seekable state
@@ -4446,7 +4448,12 @@ export class MoviElement extends HTMLElement {
     controlsContainer?.addEventListener(
       "touchend",
       () => {
-        setTimeout(() => {
+        // Kept, so a tap that lands somewhere else in the meantime can call it
+        // off — see the outside-tap handler. A finger leaving the bar is not
+        // the same statement as a finger arriving somewhere else, and this
+        // timer was written only to hear the first one.
+        clearTimeout(this._barTouchReshowTimer);
+        this._barTouchReshowTimer = window.setTimeout(() => {
           this.isOverControls = false;
           // Re-arm the auto-hide timer after a touch interaction with the
           // bar or a popup menu. Always call showControls() — it re-checks
@@ -4477,13 +4484,26 @@ export class MoviElement extends HTMLElement {
       if (!this._controls) return;
       if ((e.composedPath?.() ?? []).includes(this)) return;
       this.isOverControls = false;
-      // The same gates the inactivity timer answers to, minus the one this
-      // event has just settled. A menu still open is left alone: the handlers
-      // that close it run on the click that follows this, and taking the bar
-      // out from under an open menu mid-tap leaves the menu believing it is
-      // still up. Its own timer catches that case a moment later.
+      // The bar's own touchend arms a re-show a second later, to re-arm the
+      // auto-hide after a finger has finished with it. That second may not be
+      // up yet — and if it is not, it would put the bar straight back after
+      // this hide. With a source loaded the inactivity timer then took it away
+      // again three seconds later and the bounce passed for a slow hide; with
+      // nothing loaded that timer never arms, so the bar came back and stayed.
+      clearTimeout(this._barTouchReshowTimer);
+      // The inactivity timer's gates, minus two. The one this event has just
+      // settled, obviously — and the source check, which is not this event's
+      // business: the timer skips an empty player because auto-hiding chrome
+      // nobody asked to hide would look broken with nothing loaded, but a tap
+      // somewhere else IS the asking. Gating on it left the "Nothing to Play"
+      // state as the one place a touch could raise the bar (a tap on it) and
+      // never put it down again. It comes back the same way it went up.
+      //
+      // A menu still open is left alone: the handlers that close it run on the
+      // click that follows this, and taking the bar out from under an open
+      // menu mid-tap leaves the menu believing it is still up. Its own timer
+      // catches that case a moment later.
       if (
-        this.hasMediaSource() &&
         !this._isUnsupported &&
         !this.isDragging &&
         !this.isTouchDragging &&
