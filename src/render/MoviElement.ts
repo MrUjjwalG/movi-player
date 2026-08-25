@@ -533,6 +533,8 @@ export class MoviElement extends HTMLElement {
   private _lastStripDispatched: boolean | null = null;
   private controlsTimeout: number | null = null;
   private isOverControls: boolean = false;
+  /** Document-level "you tapped somewhere else" — see where it is set up. */
+  private _outsideTapHandler: ((e: Event) => void) | null = null;
   private isSeeking: boolean = false;
   private pendingSeekTarget: number | null = null; // Coalesces rapid currentTime sets while a seek is in flight
   private _pendingSeek: number | null = null; // Seek requested before the player was ready; applied on the next seekable state
@@ -4459,6 +4461,40 @@ export class MoviElement extends HTMLElement {
       },
       { passive: true },
     );
+
+    // A tap that lands outside the player is touch's version of the pointer
+    // leaving — and touch has no other version. The bar hides on mouseleave
+    // and, failing that, on three seconds of inactivity; a finger produces
+    // neither. Tapping the bar and then tapping something else on the page
+    // left the chrome sitting over the picture, because as far as the player
+    // could tell nothing had happened since the tap.
+    //
+    // pointerdown rather than click: it is the first thing a tap does, and a
+    // page whose own handler swallows the click still gets the down. Capture,
+    // for the same reason. composedPath rather than the target, or every tap
+    // on something inside the shadow root would read as a tap on the document.
+    this._outsideTapHandler = (e: Event) => {
+      if (!this._controls) return;
+      if ((e.composedPath?.() ?? []).includes(this)) return;
+      this.isOverControls = false;
+      // The same gates the inactivity timer answers to, minus the one this
+      // event has just settled. A menu still open is left alone: the handlers
+      // that close it run on the click that follows this, and taking the bar
+      // out from under an open menu mid-tap leaves the menu believing it is
+      // still up. Its own timer catches that case a moment later.
+      if (
+        this.hasMediaSource() &&
+        !this._isUnsupported &&
+        !this.isDragging &&
+        !this.isTouchDragging &&
+        !this._vrPadDragging &&
+        !this.isAnyMenuOpen() &&
+        !this.isTimelineOpen()
+      ) {
+        this.hideControls();
+      }
+    };
+    document.addEventListener("pointerdown", this._outsideTapHandler, true);
 
     controlsContainer?.addEventListener("mouseleave", (e) => {
       // Check if mouse is moving to another part of controls
@@ -24214,6 +24250,10 @@ export class MoviElement extends HTMLElement {
       this.handleContextRestored,
     );
     document.removeEventListener("visibilitychange", this._onVisibilityChange);
+    if (this._outsideTapHandler) {
+      document.removeEventListener("pointerdown", this._outsideTapHandler, true);
+      this._outsideTapHandler = null;
+    }
     // Cleanup nerd stats interval
     if (this.nerdStatsInterval) {
       clearInterval(this.nerdStatsInterval);
