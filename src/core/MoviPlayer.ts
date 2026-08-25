@@ -1425,6 +1425,18 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
   private static readonly VIDEO_LAG_S = 0.5;
   /** Long enough that an ordinary hitch heals itself first. */
   private static readonly VIDEO_LAG_SUSTAIN_MS = 2000;
+  /** How long the video-only ending waits for the renderer's queue to run out
+   *  once the clock has armed it. Only ever runs at the very end of a file. */
+  private static readonly EOF_PICTURE_DRAIN_MS = 2000;
+  /** How long the decoder must have emitted nothing before an empty renderer
+   *  queue is taken to mean the picture is finished rather than between
+   *  callbacks. Several frame intervals at any rate we play. */
+  private static readonly EOF_PICTURE_SETTLE_MS = 150;
+  /** One-shot: the decoder is asked for its reorder tail once per EOF. */
+  private _eofFlushRequested = false;
+  /** When the video-only ending was armed (timeDone first true), so the drain
+   *  wait above is measured from then and not from a much earlier EOF. */
+  private _eofPictureDrainSince = 0;
   /**
    * How long after a speed change the picture may trail the sound without us
    * reaching for a seek. Longer than the seek window above because a rate
@@ -4658,6 +4670,8 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
       this.pendingPrebufferPackets = [];
       this.dropVideoReadAhead();
       this.eofReached = false;
+      this._eofPictureDrainSince = 0;
+    this._eofFlushRequested = false;
       this.eofSince = 0;
     } else {
       // Resume from pause — just resume AudioContext
@@ -6442,6 +6456,20 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
 
     // Check if we've reached EOF and decoders are empty - transition to ended
     if (this.eofReached) {
+      // Ask the decoder for its tail, once. WebCodecs holds reordered frames in
+      // its DPB until a flush — on H.264 with B-frames that is the last few
+      // pictures of the file, and nothing else was ever going to ask for them:
+      // no more packets are coming, so the decoder simply goes quiet holding
+      // them. Measured on an 8.008s 720p59.94 video-only clip, after the
+      // clock-margin fix below: 471 of 480 frames, the last at 7.941s, with
+      // three frames still inside the decoder and msSinceLastFrame growing.
+      // flush() emits them and leaves the decoder configured.
+      if (!this._eofFlushRequested && !this.videoDecoder.isWaitingForKeyframe) {
+        this._eofFlushRequested = true;
+        this.videoDecoder.flush().catch(() => {
+          /* a decoder that cannot flush has nothing left to give */
+        });
+      }
       const currentTime = this.clock.getTime();
       const duration = this.mediaInfo?.duration ?? 0;
       const timeDone =
@@ -6520,8 +6548,52 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
         }
       } else {
         // Video-only: WebCodecs decodeQueueSize drops to 0 before all output
-        // callbacks fire, making queue-based end unreliable. Use clock only.
-        if (timeDone) {
+        // callbacks fire, so the DECODER's queue cannot say when the picture is
+        // finished, and the clock is what arms the ending instead.
+        //
+        // But arming is not finishing, and ending on the clock alone threw the
+        // tail away. `timeDone` fires half a second before the duration, which
+        // at 59.94fps is thirty frames. Measured on an 8.008s 720p59.94
+        // video-only clip: 450 of 480 frames presented, the last at 7.524s, the
+        // clock paused at 7.5238s — 0.484s short, every single time.
+        //
+        // The RENDERER's queue is the honest signal the decoder's is not: it
+        // holds decoded frames, not chunks the decoder has merely accepted, and
+        // it drains as they are presented. So let the clock arm the ending and
+        // let the picture running out finish it.
+        // An empty renderer queue is necessary but not sufficient. This is what
+        // the note above about decodeQueueSize was really warning of: the queue
+        // can read zero for an instant while the decoder still has output
+        // callbacks in flight, and ending there clips whatever was about to
+        // arrive. Requiring the queue AND a decoder that has gone quiet took
+        // the same clip from 4 frames short to none — at 59.94fps a frame is
+        // due every 16.7ms, so a decoder silent for EOF_PICTURE_SETTLE_MS has
+        // genuinely finished rather than merely paused between callbacks.
+        const pictureLeft = (this.videoRenderer?.getQueueSize() ?? 0) > 0;
+        const decoderQuiet =
+          (this.videoDecoder?.msSinceLastFrame?.() ?? Number.POSITIVE_INFINITY) >
+          MoviPlayer.EOF_PICTURE_SETTLE_MS;
+        if (timeDone && !pictureLeft && decoderQuiet) {
+          this.handleEnded();
+          return;
+        }
+        // …and never wait on it forever. A last frame whose PTS sits past the
+        // container's declared duration can never come due against a clock that
+        // getTime() clamps to that duration, and the queue would hold it for
+        // good. Stamped from when the ending was ARMED, not from eofSince — the
+        // demuxer can reach EOF seconds earlier on a small, fully-buffered file,
+        // and measuring from there would expire the wait before it began. Same
+        // shape as the audio watchdog above.
+        if (this._eofPictureDrainSince === 0) {
+          this._eofPictureDrainSince = performance.now();
+        } else if (
+          performance.now() - this._eofPictureDrainSince >
+          MoviPlayer.EOF_PICTURE_DRAIN_MS
+        ) {
+          Logger.warn(
+            TAG,
+            `EOF watchdog: ${this.videoRenderer?.getQueueSize() ?? 0} frame(s) never came due; ending`,
+          );
           this.handleEnded();
           return;
         }
@@ -7875,6 +7947,8 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
       this.clock.seek(t + this.startTime);
       this.seekKeyframeOffset = 0;
       this.eofReached = false;
+      this._eofPictureDrainSince = 0;
+    this._eofFlushRequested = false;
       this.eofSince = 0;
       // Honor a resume intent, mirroring what the video path does in
       // notifySeekCompletion. play()'s first-play (and replay) branch sets
@@ -8118,6 +8192,8 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
 
       // Reset EOF flag after seek - we're now at a new position
       this.eofReached = false;
+      this._eofPictureDrainSince = 0;
+    this._eofFlushRequested = false;
       this.eofSince = 0;
       // A seek re-aligns the audio source too, so the automatic-recovery budget
       // starts fresh — a failure burst earlier in the file shouldn't leave a
@@ -10332,6 +10408,7 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
     // The cursor is moving backwards; whatever the loop decided about the end
     // of the file no longer holds.
     this.eofReached = false;
+    this._eofPictureDrainSince = 0;
     this.eofSince = 0;
     try {
       await dm.seek(target);
@@ -11749,6 +11826,8 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
       this.pendingPrebufferPackets = [];
       this.dropVideoReadAhead();
       this.eofReached = false;
+      this._eofPictureDrainSince = 0;
+    this._eofFlushRequested = false;
       this.eofSince = 0;
     } catch (err) {
       Logger.error(TAG, "Subtitle prefetch failed", err);
@@ -12578,6 +12657,8 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
       // video, background processLoop may have raced to EOF; without this
       // reset, processLoop would early-return and playback stalls.
       this.eofReached = false;
+      this._eofPictureDrainSince = 0;
+    this._eofFlushRequested = false;
       this.eofSince = 0;
 
       // Seek demuxer to nearest keyframe before current audio position
