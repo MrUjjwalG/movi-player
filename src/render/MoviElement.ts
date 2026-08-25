@@ -17317,13 +17317,24 @@ export class MoviElement extends HTMLElement {
         height: var(--movi-progress-height-hover);
         transform: translateY(-50%);
         border-radius: 2px;
-        /* Two layers, in the same order the thin bar stacks them: the hover
-           range on top of the played/buffered/track gradient, so a raised
-           section shows the same band as the rest of the bar. It is drawn as
-           its own layer rather than as more stops in one gradient because the
-           band can sit either side of the playhead, and a single gradient
-           needs its stops in order — which "either side" cannot promise.
-           Collapsed to nothing (from == to) when the pointer is elsewhere. */
+        /* The groove is a background COLOUR under the gradients, not the last
+           stop inside one of them — because the buffer is translucent white and
+           the groove it sits on is ALSO white, at the same alpha once the bar is
+           hovered (0.25). Painted as a stop the buffer REPLACED the groove
+           instead of stacking on it, so the two came out the same colour and the
+           buffered stretch of the raised chapter vanished — the one section you
+           were pointing at was the one that stopped saying how far it had
+           loaded. As a layer over the colour it composites exactly the way the
+           thin bar's buffer element does over the track.
+
+           Then two gradient layers, in the same order the thin bar stacks them:
+           the hover range on top of the played/buffered one, so a raised section
+           shows the same band as the rest of the bar. The band is its own layer
+           rather than more stops in one gradient because it can sit either side
+           of the playhead, and a single gradient needs its stops in order —
+           which "either side" cannot promise. Collapsed to nothing (from == to)
+           when the pointer is elsewhere. */
+        background-color: var(--movi-progress-bg);
         background-image:
           linear-gradient(
             to right,
@@ -17336,7 +17347,7 @@ export class MoviElement extends HTMLElement {
             to right,
             var(--movi-primary) 0 var(--movi-seg-played, 0%),
             rgba(255, 255, 255, 0.25) var(--movi-seg-played, 0%) var(--movi-seg-buffered, 0%),
-            var(--movi-progress-bg) var(--movi-seg-buffered, 0%) 100%
+            transparent var(--movi-seg-buffered, 0%) 100%
           );
         transition: height 0.18s cubic-bezier(0.4, 0, 0.2, 1);
       }
