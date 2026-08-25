@@ -1732,6 +1732,9 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
   private static readonly VIDEO_AHEAD_ENGAGE_AUDIO_S = 0.5;
   private static readonly VIDEO_AHEAD_RELEASE_AUDIO_S = 1.25;
   private static readonly VIDEO_AHEAD_MAX_BYTES = 48 * 1024 * 1024;
+  /** How much of the audio target must be in hand before the loop goes back to
+   *  handing stashed video to the decoder instead of reading for sound. */
+  private static readonly STASH_DRAIN_AUDIO_FRACTION = 0.5;
 
   // Audio packets collected during the current demux burst, handed to the
   // decoder as ONE batch when the tick ends. Only used when the software path
@@ -6911,8 +6914,20 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
       gateOnAudio &&
       audioInPipeline &&
       !skipVideoBackpressure &&
-      videoBufferFull &&
-      !videoDecoderFull &&
+      // Either queue being full is a reason to hold video and go for the audio
+      // behind it. It used to be the renderer's alone, with `!videoDecoderFull`
+      // standing the whole thing down whenever the DECODER was the blockage —
+      // on the reasoning that reading further ahead of a decoder that cannot
+      // keep up only grows the stash. But the stash is bounded (see
+      // VIDEO_AHEAD_MAX_PACKETS / _MAX_BYTES), so it fills and stops, while the
+      // audio buried between those packets keeps being read.
+      //
+      // Standing down there is what starved the audio. Measured on 8K60 AV1:
+      // the video decoder queue pinned at its cap of 30, the demux loop stopped
+      // on it, the audio DECODER queue read 0 the whole time because nothing
+      // reached it, and the audio buffer fell 1.66s -> 0.00s in a straight line
+      // over 1.7 seconds and then stalled. The same shape at 1x, just slower.
+      (videoBufferFull || videoDecoderFull) &&
       !videoAheadStashFull &&
       this._videoAheadActive &&
       this.pendingPrebufferPackets.length === 0;
@@ -6998,7 +7013,12 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
       !bufferingForVideo &&
       audioBuffered > maxAudioBuffered;
     if (
-      (!skipVideoBackpressure && !skipVideoDecodeForAudio && this.videoDecoder.queueSize > maxVideoQueue) ||
+      (!skipVideoBackpressure &&
+        !skipVideoDecodeForAudio &&
+        // Stashing does not feed the decoder, so its queue being full is no
+        // reason to stop reading — the audio behind those packets is the point.
+        !videoReadAheadForAudio &&
+        this.videoDecoder.queueSize > maxVideoQueue) ||
       (gateOnAudio && this.audioDecoder.queueSize > maxAudioQueue) ||
       (gateOnAudio &&
         !catchingUpVideo &&
@@ -7168,7 +7188,9 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
         // seek "fixed" it.
         const drainingStash = this.pendingPrebufferPackets.length > 0;
         if (
-          (!skipVideoDecodeForAudio && this.videoDecoder.queueSize > maxVideoQueue) ||
+          (!skipVideoDecodeForAudio &&
+            !videoReadAheadForAudio &&
+            this.videoDecoder.queueSize > maxVideoQueue) ||
           (!drainingStash && !this.disableAudio && this.audioDecoder.queueSize > maxAudioQueue)
         ) {
           // Queue getting full, stop to let decoders catch up
@@ -7234,7 +7256,22 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
         } else if (
           this._videoAheadStash.length > 0 &&
           ((this.videoRenderer?.getQueueSize() ?? 0) <= maxVideoBuffered ||
-            this.eofReached)
+            this.eofReached) &&
+          // …but not while the sound is running out. Draining the stash feeds
+          // the decoder without touching the demuxer, so a deep stash and an
+          // empty renderer together meant the loop spent every burst handing
+          // video back and never read a packet again — and the audio
+          // interleaved behind those packets never arrived. Measured on 8K60
+          // AV1 at 2x: a 353-packet stash draining while the audio buffer went
+          // 1.63s -> 0.00s in a straight line underneath it.
+          //
+          // Read live: this is inside the burst, and the tick-level snapshot is
+          // stale by the time it matters. The stash is not lost, only deferred
+          // again — it drains as soon as the sound is comfortable.
+          (this.eofReached ||
+            !gateOnAudio ||
+            this.audioRenderer.getBufferedDuration() >=
+              maxAudioBuffered * MoviPlayer.STASH_DRAIN_AUDIO_FRACTION)
         ) {
           fromAheadStash = true;
           // Room in the renderer again — hand back the video that was read past
@@ -7379,8 +7416,15 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
               !fromAheadStash &&
               (mustQueueBehindStash ||
                 (videoReadAheadForAudio &&
-                  (this.videoRenderer?.getQueueSize() ?? 0) >
-                    maxVideoBuffered))
+                  // Measured live. `videoAheadStashFull` is decided once a tick,
+                  // and a burst can push hundreds past it: 353 packets against a
+                  // 180 cap on one 8K rate change.
+                  this._videoAheadStash.length <
+                    MoviPlayer.VIDEO_AHEAD_MAX_PACKETS &&
+                  this._videoAheadStashBytes <
+                    MoviPlayer.VIDEO_AHEAD_MAX_BYTES &&
+                  ((this.videoRenderer?.getQueueSize() ?? 0) > maxVideoBuffered ||
+                    this.videoDecoder.queueSize > maxVideoQueue)))
             ) {
               this._videoAheadStash.push(packet);
               this._videoAheadStashBytes += packet.data.length;
