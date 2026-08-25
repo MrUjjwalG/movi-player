@@ -100,6 +100,13 @@ export class CanvasRenderer {
   // drawn frame. Lets MoviElement sample average color via a 256-pixel
   // readPixels (sync, ~microseconds) instead of an 8K canvas readback
   // (~100ms GPU stall). Created lazily when ambient mode turns on.
+  /** Frames turned down by the no-going-backwards rule since anything last
+   *  reached the screen — see selectFrameForPresentation. */
+  private _backwardsRefused = 0;
+  private _backwardsReportedAt = 0;
+  /** Only worth saying once the hold is longer than any ordinary gap. */
+  private static readonly BACKWARDS_REPORT_AFTER_MS = 250;
+  private static readonly BACKWARDS_REPORT_EVERY_MS = 2000;
   private static readonly AMBIENT_SIZE = 16;
   private ambientFbo: WebGLFramebuffer | null = null;
   private ambientTex: WebGLTexture | null = null;
@@ -3130,6 +3137,7 @@ export class CanvasRenderer {
       // stale-frame drop, clearQueue on a real seek) all reset lastPresentedPts
       // to -1, so a genuine backward seek is untouched.
       if (this.lastPresentedPts >= 0 && frameTime < this.lastPresentedPts - 0.0005) {
+        this._backwardsRefused++;
         continue;
       }
 
@@ -3211,6 +3219,35 @@ export class CanvasRenderer {
     }
 
     // If we found a frame, update tracking and remove old frames
+    // Say when the picture is being held still by the rule above.
+    //
+    // It was silent, and that is why it went unexplained across three separate
+    // reports: the viewer sees the picture stop and then jump, and the log for
+    // that stretch carries nothing at all — no state change, no seek, no drop.
+    // Every other thing that can stop the picture announces itself; this did
+    // not. Rate-limited to one line an episode, and it says how long and how
+    // far, which is what tells this apart from a decoder that is merely slow.
+    if (this._backwardsRefused > 0 && !bestFrame) {
+      const heldMs = performance.now() - this._lastPresentAt;
+      if (
+        heldMs > CanvasRenderer.BACKWARDS_REPORT_AFTER_MS &&
+        performance.now() - this._backwardsReportedAt >
+          CanvasRenderer.BACKWARDS_REPORT_EVERY_MS
+      ) {
+        this._backwardsReportedAt = performance.now();
+        const head = this.frameQueue.length
+          ? this.frameQueue[0].timestamp / 1_000_000
+          : NaN;
+        Logger.warn(
+          TAG,
+          `Picture held at ${this.lastPresentedPts.toFixed(3)}s for ${heldMs.toFixed(0)}ms — ` +
+            `${this._backwardsRefused} frame(s) refused as older than what is on screen ` +
+            `(queue ${this.frameQueue.length}, head ${Number.isFinite(head) ? head.toFixed(3) + "s" : "none"}, clock ${currentTime.toFixed(3)}s)`,
+        );
+      }
+    }
+    if (bestFrame) this._backwardsRefused = 0;
+
     if (bestFrame && bestIndex >= 0) {
       // Remove all frames up to (but not including) the best one
       if (bestIndex > 0) {
