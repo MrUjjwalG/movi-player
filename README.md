@@ -433,7 +433,7 @@ Settings: `loop`, `muted`, `volume`, `speed`, `ambient`, `stablevolume`, `hdr`, 
 
 ### Custom Controls and Overlays
 
-`addControl()` puts a control of your own in the player's chrome — the bottom bar, the right-click menu, or both — so it sits with the built-ins instead of beside them. Described once; the player builds the button and the menu row, keeps them in sync, and removes them together.
+`addControl()` puts a control of your own in the player's chrome — the bottom bar, the top-right corner, the right-click menu, or any combination — so it sits with the built-ins instead of beside them. Described once; the player builds the button and the menu row, keeps them in sync, and removes them together.
 
 ```js
 player.addControl({
@@ -447,6 +447,8 @@ player.addControl({
   onSelect: (on) => setAutoplay(on),
 });
 ```
+
+`placement: "top"` puts the control in the top-right corner instead, beside the three-dots that opens the context menu on touch — the corner for what is about the session rather than about playback (cast, share, close), and shown on every device. A list takes several surfaces at once: `placement: ["top", "menu"]`.
 
 Controls can open nested submenus (`items` / `onPick`, any depth), persist their toggle state (`persist: true`), group into a bar capsule of their own (`group`), anchor differently per surface (`anchors: { bar, menu }` — an anchor can be a list for a neighbour that only sometimes exists), and declare `media: "video" | "audio" | "both"` to hide themselves for content they don't apply to. `updateControl(id, patch)` and `removeControl(id)` manage them afterwards.
 

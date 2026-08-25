@@ -203,8 +203,34 @@ export interface MoviControlSpec {
    *  what it belongs WITH. A control can sit beside the subtitles button and
    *  still be in nobody's capsule. */
   group?: "play" | "seek" | "volume" | "time" | "settings" | "none" | (string & {});
-  /** Where it appears. Default "bar". */
-  placement?: "bar" | "menu" | "both";
+  /** Which surface (or surfaces) it appears on. Default "bar".
+   *
+   *    "bar"   the control bar along the bottom
+   *    "top"   the top-right corner, beside the three-dots button that opens
+   *            the context menu on touch — the corner a player puts the things
+   *            that are ABOUT the session rather than about playback: cast,
+   *            share, close. Shown on every device, not only touch: the
+   *            three-dots is a touch affordance (a mouse has right-click), the
+   *            corner is not.
+   *    "menu"  a row in the context menu
+   *    "both"  bar and menu, which is what it has always meant
+   *
+   * A LIST puts one control on several surfaces — ["top", "menu"] is the
+   * arrangement a cast button wants, reachable in the corner while watching
+   * and still named in the long list. "both" stays exactly what it was, so
+   * nothing written against the old three values changes meaning.
+   *
+   * Note that "top" is a corner, not a row of the bar: `group`, `side` and the
+   * bar anchors describe the bar and are ignored there, and the buttons appear
+   * in the order they were added. Its tooltip is the browser's, like the
+   * three-dots' own — the player's tooltip belongs to the bar and points at
+   * it. */
+  placement?:
+    | "bar"
+    | "menu"
+    | "top"
+    | "both"
+    | Array<"bar" | "menu" | "top">;
   /** WHICH kind of media it belongs to. Default "both".
    *
    *  The player collapses to an audio presentation when the media has no
@@ -2521,6 +2547,17 @@ export class MoviElement extends HTMLElement {
       this.handleBackClick();
     });
     shadowRoot.appendChild(titleBar);
+
+    // The top-right corner's own row, for controls a host places there
+    // (placement: "top"). Its own element rather than a wrapper around the
+    // three-dots below: that button carries a breakpoint's worth of corner
+    // positioning, a strip-mode override and a transform composed into its
+    // hover and press states, and none of that survives being made a flex
+    // child. Two siblings anchored to the same corner cost one margin (see the
+    // coarse-pointer rule) and leave the three-dots exactly as it was.
+    const topControls = document.createElement("div");
+    topControls.className = "movi-top-controls";
+    shadowRoot.appendChild(topControls);
 
     // Gear button (top-right) → opens the context menu. This is how touch users
     // reach it now that long-press drives hold-to-2x; on desktop it's a
@@ -12807,9 +12844,14 @@ export class MoviElement extends HTMLElement {
 
     // Reveal the settings gear with the rest of the chrome — but only once a
     // source is set (nothing to configure in the empty "No Video" state).
-    const gearEl = this.shadowRoot?.querySelector(".movi-gear-btn");
-    if (gearEl) {
-      gearEl.classList.toggle("movi-gear-visible", this.hasMediaSource());
+    // …and the host's own corner controls with it. Same class, same rule: the
+    // corner is one place as far as a viewer is concerned, and half of it
+    // fading in without the other half would read as a bug.
+    for (const el of [
+      this.shadowRoot?.querySelector(".movi-gear-btn"),
+      this.shadowRoot?.querySelector(".movi-top-controls"),
+    ]) {
+      el?.classList.toggle("movi-gear-visible", this.hasMediaSource());
     }
 
     // Clear existing timeout
@@ -14440,6 +14482,9 @@ export class MoviElement extends HTMLElement {
     if (!this.classList.contains("movi-audio-strip")) {
       this.shadowRoot
         ?.querySelector(".movi-gear-btn")
+        ?.classList.remove("movi-gear-visible");
+      this.shadowRoot
+        ?.querySelector(".movi-top-controls")
         ?.classList.remove("movi-gear-visible");
     }
   }
@@ -16290,8 +16335,13 @@ export class MoviElement extends HTMLElement {
         left: 0;
         right: 0;
         /* Extra right padding keeps the title text from running under the
-           settings gear pinned in the top-right corner. */
-        padding: var(--movi-title-pad-top) 62px var(--movi-title-pad-top) 20px;
+           settings gear pinned in the top-right corner — and under whatever
+           the host has put beside it, which is counted rather than measured:
+           a count survives a resize, a measured width goes stale at the next
+           breakpoint (see syncTopControlCount). */
+        padding: var(--movi-title-pad-top)
+          calc(62px + var(--movi-top-controls-n, 0) * (var(--movi-btn-size) + 4px))
+          var(--movi-title-pad-top) 20px;
         background: linear-gradient(to bottom, rgba(0, 0, 0, 0.7) 0%, transparent 100%);
         z-index: 5;
         opacity: 0;
@@ -16399,6 +16449,72 @@ export class MoviElement extends HTMLElement {
         }
       }
 
+      /* The host's top-right row. Anchored to the same point the three-dots
+         is, and carried along by the same rules — every breakpoint's corner
+         inset below names both, so the corner stays one corner. */
+      .movi-top-controls {
+        position: absolute;
+        top: calc(var(--movi-title-pad-top) + var(--movi-title-line) / 2);
+        right: max(4px, calc(var(--movi-chrome-inset) - 8px));
+        z-index: 30;
+        display: flex;
+        align-items: center;
+        gap: 4px;
+        opacity: 0;
+        visibility: hidden;
+        transform: translateY(calc(-50% - 4px));
+        transition: opacity 0.2s ease, transform 0.2s ease;
+        pointer-events: none;
+      }
+      .movi-top-controls.movi-gear-visible {
+        opacity: 1;
+        visibility: visible;
+        transform: translateY(-50%);
+        pointer-events: auto;
+      }
+      /* An EMPTY row still has a margin reserved for it below, and on touch
+         that pushes the three-dots' neighbours around for nothing. */
+      .movi-top-controls:empty {
+        display: none;
+      }
+      /* On a coarse pointer the three-dots is in this corner too (it is hidden
+         on mouse/hover devices — see its own rule). Step aside by exactly its
+         box so the two sit side by side instead of on top of each other, and
+         do it with a margin so each breakpoint's own inset below still means
+         what it says for both of them. */
+      @media (pointer: coarse) {
+        .movi-top-controls {
+          margin-right: calc(var(--movi-btn-size) + 4px);
+        }
+      }
+      /* The corner's buttons are round and dark like the three-dots, not the
+         bar's flat glyphs: they float against the picture with nothing behind
+         them, and a bare icon there is unreadable over a bright frame. */
+      .movi-top-controls .movi-btn {
+        width: var(--movi-btn-size);
+        height: var(--movi-btn-size);
+        padding: 8px;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        border: none;
+        cursor: pointer;
+        color: var(--movi-chrome-fg, #fff);
+        background: rgba(0, 0, 0, 0.35);
+        border-radius: 50%;
+        transition: background 0.2s ease, transform 0.2s ease;
+      }
+      .movi-top-controls .movi-btn:hover {
+        background: rgba(0, 0, 0, 0.55);
+      }
+      .movi-top-controls .movi-btn svg {
+        width: 22px;
+        height: 22px;
+      }
+      .movi-top-controls .movi-btn.movi-custom-active {
+        background: color-mix(in srgb, var(--movi-primary) 55%, rgba(0, 0, 0, 0.35));
+      }
+
       /* Settings gear (top-right) — opens the context menu. Vertically centred
          on the title text (title padding-top 16px + ~half the ~20px line) and
          inset to match; the title bar reserves right padding so the title
@@ -16450,7 +16566,10 @@ export class MoviElement extends HTMLElement {
          won't close. The panel is the thing being read, so it wins. */
       :host:has(.movi-nerd-stats[style*="flex"]) .movi-gear-btn,
       :host(.movi-bottom-menu-open) .movi-gear-btn,
-      :host:has(.movi-timeline-panel[style*="flex"]) .movi-gear-btn {
+      :host:has(.movi-timeline-panel[style*="flex"]) .movi-gear-btn,
+      :host:has(.movi-nerd-stats[style*="flex"]) .movi-top-controls,
+      :host(.movi-bottom-menu-open) .movi-top-controls,
+      :host:has(.movi-timeline-panel[style*="flex"]) .movi-top-controls {
         opacity: 0 !important;
         visibility: hidden !important;
         pointer-events: none !important;
@@ -19641,7 +19760,8 @@ export class MoviElement extends HTMLElement {
       @container movi-host (max-width: 400px) {
         /* Top-right button: tucked closer to the edge than the bar - see the
            --movi-chrome-inset note on :host. */
-        .movi-gear-btn {
+        .movi-gear-btn,
+        .movi-top-controls {
           right: 4px;
         }
         .movi-resume-dialog {
@@ -19797,7 +19917,8 @@ export class MoviElement extends HTMLElement {
 
         /* Top-right button: closer to the edge than the bar's inset - see the
            --movi-chrome-inset note on :host for why this is per-breakpoint. */
-        .movi-gear-btn {
+        .movi-gear-btn,
+        .movi-top-controls {
           right: 4px;
         }
 
@@ -20289,7 +20410,8 @@ export class MoviElement extends HTMLElement {
       @container movi-host (min-width: 721px) and (max-width: 1024px) {
         /* Top-right button: tucked closer to the edge than the bar - see the
            --movi-chrome-inset note on :host. */
-        .movi-gear-btn {
+        .movi-gear-btn,
+        .movi-top-controls {
           right: 10px;
         }
         .movi-controls-bar {
@@ -20404,7 +20526,8 @@ export class MoviElement extends HTMLElement {
       @container movi-host (min-width: 1025px) {
         /* Top-right button: tucked closer to the edge than the bar - see the
            --movi-chrome-inset note on :host. */
-        .movi-gear-btn {
+        .movi-gear-btn,
+        .movi-top-controls {
           right: 16px;
         }
         .movi-controls-bar {
@@ -23013,7 +23136,8 @@ export class MoviElement extends HTMLElement {
       }
       /* The gear button otherwise centres a few px BELOW the small strip title
          text — nudge it up so their icon/text vertical centres line up. */
-      :host(.movi-audio-strip) .movi-gear-btn {
+      :host(.movi-audio-strip) .movi-gear-btn,
+      :host(.movi-audio-strip) .movi-top-controls {
         top: 1px !important;
         /* Strip mode positions the gear from the top edge, not from a title
            line, so the midpoint anchoring the normal layout uses would push it
@@ -33852,6 +33976,9 @@ export class MoviElement extends HTMLElement {
         ?.querySelectorAll(`[data-custom-control="${sel}"]`)
         .forEach((n) => n.remove());
     }
+    // The corner may have just lost one, and the title bar's clearance is
+    // counted from what is actually there.
+    this.syncTopControlCount();
   }
 
   /**
@@ -33897,51 +34024,110 @@ export class MoviElement extends HTMLElement {
     }
   }
 
+  /**
+   * The button a custom control is, wherever it is going.
+   *
+   * One builder for the bar and the corner: the two differ in where they are
+   * appended and in how they are named (see the tooltip note at the corner's
+   * call site), not in what the control IS — and a second copy of this would
+   * be the thing that drifts the next time a control gains a state.
+   */
+  private buildCustomButton(
+    id: string,
+    entry: { spec: MoviControlSpec; active: boolean },
+    corner: boolean,
+  ): HTMLButtonElement {
+    const { spec } = entry;
+    const btn = document.createElement("button");
+    btn.className = "movi-btn movi-custom-btn";
+    btn.type = "button";
+    btn.dataset.customControl = id;
+    this.markCustomMediaScope(btn, spec);
+    btn.setAttribute("aria-label", spec.label);
+    // Through the player's own tooltip rather than the browser's, so a host
+    // control is named the same way, in the same style, at the same moment
+    // as every built-in beside it. title: null still means none — recorded
+    // as an EMPTY tip rather than an absent one, since absent falls back to
+    // the aria-label, which every control has. The corner has no such
+    // tooltip to join, so it is not given the hooks for one.
+    if (!corner) {
+      btn.dataset.tip = spec.title === null ? "" : (spec.title ?? spec.label);
+      if (spec.hotkey) btn.dataset.tipKey = formatHotkey(spec.hotkey);
+    }
+    if (spec.toggle) btn.setAttribute("aria-pressed", String(entry.active));
+    const icon = this.buildCustomIcon(spec.icon);
+    if (icon) btn.appendChild(icon);
+    else {
+      // No icon is not an error — a word is a perfectly good control, and
+      // it is better than a button nobody can see.
+      const text = document.createElement("span");
+      text.className = "movi-custom-btn-text";
+      text.textContent = spec.label;
+      btn.appendChild(text);
+    }
+    btn.classList.toggle("movi-custom-active", !!spec.toggle && entry.active);
+    btn.addEventListener("click", (e) => {
+      e.stopPropagation();
+      this.triggerCustomControl(id);
+    });
+    return btn;
+  }
+
+  /**
+   * How many controls the corner is holding, as a number the stylesheet can
+   * do arithmetic with — the title bar keeps clear of them (see its padding).
+   *
+   * A count rather than a measured width because the buttons are sized from
+   * --movi-btn-size, which changes at every breakpoint: a width read once
+   * would be wrong the moment the player was resized, while a count multiplied
+   * by the CURRENT button size is right at every size without being watched.
+   */
+  private syncTopControlCount(): void {
+    const corner = this.shadowRoot?.querySelector(".movi-top-controls");
+    this.style.setProperty(
+      "--movi-top-controls-n",
+      String(corner?.childElementCount ?? 0),
+    );
+  }
+
   private renderCustomControl(id: string): void {
     const entry = this._customControls.get(id);
     const sr = this.shadowRoot;
     if (!entry || !sr) return;
     const { spec } = entry;
-    const wantsBar = spec.placement !== "menu";
-    const wantsMenu = spec.placement === "menu" || spec.placement === "both";
+    // "both" is bar + menu, as it always was; a list says exactly which
+    // surfaces, and a bare word is that one surface. Absent means the bar.
+    const on = new Set<string>(
+      Array.isArray(spec.placement)
+        ? spec.placement
+        : spec.placement === "both"
+          ? ["bar", "menu"]
+          : [spec.placement ?? "bar"],
+    );
+    const wantsBar = on.has("bar");
+    const wantsMenu = on.has("menu");
+    const wantsTop = on.has("top");
+
+    if (wantsTop) {
+      const corner = sr.querySelector(".movi-top-controls");
+      if (corner) {
+        const btn = this.buildCustomButton(id, entry, true);
+        // The bar's tooltip is drawn INSIDE the bar and positioned against it
+        // (see positionControlTip), so a corner button borrowing it would be
+        // named down at the other end of the player. The browser's own is what
+        // the three-dots beside it uses, and it appears where the pointer is.
+        if (spec.title !== null) btn.title = spec.title ?? spec.label;
+        corner.appendChild(btn);
+        this.syncTopControlCount();
+      }
+    }
 
     if (wantsBar) {
       const side =
         spec.side === "left" ? ".movi-controls-left" : ".movi-controls-right";
       const row = sr.querySelector(side);
       if (row) {
-        const btn = document.createElement("button");
-        btn.className = "movi-btn movi-custom-btn";
-        btn.type = "button";
-        btn.dataset.customControl = id;
-        this.markCustomMediaScope(btn, spec);
-        btn.setAttribute("aria-label", spec.label);
-        // Through the player's own tooltip rather than the browser's, so a host
-        // control is named the same way, in the same style, at the same moment
-        // as every built-in beside it. title: null still means none — recorded
-        // as an EMPTY tip rather than an absent one, since absent falls back to
-        // the aria-label, which every control has.
-        btn.dataset.tip = spec.title === null ? "" : (spec.title ?? spec.label);
-        if (spec.hotkey) btn.dataset.tipKey = formatHotkey(spec.hotkey);
-        if (spec.toggle) btn.setAttribute("aria-pressed", String(entry.active));
-        const icon = this.buildCustomIcon(spec.icon);
-        if (icon) btn.appendChild(icon);
-        else {
-          // No icon is not an error — a word is a perfectly good control, and
-          // it is better than a button nobody can see.
-          const text = document.createElement("span");
-          text.className = "movi-custom-btn-text";
-          text.textContent = spec.label;
-          btn.appendChild(text);
-        }
-        btn.classList.toggle(
-          "movi-custom-active",
-          !!spec.toggle && entry.active,
-        );
-        btn.addEventListener("click", (e) => {
-          e.stopPropagation();
-          this.triggerCustomControl(id);
-        });
+        const btn = this.buildCustomButton(id, entry, false);
         if (spec.group) {
           // A named group decides the parent; before/after still order the
           // control inside it.

@@ -2070,7 +2070,7 @@ player.addControl({
 | `title` | Tooltip override; `null` for none. Drawn by the player over the bar, like every built-in's, with the `hotkey` beside it — not the browser's native tooltip |
 | `side` | `"left"` / `"right"` (default) end of the bar |
 | `before` / `after` | Position against a built-in — `"play"`, `"cc"`, `"settings"`, `"pip"`, `"fullscreen"`, … |
-| `placement` | `"bar"` (default), `"menu"`, `"both"` |
+| `placement` | `"bar"` (default), `"top"`, `"menu"`, `"both"` — or a list, e.g. `["top", "menu"]`. See below |
 | `media` | `"video"`, `"audio"`, or `"both"` (default) — see below |
 | `toggle` / `active` | Carries state: pressed styling, On/Off on the menu row, and the boolean handed to `onSelect` |
 | `hotkey` | e.g. `"shift+a"`. Checked after the player's own shortcuts, so it can't take over Space or the arrows; appears on the menu row and in the shortcuts panel |
@@ -2079,6 +2079,33 @@ player.addControl({
 | `persist` | Remember a toggle's state under the element's `persistkey` |
 | `osd` | Set `false` to stay silent when used by its hotkey |
 | `onSelect` | Called with the state AFTER the toggle flipped; also emitted as a `movi-control` event |
+
+**`placement` — which surface.** `"bar"` is the control bar along the bottom,
+`"menu"` a row in the right-click menu, and `"both"` means those two, as it
+always has. `"top"` is the top-right corner — beside the three-dots button that
+opens the context menu on touch — which is where a player puts what is about
+the *session* rather than about playback: cast, share, close. It is shown on
+every device, not only touch: the three-dots is a touch affordance (a mouse has
+right-click), the corner is not.
+
+A list puts one control on several surfaces at once:
+
+```js
+player.addControl({
+  id: "cast",
+  label: "Cast to TV",
+  icon: '<svg viewBox="0 0 24 24">…</svg>',
+  placement: ["top", "menu"],   // in the corner while watching, and named in the menu
+  onSelect: () => startCast(),
+});
+```
+
+The corner is a corner, not a row of the bar: `side`, `group` and the bar
+anchors describe the bar and are ignored there, and buttons appear in the order
+they were added. Its tooltip is the browser's — the player's own tooltip is
+drawn inside the bar and positioned against it, so a corner button borrowing it
+would be named at the other end of the player. The title bar keeps clear of
+whatever the corner holds, so a long title still truncates before it.
 
 **`media` — video-only or audio-only.** The player collapses to an audio
 presentation when the media has no picture (cover art, or the compact strip),
