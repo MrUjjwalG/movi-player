@@ -183,19 +183,35 @@ export class SignalsmithStretcher {
     const outPtr = this.ensureBuffer("out", outFrames);
 
     // movi.wasm only exports HEAPU8 to JS (EXPORTED_RUNTIME_METHODS), so we
-    // build a Float32 view over the shared ArrayBuffer ourselves. Re-create
-    // it each call because ALLOW_MEMORY_GROWTH=1 lets the heap detach if a
-    // _malloc grows the buffer (which would invalidate any cached view).
-    const heapF32 = new Float32Array(this.mod.HEAPU8.buffer);
+    // build a Float32 view over the shared ArrayBuffer ourselves. It has to be
+    // built TWICE — once to write the input and again to read the output —
+    // because the call in between can grow the heap, and ALLOW_MEMORY_GROWTH=1
+    // means growing DETACHES the old ArrayBuffer. A single view spanning the
+    // call was the bug: writing through it worked, the stretch allocated, and
+    // reading back threw
+    //
+    //   TypeError: Cannot perform Construct on a detached ArrayBuffer
+    //       at Float32Array.subarray
+    //       at SignalsmithStretcher.runProcessIfNeeded
+    //
+    // which surfaced as "RenderPCM error" and took the audio chunk with it.
+    // Caught on an 8K source, where the demuxer shares this module and its
+    // reads keep the heap growing — the comment above already knew the hazard
+    // and the code straddled it anyway.
     const inOffset = inPtr >> 2;
     const inLen = inFrames * this.channels;
-    heapF32.set(this.pendingInput.subarray(0, inLen), inOffset);
+    new Float32Array(this.mod.HEAPU8.buffer).set(
+      this.pendingInput.subarray(0, inLen),
+      inOffset,
+    );
 
     this.mod._movi_stretch_process(this.handle, inPtr, inFrames, outPtr, outFrames);
 
     const outOffset = outPtr >> 2;
     const outLen = outFrames * this.channels;
-    output.set(heapF32.subarray(outOffset, outOffset + outLen));
+    // Fresh view: whatever the line above did to the heap, this one is valid.
+    const heapAfter = new Float32Array(this.mod.HEAPU8.buffer);
+    output.set(heapAfter.subarray(outOffset, outOffset + outLen));
 
     // Consume the pending input — same chunk shouldn't be processed twice.
     this.pendingInput = null;
