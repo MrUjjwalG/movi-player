@@ -145,12 +145,21 @@ export class MoviVideoDecoder {
     this.bindings = bindings;
   }
 
-  private setWaitingForKeyframe(waiting: boolean): void {
+  private setWaitingForKeyframe(waiting: boolean, reason = "unspecified"): void {
     // Restart the tiny-packet drop window whenever we begin waiting for a
     // keyframe — that marks a fresh (re)configure/flush, the only phase where
     // the corrupt sub-4-byte packets appear.
     if (waiting) this.chunksSinceKeyframeWait = 0;
     if (this.waitingForKeyframe === waiting) return;
+    // Say WHY. Beginning to wait stops the picture until a keyframe arrives —
+    // a second or more on a long-GOP source — and until now it happened
+    // silently from six different places. A player-level log then reported
+    // "Decoder waiting for keyframe mid-playback" without anything anywhere
+    // saying what had started it, and a hold traced back to here had no origin
+    // that could be read out of a log. Every entry into the wait names itself.
+    if (waiting) {
+      Logger.info(TAG, `Waiting for a keyframe — ${reason}`);
+    }
     this.waitingForKeyframe = waiting;
     this.keyframeWaitSince = waiting ? performance.now() : 0;
     if (this.onKeyframeWaitChange) {
@@ -574,7 +583,7 @@ export class MoviVideoDecoder {
     }
     if (success) {
       this.isConfigured = true;
-      this.setWaitingForKeyframe(true); // Wait for keyframe on new decoder
+      this.setWaitingForKeyframe(true, "decoder (re)configured");
 
       // Process pending chunks
       if (this.pendingChunks.length > 0) {
@@ -645,7 +654,7 @@ export class MoviVideoDecoder {
       // held, so the stream must resume on a keyframe, and an open-GOP CRA must
       // go in as `key` rather than being downgraded to `delta`.
       this.justFlushed = true;
-      this.setWaitingForKeyframe(true);
+      this.setWaitingForKeyframe(true, "flushed");
       return true;
     } catch (error) {
       Logger.warn(TAG, "In-place decoder re-arm failed, falling back", error);
@@ -703,7 +712,7 @@ export class MoviVideoDecoder {
       // Wait for next keyframe to resync — don't re-feed cached keyframe
       // as subsequent non-keyframes may fail on certain content (DoVi P8 etc.)
       // causing a recreate→re-feed→fail loop that triggers software fallback.
-      this.setWaitingForKeyframe(true);
+      this.setWaitingForKeyframe(true, "recovering from a decoder error");
       return true;
     } catch (error) {
       Logger.error(TAG, "Failed to recreate decoder", error);
@@ -1190,7 +1199,7 @@ export class MoviVideoDecoder {
         try {
           this.decoder.reset();
           this.decoder.configure(this.lastConfig!);
-          this.setWaitingForKeyframe(true);
+          this.setWaitingForKeyframe(true, "reset + reconfigure after an error");
           return;
         } catch (e) {
           Logger.warn(
@@ -1249,7 +1258,7 @@ export class MoviVideoDecoder {
         try {
           if (this.decoder && this.decoder.state !== "closed") {
             this.decoder.configure(this.lastConfig);
-            this.setWaitingForKeyframe(true);
+            this.setWaitingForKeyframe(true, "reconfigured after an error");
             this.errorCount = 0; // Reset error count as we are trying a new config/hack
             return;
           } else {
@@ -1277,7 +1286,7 @@ export class MoviVideoDecoder {
         this.decoder.reset();
         this.decoder.configure(this.lastConfig!);
 
-        this.setWaitingForKeyframe(true);
+        this.setWaitingForKeyframe(true, "recreated after repeated errors");
         return;
       } catch (e) {
         Logger.warn(TAG, "Fast reset failed, trying full recreation");
@@ -1451,7 +1460,7 @@ export class MoviVideoDecoder {
     // after configure" and corrupts the next true IDR's decode too. This is the
     // authoritative "references missing" signal; the decode() path keys its
     // CRA→delta downgrade off NOT being in this state.
-    this.setWaitingForKeyframe(true);
+    this.setWaitingForKeyframe(true, "flush() called");
     if (this.swDecoder) {
       return this.swDecoder.flush();
     }
