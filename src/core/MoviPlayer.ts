@@ -10438,8 +10438,12 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
       // to playing again, 2504ms of it with the sound stopped, for a rewind
       // that only ever concerned the sound. Rewind just the audio; the picture
       // never stops.
+      // Read the playhead at the moment the seek is issued, not at the top of
+      // setPlaybackRate. The clock has been running at the NEW rate since then;
+      // seeking to the older value steps playback backwards by that much. Same
+      // reasoning as the rewind path — see rewindMuxedAudioTo.
       const fullSeek = () =>
-        this.seek(savedTime, {
+        this.seek(Math.max(savedTime, this.getCurrentTime()), {
           suppressSpinner: true,
           preservePlaying: true,
         }).catch(() => {});
@@ -10484,7 +10488,6 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
   private async rewindMuxedAudioTo(time: number): Promise<boolean> {
     const dm = this.demuxer;
     if (!dm) return false;
-    const target = Math.max(0, time) + this.startTime;
     // Same order the seek path uses: stop the loop BEFORE waiting on the read
     // in flight, or it starts another one behind the wait.
     if (this.animationFrameId !== null) {
@@ -10496,6 +10499,24 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
       await new Promise((r) => setTimeout(r, 10));
     }
     if (this._destroyed || this.demuxer !== dm) return true; // gone; nothing owed
+    // Where playback is NOW, not where it was when the speed was pressed.
+    //
+    // The caller reads the playhead, applies the new rate to the clock, and
+    // only then calls this — and the wait above is asynchronous, so between
+    // those two moments the clock runs on at the NEW rate. Rewinding to the
+    // stale value therefore drags playback back by exactly the gap times the
+    // new rate: it goes to the speed you asked for, then steps backwards, then
+    // carries on. Reported that way for both faster and slower, and worst at
+    // 2x, where the same gap counts double.
+    //
+    // The playhead is the whole target of this rewind — the point is to undo
+    // the demuxer's read-ahead, not to undo playback — so read it here, after
+    // the wait, where it is true. `time` remains the floor: a clock that has
+    // somehow gone backwards must not push the rewind forwards.
+    const live = this.getCurrentTime();
+    const target =
+      Math.max(0, Number.isFinite(live) && live > time ? live : time) +
+      this.startTime;
     if (this.demuxInFlight) {
       // A read that will not settle is a demuxer nobody may reposition.
       this.animationFrameId = requestAnimationFrame(this.processLoop);
