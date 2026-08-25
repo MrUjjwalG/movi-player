@@ -6575,7 +6575,22 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
       // clock-margin fix below: 471 of 480 frames, the last at 7.941s, with
       // three frames still inside the decoder and msSinceLastFrame growing.
       // flush() emits them and leaves the decoder configured.
-      if (!this._eofFlushRequested && !this.videoDecoder.isWaitingForKeyframe) {
+      //
+      // Not while anything is still WAITING to be fed. `eofReached` says the
+      // demuxer ran out, and with a read-ahead stash that happens long before
+      // the picture gets there — measured on 4K60 HEVC at 2x, the stash still
+      // held 224 packets when this fired. Flushing then makes the decoder wait
+      // for a keyframe mid-playback, the point-of-use guard dumps the stash on
+      // top of that, and there is no keyframe left to come because the file has
+      // ended: the picture stopped for 8.85 seconds and the tail was lost. The
+      // reorder tail is only the tail once the last packet has actually gone
+      // in.
+      if (
+        !this._eofFlushRequested &&
+        !this.videoDecoder.isWaitingForKeyframe &&
+        this._videoAheadStash.length === 0 &&
+        this.pendingPrebufferPackets.length === 0
+      ) {
         this._eofFlushRequested = true;
         this.videoDecoder.flush().catch(() => {
           /* a decoder that cannot flush has nothing left to give */
