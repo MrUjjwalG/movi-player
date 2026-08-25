@@ -1708,9 +1708,19 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
     if (stash[0].timestamp >= onScreen) return; // head is still ahead — nothing stale
     // The first keyframe at or past the screen is the only place the run can be
     // cut without orphaning what follows.
+    // A TRUE random-access point, not merely `keyframe`. On open-GOP HEVC that
+    // flag is also set on CRA pictures, which WebCodecs is handed as `delta`
+    // and which reset nothing — cutting to one leaves everything after it
+    // orphaned. Measured on 4K60 HEVC Main 10 immediately after this trim:
+    // "Decoder waiting for keyframe mid-playback", and the picture stood at
+    // 78.862s for 1.2 seconds with an empty queue and an empty stash while the
+    // clock ran to 81.4s. That is the one-second hitch a rate change leaves
+    // behind, and this made it. The same lesson is already written into
+    // movi_read_frame's is_idr and into the starve-skip's chain-break latch:
+    // `keyframe` is not a reference reset here, `isIdr` is.
     let cut = -1;
     for (let i = 0; i < stash.length; i++) {
-      if (stash[i].timestamp >= onScreen && stash[i].keyframe) {
+      if (stash[i].timestamp >= onScreen && stash[i].keyframe && stash[i].isIdr) {
         cut = i;
         break;
       }
@@ -1722,7 +1732,7 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
     this._videoAheadStashBytes = Math.max(0, this._videoAheadStashBytes - bytes);
     Logger.debug(
       TAG,
-      `Read-ahead: dropped ${cut} packet(s) the picture had passed (up to keyframe ${stash[cut].timestamp.toFixed(3)}s, screen ${onScreen.toFixed(3)}s)`,
+      `Read-ahead: dropped ${cut} packet(s) the picture had passed (up to IDR ${stash[cut].timestamp.toFixed(3)}s, screen ${onScreen.toFixed(3)}s)`,
     );
   }
 
