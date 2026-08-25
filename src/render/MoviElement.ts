@@ -11052,6 +11052,20 @@ export class MoviElement extends HTMLElement {
    */
   private static readonly JUDDER_RATIO = 0.6; // < 60% of the expected frames
   private static readonly JUDDER_SECONDS = 2; // consecutive bad seconds
+  /**
+   * The "Play at 1x for smoother playback" hint is a claim about the DEVICE —
+   * that it cannot hold this speed — so it needs more than a passing dip.
+   *
+   * It used to fire after three bad seconds, and a speed change on its own
+   * costs about that much: the corrective seek re-primes the pipeline, the
+   * read-ahead unwinds, and the picture is thin for a second or two before it
+   * settles. So the hint was going up over a disturbance the player had just
+   * caused itself and then recovered from, telling the viewer their machine was
+   * at fault. Sustained incapacity outlasts that easily; a self-inflicted hitch
+   * does not.
+   */
+  private static readonly STUTTER_RATIO = 0.6; // < 60% of the expected frames
+  private static readonly STUTTER_SECONDS = 8; // consecutive bad seconds
   private _judderSeconds = 0;
   private _juddering = false;
 
@@ -11175,12 +11189,18 @@ export class MoviElement extends HTMLElement {
       this.updateLoadingIndicator();
     }
 
-    if (this._playbackRate > 1 && presented < expected * 0.6) {
+    if (
+      this._playbackRate > 1 &&
+      presented < expected * MoviElement.STUTTER_RATIO
+    ) {
       this._stutterSeconds++;
     } else {
       this._stutterSeconds = 0;
     }
-    if (this._stutterSeconds >= 3 && !this._stutterCooldown) {
+    if (
+      this._stutterSeconds >= MoviElement.STUTTER_SECONDS &&
+      !this._stutterCooldown
+    ) {
       this._stutterSeconds = 0;
       this._stutterCooldown = true;
       // Cooldown so it doesn't nag while stuttering at the SAME rate; a rate
