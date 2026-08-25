@@ -2069,7 +2069,7 @@ player.addControl({
 | `icon` | Inline SVG markup or an element to clone. Without one the label is drawn as text |
 | `title` | Tooltip override; `null` for none. Drawn by the player over the bar, like every built-in's, with the `hotkey` beside it — not the browser's native tooltip |
 | `side` | `"left"` / `"right"` (default) end of the bar |
-| `before` / `after` | Position against a built-in — `"play"`, `"cc"`, `"settings"`, `"pip"`, `"fullscreen"`, … |
+| `before` / `after` | Position against a built-in — `"play"`, `"cc"`, `"settings"`, `"pip"`, `"fullscreen"`, `"dots"` (the corner's three-dots), … — or against another of your controls by its id |
 | `placement` | `"bar"` (default), `"top"`, `"menu"`, `"both"` — or a list, e.g. `["top", "menu"]`. See below |
 | `media` | `"video"`, `"audio"`, or `"both"` (default) — see below |
 | `toggle` / `active` | Carries state: pressed styling, On/Off on the menu row, and the boolean handed to `onSelect` |
@@ -2100,12 +2100,31 @@ player.addControl({
 });
 ```
 
-The corner is a corner, not a row of the bar: `side`, `group` and the bar
-anchors describe the bar and are ignored there, and buttons appear in the order
-they were added. Its tooltip is the browser's — the player's own tooltip is
-drawn inside the bar and positioned against it, so a corner button borrowing it
-would be named at the other end of the player. The title bar keeps clear of
-whatever the corner holds, so a long title still truncates before it.
+The corner is a row like the bar is, and it is ordered the same way — with
+`before` / `after`. The three-dots is one member of that row, named `"dots"`,
+so it can be placed against like anything else:
+
+```js
+player.addControl({ id: "share", label: "Share", placement: "top", before: "cast" });
+player.addControl({ id: "cast",  label: "Cast",  placement: "top" });
+player.addControl({ id: "close", label: "Close", placement: "top", after: "dots" });
+// → share  cast  ⋮  close
+```
+
+An anchor can name a built-in, **another of your own controls by its id**, or
+`"dots"`. A control with no anchor goes in front of the three-dots, so the
+corner still ends with it unless you ask for otherwise — `after: "dots"` is
+that asking. `anchors: { top: { … } }` sets the corner's anchors separately
+from the bar's and the menu's.
+
+The order holds on touch and on desktop alike: the three-dots is hidden where
+there is a right-click to open the menu with, and the row closes up around it.
+
+`side` and `group` describe the bar and are ignored in the corner. Its tooltip
+is the browser's — the player's own tooltip is drawn inside the bar and
+positioned against it, so a corner button borrowing it would be named at the
+other end of the player. The title bar keeps clear of whatever the corner
+holds, so a long title still truncates before it.
 
 **`media` — video-only or audio-only.** The player collapses to an audio
 presentation when the media has no picture (cover art, or the compact strip),

@@ -184,6 +184,7 @@ export interface MoviControlSpec {
   anchors?: {
     bar?: { before?: string | string[]; after?: string | string[] };
     menu?: { before?: string | string[]; after?: string | string[] };
+    top?: { before?: string | string[]; after?: string | string[] };
   };
   /** WHICH capsule it sits in — the bar draws one behind each group of
    *  controls, and this says which group this one belongs to.
@@ -220,11 +221,19 @@ export interface MoviControlSpec {
    * and still named in the long list. "both" stays exactly what it was, so
    * nothing written against the old three values changes meaning.
    *
-   * Note that "top" is a corner, not a row of the bar: `group`, `side` and the
-   * bar anchors describe the bar and are ignored there, and the buttons appear
-   * in the order they were added. Its tooltip is the browser's, like the
-   * three-dots' own — the player's tooltip belongs to the bar and points at
-   * it. */
+   * The corner is a row like the bar is, and it is ordered the same way: with
+   * `before`/`after`, against a built-in, against another of the host's
+   * controls by id, or against `"dots"` — the three-dots itself, which is one
+   * member of that row and not a fixture at its end. A control that names no
+   * anchor goes in front of the three-dots, so the corner still ENDS with it
+   * unless someone asks for otherwise; `after: "dots"` is that asking. The
+   * order holds on touch and on desktop alike — the three-dots is hidden where
+   * there is a right-click to open the menu with, and the row simply closes up
+   * around it.
+   *
+   * `group` and `side` describe the bar and are ignored there. Its tooltip is
+   * the browser's, like the three-dots' own — the player's tooltip belongs to
+   * the bar and points at it. */
   placement?:
     | "bar"
     | "menu"
@@ -2590,7 +2599,14 @@ export class MoviElement extends HTMLElement {
         }),
       );
     });
-    shadowRoot.appendChild(gearBtn);
+    // Into the corner ROW, not the shadow root. It used to be pinned to the
+    // corner on its own, which made "beside the three-dots" a thing only the
+    // player could do: a host control could be laid out to its left (by a
+    // margin) and nowhere else. As one member of the row it has a POSITION,
+    // and a position is something anything else in the row can be placed
+    // against — see the "dots" anchor. Last by default, so the corner still
+    // ends with it unless a host says otherwise.
+    topControls.appendChild(gearBtn);
 
     // Create Nerd Stats overlay
     const nerdStats = document.createElement("div");
@@ -12844,15 +12860,11 @@ export class MoviElement extends HTMLElement {
 
     // Reveal the settings gear with the rest of the chrome — but only once a
     // source is set (nothing to configure in the empty "No Video" state).
-    // …and the host's own corner controls with it. Same class, same rule: the
-    // corner is one place as far as a viewer is concerned, and half of it
-    // fading in without the other half would read as a bug.
-    for (const el of [
-      this.shadowRoot?.querySelector(".movi-gear-btn"),
-      this.shadowRoot?.querySelector(".movi-top-controls"),
-    ]) {
-      el?.classList.toggle("movi-gear-visible", this.hasMediaSource());
-    }
+    // The whole corner at once — the three-dots is inside this row, along with
+    // whatever the host has put beside it.
+    this.shadowRoot
+      ?.querySelector(".movi-top-controls")
+      ?.classList.toggle("movi-gear-visible", this.hasMediaSource());
 
     // Clear existing timeout
     if (this.controlsTimeout) {
@@ -14480,9 +14492,6 @@ export class MoviElement extends HTMLElement {
     // strip mode, where the bar is the whole (always-visible) player, so its
     // gear must stay put rather than auto-hiding with the transient controls.
     if (!this.classList.contains("movi-audio-strip")) {
-      this.shadowRoot
-        ?.querySelector(".movi-gear-btn")
-        ?.classList.remove("movi-gear-visible");
       this.shadowRoot
         ?.querySelector(".movi-top-controls")
         ?.classList.remove("movi-gear-visible");
@@ -16472,21 +16481,6 @@ export class MoviElement extends HTMLElement {
         transform: translateY(-50%);
         pointer-events: auto;
       }
-      /* An EMPTY row still has a margin reserved for it below, and on touch
-         that pushes the three-dots' neighbours around for nothing. */
-      .movi-top-controls:empty {
-        display: none;
-      }
-      /* On a coarse pointer the three-dots is in this corner too (it is hidden
-         on mouse/hover devices — see its own rule). Step aside by exactly its
-         box so the two sit side by side instead of on top of each other, and
-         do it with a margin so each breakpoint's own inset below still means
-         what it says for both of them. */
-      @media (pointer: coarse) {
-        .movi-top-controls {
-          margin-right: calc(var(--movi-btn-size) + 4px);
-        }
-      }
       /* The corner's buttons are round and dark like the three-dots, not the
          bar's flat glyphs: they float against the picture with nothing behind
          them, and a bare icon there is unreadable over a bright frame. */
@@ -16515,26 +16509,14 @@ export class MoviElement extends HTMLElement {
         background: color-mix(in srgb, var(--movi-primary) 55%, rgba(0, 0, 0, 0.35));
       }
 
-      /* Settings gear (top-right) — opens the context menu. Vertically centred
-         on the title text (title padding-top 16px + ~half the ~20px line) and
-         inset to match; the title bar reserves right padding so the title
-         doesn't run under it. */
+      /* Settings gear — opens the context menu. One member of the corner row
+         above, which owns where the corner IS and when it is shown; this rule
+         is only what the button looks like. (It was pinned to the corner
+         itself until the row existed, and the corner's inset, its centring on
+         the title line and its fade all moved up there together — leaving them
+         here would have anchored the button twice, in two places that then
+         disagree.) */
       .movi-gear-btn {
-        position: absolute;
-        /* Centred on the title's first line rather than a fixed inset — see
-           the --movi-title-* vars on :host. Anchored by its own midpoint via
-           translateY(-50%) rather than by subtracting its height: this element
-           also matches .movi-btn and picks up its box from the responsive
-           layout rules, so any height arithmetic here goes stale the moment
-           those change. The slide-in offset rides on the same transform. */
-        top: calc(var(--movi-title-pad-top) + var(--movi-title-line) / 2);
-        /* Tucked closer to the edge than the bar's inset. Matching the bar
-           exactly is the correct-on-paper answer and the wrong-looking one: the
-           bar is a full-width band whose row reads as a group, while this button
-           floats alone against the picture, so the same inset leaves it looking
-           adrift rather than pinned to the corner. */
-        right: max(4px, calc(var(--movi-chrome-inset) - 8px));
-        z-index: 30;
         width: var(--movi-btn-size);
         height: var(--movi-btn-size);
         padding: 8px;
@@ -16546,17 +16528,7 @@ export class MoviElement extends HTMLElement {
         color: var(--movi-chrome-fg, #fff);
         background: rgba(0, 0, 0, 0.35);
         border-radius: 50%;
-        opacity: 0;
-        visibility: hidden;
-        transform: translateY(calc(-50% - 4px));
-        transition: opacity 0.2s ease, transform 0.2s ease, background 0.2s ease;
-        pointer-events: none;
-      }
-      .movi-gear-btn.movi-gear-visible {
-        opacity: 1;
-        visibility: visible;
-        transform: translateY(-50%);
-        pointer-events: auto;
+        transition: background 0.2s ease, transform 0.2s ease;
       }
       /* Hide the gear while a bottom dropdown OR the storyboard timeline is
          open — it lives in a higher stacking context than either and would
@@ -16564,9 +16536,6 @@ export class MoviElement extends HTMLElement {
       /* Stats-for-nerds has its own close button in the same corner, and on a
          small phone the two overlap — the tap lands on this one and the panel
          won't close. The panel is the thing being read, so it wins. */
-      :host:has(.movi-nerd-stats[style*="flex"]) .movi-gear-btn,
-      :host(.movi-bottom-menu-open) .movi-gear-btn,
-      :host:has(.movi-timeline-panel[style*="flex"]) .movi-gear-btn,
       :host:has(.movi-nerd-stats[style*="flex"]) .movi-top-controls,
       :host(.movi-bottom-menu-open) .movi-top-controls,
       :host:has(.movi-timeline-panel[style*="flex"]) .movi-top-controls {
@@ -17057,17 +17026,14 @@ export class MoviElement extends HTMLElement {
         transition-duration: 0.08s;
       }
 
-      /* The gear is centred on the title line with translateY(-50%), and the
-         two rules above REPLACE transform outright rather than adding to it —
-         so pressing the gear dropped it half its own height. That is not just
-         cosmetic: the button moved out from under the finger between touchstart
-         and touchend, so no click was ever dispatched and the menu never
-         opened. Compose the press/hover scale with the centering instead. */
+      /* Plain scales now: the centring that these once had to compose with
+         belongs to the corner row, so replacing transform here no longer drops
+         the button out from under a finger mid-tap. */
       .movi-gear-btn:hover {
-        transform: translateY(-50%) scale(1.06);
+        transform: scale(1.06);
       }
       .movi-gear-btn:active {
-        transform: translateY(-50%) scale(0.94);
+        transform: scale(0.94);
       }
 
       .movi-btn:focus,
@@ -19760,7 +19726,6 @@ export class MoviElement extends HTMLElement {
       @container movi-host (max-width: 400px) {
         /* Top-right button: tucked closer to the edge than the bar - see the
            --movi-chrome-inset note on :host. */
-        .movi-gear-btn,
         .movi-top-controls {
           right: 4px;
         }
@@ -19917,7 +19882,6 @@ export class MoviElement extends HTMLElement {
 
         /* Top-right button: closer to the edge than the bar's inset - see the
            --movi-chrome-inset note on :host for why this is per-breakpoint. */
-        .movi-gear-btn,
         .movi-top-controls {
           right: 4px;
         }
@@ -20410,7 +20374,6 @@ export class MoviElement extends HTMLElement {
       @container movi-host (min-width: 721px) and (max-width: 1024px) {
         /* Top-right button: tucked closer to the edge than the bar - see the
            --movi-chrome-inset note on :host. */
-        .movi-gear-btn,
         .movi-top-controls {
           right: 10px;
         }
@@ -20526,7 +20489,6 @@ export class MoviElement extends HTMLElement {
       @container movi-host (min-width: 1025px) {
         /* Top-right button: tucked closer to the edge than the bar - see the
            --movi-chrome-inset note on :host. */
-        .movi-gear-btn,
         .movi-top-controls {
           right: 16px;
         }
@@ -23136,7 +23098,6 @@ export class MoviElement extends HTMLElement {
       }
       /* The gear button otherwise centres a few px BELOW the small strip title
          text — nudge it up so their icon/text vertical centres line up. */
-      :host(.movi-audio-strip) .movi-gear-btn,
       :host(.movi-audio-strip) .movi-top-controls {
         top: 1px !important;
         /* Strip mode positions the gear from the top edge, not from a title
@@ -33377,6 +33338,9 @@ export class MoviElement extends HTMLElement {
     pip: ".movi-pip-btn",
     fullscreen: ".movi-fullscreen-btn",
     more: ".movi-more-btn",
+    /* The corner's three-dots — the anchor that makes placement: "top" fully
+       orderable. after: "dots" is the only way to sit further right than it. */
+    dots: ".movi-gear-btn",
   };
 
   /**
@@ -34084,9 +34048,11 @@ export class MoviElement extends HTMLElement {
    */
   private syncTopControlCount(): void {
     const corner = this.shadowRoot?.querySelector(".movi-top-controls");
+    // The host's own, not every child: the three-dots is in this row too, and
+    // the base 62px of the title bar's padding is already its clearance.
     this.style.setProperty(
       "--movi-top-controls-n",
-      String(corner?.childElementCount ?? 0),
+      String(corner?.querySelectorAll("[data-custom-control]").length ?? 0),
     );
   }
 
@@ -34117,7 +34083,9 @@ export class MoviElement extends HTMLElement {
         // named down at the other end of the player. The browser's own is what
         // the three-dots beside it uses, and it appears where the pointer is.
         if (spec.title !== null) btn.title = spec.title ?? spec.label;
-        corner.appendChild(btn);
+        this.insertAtAnchor(corner, btn, spec, false, {
+          defaultBefore: corner.querySelector(".movi-gear-btn"),
+        });
         this.syncTopControlCount();
       }
     }
@@ -34333,19 +34301,37 @@ export class MoviElement extends HTMLElement {
     node: Element,
     spec: MoviControlSpec,
     isMenu = false,
+    /** The corner row: which anchors this surface reads, and what a control
+     *  with none of them is placed against (the three-dots, so the corner ends
+     *  with it unless a host asks otherwise). */
+    corner?: { defaultBefore: Element | null },
   ): void {
     const one = (name: string): Element | null => {
       if (isMenu) {
-        return parent.querySelector(
+        const built = parent.querySelector(
           `.movi-context-menu-item[data-action="${name}"]`,
+        );
+        // A host's OTHER control, by its id. Rows carry data-action
+        // "custom:<id>", so a built-in and a custom control cannot collide
+        // even when they share a name — and the built-in is looked up first
+        // either way.
+        return built ?? parent.querySelector(
+          `.movi-context-menu-item[data-action="custom:${this.escapeSel(name)}"]`,
         );
       }
       const sel = MoviElement.CONTROL_ANCHORS[name];
-      if (!sel) return null;
       // The anchor may sit inside the mobile-expandable wrapper; the custom
       // control goes beside the wrapper's child, not beside the wrapper, so
       // the two stay adjacent when the tray collapses.
-      return parent.querySelector(sel);
+      if (sel) return parent.querySelector(sel);
+      // Not a built-in: another of the host's controls, named by its id. What
+      // makes a row of host controls orderable AMONG THEMSELVES — without it,
+      // three controls all asking to sit after the same built-in end up in the
+      // reverse of the order they were registered in, which is nobody's idea
+      // of where they put them.
+      return parent.querySelector(
+        `[data-custom-control="${this.escapeSel(name)}"]`,
+      );
     };
     // A list is a set of fallbacks, in order: the first anchor that is actually
     // on the bar wins. See `before` on the spec for why that matters.
@@ -34358,7 +34344,12 @@ export class MoviElement extends HTMLElement {
       return null;
     };
     // Whatever this surface was given, falling back to the shared pair.
-    const surface = (isMenu ? spec.anchors?.menu : spec.anchors?.bar) ?? {};
+    const surface =
+      (isMenu
+        ? spec.anchors?.menu
+        : corner
+          ? spec.anchors?.top
+          : spec.anchors?.bar) ?? {};
     const before = find(surface.before ?? spec.before);
     if (before?.parentElement) {
       before.parentElement.insertBefore(node, before);
@@ -34369,7 +34360,19 @@ export class MoviElement extends HTMLElement {
       after.parentElement.insertBefore(node, after.nextSibling);
       return;
     }
+    if (corner?.defaultBefore) {
+      parent.insertBefore(node, corner.defaultBefore);
+      return;
+    }
     parent.appendChild(node);
+  }
+
+  /** A value going into a selector — an id the host chose, which is a string
+   *  and not necessarily an identifier. */
+  private escapeSel(value: string): string {
+    const esc = (window as { CSS?: { escape?: (v: string) => string } }).CSS
+      ?.escape;
+    return esc ? esc(value) : value.replace(/["\\]/g, "\\$&");
   }
 
   /**

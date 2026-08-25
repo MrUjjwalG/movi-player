@@ -448,7 +448,7 @@ player.addControl({
 });
 ```
 
-`placement: "top"` puts the control in the top-right corner instead, beside the three-dots that opens the context menu on touch — the corner for what is about the session rather than about playback (cast, share, close), and shown on every device. A list takes several surfaces at once: `placement: ["top", "menu"]`.
+`placement: "top"` puts the control in the top-right corner instead, beside the three-dots that opens the context menu on touch — the corner for what is about the session rather than about playback (cast, share, close), and shown on every device. A list takes several surfaces at once: `placement: ["top", "menu"]`. The corner is ordered with `before` / `after` like the bar is, and the three-dots is one member of it named `"dots"` — so `after: "dots"` is how a control sits further right than it, and the arrangement is the same on touch and on desktop.
 
 Controls can open nested submenus (`items` / `onPick`, any depth), persist their toggle state (`persist: true`), group into a bar capsule of their own (`group`), anchor differently per surface (`anchors: { bar, menu }` — an anchor can be a list for a neighbour that only sometimes exists), and declare `media: "video" | "audio" | "both"` to hide themselves for content they don't apply to. `updateControl(id, patch)` and `removeControl(id)` manage them afterwards.
 
