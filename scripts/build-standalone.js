@@ -1,14 +1,36 @@
 /**
  * Build script for standalone modular bundles
  * Builds each entry point separately to avoid shared chunks
+ *
+ * Ten bundles come out of here — five entries in two formats — and each one is
+ * an 11 MB rollup put through five terser passes, so the run is minutes of
+ * pure CPU and nothing about it is sequential by nature. It runs as a pool
+ * (MOVI_JOBS), and it can be narrowed to the one bundle you are actually
+ * iterating on (MOVI_ENTRY / MOVI_FORMAT) instead of rebuilding the other
+ * nine to look at one.
+ *
+ *   MOVI_ENTRY=element.slim MOVI_FORMAT=es   just the slim ESM bundle
+ *   MOVI_JOBS=1                              back to one at a time
+ *   MOVI_VERBOSE=1                           vite's own per-build chatter
+ *   MOVI_NO_HARDEN=1                         skip terser (diagnostic builds)
+ *
+ * Declarations are NOT built here. `tsc` runs ahead of this script in
+ * `build:ts` with `declaration: true` and emits every .d.ts — and .d.ts.map —
+ * into the same dist. vite-plugin-dts used to regenerate them on top, which
+ * cost a slow type pass per entry for a byte-for-byte equivalent result, made
+ * the entries unsafe to run in parallel (they write each other's shared
+ * transitive declarations), and got the package's own entry wrong: with
+ * `insertTypesEntry` every entry writes dist/index.d.ts, so the LAST one built
+ * won and `"types": "dist/index.d.ts"` resolved to the SLIM element's types
+ * rather than the index's.
  */
 
 import { build } from 'vite';
 import { resolve } from 'path';
-import dts from 'vite-plugin-dts';
 import terser from '@rollup/plugin-terser';
 import { fileURLToPath } from 'url';
 import { dirname } from 'path';
+import { cpus } from 'os';
 import { readFileSync, writeFileSync, copyFileSync, existsSync } from 'fs';
 
 const __filename = fileURLToPath(import.meta.url);
@@ -20,6 +42,20 @@ const rootDir = resolve(__dirname, '..');
 const PKG_VERSION = JSON.parse(
   readFileSync(resolve(rootDir, 'package.json'), 'utf8'),
 ).version;
+
+/** `a,b` → `["a","b"]`; empty/unset → `[]`, which every filter reads as "all". */
+const list = (v) => (v || '').split(',').map((s) => s.trim()).filter(Boolean);
+
+const ONLY_ENTRIES = list(process.env.MOVI_ENTRY);
+const ONLY_FORMATS = list(process.env.MOVI_FORMAT);
+const VERBOSE = process.env.MOVI_VERBOSE === '1';
+/* Each job holds a multi-megabyte rollup AST and a terser pass on top of it,
+   so this is bounded by memory long before it is bounded by cores. Four is
+   comfortable on an 8 GB machine; raise it with MOVI_JOBS if yours has room. */
+const JOBS = Math.max(
+  1,
+  Number(process.env.MOVI_JOBS) || Math.min(4, Math.max(1, cpus().length - 2)),
+);
 
 const entries = [
   { name: 'demuxer', path: 'src/demuxer.ts' },
@@ -58,7 +94,11 @@ const terserConfig = {
   compress: {
     drop_console: true,
     drop_debugger: true,
-    passes: 5,
+    // Five passes is the shipped setting. It is also most of this script's
+    // wall clock, so MOVI_TERSER_PASSES lowers it for a build you are only
+    // going to load once — the output is a little larger and otherwise the
+    // same code.
+    passes: Number(process.env.MOVI_TERSER_PASSES) || 5,
     unsafe: false,
     unsafe_comps: false,
     unsafe_math: false,
@@ -103,7 +143,7 @@ const terserConfig = {
 
 async function buildEntry(entry, format) {
   const formatExt = format === 'es' ? 'js' : format;
-  console.log(`Building ${entry.name}.${formatExt}...`);
+  const started = Date.now();
 
   await build({
     configFile: false,
@@ -129,18 +169,10 @@ async function buildEntry(entry, format) {
           },
         }
       : {}),
-    plugins: [
-      // Only generate types once for ES format
-      ...(format === 'es'
-        ? [
-            dts({
-              insertTypesEntry: true,
-              entryRoot: 'src',
-              include: [entry.path],
-            }),
-          ]
-        : []),
-    ],
+    // No dts plugin: tsc emits the declarations before this script runs. See
+    // the note at the top of the file.
+    plugins: [],
+    logLevel: VERBOSE ? 'info' : 'warn',
     build: {
       // Native class fields output (no __publicField helper). Required
       // by the post-build harden pass: terser's property mangler
@@ -190,6 +222,9 @@ async function buildEntry(entry, format) {
       outDir: resolve(rootDir, 'dist'),
     },
   });
+
+  const secs = ((Date.now() - started) / 1000).toFixed(1);
+  console.log(`  ✓ ${entry.name}.${formatExt}  (${secs}s)`);
 }
 
 /**
@@ -206,7 +241,7 @@ async function buildEntry(entry, format) {
  * document/require expression for CJS — untouched, so both formats resolve the
  * file next to their own bundle. Then drop movi.wasm beside them.
  */
-function externalizeSlimWasm() {
+function externalizeSlimWasm(files) {
   const wasmSrc = resolve(rootDir, 'dist/wasm/external/movi.wasm');
   if (!existsSync(wasmSrc)) {
     throw new Error(
@@ -216,8 +251,12 @@ function externalizeSlimWasm() {
   }
   copyFileSync(wasmSrc, resolve(rootDir, 'dist/movi.wasm'));
 
+  // Only the files THIS run produced. With MOVI_FORMAT narrowing the run to one
+  // format, the other one on disk is a previous build's output — already fixed
+  // up, so the data URL is long gone and the "did the fixup match" check below
+  // would fail on a bundle that is perfectly correct.
   const dataUrl = /new URL\("data:application\/wasm;base64,[A-Za-z0-9+/=]+"/g;
-  for (const file of ['dist/element.slim.js', 'dist/element.slim.cjs']) {
+  for (const file of files) {
     const p = resolve(rootDir, file);
     const before = readFileSync(p, 'utf8');
     const after = before.replace(dataUrl, 'new URL("movi.wasm"');
@@ -232,24 +271,87 @@ function externalizeSlimWasm() {
   console.log('✓ slim WASM externalized → dist/movi.wasm (bundle no longer embeds it)');
 }
 
+/**
+ * Run `tasks` with at most `limit` in flight.
+ *
+ * A fixed set of workers pulling from a shared cursor, rather than chunking the
+ * list into batches: the bundles are wildly uneven — the slim one is 4.5 MB and
+ * index is 11.4 MB — and a batch is only as fast as its slowest member, which
+ * would leave three cores idle waiting on index every time.
+ */
+async function runPool(tasks, limit) {
+  let next = 0;
+  const worker = async () => {
+    for (;;) {
+      const i = next++;
+      if (i >= tasks.length) return;
+      await tasks[i]();
+    }
+  };
+  await Promise.all(
+    Array.from({ length: Math.min(limit, tasks.length) }, worker),
+  );
+}
+
 async function buildAll() {
-  console.log('Building standalone modular bundles...\n');
-
-  let builtSlim = false;
-  for (const entry of entries) {
-    // Build ES format
-    await buildEntry(entry, 'es');
-
-    // Build CJS format
-    await buildEntry(entry, 'cjs');
-
-    if (entry.slim) builtSlim = true;
-    console.log(`✓ ${entry.name} built\n`);
+  const selected = ONLY_ENTRIES.length
+    ? entries.filter((e) => ONLY_ENTRIES.includes(e.name))
+    : entries;
+  if (!selected.length) {
+    throw new Error(
+      `MOVI_ENTRY=${process.env.MOVI_ENTRY} matches no entry. Known: ` +
+        entries.map((e) => e.name).join(', '),
+    );
+  }
+  const formats = ONLY_FORMATS.length
+    ? ['es', 'cjs'].filter((f) => ONLY_FORMATS.includes(f))
+    : ['es', 'cjs'];
+  if (!formats.length) {
+    throw new Error(
+      `MOVI_FORMAT=${process.env.MOVI_FORMAT} matches no format. Known: es, cjs`,
+    );
   }
 
-  if (builtSlim) externalizeSlimWasm();
+  const jobs = [];
+  for (const entry of selected) {
+    for (const format of formats) jobs.push({ entry, format });
+  }
 
-  console.log('✓ All standalone bundles built successfully!');
+  const started = Date.now();
+  console.log(
+    `Building ${jobs.length} bundle(s) — ${selected.map((e) => e.name).join(', ')} ` +
+      `× ${formats.join(', ')} — ${Math.min(JOBS, jobs.length)} at a time\n`,
+  );
+
+  // Say it out loud when the run is narrowed. A partial run leaves the other
+  // bundles in dist as whatever the last full build wrote, which is exactly
+  // what you want while iterating and exactly what you must not publish — and
+  // a stale bundle looks identical to a fresh one on disk.
+  const skippedEntries = entries.filter((e) => !selected.includes(e));
+  const skippedFormats = ['es', 'cjs'].filter((f) => !formats.includes(f));
+  if (skippedEntries.length || skippedFormats.length) {
+    const parts = [];
+    if (skippedEntries.length)
+      parts.push(`entries ${skippedEntries.map((e) => e.name).join(', ')}`);
+    if (skippedFormats.length) parts.push(`format ${skippedFormats.join(', ')}`);
+    console.log(
+      `  ! partial build — ${parts.join(' and ')} left as the previous build wrote them.\n` +
+        `    Run \`npm run build:ts\` before publishing or releasing.\n`,
+    );
+  }
+
+  await runPool(
+    jobs.map(({ entry, format }) => () => buildEntry(entry, format)),
+    JOBS,
+  );
+
+  const slimFiles = jobs
+    .filter(({ entry }) => entry.slim)
+    .map(({ entry, format }) => `dist/${entry.name}.${format === 'es' ? 'js' : 'cjs'}`);
+  if (slimFiles.length) externalizeSlimWasm(slimFiles);
+
+  const secs = ((Date.now() - started) / 1000).toFixed(1);
+  console.log(`\n✓ ${jobs.length} bundle(s) built in ${secs}s`);
 }
 
 buildAll().catch((err) => {

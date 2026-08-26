@@ -37,6 +37,15 @@ import { setWasmUrl } from "../wasm/FFmpegLoader";
 import { probeLinkBandwidth } from "../utils/bandwidthProbe";
 import { childAbort } from "../utils/abort";
 import { loadPersistedLinkBps, persistLinkBps } from "../utils/LinkRate";
+// Static, though it is used once and only on an encrypted source. It was a
+// dynamic import, and a dynamic import that saves nothing is worse than a
+// static one: the module is re-exported from the public API (src/element.ts and
+// src/source/index.ts both name generateFingerprint), so it is in the bundle
+// regardless, and these are single-chunk library builds with nowhere for it to
+// split off to. All the `await import()` bought was a rollup warning on every
+// one of the ten bundles, and a promise in front of sixty lines of navigator
+// reads.
+import { generateFingerprint } from "../utils/Fingerprint";
 
 const TAG = "MoviElement";
 
@@ -26128,7 +26137,6 @@ export class MoviElement extends HTMLElement {
       // native reports with `waitingforkey`.
       this.dispatchEvent(new Event("waitingforkey"));
       try {
-        const { generateFingerprint } = await import("../utils/Fingerprint");
         const fingerprint = await generateFingerprint();
         await this.loadEncrypted({
           videoUrl: this._videoUrl,

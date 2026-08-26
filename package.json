@@ -101,6 +101,7 @@
   "scripts": {
     "build": "npm run build:wasm && npm run build:ts",
     "build:ts": "node scripts/check-wasm.js && tsc && node scripts/build-standalone.js && node scripts/build-wrappers.mjs && node scripts/build-custom-data.mjs",
+    "build:ts:fast": "node scripts/check-wasm.js && tsc --emitDeclarationOnly && MOVI_ENTRY=element,element.slim MOVI_FORMAT=es MOVI_TERSER_PASSES=2 node scripts/build-standalone.js && node scripts/build-wrappers.mjs && node scripts/build-custom-data.mjs",
     "release": "node scripts/release.mjs",
     "sync:element": "node scripts/sync-element.mjs",
     "build:wasm": "mkdir -p dist/wasm && docker compose run --rm build",
