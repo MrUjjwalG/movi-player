@@ -203,6 +203,10 @@
               "description": "Target prefetch window in **megabytes** — how far ahead of playback the source should try to keep buffered."
             },
             {
+              "name": "spinnerdelay",
+              "description": "How long an interruption has to last, in **seconds**, before the viewer is shown a loading spinner."
+            },
+            {
               "name": "title",
               "description": "Sets the video title shown in the in-player overlay. Unlike the global HTML `title` attribute, this does **not** trigger a native browser tooltip on hover."
             },

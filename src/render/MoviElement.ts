@@ -810,6 +810,10 @@ export class MoviElement extends HTMLElement {
   // SettingsStorage — sync drift is per-source, so a global value would
   // mis-shift unrelated videos.
   private _subtitleDelay: number = 0;
+  // How long an interruption has to last before the viewer is shown a spinner,
+  // in seconds. Not persisted and not a viewer setting: it describes what this
+  // page is serving, not what this viewer prefers. See spinnerDelayMs.
+  private _spinnerDelay: number = 0;
   // Host-supplied pluggable subtitle renderer (e.g. jassub/libass). Stored so it
   // survives a source change: re-applied to each fresh player instance.
   private _subtitleRenderer: SubtitleRenderer | null = null;
@@ -1488,6 +1492,7 @@ export class MoviElement extends HTMLElement {
       "doubletap",
       "themecolor",
       "buffersize",
+      "spinnerdelay",
       "title",
       "showtitle",
       "titlemode",
@@ -8145,12 +8150,15 @@ export class MoviElement extends HTMLElement {
         const buffered = this.player.getBufferEndTime?.() ?? 0;
         progressBuffer.style.width =
           dur > 0 ? `${Math.min(100, (buffered / dur) * 100)}%` : "0%";
-        // Loading is anything that is not playable picture: opening a source,
-        // and re-buffering mid-play.
-        const st = this.player.getState?.();
+        // The PiP window's spinner is the same spinner, on another surface —
+        // so it reads the same answer rather than making its own out of the
+        // player state. That answer has been through every suppression the
+        // main one has (internal seeks, a picture that is still moving) and
+        // through spinnerdelay, which is what keeps a flicker here from being
+        // the one place the page's setting does not reach.
         pipWindow.document.body.classList.toggle(
           "is-loading",
-          st === "loading" || st === "buffering" || st === "seeking",
+          this.classList.contains("is-buffering"),
         );
         timeCurrent.textContent = this.formatTime(cur);
         timeDuration.textContent = this.formatTime(dur);
@@ -14840,8 +14848,13 @@ export class MoviElement extends HTMLElement {
     // class hides this button with !important, so the flash would run entirely
     // invisibly. Take it down for the length of the receipt; done() re-asks
     // whether it is still wanted and puts it straight back if so.
+    // The RAW hide, not the gated one: this spinner has already served its
+    // spinnerdelay, and the receipt is covering it for well under a second,
+    // not ending the load. Routing it through setSpinnerVisible would end the
+    // run, and done() below would then make the viewer wait the whole delay
+    // over again to get back a spinner that never actually left.
     const spinnerWasUp = this.centerHiddenBySpinner();
-    if (spinnerWasUp) this.setSpinnerVisible(false);
+    if (spinnerWasUp) this.applySpinnerVisible(false);
 
     // Feedback must never swallow a click meant for the video underneath.
     //
@@ -24059,6 +24072,11 @@ export class MoviElement extends HTMLElement {
       const parsed = parseFloat(subtitleDelayAttr);
       if (Number.isFinite(parsed)) this._subtitleDelay = parsed;
     }
+    const spinnerDelayAttr = this.getAttribute("spinnerdelay");
+    if (spinnerDelayAttr) {
+      const parsed = parseFloat(spinnerDelayAttr);
+      if (Number.isFinite(parsed)) this._spinnerDelay = Math.max(0, parsed);
+    }
     this._ambientMode = this.hasAttribute("ambientmode");
     this._ambientWrapper = this.getAttribute("ambientwrapper");
     const objectFitAttr = this.getAttribute("objectfit");
@@ -24456,6 +24474,14 @@ export class MoviElement extends HTMLElement {
       document.removeEventListener("pointerdown", this._outsideTapHandler, true);
       this._outsideTapHandler = null;
     }
+    // A spinner still waiting out its delay, for a player that is no longer in
+    // the document.
+    if (this._spinnerDelayTimer !== null) {
+      clearTimeout(this._spinnerDelayTimer);
+      this._spinnerDelayTimer = null;
+    }
+    this._spinnerEarned = false;
+
     // Cleanup nerd stats interval
     if (this.nerdStatsInterval) {
       clearInterval(this.nerdStatsInterval);
@@ -25021,6 +25047,18 @@ export class MoviElement extends HTMLElement {
           }
         }
         break;
+      case "spinnerdelay": {
+        const parsed = newValue === null ? 0 : parseFloat(newValue);
+        this._spinnerDelay = Number.isFinite(parsed) ? Math.max(0, parsed) : 0;
+        // A wait already running was measured against the old number and means
+        // nothing now. Drop it and let the next tick ask again — which it will,
+        // within a frame or two, if whatever asked for it is still loading.
+        if (this._spinnerDelayTimer !== null) {
+          clearTimeout(this._spinnerDelayTimer);
+          this._spinnerDelayTimer = null;
+        }
+        break;
+      }
       case "ambientmode":
         if (this.hostOverridingStoredChoice("ambientmode", newValue)) return;
         this._ambientMode = newValue !== null;
@@ -30002,7 +30040,89 @@ export class MoviElement extends HTMLElement {
   }
 
   /**
-   * Put the spinner up or take it down — the ONLY way to do either.
+   * How long the player has to keep saying "loading" before the viewer is
+   * told. `spinnerdelay`, in seconds; 0 — the default — is no wait at all.
+   *
+   * Every reason a spinner goes up already funnels through one decision
+   * (updateLoadingIndicator) and one switch (setSpinnerVisible), so a single
+   * timer in front of that switch covers all of them: the opening load, a
+   * seek, a mid-play stall, a rendition switch, judder, the software retry.
+   *
+   * Whether the wait is worth having is not ours to decide. A local file on a
+   * fast machine interrupts itself for a tenth of a second at a time and every
+   * one of those flashes a ring the viewer cannot read, which reads as a
+   * player in trouble; a phone on a thin link stalls for real, and hiding that
+   * for a second reads as a player that has died. Same code, opposite right
+   * answers — so it is a number the page sets, and it defaults to the
+   * behaviour that was there before it existed.
+   *
+   * This is a floor under the per-reason graces above it
+   * (SEEK_SPINNER_GRACE_MS, CATCHUP_SPINNER_GRACE_MS), not a replacement: they
+   * know which interruptions are ordinarily brief, and this knows how patient
+   * this particular page wants to be. Both have to pass.
+   */
+  private spinnerDelayMs(): number {
+    return Math.max(0, this._spinnerDelay) * 1000;
+  }
+
+  /** Pending "show the spinner if this is still true when it fires". */
+  private _spinnerDelayTimer: number | null = null;
+  /** The current run of wanting the spinner has already served its wait, so
+   *  the next ask puts it up at once. Cleared by a real hide. */
+  private _spinnerEarned = false;
+
+  /**
+   * Ask for the spinner, or take it down — the ONLY way to do either.
+   *
+   * Asking is not showing. A show starts the delay and returns; the spinner
+   * appears only if nothing takes the ask back before the timer fires, which
+   * is the whole point — an interruption shorter than the delay is one the
+   * viewer never hears about. A hide is immediate and unconditional: it
+   * cancels a pending show, and it ends the run, so the NEXT interruption
+   * serves the wait again from the top rather than flashing on the strength of
+   * a wait some earlier stall paid for.
+   *
+   * Once a run has been shown it stays shown — repeated asks during it (a tick
+   * re-stating the same load) do not restart the timer, or a spinner would
+   * only ever appear in the gap between two ticks.
+   */
+  private setSpinnerVisible(on: boolean): void {
+    if (!on) {
+      if (this._spinnerDelayTimer !== null) {
+        clearTimeout(this._spinnerDelayTimer);
+        this._spinnerDelayTimer = null;
+      }
+      this._spinnerEarned = false;
+      this.applySpinnerVisible(false);
+      return;
+    }
+
+    // Already past the wait for this run — including a spinner that is up and
+    // was momentarily covered by a centre flash. Show it now.
+    if (this._spinnerEarned) {
+      this.applySpinnerVisible(true);
+      return;
+    }
+    // A wait is already running for this run. Let it finish.
+    if (this._spinnerDelayTimer !== null) return;
+
+    const wait = this.spinnerDelayMs();
+    if (wait <= 0) {
+      this._spinnerEarned = true;
+      this.applySpinnerVisible(true);
+      return;
+    }
+    this._spinnerDelayTimer = window.setTimeout(() => {
+      this._spinnerDelayTimer = null;
+      this._spinnerEarned = true;
+      this.applySpinnerVisible(true);
+    }, wait);
+  }
+
+  /**
+   * Put the spinner on the screen or take it off — the raw half, past the
+   * delay. Call setSpinnerVisible instead unless you are the centre flash
+   * covering a spinner it has already earned.
    *
    * The host carries is-buffering for as long as the spinner is displayed, and
    * CSS leans on that: it is what keeps the centre play button off the screen
@@ -30010,8 +30130,11 @@ export class MoviElement extends HTMLElement {
    * paths could guarantee on its own. Setting the display directly leaves the
    * class behind, and a spinner the CSS cannot see is a spinner with a play
    * triangle sitting inside it. Three call sites did exactly that.
+   *
+   * Strip mode reads the same class — it has no ring, and pulses its progress
+   * bar instead — so the delay reaches that surface for free.
    */
-  private setSpinnerVisible(on: boolean): void {
+  private applySpinnerVisible(on: boolean): void {
     // One at a time, in order: the receipt, then the spinner.
     //
     // "Never the button and the spinner together" is settled by the stylesheet
@@ -36342,6 +36465,19 @@ export class MoviElement extends HTMLElement {
     // Speed is the setting most often changed from the keyboard while the panel
     // is open — the row's value and the speed list's tick both have to move.
     this.refreshOpenSettingsSurfaces();
+  }
+
+  /**
+   * Seconds an interruption must last before the viewer is shown a spinner.
+   * `0` — the default — shows it the moment the player says it is loading.
+   */
+  get spinnerDelay(): number {
+    return this._spinnerDelay;
+  }
+
+  set spinnerDelay(value: number) {
+    if (!Number.isFinite(value)) return;
+    this.setAttribute("spinnerdelay", Math.max(0, value).toString());
   }
 
   get subtitleDelay(): number {

@@ -680,6 +680,19 @@
           ]
         },
         {
+          "name": "spinnerdelay",
+          "description": {
+            "kind": "markdown",
+            "value": "How long an interruption has to last, in **seconds**, before the viewer is shown a loading spinner."
+          },
+          "references": [
+            {
+              "name": "Documentation",
+              "url": "https://moviplayer.com/docs/api/element#spinnerdelay"
+            }
+          ]
+        },
+        {
           "name": "title",
           "description": {
             "kind": "markdown",

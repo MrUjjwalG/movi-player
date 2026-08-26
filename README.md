@@ -750,6 +750,7 @@ Every attribute can also be read and set as a JS property (`el.rotate = 90`). Gr
 | `title` | `title="My Video"` | Video title (in-player overlay only — no native tooltip) |
 | `showtitle` | `showtitle` | Show the title bar overlay at the top |
 | `titlemode` | `titlemode="fullscreen back"` | Where the title bar may show: `both` (default) \| `fullscreen` \| `windowed`; add `back` (or `back-mobile`, `back-fullscreen`, `back-mobile-fullscreen`) for a back arrow that fires a cancelable `back` event |
+| `spinnerdelay` | `spinnerdelay="0.4"` | Seconds an interruption must last before the loading spinner appears. `0` (default) shows it at once; anything higher lets brief stalls pass in silence |
 
 </details>
 

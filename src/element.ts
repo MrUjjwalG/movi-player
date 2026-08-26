@@ -233,6 +233,13 @@ export interface MoviPlayerAttributes {
   startat?: number | string;
   /** Target prefetch window, in megabytes. */
   buffersize?: number | string;
+  /**
+   * How long an interruption must last, in seconds, before the viewer is shown
+   * a loading spinner. `0` (default) shows it at once. Applies to every reason
+   * the spinner goes up — the opening load, seeking, buffering, a rendition
+   * switch, judder — so a brief stall passes in silence.
+   */
+  spinnerdelay?: number | string;
   /** Override the video frame rate (0 = use the source's own). */
   fps?: number | string;
   /** Force software decoding (FFmpeg WASM) instead of WebCodecs. `auto` (default) picks per source. */

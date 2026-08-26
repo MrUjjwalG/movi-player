@@ -1106,6 +1106,29 @@ Target prefetch window in **megabytes** — how far ahead of playback the source
 
 ---
 
+#### `spinnerdelay`
+
+How long an interruption has to last, in **seconds**, before the viewer is shown a loading spinner.
+
+```html
+<!-- anything under 400ms passes without a spinner -->
+<movi-player src="video.mp4" spinnerdelay="0.4"></movi-player>
+```
+
+**Value:** Seconds. `0` — the default — shows the spinner the moment the player says it is loading, which is how the player has always behaved.
+
+Playback interrupts itself constantly and briefly: an opening seek, a scrub landing, a rendition switch, a queue refilling after a flush. Most of those are over in a tenth of a second, and a ring that appears and vanishes faster than it can be read is not information — it reads as a player in trouble. `spinnerdelay` is the wait before the player admits to one.
+
+The delay is a floor under **every** reason the spinner goes up, because they all pass through one decision: the opening load, seeking, buffering, a rendition switch, a juddering picture, the software-decode retry. A hide cancels a wait still in flight, so an interruption shorter than the delay is one the viewer never hears about. Once the spinner IS up it stays up for as long as the load lasts — the wait is paid once per interruption, not once per tick — and the next interruption pays it again from the top.
+
+It reaches the other two surfaces that say the same thing: strip mode's pulsing progress bar, and the spinner in the document Picture-in-Picture window.
+
+**Behavior:** The wait is in addition to the per-reason grace the player already applies (seeks and picture catch-up are held back briefly on their own, and a picture that is still moving never earns a spinner at all). Both have to pass, so a value of `0` does not switch those off.
+
+**Use Case:** A local file on a fast machine, or a well-provisioned CDN, where the honest answer to most interruptions is that nothing worth reporting happened. Leave it at `0` where stalls are real and long — on a thin mobile link, hiding the spinner for a second reads as a player that has died.
+
+---
+
 #### `resume`
 
 Saves playback position to localStorage and shows a resume dialog on reload.
@@ -1760,6 +1783,17 @@ Gets/sets the target prefetch window in **megabytes**. Applies to both HTTP and 
 ```typescript
 player.buffersize = 400; // Keep ~400 MB buffered ahead
 player.buffersize = 0;   // Restore library default
+```
+
+---
+
+#### `spinnerDelay: number`
+
+Gets/sets the loading-spinner delay in **seconds**. See the [`spinnerdelay` attribute](#spinnerdelay).
+
+```typescript
+player.spinnerDelay = 0.4; // Interruptions under 400ms pass in silence
+player.spinnerDelay = 0;   // Show the spinner as soon as loading starts
 ```
 
 ---
