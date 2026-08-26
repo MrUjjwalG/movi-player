@@ -330,7 +330,7 @@
             },
             {
               "name": "playlistindex",
-              "description": "Which item to open on. Default `0`. Readable and writable as the"
+              "description": "Which item to open on. Default `0`. The `playlistIndex` property reads and"
             },
             {
               "name": "autoadvance",

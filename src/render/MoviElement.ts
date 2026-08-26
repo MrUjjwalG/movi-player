@@ -2238,6 +2238,18 @@ export class MoviElement extends HTMLElement {
         
         <div class="movi-buttons-row">
           <div class="movi-controls-left">
+            <!-- Previous, Play and Next are one control, not three: they are
+                 one decision about what is on screen, and the bar says that the
+                 way it already says it for the seek pair — a single capsule.
+                 The ends are absent from it until there IS a queue, and a
+                 capsule of one is no capsule at all, so with them gone the
+                 wrapper stands down and Play wears its own again (see
+                 .movi-play-group-solo in the styles).
+
+                 data-group="play" on purpose: a host's addControl({ group:
+                 "play" }) looks for exactly this, so its button joins THIS
+                 capsule rather than wrapping Play in a second one. -->
+            <div class="movi-control-group movi-play-group" data-group="play">
             <!-- The queue's two ends. Absent from the bar until there IS a
                  queue: a Previous button on a single video is a control that
                  can never do anything, and the commonest case by far is a
@@ -2263,6 +2275,7 @@ export class MoviElement extends HTMLElement {
                 <path d="M18 6h-2.4v12H18V6zM6 6v12l9-6-9-6z"></path>
               </svg>
             </button>
+            </div>
 
             <!-- The two seek buttons are one control, not two: they do the same
                  thing in opposite directions, and the bar groups them as one. -->
@@ -16972,10 +16985,7 @@ export class MoviElement extends HTMLElement {
          and over any frame — the bar's own gradient is what it sits on. */
       .movi-controls-right,
       .movi-control-group,
-      .movi-controls-left > .movi-play-pause,
       .movi-controls-left > .movi-custom-btn,
-      .movi-controls-left > .movi-prev-btn,
-      .movi-controls-left > .movi-next-btn,
       .movi-controls-left > .movi-seek-group,
       .movi-controls-left > .movi-volume-container,
       .movi-controls-left > .movi-chapter-pill,
@@ -17055,10 +17065,33 @@ export class MoviElement extends HTMLElement {
          2px shorter than everything beside it and the row's baseline breaks.
          A host's button on this side is the same shape of thing: its own
          capsule, so its own ring. */
-      :host .movi-controls-left > .movi-play-pause,
-      :host .movi-controls-left > .movi-prev-btn,
-      :host .movi-controls-left > .movi-next-btn,
       :host .movi-controls-left > .movi-custom-btn {
+        --movi-btn-size: 42px;
+        width: var(--movi-btn-size);
+        height: var(--movi-btn-size);
+      }
+
+      /* A capsule of one is no capsule. With no queue — the ordinary case for
+         almost every player on almost every page — the group holds nothing but
+         Play, and Play has always been its own capsule: the wrapper draws
+         nothing and hands the ring back, so a player with one video looks
+         exactly as it did before queues existed.
+
+         The three ways that happens: no queue at all, the queue switched off
+         wholesale, or both of its ends switched off one at a time. A host
+         control that joined group:"play" makes it a real group again whichever
+         of those is true, which is what the :has() is for. */
+      :host(:not(.movi-has-playlist)) .movi-play-group:not(:has(> .movi-custom-btn)),
+      :host([controlslist~="noplaylist"]) .movi-play-group:not(:has(> .movi-custom-btn)),
+      :host([controlslist~="noprev"][controlslist~="nonext"]) .movi-play-group:not(:has(> .movi-custom-btn)) {
+        background: none;
+        padding: 0;
+      }
+      :host(:not(.movi-has-playlist)) .movi-play-group:not(:has(> .movi-custom-btn)) > .movi-play-pause,
+      :host([controlslist~="noplaylist"]) .movi-play-group:not(:has(> .movi-custom-btn)) > .movi-play-pause,
+      :host([controlslist~="noprev"][controlslist~="nonext"]) .movi-play-group:not(:has(> .movi-custom-btn)) > .movi-play-pause {
+        background: var(--movi-controls-group-bg);
+        border-radius: 999px;
         --movi-btn-size: 42px;
         width: var(--movi-btn-size);
         height: var(--movi-btn-size);
@@ -21816,6 +21849,12 @@ export class MoviElement extends HTMLElement {
       :host([controlslist~="noplay"]) .movi-play-pause,
       :host([controlslist~="noplaylist"]) .movi-prev-btn,
       :host([controlslist~="noplaylist"]) .movi-next-btn,
+      /* One end at a time — the BUTTON only. Shift+P, the queue and the lock
+         screen's own pair carry on: a host taking Previous off a crowded bar is
+         making room, not saying the viewer may never go back. noplaylist above
+         is the one that means that. */
+      :host([controlslist~="noprev"]) .movi-prev-btn,
+      :host([controlslist~="nonext"]) .movi-next-btn,
       /* …and the rows in the shortcuts sheet that name keys the token has just
          switched off, which would otherwise be the sheet teaching a press that
          does nothing. */

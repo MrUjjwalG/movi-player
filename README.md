@@ -466,7 +466,7 @@ Setting a list opens its first item, *unless* the element is already playing one
 <movi-player src="ep2.mkv" playlist='["ep1.mkv","ep2.mkv","ep3.mkv"]' controls></movi-player>
 ```
 
-Hide the pair with `controlslist="noplaylist"` — which takes the keys and the lock-screen buttons with it.
+Previous, play and next sit in one pill — they are one decision about what is on screen, not three. Trim an end with `controlslist="noprev"` / `"nonext"`: that takes the *button* and nothing else, so the key and the lock-screen pair carry on. `controlslist="noplaylist"` is the one that switches the whole feature off, keys and lock screen included.
 
 ### Remembering Viewer Settings
 

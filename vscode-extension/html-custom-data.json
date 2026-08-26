@@ -1119,7 +1119,7 @@
           "name": "playlistindex",
           "description": {
             "kind": "markdown",
-            "value": "Which item to open on. Default `0`. Readable and writable as the"
+            "value": "Which item to open on. Default `0`. The `playlistIndex` property reads and"
           },
           "references": [
             {

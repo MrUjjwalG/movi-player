@@ -594,7 +594,7 @@ Switches built-in controls off, as `no<name>` tokens — the same shape
              controlslist="nofullscreen nopip nospeed"></movi-player>
 ```
 
-**Tokens:** `noplay`, `noplaylist`, `noseekbuttons`, `novolume`, `notime`,
+**Tokens:** `noplay`, `noplaylist`, `noprev`, `nonext`, `noseekbuttons`, `novolume`, `notime`,
 `noprogress`, `noaudio`, `nocc`, `noquality`, `nospeed`, `nostableaudio`,
 `nohdr`, `noloop`, `nosettings`, `noaspect`, `nopip`, `nofullscreen`, `nomore`,
 `nostats`, `noshortcuts`, `noambient`, `nocrop`, `nosnapshot`, `norotate`,
@@ -607,7 +607,14 @@ row, and — for the ones the availability check knows (`aspect`, `pip`,
 `snapshot`, `rotate`, `hdr`, `ambient`, `timeline`, `stableaudio`, `playlist`)
 — its keyboard shortcut. `noplaylist` also clears the queue's skip pair from
 the OS lock screen, which is the one surface a page cannot restyle its way out
-of. Ask the same question in code with
+of.
+
+`noprev` and `nonext` are a different kind of token: they take one BUTTON off
+the bar and nothing else. The key, the queue and the lock screen's pair carry
+on, because a host trimming a crowded bar is making room, not saying the viewer
+may never go back. `noplaylist` is the one that means that. With one end gone
+the other keeps play company in a single pill — which is what the bar shows for
+a queue anyway, the two ends and play being one control rather than three. Ask the same question in code with
 `player.isControlDisabled("pip")`.
 
 ---
