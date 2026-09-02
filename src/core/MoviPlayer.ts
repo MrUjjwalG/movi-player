@@ -1408,6 +1408,15 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
   /** How long after a rate change or a seek's resume an audio stall is still
    *  attributable to the flush/re-anchor that operation performed itself. */
   private static readonly SELF_INFLICTED_STALL_WINDOW_MS = 1500;
+  /** The renderer queue depth below which the picture counts as having run
+   *  OUT, rather than merely being short — the point past which the audio
+   *  cushion's cap must not be what holds the demuxer shut. A quarter of the
+   *  queue's own cap, so it scales with the cap's own reasoning (VRAM on 8K,
+   *  wall-clock on mobile, deep on desktop), held between these two so a very
+   *  shallow cap cannot put the floor at the stall itself and a very deep one
+   *  cannot keep the exemption standing through ordinary playback. */
+  private static readonly PICTURE_FLOOR_MIN_FRAMES = 4;
+  private static readonly PICTURE_FLOOR_MAX_FRAMES = 12;
   /**
    * Buffered ahead of the playhead, past which a stall is not about supply.
    * Comfortably more than the cushion the floor exists to rebuild, so a link
@@ -7068,6 +7077,66 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
     // this cannot flood anything.
     const stashCanFeedThePicture =
       this._videoAheadStash.length > 0 && videoBuffered <= maxVideoBuffered;
+    // The fourth, and the one the cap CAUSES rather than merely fails to
+    // prevent: the picture has run out while the cushion is still over its cap.
+    //
+    // Coming back from a background tab is where it bites. The hidden-tab pump
+    // schedules a deeper cushion — 3.1s measured against the 2.0s cap — and the
+    // foreground recovery then flushes the video decoder, clears the renderer
+    // queue and drops the read-ahead stash, all on purpose. So at the moment of
+    // return the audio side is a full second OVER its ceiling and the video
+    // side is at zero, and none of the three carve-outs above is standing:
+    // _videoResumeTarget cleared the instant the first frame passed it (63ms
+    // in), the stash was just dropped, and "buffering" has not happened yet.
+    //
+    // The gate therefore closes and the demuxer reads NOTHING for as long as
+    // the cushion takes to drain under the cap. Read off the session this came
+    // from, twice: recovery at 43.471, first frame at 43.545, gate shut,
+    // `Stall detected: buffers empty for 500ms` at 44.462 — 917ms of an idle
+    // demuxer, a decoder with nothing to do, and an empty renderer. Then
+    // buffering makes bufferingForVideo true, the gate opens, the queue
+    // refills, playback resumes, the cushion is STILL over the cap, and the
+    // whole thing goes round again. Three times in two seconds, each one
+    // pausing the clock and suspending the AudioContext, until the audio clock
+    // stopped advancing (104.374s logged twice a full second apart) and the
+    // picture ran far enough ahead for the desync detector to fire a corrective
+    // seek.
+    //
+    // bufferingForVideo already concedes the whole argument — it exists so the
+    // cap cannot hold shut the reads that would end a wait for picture. It just
+    // concedes it one stall too late. This is the same rule, before the stop
+    // rather than after it.
+    //
+    // Same shape as the three above: bounded (it clears the moment the queue is
+    // off the floor), self-limiting (the video cap and the audio DECODER queue
+    // gate both still apply), and it cannot leave the audio ceiling lifted the
+    // way `_videoResumeTarget !== -1` once did, because the queue climbing back
+    // is what ends it.
+    const pictureFloorFrames = Math.max(
+      MoviPlayer.PICTURE_FLOOR_MIN_FRAMES,
+      Math.min(
+        MoviPlayer.PICTURE_FLOOR_MAX_FRAMES,
+        Math.floor(maxVideoBuffered / 4),
+      ),
+    );
+    //
+    // The DECODER's own queue has to be dry too, and that is what keeps this
+    // from becoming the very bug the catch-up flag once was. A machine that
+    // cannot decode the source in real time — 8K60 AV1 at ~20fps against 60 —
+    // holds the renderer queue at zero permanently: the presentation loop takes
+    // every frame the instant it lands. On the renderer queue alone this
+    // exemption would then stand for the whole file and lift the audio ceiling
+    // with it, which is exactly how one session ended up with 29.5s of audio
+    // buffered against a 2s target. But that pipeline is not short of PACKETS —
+    // its decoder is backed up with them — and reading more cannot help it. The
+    // one this is for has nothing anywhere: no frames, no work queued, and a
+    // demuxer sitting idle because of a cushion. Asking both questions
+    // separates them exactly.
+    const pictureHasRunOut =
+      this.hasPicture &&
+      videoBuffered <= pictureFloorFrames &&
+      videoBuffered < maxVideoBuffered &&
+      this.videoDecoder.queueSize <= pictureFloorFrames;
     // …and this tick is running ONLY on that exemption when the audio cap is
     // the one thing it stepped over. The burst below must then stop the moment
     // the stash is empty: the exemption was granted to hand over picture
@@ -7078,6 +7147,11 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
       gateOnAudio &&
       !catchingUpVideo &&
       !bufferingForVideo &&
+      // …and not when the picture running out is what got this tick through.
+      // That exemption is not about handing over packets already in memory, so
+      // stopping the burst at an empty stash would end it before it has read
+      // the one thing it was granted for.
+      !pictureHasRunOut &&
       audioBuffered > maxAudioBuffered;
     if (
       (!skipVideoBackpressure &&
@@ -7091,6 +7165,7 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
         !catchingUpVideo &&
         !bufferingForVideo &&
         !stashCanFeedThePicture &&
+        !pictureHasRunOut &&
         audioBuffered > maxAudioBuffered) ||
       (!skipVideoBackpressure &&
         !skipVideoDecodeForAudio &&
