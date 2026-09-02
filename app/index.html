@@ -4322,6 +4322,11 @@
     <section class="features-section">
       <h2>What can it play?</h2>
       <p class="section-desc">Pretty much anything. From old AVI files to modern 4K HDR movies &mdash; right in your browser, with no software to install. Behind the scenes it uses FFmpeg (the same engine that powers VLC and most pro tools) along with your browser's WebCodecs API for fast, hardware-accelerated playback.</p>
+      <!-- The board below carries the same names, but as labelled chips. This
+           line keeps them in a sentence too: it is how someone searching for
+           "play MKV online" or "HEVC player" phrases it, and a grid of chips
+           reads as data rather than as an answer. -->
+      <p class="section-desc"><strong>File types:</strong> MKV, MP4, AVI, FLV, MOV, MPEG-TS, WebM and more. <strong>Video codecs:</strong> H.264, H.265 (HEVC), AV1, VP8, VP9. <strong>Audio:</strong> AAC, Opus, FLAC, MP3, AC3, and more. <strong>HDR:</strong> HDR10 and HLG also work on compatible displays.</p>
 
       <div class="spec-panel">
         <div class="spec-panel-head">
@@ -5031,10 +5036,17 @@
       };
 
       const scrollToPlayer = () => {
-        const section = document.querySelector(".player-section");
-        if (!section) return;
+        // Measure the player itself, not .player-section. The section carries
+        // 100px of block padding (pulled back out with a negative margin) so
+        // the ambient halo has somewhere to live inside the clip — measuring
+        // its box left the picture 100px lower than intended, and the gap on
+        // top of that put it barely above the fold on a laptop.
+        const target =
+          document.querySelector(".player-wrapper") ||
+          document.querySelector(".player-section");
+        if (!target) return;
         const navbarH = 64;
-        const top = section.getBoundingClientRect().top + window.scrollY - navbarH - 80;
+        const top = target.getBoundingClientRect().top + window.scrollY - navbarH - 48;
         window.scrollTo({ top, behavior: "smooth" });
       };
 
