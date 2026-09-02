@@ -1,0 +1,1022 @@
+/* ===================================================================
+   MoviPlayer — "Cinematic Precision" shared design system
+   -------------------------------------------------------------------
+   One stylesheet for every page on moviplayer.com (/, /examples,
+   /compare, /drive). The worker splices it into each page's <head>
+   AFTER that page's own <style> block (see __SHARED_CSS__ in
+   worker.js), so what lives here is the authority on the shared
+   chrome — tokens, navbar, buttons, cards, chips, sections, footer —
+   while each page keeps its own layout rules for whatever is unique
+   to it.
+
+   Why last and not first: the pages each grew their own palette and
+   navbar over time. Loading this after them lets a single edit here
+   re-skin all four without deleting three thousand lines of working,
+   JS-coupled CSS from under them.
+
+   Rules of the system:
+     · One accent (#7c6cf0). It marks actions and state, never
+       decoration.
+     · Depth comes from tonal layers + a 1px hairline, not shadows.
+     · Inter for prose, JetBrains Mono for anything technical.
+     · Everything spatial is a multiple of 4px; sections breathe.
+   =================================================================== */
+
+/* ── Tokens ─────────────────────────────────────────────────────── */
+:root {
+  /* Brand */
+  --accent: #7c6cf0;
+  --accent-hover: #9184f5;
+  --accent-soft: rgba(124, 108, 240, 0.12);
+  --accent-glow: rgba(124, 108, 240, 0.45);
+  --accent-2: #00d4ff;
+  --accent-grad: linear-gradient(135deg, #8a7cf2 0%, #6c5dd3 100%);
+
+  /* Surfaces — tonal layers, lightest content sits highest */
+  --bg-base: #0f0f12;
+  --bg-panel: #16161b;
+  --bg-card: #1c1c1c;
+  --bg-elevated: #1c1c22;
+  --surface-1: #1c1c1c;
+  --surface-2: #252529;
+  --bg-surface: rgba(255, 255, 255, 0.04);
+  --surface-soft: rgba(255, 255, 255, 0.05);
+  --surface-soft-hover: rgba(255, 255, 255, 0.09);
+
+  /* Ink */
+  --text-primary: #ffffff;
+  --text-secondary: #a0a0a0;
+  --text-muted: #6e6e6e;
+
+  /* Hairlines */
+  --border: rgba(255, 255, 255, 0.08);
+  --border-subtle: rgba(255, 255, 255, 0.08);
+  --border-hover: rgba(255, 255, 255, 0.16);
+  --border-strong: rgba(255, 255, 255, 0.16);
+  --row-divider: rgba(255, 255, 255, 0.05);
+
+  /* Chrome */
+  --page-glow:
+    radial-gradient(58% 46% at 14% 4%, rgba(124, 108, 240, 0.14) 0%, transparent 62%),
+    radial-gradient(46% 42% at 92% 14%, rgba(0, 212, 255, 0.07) 0%, transparent 58%);
+  --navbar-bg: rgba(15, 15, 18, 0.88);
+  --navbar-bg-scrolled: rgba(15, 15, 18, 0.94);
+  --navbar-border: rgba(255, 255, 255, 0.06);
+  --navbar-border-scrolled: rgba(255, 255, 255, 0.1);
+
+  /* Status */
+  --success: #4ade80;
+  --fail: #f87171;
+
+  /* /examples and /compare grew their own names for the same two brand
+     colours. Aliased here so all four pages move together. */
+  --primary-accent: var(--accent);
+  --secondary-accent: var(--accent-2);
+  --code-bg: #0c0c10;
+  --fallback-bg: rgba(0, 0, 0, 0.65);
+
+  /* Type */
+  --font-family: "Inter", system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+  --font: var(--font-family);
+  --mono-family: "JetBrains Mono", "SF Mono", ui-monospace, Menlo, Consolas, monospace;
+
+  /* Shape */
+  --radius-sm: 8px;
+  --radius: 12px;
+  --radius-lg: 16px;
+  --radius-xl: 24px;
+
+  /* Rhythm */
+  --container: 1200px;
+  --gutter: clamp(1.25rem, 4vw, 2rem);
+  --section-y: clamp(72px, 9vw, 120px);
+
+  /* Elevation — soft and large, only ever a lift */
+  --shadow: 0 24px 60px -24px rgba(0, 0, 0, 0.75);
+  --shadow-lift: 0 32px 80px -32px rgba(0, 0, 0, 0.85);
+}
+
+[data-theme="light"] {
+  --bg-base: #f6f6f8;
+  --bg-panel: #ffffff;
+  --bg-card: #ffffff;
+  --bg-elevated: #ffffff;
+  --surface-1: #ffffff;
+  --surface-2: #f1f1f5;
+  --bg-surface: rgba(0, 0, 0, 0.02);
+  --surface-soft: rgba(0, 0, 0, 0.04);
+  --surface-soft-hover: rgba(0, 0, 0, 0.07);
+
+  --text-primary: #141414;
+  --text-secondary: #5a5a68;
+  --text-muted: #8b8b98;
+
+  --border: rgba(17, 20, 45, 0.09);
+  --border-subtle: rgba(17, 20, 45, 0.09);
+  --border-hover: rgba(17, 20, 45, 0.16);
+  --border-strong: rgba(17, 20, 45, 0.16);
+  --row-divider: rgba(17, 20, 45, 0.06);
+
+  --page-glow:
+    radial-gradient(58% 46% at 14% 4%, rgba(124, 108, 240, 0.1) 0%, transparent 62%),
+    radial-gradient(46% 42% at 92% 14%, rgba(0, 212, 255, 0.05) 0%, transparent 58%);
+  --navbar-bg: rgba(246, 246, 248, 0.88);
+  --navbar-bg-scrolled: rgba(246, 246, 248, 0.95);
+  --navbar-border: rgba(17, 20, 45, 0.07);
+  --navbar-border-scrolled: rgba(17, 20, 45, 0.11);
+
+  --accent-soft: rgba(124, 108, 240, 0.1);
+  --code-bg: #f4f4f9;
+  --fallback-bg: rgba(255, 255, 255, 0.85);
+  --shadow: 0 24px 60px -28px rgba(60, 66, 120, 0.3);
+  --shadow-lift: 0 32px 80px -34px rgba(60, 66, 120, 0.36);
+}
+
+/* ── Base ───────────────────────────────────────────────────────── */
+body {
+  font-family: var(--font-family);
+  background-color: var(--bg-base);
+  color: var(--text-primary);
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+/* A single, quiet atmosphere behind every page. One violet bloom
+   top-left, one cool counterweight far right — no more competing
+   gradients per page. */
+body::before {
+  content: "";
+  position: fixed;
+  inset: 0;
+  z-index: 0;
+  pointer-events: none;
+  background: var(--page-glow);
+}
+/* Pages that paint their own body gradient defer to the one above. */
+body { background-image: none; }
+
+::selection { background: var(--accent); color: #fff; }
+
+/* ── Navbar ─────────────────────────────────────────────────────── */
+.navbar {
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  z-index: 1000;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+  height: 64px;
+  padding: 0 var(--gutter);
+  /* The bar paints the page's own backdrop rather than sitting on top
+     of it: base colour plus the same --page-glow, background-attachment
+     fixed so the radials land on the viewport exactly where
+     body::before puts them. It is therefore opaque — nothing behind it
+     shows through — yet indistinguishable from the page around it.
+
+     Everything else was a seam. A translucent bar lets whatever
+     scrolls underneath bleed through at a different strength than one
+     pixel below it, and the player's ambient halo — which reaches ~90px
+     past the video and is bright — turned that difference into a hard
+     line ruled across the top of the player. backdrop-filter made it
+     worse (the blur, and especially a saturate(), are applied inside
+     the bar and nowhere else). A 1px bottom border was a third line on
+     top of that. None of it survives: opaque, matched, no border. */
+  background-color: var(--bg-base);
+  background-image: var(--page-glow);
+  background-attachment: fixed;
+  border-bottom: 1px solid transparent;
+  box-shadow: none;
+  transition: box-shadow 0.25s ease;
+}
+/* Repeated, not inherited: each page's own `.navbar.scrolled` sets the
+   background shorthand at two classes, which outranks the one-class
+   rule above and put the translucency straight back the moment you
+   scrolled. */
+.navbar.scrolled {
+  background-color: var(--bg-base);
+  background-image: var(--page-glow);
+  background-attachment: fixed;
+  box-shadow: 0 12px 32px -24px rgba(0, 0, 0, 0.9);
+}
+
+/* A fixed opaque bar cuts whatever scrolls under it off at a hard edge.
+   Normally you never notice — the thing being cut is text. Here it is
+   the player's ambient halo, a soft glow reaching ~90px above the
+   video, and slicing a glow in half reads as a band ruled across the
+   hero. This strip continues the bar's own backdrop past its bottom
+   edge and masks itself away, so the halo emerges gradually instead.
+   Same background-attachment: fixed as the bar, so the page glow runs
+   through both without a step. */
+.navbar::after {
+  content: "";
+  position: absolute;
+  top: 100%;
+  left: 0;
+  right: 0;
+  height: 32px;
+  pointer-events: none;
+  background-color: var(--bg-base);
+  background-image: var(--page-glow);
+  background-attachment: fixed;
+  -webkit-mask-image: linear-gradient(180deg, #000 0%, transparent 100%);
+          mask-image: linear-gradient(180deg, #000 0%, transparent 100%);
+}
+/* index.html carries its own [data-theme="light"] .navbar rules at this
+   specificity; these land later so the light bar follows the same
+   scheme instead of its old translucent #f5f5f5. */
+[data-theme="light"] .navbar,
+[data-theme="light"] .navbar.scrolled {
+  background-color: var(--bg-base);
+  background-image: var(--page-glow);
+  background-attachment: fixed;
+  border-bottom-color: transparent;
+}
+[data-theme="light"] .navbar.scrolled {
+  box-shadow: 0 12px 30px -24px rgba(60, 66, 120, 0.5);
+}
+/* The nav is a fixed 1200px rail like every other section, so the
+   brand lines up with the content beneath it instead of hugging the
+   viewport edge on wide screens. */
+.navbar > .nav-left { margin-left: max(0px, calc((100vw - var(--container)) / 2 - var(--gutter))); }
+.navbar > .nav-right { margin-right: max(0px, calc((100vw - var(--container)) / 2 - var(--gutter))); }
+
+.nav-left { display: flex; align-items: center; gap: 2.25rem; min-width: 0; }
+.nav-right { display: flex; align-items: center; gap: 0.35rem; }
+
+.brand { display: inline-flex; align-items: center; gap: 0.6rem; text-decoration: none; }
+.brand-logo {
+  width: 30px;
+  height: 30px;
+  flex-shrink: 0;
+  filter: drop-shadow(0 2px 10px rgba(124, 108, 240, 0.4));
+}
+.brand-text {
+  font-size: 1.2rem;
+  font-weight: 700;
+  letter-spacing: -0.03em;
+  line-height: 1;
+  color: var(--text-primary);
+  background: none;
+  -webkit-text-fill-color: currentColor;
+}
+[data-theme="light"] .brand-text {
+  color: var(--text-primary);
+  background: none;
+  -webkit-text-fill-color: currentColor;
+}
+
+.nav-links { display: flex; align-items: center; gap: 1.75rem; list-style: none; margin: 0; padding: 0; }
+.nav-links a {
+  position: relative;
+  display: inline-block;
+  padding: 0.35rem 0;
+  font-size: 0.9rem;
+  font-weight: 500;
+  letter-spacing: -0.01em;
+  color: var(--text-secondary);
+  text-decoration: none;
+  transition: color 0.18s ease;
+}
+.nav-links a:hover { color: var(--text-primary); }
+.nav-links a.active { color: var(--accent); font-weight: 600; }
+/* The active page is marked by a hairline under the label, not a pill —
+   it reads as a tab without adding another filled shape to the bar. */
+.nav-links a.active::after {
+  content: "";
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: -2px;
+  height: 2px;
+  border-radius: 2px;
+  background: var(--accent);
+}
+
+.nav-icon-btn,
+.nav-icon-link {
+  display: grid;
+  place-items: center;
+  width: 36px;
+  height: 36px;
+  padding: 0;
+  border: 1px solid transparent;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--text-secondary);
+  cursor: pointer;
+  transition: color 0.18s ease, background 0.18s ease, border-color 0.18s ease;
+}
+.nav-icon-btn:hover,
+.nav-icon-link:hover {
+  color: var(--text-primary);
+  background: var(--surface-soft);
+  border-color: var(--border);
+}
+.nav-icon-btn svg,
+.nav-icon-link svg { width: 18px; height: 18px; }
+
+@media (max-width: 720px) {
+  .nav-left { gap: 1rem; }
+  .nav-links { gap: 1rem; }
+}
+@media (max-width: 560px) {
+  .nav-links { display: none; }
+}
+
+/* ── Buttons ────────────────────────────────────────────────────── */
+.btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.5rem;
+  height: 46px;
+  padding: 0 1.35rem;
+  border: 1px solid transparent;
+  border-radius: var(--radius);
+  font-family: inherit;
+  font-size: 0.94rem;
+  font-weight: 600;
+  letter-spacing: -0.01em;
+  text-decoration: none;
+  white-space: nowrap;
+  cursor: pointer;
+  transition: transform 0.16s cubic-bezier(0.2, 0.8, 0.2, 1), background 0.18s ease,
+    border-color 0.18s ease, box-shadow 0.18s ease, color 0.18s ease;
+}
+.btn:active { transform: translateY(0) scale(0.985); }
+.btn svg { width: 18px; height: 18px; }
+
+.btn-primary,
+.btn-cta {
+  color: #fff;
+  background: var(--accent);
+  border-color: transparent;
+  box-shadow: 0 10px 24px -12px var(--accent-glow);
+}
+.btn-primary:hover,
+.btn-cta:hover {
+  background: var(--accent-hover);
+  transform: translateY(-2px);
+  box-shadow: 0 16px 32px -14px var(--accent-glow);
+}
+
+.btn-secondary,
+.btn-ghost {
+  color: var(--text-primary);
+  background: var(--surface-soft);
+  border-color: var(--border);
+}
+.btn-secondary:hover,
+.btn-ghost:hover {
+  background: var(--surface-soft-hover);
+  border-color: var(--border-hover);
+  transform: translateY(-2px);
+}
+
+/* ── Surfaces ───────────────────────────────────────────────────── */
+.glass-panel,
+.feature-card,
+.spec-panel,
+.card {
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+}
+
+/* ── Section rhythm ─────────────────────────────────────────────── */
+.features-section,
+.section {
+  position: relative;
+  z-index: 1;
+  max-width: var(--container);
+  margin: 0 auto;
+  padding: var(--section-y) var(--gutter);
+}
+.features-section + .features-section { padding-top: 0; }
+
+.features-section > h2,
+.section > h2 {
+  margin: 0 0 0.85rem;
+  font-size: clamp(1.75rem, 3.4vw, 2.25rem);
+  font-weight: 600;
+  line-height: 1.2;
+  letter-spacing: -0.03em;
+  text-align: center;
+  color: var(--text-primary);
+}
+.features-section > .section-desc,
+.section > .section-desc {
+  max-width: 62ch;
+  margin: 0 auto;
+  font-size: 1.02rem;
+  line-height: 1.65;
+  letter-spacing: -0.01em;
+  text-align: center;
+  color: var(--text-secondary);
+}
+.features-section > .section-desc + .section-desc { margin-top: 0.9rem; }
+
+.features-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+  gap: 1.5rem;
+  margin-top: 3.5rem;
+}
+.features-grid--2up { grid-template-columns: repeat(auto-fit, minmax(min(100%, 420px), 1fr)); }
+.features-grid--2up .feature-card { padding: 2.5rem; }
+
+.feature-card {
+  padding: 2rem;
+  transition: border-color 0.22s ease, background 0.22s ease, transform 0.22s ease;
+}
+.feature-card:hover {
+  border-color: rgba(124, 108, 240, 0.35);
+  background: color-mix(in srgb, var(--bg-card) 92%, var(--accent));
+  transform: translateY(-3px);
+}
+.feature-card .feature-icon {
+  display: grid;
+  place-items: center;
+  width: 52px;
+  height: 52px;
+  margin-bottom: 1.4rem;
+  border-radius: var(--radius);
+  background: var(--accent-soft);
+  color: var(--accent);
+}
+.feature-card .feature-icon svg { width: 24px; height: 24px; }
+.feature-card h3 {
+  margin: 0 0 0.6rem;
+  font-size: 1.12rem;
+  font-weight: 600;
+  letter-spacing: -0.02em;
+  color: var(--text-primary);
+}
+.feature-card p {
+  margin: 0;
+  font-size: 0.95rem;
+  line-height: 1.65;
+  color: var(--text-secondary);
+}
+
+/* ── Technical chips ────────────────────────────────────────────── */
+/* Anything that names a codec, container or format is monospaced —
+   that's the line between prose and spec, and it's what makes the
+   page read like a tool rather than a brochure. */
+.chip,
+.format-chip,
+.spec-chip {
+  font-family: var(--mono-family);
+  font-size: 0.78rem;
+  font-weight: 500;
+  letter-spacing: 0.05em;
+  color: var(--text-secondary);
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  padding: 0.42rem 0.8rem;
+  transition: color 0.18s ease, border-color 0.18s ease, background 0.18s ease;
+}
+.chip:hover,
+.format-chip:hover,
+.spec-chip:hover {
+  color: var(--text-primary);
+  border-color: var(--border-hover);
+}
+
+/* The codec board: one panel, chips in a grid, each with its
+   technical name over a plain-language label. */
+.spec-panel { padding: clamp(1.75rem, 4vw, 3rem); margin-top: 3rem; }
+.spec-panel-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: 1rem;
+  margin-bottom: 2rem;
+}
+.spec-panel-head h3 {
+  margin: 0 0 0.35rem;
+  font-size: 1.35rem;
+  font-weight: 600;
+  letter-spacing: -0.02em;
+  color: var(--text-primary);
+}
+.spec-panel-head p { margin: 0; font-size: 0.92rem; color: var(--text-secondary); }
+.spec-panel-head a {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  font-size: 0.88rem;
+  font-weight: 600;
+  color: var(--accent);
+  text-decoration: none;
+}
+.spec-panel-head a:hover { color: var(--accent-hover); }
+
+.spec-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+  gap: 0.85rem;
+}
+.spec-chip {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 0.3rem;
+  padding: 0.95rem 0.75rem;
+  border-radius: var(--radius);
+  text-align: center;
+}
+.spec-chip b {
+  font-size: 1rem;
+  font-weight: 700;
+  color: var(--text-primary);
+}
+.spec-chip span {
+  font-family: var(--font-family);
+  font-size: 0.74rem;
+  letter-spacing: 0;
+  color: var(--text-muted);
+}
+
+/* ── FAQ ────────────────────────────────────────────────────────── */
+.faq-item {
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--bg-card);
+  margin-top: 0.75rem;
+  overflow: hidden;
+}
+.faq-item summary { padding: 1.15rem 1.4rem; }
+.faq-item summary h3 { font-size: 1rem; font-weight: 500; letter-spacing: -0.01em; }
+.faq-item > div { padding: 0 1.4rem 1.35rem; }
+.faq-item > div .section-desc { text-align: left; margin: 0; font-size: 0.95rem; }
+
+/* ── Footer ─────────────────────────────────────────────────────── */
+/* One footer for all four pages. The markup is identical everywhere;
+   only the page underneath it changes. */
+.site-footer {
+  position: relative;
+  z-index: 1;
+  margin-top: var(--section-y);
+  padding: 4rem var(--gutter) 2.5rem;
+  border-top: 1px solid var(--border);
+  background: color-mix(in srgb, var(--bg-base) 92%, #000);
+}
+[data-theme="light"] .site-footer { background: color-mix(in srgb, var(--bg-base) 92%, #fff); }
+
+.site-footer-inner {
+  display: grid;
+  grid-template-columns: minmax(240px, 1fr) 2fr;
+  gap: 3rem;
+  max-width: var(--container);
+  margin: 0 auto;
+}
+.site-footer-brand .brand-text { font-size: 1.05rem; }
+.site-footer-brand .brand-logo { width: 24px; height: 24px; }
+.site-footer-brand p {
+  max-width: 34ch;
+  margin: 1rem 0 0;
+  font-size: 0.86rem;
+  line-height: 1.7;
+  color: var(--text-secondary);
+}
+.site-footer-brand p a { color: var(--accent); text-decoration: none; }
+.site-footer-brand p a:hover { color: var(--accent-hover); }
+
+/* On an app surface (/drive) the page is the tool, not a scroll — the
+   footer closes it off rather than ending a long read. */
+.site-footer--app { margin-top: 2rem; padding-top: 2.5rem; }
+.site-footer-links {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-start;
+  justify-content: flex-end;
+  gap: 0.75rem 2.25rem;
+}
+.site-footer-links a {
+  font-size: 0.86rem;
+  font-weight: 500;
+  color: var(--text-secondary);
+  text-decoration: none;
+  transition: color 0.18s ease;
+}
+.site-footer-links a:hover { color: var(--accent); }
+
+.site-footer-base {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+  max-width: var(--container);
+  margin: 3rem auto 0;
+  padding-top: 1.75rem;
+  border-top: 1px solid var(--border);
+  font-size: 0.78rem;
+  color: var(--text-muted);
+}
+.site-footer-base p { margin: 0; }
+
+@media (max-width: 760px) {
+  .site-footer-inner { grid-template-columns: 1fr; gap: 2rem; }
+  .site-footer-links { justify-content: flex-start; gap: 0.75rem 1.5rem; }
+}
+
+/* The old per-page footers are gone from the markup; this keeps any
+   that linger (or a cached page mid-deploy) from looking stranded. */
+.footer {
+  position: relative;
+  z-index: 1;
+  max-width: var(--container);
+  margin: 0 auto;
+  padding: 3rem var(--gutter);
+  text-align: center;
+  font-size: 0.86rem;
+  color: var(--text-secondary);
+  border-top: 1px solid var(--border);
+}
+.footer a { color: var(--text-secondary); }
+.footer a:hover { color: var(--accent); }
+.footer .disclaimer { font-size: 0.78rem; color: var(--text-muted); }
+
+/* ── Page heroes ────────────────────────────────────────────────── */
+/* Shared across /examples and /compare: an eyebrow, one claim, one
+   sub. The landing page overrides the alignment below. */
+.hero-eyebrow {
+  display: inline-block;
+  margin-bottom: 1rem;
+  padding: 0.35rem 0.75rem;
+  border: 1px solid var(--border);
+  border-radius: 100px;
+  background: var(--surface-soft);
+  font-family: var(--mono-family);
+  font-size: 0.72rem;
+  font-weight: 500;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--text-secondary);
+}
+.hero h1 {
+  font-weight: 700;
+  line-height: 1.08;
+  letter-spacing: -0.04em;
+  color: var(--text-primary);
+}
+.hero h1 .accent {
+  color: var(--accent);
+  background: none;
+  -webkit-text-fill-color: currentColor;
+}
+.hero p.sub {
+  font-size: clamp(1rem, 1.5vw, 1.125rem);
+  line-height: 1.65;
+  letter-spacing: -0.01em;
+  color: var(--text-secondary);
+}
+
+/* ── Landing hero (/) ───────────────────────────────────────────── */
+/* Two rails: the claim on the left, the two ways in on the right.
+   Below 940px they stack and the copy re-centres. */
+.hero--split {
+  position: relative;
+  z-index: 1;
+  display: block;
+  min-height: 0;
+  padding: calc(64px + clamp(3rem, 7vw, 6rem)) var(--gutter) clamp(3rem, 6vw, 5rem);
+  text-align: left;
+}
+.hero--split .hero-content {
+  display: grid;
+  grid-template-columns: 1.05fr 1fr;
+  align-items: center;
+  gap: clamp(2rem, 5vw, 4.5rem);
+  max-width: var(--container);
+  margin: 0 auto;
+  text-align: left;
+}
+/* index.html fades the bottom of the hero to solid --bg-base with a
+   full-cover ::after. That made sense when the hero owned its own
+   animated backdrop and the page had no ambient of its own: the wash
+   blended one section into the next. Now it paints over the shared
+   page glow for the hero's bottom third and then stops dead at the
+   section boundary — a darkened band across the lower hero with a hard
+   edge under it, right where the player's halo comes up to meet it.
+   The shared ambient is continuous by design; nothing needs blending. */
+.hero--split::after { display: none; }
+
+.hero-copy { min-width: 0; text-align: left; }
+
+.hero--split h1 {
+  margin: 0 0 1.25rem;
+  font-size: clamp(2.5rem, 5.2vw, 4.1rem);
+  line-height: 1.05;
+}
+.hero--split h1 .highlight {
+  display: block;
+  color: var(--accent);
+  background: none;
+  -webkit-text-fill-color: currentColor;
+  text-shadow: none;
+}
+.hero-tagline {
+  max-width: 46ch;
+  margin: 0;
+  font-size: clamp(1rem, 1.5vw, 1.125rem);
+  line-height: 1.6;
+  letter-spacing: -0.01em;
+  color: var(--text-secondary);
+}
+
+.hero-copy .hero-trust,
+.hero-copy .hero-badges,
+.hero-copy .hero-formats {
+  justify-content: flex-start;
+  margin-top: 1.75rem;
+}
+.hero-copy .hero-formats::before { display: none; }
+.hero-copy .hero-badges { margin-top: 1.25rem; }
+
+/* The panel is the only filled shape in the hero — everything the
+   visitor can actually act on lives inside it. */
+.hero-panel {
+  position: relative;
+  overflow: hidden;
+  padding: clamp(1.5rem, 3vw, 2rem);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-xl);
+  background: var(--bg-card);
+  box-shadow: var(--shadow);
+}
+/* Corner light. This used to be a 280px blurred circle centred OUTSIDE
+   the panel (top/right: -140px), which meant the part that landed
+   inside was the blob's bright middle — and overflow:hidden then sliced
+   it off against the panel's right edge as a flat violet band ending in
+   a hard vertical line. A gradient anchored to the corner falls off on
+   its own, so it never reaches an edge at full strength and nothing
+   depends on the clip. Cheaper too: no blur filter to rasterise. */
+.hero-panel {
+  background-image: radial-gradient(
+    150% 110% at 100% 0%,
+    rgba(124, 108, 240, 0.2) 0%,
+    rgba(124, 108, 240, 0.06) 35%,
+    transparent 62%
+  );
+}
+.hero-panel > * { position: relative; z-index: 1; }
+
+.hero-panel .url-bar.hero-url-bar {
+  width: 100%;
+  max-width: none;
+  margin: 0;
+  /* The bar's glow was sized for a hero where it floated free: 40px of
+     blur plus a 5px spread ring, so it reached ~45px out. Inside the
+     panel it only has ~34px of clearance, so the panel's rounded
+     overflow clip sliced it off flat against the edge — a bright violet
+     band ending in a hard vertical line (most obvious in Safari, where
+     the surrounding page is darker). Scaled to fit its container: the
+     glow now fades out before it reaches the edge, so nothing is cut
+     and nothing depends on the clip. */
+  box-shadow:
+    0 8px 20px rgba(124, 108, 240, 0.22),
+    0 0 0 3px rgba(124, 108, 240, 0.07);
+}
+.hero-panel .url-bar.hero-url-bar:hover {
+  box-shadow:
+    0 10px 26px rgba(124, 108, 240, 0.3),
+    0 0 0 4px rgba(124, 108, 240, 0.09);
+}
+.hero-panel .url-bar.hero-url-bar:focus-within {
+  box-shadow:
+    0 8px 22px rgba(124, 108, 240, 0.26),
+    0 0 0 3px var(--accent-glow);
+}
+.hero-panel .hero-or {
+  display: flex;
+  align-items: center;
+  gap: 1rem;
+  max-width: none;
+  margin: 1.35rem 0;
+  font-size: 0.8rem;
+  color: var(--text-muted);
+}
+/* The rules on either side of "or pick a video file" — they were set to
+   the old hero width and collapsed to nothing once the divider moved
+   inside the panel. */
+.hero-panel .hero-or::before,
+.hero-panel .hero-or::after {
+  content: "";
+  flex: 1;
+  height: 1px;
+  background: var(--border);
+}
+.hero-panel .hero-cta-primary {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 0.85rem;
+  width: 100%;
+  max-width: none;
+  margin: 0;
+  padding: 2rem 1.5rem;
+  text-align: center;
+  border: 1px dashed var(--border-hover);
+  border-radius: var(--radius-lg);
+  background: var(--bg-surface);
+  box-shadow: none;
+}
+.hero-panel .hero-cta-primary:hover {
+  border-color: rgba(124, 108, 240, 0.5);
+  background: var(--accent-soft);
+  transform: none;
+}
+.hero-panel .hero-cta-icon {
+  width: 48px;
+  height: 48px;
+  border-radius: 50%;
+  background: var(--accent-soft);
+  border: 1px solid var(--border);
+  color: var(--accent);
+}
+.hero-panel .hero-cta-icon svg { width: 18px; height: 18px; }
+.hero-panel .hero-cta-text { align-items: center; text-align: center; }
+.hero-panel .hero-cta-text strong { font-size: 0.98rem; font-weight: 600; }
+.hero-panel .hero-cta-text small { font-size: 0.82rem; color: var(--text-muted); }
+/* The panel's tray: the secondary routes in, and — in developer mode —
+   the cache readout, on one centred axis. They used to sit on separate
+   alignments because .cache-info is a sibling of the button row. */
+.hero-panel .hero-secondary {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  align-items: center;
+  gap: 0.5rem 1.25rem;
+  margin-top: 1.5rem;
+  padding-top: 1.25rem;
+  border-top: 1px solid var(--border);
+}
+.hero-panel .hero-link-btn { text-decoration: none; }
+/* The cache readout rides in the same row; it only ever wraps to its own
+   line, and the row centres it there. margin-top:-0.5rem was pulling it up
+   into the buttons once it stopped being a block of its own. */
+.hero-panel .cache-info { margin: 0; }
+
+/* A quiet caption so the input reads as one of two labelled routes in,
+   not a stray search box. */
+.hero-panel-label {
+  display: block;
+  margin-bottom: 0.6rem;
+  font-size: 0.82rem;
+  font-weight: 600;
+  letter-spacing: -0.01em;
+  color: var(--text-primary);
+}
+
+@media (max-width: 940px) {
+  .hero--split { text-align: center; }
+  .hero--split .hero-content { grid-template-columns: 1fr; text-align: center; }
+  .hero-copy { text-align: center; }
+  .hero-tagline { margin-left: auto; margin-right: auto; }
+  .hero-copy .hero-trust,
+  .hero-copy .hero-badges,
+  .hero-copy .hero-formats { justify-content: center; }
+}
+
+/* ── Player stage (/) ───────────────────────────────────────────── */
+.player-section {
+  /* index.html used `overflow-x: clip` here, counting on `overflow-y`
+     staying `visible` so the ambient halo (inset: -90px around the
+     player) could bleed up and down while never widening the page on a
+     phone. Chrome does that. WebKit clips BOTH axes, so on Safari the
+     glow was sliced off flat above and below the player.
+
+     clip-path was the wrong replacement — it only masks paint, so the
+     halo still grew the scrollable area (measured: +24px of horizontal
+     scroll at 500px wide). Instead the section itself grows to contain
+     the halo: 100px of block padding pulled back out with an equal
+     negative margin, so nothing moves and the halo now sits INSIDE the
+     box. Clipping both axes is then safe in either engine — which also
+     means the rule no longer depends on the one behaviour the two
+     engines disagree about. */
+  overflow: clip;
+  padding-block: 100px;
+  margin-block: -100px;
+}
+.player-wrapper {
+  border-radius: var(--radius-xl);
+  box-shadow: 0 0 100px rgba(124, 108, 240, 0.15);
+  outline: 1px solid var(--border);
+  outline-offset: -1px;
+}
+
+/* ── /examples — list, not a card wall ──────────────────────────── */
+/* Every example is the same shape: a name, a sentence of context, and
+   the markup that does it. Three-across cards forced that into narrow
+   columns where the code — the part people came for — got the least
+   room and scrolled sideways under the Copy button. One row per
+   example gives the snippet the full width and lets the eye run down
+   the titles. */
+.examples-page .grid {
+  display: flex;
+  flex-direction: column;
+  gap: 1rem;
+}
+.examples-page .card {
+  display: grid;
+  grid-template-columns: minmax(0, 320px) minmax(0, 1fr);
+  column-gap: 2.5rem;
+  row-gap: 1rem;
+  align-items: start;
+  padding: 1.5rem 1.75rem;
+  border-radius: var(--radius-lg);
+  background: var(--bg-card);
+}
+.examples-page .card-head { grid-column: 1; padding: 0; }
+/* A card that also carries a poster stacks stage over code on the
+   right, so the copy spans both of those rows instead of leaving a
+   hole under itself. */
+.examples-page .card:has(.stage) .card-head { grid-row: span 2; }
+.examples-page .card .stage,
+.examples-page .card .code {
+  grid-column: 2;
+  margin: 0;
+}
+.examples-page .card .stage { max-width: 460px; }
+.examples-page .card .code.grow { margin-top: 0; }
+/* The button used to sit on top of the first line of code; now the
+   line stops short of it and it is opaque where they still meet. */
+.examples-page .card .code pre { padding-right: 5rem; }
+.examples-page .card .copy-btn { background: var(--surface-2); }
+
+@media (max-width: 860px) {
+  .examples-page .card { grid-template-columns: minmax(0, 1fr); }
+  .examples-page .card-head,
+  .examples-page .card .stage,
+  .examples-page .card .code { grid-column: 1; }
+  .examples-page .card:has(.stage) .card-head { grid-row: auto; }
+  .examples-page .card .stage { max-width: none; }
+}
+
+/* Poster frames, pulled from each sample with ffmpeg and served from R2.
+   They sit under the play affordance with a scrim, so the label stays
+   readable over a bright frame (the HLS one is a sunlit meadow). The
+   audio-only example has no frame to take and keeps the gradient. */
+.examples-page .stage-poster { overflow: hidden; }
+.examples-page .stage-thumb {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  z-index: 0;
+  transform: scale(1.01);
+  transition: transform 0.35s cubic-bezier(0.2, 0.8, 0.2, 1);
+}
+.examples-page .stage-poster::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  z-index: 1;
+  background:
+    radial-gradient(60% 60% at 50% 50%, rgba(8, 8, 12, 0.55) 0%, transparent 75%),
+    linear-gradient(180deg, rgba(8, 8, 12, 0.3) 0%, rgba(8, 8, 12, 0.8) 100%);
+}
+.examples-page .stage-poster .load-label,
+.examples-page .stage-poster .load-hint {
+  text-shadow: 0 1px 6px rgba(0, 0, 0, 0.7);
+}
+.examples-page .stage-poster > :not(.stage-thumb) { position: relative; z-index: 2; }
+.examples-page .stage-poster:hover .stage-thumb { transform: scale(1.05); }
+@media (prefers-reduced-motion: reduce) {
+  .examples-page .stage-thumb,
+  .examples-page .stage-poster:hover .stage-thumb { transition: none; transform: none; }
+}
+
+/* ── Code blocks in light mode ──────────────────────────────────── */
+/* The snippets used to stay on a near-black slab when the rest of the
+   page went light — a dark rectangle in the middle of a white one. The
+   surface flips with the theme, so the syntax colours have to flip too:
+   the dark-mode palette is tuned for a #0c0c10 ground and is close to
+   unreadable on #f4f4f9. These are the same five hues, darkened to
+   carry contrast on paper. */
+[data-theme="light"] .code {
+  background: var(--code-bg);
+  border-color: var(--border);
+}
+[data-theme="light"] .code code { color: #2b2b38; }
+[data-theme="light"] .code .tok-tag { color: #5b46c9; }
+[data-theme="light"] .code .tok-attr { color: #0a6b87; }
+[data-theme="light"] .code .tok-str { color: #1f7a45; }
+[data-theme="light"] .code .tok-com { color: #85859a; }
+[data-theme="light"] .code .tok-kw { color: #9a5b12; }
+[data-theme="light"] .copy-btn {
+  background: rgba(17, 20, 45, 0.05);
+  border-color: rgba(17, 20, 45, 0.12);
+  color: #4a4a5c;
+}
+[data-theme="light"] .copy-btn:hover { background: rgba(17, 20, 45, 0.1); }
+[data-theme="light"] .copy-btn.done { color: #1f7a45; border-color: rgba(31, 122, 69, 0.4); }

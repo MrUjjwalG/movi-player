@@ -700,6 +700,16 @@
         .nav-links { display: none; }
       }
     </style>
+    <!-- Inter for prose, JetBrains Mono for anything technical (codec names,
+         timecodes, code). Both are declared in app/shared.css, so both have
+         to actually load here or the mono chips fall back to Menlo/Consolas
+         and the pages drift apart again. -->
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500;700&display=swap" rel="stylesheet" />
+    <!-- Shared design system — spliced in by the worker AFTER this page's own
+         <style> so it is the authority on the site-wide chrome. -->
+    <!--__SHARED_CSS__-->
   </head>
   <body>
     <nav class="navbar" id="navbar">
@@ -832,6 +842,69 @@
         <a class="btn btn-secondary" href="https://github.com/mrujjwalg/movi-player" target="_blank" rel="noopener">View on GitHub</a>
       </section>
     </main>
+
+    <script>
+      // Deliberately a classic script, not the module below: the module
+      // starts with an import of the player bundle, and if that import
+      // fails the whole module is skipped — which used to leave the theme
+      // button as an empty box in the header. Nothing here needs the
+      // bundle.
+      // --- Theme Logic --- mirrors app/index.html (same localStorage key,
+      // same auto/light/dark cycle) so the choice carries between pages.
+      const themeToggle = document.getElementById("theme-toggle");
+      // SVG markup is parsed via DOMParser instead of assigning to
+      // innerHTML so we don't trip the project's no-innerHTML security
+      // hook. The strings are static literals, but the rule is
+      // mechanical and easier to comply with than to argue with.
+      const svgNs = "http://www.w3.org/2000/svg";
+      const parseSvg = (markup) => {
+        const doc = new DOMParser().parseFromString(
+          `<svg xmlns="${svgNs}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">${markup}</svg>`,
+          "image/svg+xml",
+        );
+        return document.importNode(doc.documentElement, true);
+      };
+      const themeIcons = {
+        auto: () => parseSvg('<rect x="2" y="3" width="20" height="14" rx="2" ry="2"/><line x1="8" y1="21" x2="16" y2="21"/><line x1="12" y1="17" x2="12" y2="21"/>'),
+        light: () => parseSvg('<circle cx="12" cy="12" r="5"/><line x1="12" y1="1" x2="12" y2="3"/><line x1="12" y1="21" x2="12" y2="23"/><line x1="4.22" y1="4.22" x2="5.64" y2="5.64"/><line x1="18.36" y1="18.36" x2="19.78" y2="19.78"/><line x1="1" y1="12" x2="3" y2="12"/><line x1="21" y1="12" x2="23" y2="12"/><line x1="4.22" y1="19.78" x2="5.64" y2="18.36"/><line x1="18.36" y1="5.64" x2="19.78" y2="4.22"/>'),
+        dark: () => parseSvg('<path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"/>'),
+      };
+      const themeModes = ["auto", "light", "dark"];
+      let themeMode = localStorage.getItem("theme-preference") || "auto";
+
+      const applyTheme = (mode) => {
+        const effective = mode === "auto"
+          ? (window.matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light")
+          : mode;
+        if (effective === "light") {
+          document.documentElement.setAttribute("data-theme", "light");
+        } else {
+          document.documentElement.removeAttribute("data-theme");
+        }
+        themeToggle.replaceChildren(themeIcons[mode]());
+        themeToggle.setAttribute("title", `Theme: ${mode[0].toUpperCase() + mode.slice(1)}`);
+        // Push the resolved theme to both players so their internal
+        // [theme="..."] selectors flip in sync with the page chrome.
+        document
+          .querySelectorAll("movi-player")
+          .forEach((p) => p.setAttribute("theme", effective));
+        document
+          .querySelectorAll("video")
+          .forEach((v) => { v.style.colorScheme = effective; });
+      };
+
+      window.matchMedia("(prefers-color-scheme: dark)").addEventListener("change", () => {
+        if (themeMode === "auto") applyTheme("auto");
+      });
+
+      themeToggle.addEventListener("click", () => {
+        themeMode = themeModes[(themeModes.indexOf(themeMode) + 1) % themeModes.length];
+        localStorage.setItem("theme-preference", themeMode);
+        applyTheme(themeMode);
+      });
+
+      applyTheme(themeMode);
+    </script>
 
     <script type="module">
       // Slim build — same <movi-player>, WASM streamed from movi.wasm alongside.
@@ -1449,58 +1522,48 @@
       // itself is ~1.1 GB. User can override anytime with the picker / drop.
       loadSource(DEFAULT_SAMPLE);
 
-      // --- Theme Logic --- mirrors app/index.html (same localStorage key,
-      // same auto/light/dark cycle) so the choice carries between pages.
-      const themeToggle = document.getElementById("theme-toggle");
-      // SVG markup is parsed via DOMParser instead of assigning to
-      // innerHTML so we don't trip the project's no-innerHTML security
-      // hook. The strings are static literals, but the rule is
-      // mechanical and easier to comply with than to argue with.
-      const svgNs = "http://www.w3.org/2000/svg";
-      const parseSvg = (markup) => {
-        const doc = new DOMParser().parseFromString(
-          `<svg xmlns="${svgNs}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">${markup}</svg>`,
-          "image/svg+xml",
-        );
-        return document.importNode(doc.documentElement, true);
-      };
-      const themeIcons = {
-        auto: () => parseSvg('<rect x="2" y="3" width="20" height="14" rx="2" ry="2"/><line x1="8" y1="21" x2="16" y2="21"/><line x1="12" y1="17" x2="12" y2="21"/>'),
-        light: () => parseSvg('<circle cx="12" cy="12" r="5"/><line x1="12" y1="1" x2="12" y2="3"/><line x1="12" y1="21" x2="12" y2="23"/><line x1="4.22" y1="4.22" x2="5.64" y2="5.64"/><line x1="18.36" y1="18.36" x2="19.78" y2="19.78"/><line x1="1" y1="12" x2="3" y2="12"/><line x1="21" y1="12" x2="23" y2="12"/><line x1="4.22" y1="19.78" x2="5.64" y2="18.36"/><line x1="18.36" y1="5.64" x2="19.78" y2="4.22"/>'),
-        dark: () => parseSvg('<path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"/>'),
-      };
-      const themeModes = ["auto", "light", "dark"];
-      let themeMode = localStorage.getItem("theme-preference") || "auto";
-
-      const applyTheme = (mode) => {
-        const effective = mode === "auto"
-          ? (window.matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light")
-          : mode;
-        if (effective === "light") {
-          document.documentElement.setAttribute("data-theme", "light");
-        } else {
-          document.documentElement.removeAttribute("data-theme");
-        }
-        themeToggle.replaceChildren(themeIcons[mode]());
-        themeToggle.setAttribute("title", `Theme: ${mode[0].toUpperCase() + mode.slice(1)}`);
-        // Push the resolved theme to both players so their internal
-        // [theme="..."] selectors flip in sync with the page chrome.
-        if (moviPlayer) moviPlayer.setAttribute("theme", effective);
-        if (nativeVideo) nativeVideo.style.colorScheme = effective;
-      };
-
-      window.matchMedia("(prefers-color-scheme: dark)").addEventListener("change", () => {
-        if (themeMode === "auto") applyTheme("auto");
-      });
-
-      themeToggle.addEventListener("click", () => {
-        themeMode = themeModes[(themeModes.indexOf(themeMode) + 1) % themeModes.length];
-        localStorage.setItem("theme-preference", themeMode);
-        applyTheme(themeMode);
-      });
-
-      applyTheme(themeMode);
     </script>
+    <!-- ===== FOOTER (identical on every page — see app/shared.css) ===== -->
+    <footer class="site-footer">
+      <div class="site-footer-inner">
+        <div class="site-footer-brand">
+          <a href="/" class="brand" aria-label="MoviPlayer — home">
+            <svg class="brand-logo" viewBox="0 0 100 100" aria-hidden="true">
+              <defs>
+                <linearGradient id="footer-logo-grad" x1="0%" y1="0%" x2="100%" y2="100%">
+                  <stop offset="0%" stop-color="#8a7cf2"/>
+                  <stop offset="100%" stop-color="#6c5dd3"/>
+                </linearGradient>
+              </defs>
+              <circle cx="50" cy="50" r="46" fill="url(#footer-logo-grad)"/>
+              <polygon points="40,29 40,71 73,50" fill="#ffffff"/>
+            </svg>
+            <span class="brand-text">MoviPlayer</span>
+          </a>
+          <p>Made with <a href="https://github.com/mrujjwalg/movi-player" target="_blank" rel="noopener">movi-player</a> &mdash; an open-source video player that runs in your browser.</p>
+        </div>
+        <div class="site-footer-links">
+          <a href="/">Player</a>
+          <a href="/examples">Examples</a>
+          <a href="/compare">Compare</a>
+          <a href="/docs">Docs</a>
+          <a href="https://chromewebstore.google.com/detail/movi-player/ckleeigcopjnpehkjokijokjegknfgej" rel="noopener" target="_blank">Chrome extension</a>
+          <a href="https://marketplace.visualstudio.com/items?itemName=mrujjwalg.movi-player-vscode" rel="noopener" target="_blank">VS Code extension</a>
+          <a href="https://www.npmjs.com/package/movi-player" rel="noopener" target="_blank">npm package</a>
+          <a href="https://github.com/mrujjwalg/movi-player" rel="noopener" target="_blank">GitHub</a>
+          <a href="https://github.com/mrujjwalg/movi-player/issues" rel="noopener" target="_blank">Report a problem</a>
+          <a href="/#comments">Leave feedback</a>
+          <a href="/docs/privacy-policy">Privacy Policy</a>
+          <a href="/docs/terms-of-service">Terms of Service</a>
+          <a href="mailto:abuse@moviplayer.com">Report abuse / copyright</a>
+        </div>
+      </div>
+      <div class="site-footer-base">
+        <p>You bring the videos &mdash; we don't host or store any media. Whatever you play is your own responsibility.</p>
+        <p>&copy; MoviPlayer &middot; Engineered for high-fidelity playback.</p>
+      </div>
+    </footer>
+
   </body>
 </html>
 

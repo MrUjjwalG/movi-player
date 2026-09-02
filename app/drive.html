@@ -47,37 +47,21 @@
   <script src="https://accounts.google.com/gsi/client" async defer></script>
   <script src="https://apis.google.com/js/api.js" async defer></script>
   <style>
+    /* This page's own names, aliased onto the shared design system in
+       app/shared.css. Custom properties resolve at use time, so these pick
+       up whatever shared.css sets — including the light theme — without
+       /drive keeping a second palette of its own. */
     :root {
-      --accent: #6c5dd3;
-      --accent-2: #00d4ff;
-      --accent-grad: linear-gradient(135deg, #6c5dd3 0%, #00d4ff 100%);
-      --font: "Inter", system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
-
-      --bg: #0b0b0f;
-      --surface: rgba(255, 255, 255, 0.045);
-      --surface-2: rgba(255, 255, 255, 0.07);
-      --border: rgba(255, 255, 255, 0.09);
-      --border-strong: rgba(255, 255, 255, 0.16);
-      --text: #f4f4f7;
-      --text-dim: #9a9aae;
-      --text-faint: #6a6a7d;
-      --glow-1: rgba(108, 93, 211, 0.18);
+      --accent-grad: linear-gradient(135deg, #8a7cf2 0%, #6c5dd3 100%);
+      --bg: var(--bg-base);
+      --surface: var(--bg-surface);
+      --surface-2: var(--surface-soft);
+      --text: var(--text-primary);
+      --text-dim: var(--text-secondary);
+      --text-faint: var(--text-muted);
+      --glow-1: rgba(124, 108, 240, 0.18);
       --glow-2: rgba(0, 212, 255, 0.12);
-      --shadow: 0 24px 60px -20px rgba(0, 0, 0, 0.7);
-      --radius: 20px;
-    }
-    [data-theme="light"] {
-      --bg: #f6f7fb;
-      --surface: rgba(255, 255, 255, 0.75);
-      --surface-2: #ffffff;
-      --border: rgba(17, 20, 45, 0.08);
-      --border-strong: rgba(17, 20, 45, 0.14);
-      --text: #14162e;
-      --text-dim: #5a5f78;
-      --text-faint: #8a8fa6;
-      --glow-1: rgba(108, 93, 211, 0.12);
-      --glow-2: rgba(0, 212, 255, 0.1);
-      --shadow: 0 24px 60px -24px rgba(60, 66, 120, 0.28);
+      --radius: var(--radius-xl);
     }
 
     * { margin: 0; padding: 0; box-sizing: border-box; }
@@ -91,15 +75,6 @@
       flex-direction: column;
       overflow-x: hidden;
       -webkit-font-smoothing: antialiased;
-    }
-    /* Ambient background glow */
-    body::before {
-      content: "";
-      position: fixed; inset: 0; z-index: 0; pointer-events: none;
-      background:
-        radial-gradient(60% 50% at 12% 8%, var(--glow-1) 0%, transparent 60%),
-        radial-gradient(50% 50% at 90% 20%, var(--glow-2) 0%, transparent 55%),
-        radial-gradient(40% 40% at 50% 110%, var(--glow-1) 0%, transparent 60%);
     }
     #ambient-wrapper {
       position: fixed; inset: 0; z-index: 0; pointer-events: none;
@@ -203,6 +178,16 @@
       .privacy-note { display: none; }
     }
   </style>
+  <!-- Inter for prose, JetBrains Mono for anything technical (codec names,
+       timecodes, code). Both are declared in app/shared.css, so both have
+       to actually load here or the mono chips fall back to Menlo/Consolas
+       and the pages drift apart again. -->
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500;700&display=swap" rel="stylesheet" />
+  <!-- Shared design system — spliced in by the worker AFTER this page's own
+       <style> so it is the authority on the site-wide chrome. -->
+  <!--__SHARED_CSS__-->
 </head>
 
 <body data-state="loading">
@@ -295,9 +280,39 @@
 
   </div>
 
-  <div class="foot">
-    Not affiliated with Google. · <a href="/docs/privacy-policy">Privacy</a> · <a href="/docs/terms-of-service">Terms</a> · <a href="/">moviplayer.com</a>
-  </div>
+  <footer class="site-footer site-footer--app">
+    <div class="site-footer-inner">
+      <div class="site-footer-brand">
+        <a href="/" class="brand" aria-label="MoviPlayer — home">
+          <svg class="brand-logo" viewBox="0 0 100 100" aria-hidden="true">
+            <defs>
+              <linearGradient id="footer-logo-grad" x1="0%" y1="0%" x2="100%" y2="100%">
+                <stop offset="0%" stop-color="#8a7cf2"/>
+                <stop offset="100%" stop-color="#6c5dd3"/>
+              </linearGradient>
+            </defs>
+            <circle cx="50" cy="50" r="46" fill="url(#footer-logo-grad)"/>
+            <polygon points="40,29 40,71 73,50" fill="#ffffff"/>
+          </svg>
+          <span class="brand-text">MoviPlayer</span>
+        </a>
+        <p>Not affiliated with Google. Your Drive files are streamed read-only and decoded on your device.</p>
+      </div>
+      <div class="site-footer-links">
+        <a href="/">Player</a>
+        <a href="/examples">Examples</a>
+        <a href="/compare">Compare</a>
+        <a href="/docs">Docs</a>
+        <a href="https://github.com/mrujjwalg/movi-player" rel="noopener" target="_blank">GitHub</a>
+        <a href="/docs/privacy-policy">Privacy Policy</a>
+        <a href="/docs/terms-of-service">Terms of Service</a>
+      </div>
+    </div>
+    <div class="site-footer-base">
+      <p>We only ever read the file you pick &mdash; nothing is uploaded or stored.</p>
+      <p>&copy; MoviPlayer &middot; Engineered for high-fidelity playback.</p>
+    </div>
+  </footer>
 
   <div class="toast" id="toast"><svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/></svg><span id="toast-msg"></span></div>
 

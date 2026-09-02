@@ -254,7 +254,7 @@
     </script>
     <link rel="preconnect" href="https://fonts.googleapis.com" />
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
-    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet" />
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500;700&display=swap" rel="stylesheet" />
     <style>
       :root {
         --accent: #7c6cf0;
@@ -3758,6 +3758,9 @@
         window.__movilog = movilog;
       })();
     </script>
+    <!-- Shared design system — spliced in by the worker AFTER this page's own
+         <style> so it is the authority on the site-wide chrome. -->
+    <!--__SHARED_CSS__-->
   </head>
 
   <body>
@@ -3939,7 +3942,7 @@
     </script>
 
     <!-- ===== HERO ===== -->
-    <section class="hero">
+    <section class="hero hero--split">
       <div class="hero-bg">
         <div class="hero-particles">
           <div class="particle" style="--size:2px;--opacity:0.4;--duration:14s;--delay:0s;--dx:60px;--dy:-100px;--scale-end:0.3;top:70%;left:10%"></div>
@@ -3957,183 +3960,196 @@
         </div>
       </div>
       <div class="hero-content">
-        <h1 aria-label="MoviPlayer — Free online video player. Play any video without download.">
-          Play any video<br><span class="highlight">without download.</span>
-        </h1>
-        <p class="hero-tagline">
-          Movies, shows, downloads — open them right here in your browser. No app to install, no uploads, nothing leaves your device.
-        </p>
+        <!-- Left rail: the claim. Right rail: the two ways in. Splitting
+             them stops the headline and the input fighting for the same
+             vertical centre, and puts a real control above the fold on a
+             laptop instead of below it. -->
+        <div class="hero-copy">
+          <h1 aria-label="MoviPlayer — Free online video player. Play any video without download.">
+            Play any video<br><span class="highlight">without download.</span>
+          </h1>
+          <p class="hero-tagline">
+            Movies, shows, downloads — open them right here in your browser. No app to install, no uploads, nothing leaves your device.
+          </p>
 
-        <!-- Primary action: paste a video URL. The big, prominent input. -->
-        <div class="url-bar hero-url-bar">
-          <input
-            type="text"
-            id="url-input"
-            placeholder="https://…  paste any video link"
-            aria-label="Video URL"
-          />
-          <!-- One-tap paste — the whole point of this bar is a link the
-               visitor copied somewhere else, and on phones that's otherwise
-               a long-press-and-aim. Starts hidden and is only revealed by
-               the script when the browser can actually read the clipboard,
-               so it's never a button that does nothing. -->
-          <button
-            type="button"
-            class="url-bar-paste"
-            id="paste-btn"
-            title="Paste link"
-            aria-label="Paste video link from clipboard"
-            hidden
-          >
-            <svg class="paste-icon" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
-              <rect x="8" y="2" width="8" height="4" rx="1" ry="1"></rect>
-              <path d="M16 4h2a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h2"></path>
-            </svg>
-            <svg class="paste-icon-done" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
-              <polyline points="20 6 9 17 4 12"></polyline>
-            </svg>
-          </button>
+          <!-- Subtle trust strip -->
+          <div class="hero-trust">
+            <span class="trust-item">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/></svg>
+              Stays on your device
+            </span>
+            <span class="trust-dot"></span>
+            <span class="trust-item">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg>
+              Free, no sign-up
+            </span>
+            <span class="trust-dot"></span>
+            <a class="trust-item trust-item-verified" href="https://chromewebstore.google.com/detail/movi-player/ckleeigcopjnpehkjokijokjegknfgej" target="_blank" rel="noopener" title="Verified publisher on the Chrome Web Store">
+              <svg viewBox="0 0 24 24" aria-hidden="true"><path fill="#4d9bff" d="M23 12l-2.44-2.78.34-3.68-3.61-.82-1.89-3.18L12 3 8.6 1.54 6.71 4.72 3.1 5.53l.34 3.68L1 12l2.44 2.78-.34 3.69 3.61.82 1.89 3.18L12 21l3.4 1.46 1.89-3.18 3.61-.82-.34-3.68L23 12z"/><path fill="#fff" d="M10.09 16.72 6 12.59l1.41-1.41 2.68 2.68 6.68-6.68L18.18 8.6l-8.09 8.12z"/></svg>
+              Verified Chrome extension
+            </a>
+          </div>
 
-          <!-- Protected toggle is dev-only: only visible when the
-               corner developer-mode chip is enabled. -->
-          <label class="url-bar-toggle dev-only" id="encrypt-toggle-label" title="Route the URL through a signed token proxy — hides the source URL and requires auth per request.">
-            <input type="checkbox" id="encrypt-toggle" />
-            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-              <rect x="3" y="11" width="18" height="11" rx="2" ry="2"/>
-              <path d="M7 11V7a5 5 0 0 1 10 0v4"/>
-            </svg>
-            <span>Protected</span>
+          <!-- Install/usage badges, proxied same-origin from /badge/*.svg (worker.js) -->
+          <div class="hero-badges" aria-label="Extension stats">
+            <!-- No Chrome badge here. The store publishes a "users" figure, not
+                 installs, and it does not track them: the dashboard showed 197
+                 installs over four weeks and climbing while the public number
+                 read 5. Standing next to real download counts it read as a dead
+                 extension. The verified-publisher item above carries the trust
+                 this was meant to; /badge/chrome.svg still exists if a metric
+                 worth showing ever appears (ratings, once there are some). -->
+            <a href="https://marketplace.visualstudio.com/items?itemName=mrujjwalg.movi-player-vscode" rel="noopener" target="_blank" title="Movi Player on the VS Code Marketplace">
+              <img src="/badge/vscode.svg" height="20" loading="lazy" decoding="async" alt="VS Code Marketplace downloads" />
+            </a>
+            <a href="https://www.npmjs.com/package/movi-player" rel="noopener" target="_blank" title="movi-player on npm">
+              <img src="/badge/npm.svg" height="20" loading="lazy" decoding="async" alt="npm total downloads" />
+            </a>
+            <a href="https://www.jsdelivr.com/package/npm/movi-player" rel="noopener" target="_blank" title="movi-player on jsDelivr">
+              <img src="/badge/jsdelivr.svg" height="20" loading="lazy" decoding="async" alt="jsDelivr CDN downloads" />
+            </a>
+          </div>
+
+          <!-- Format strip — small footnote so it doesn't dominate the hero -->
+          <div class="hero-formats" aria-label="Supported formats">
+            <span class="format-chip">MKV</span>
+            <span class="format-chip">MP4</span>
+            <span class="format-chip">HEVC</span>
+            <span class="format-chip">AV1</span>
+            <span class="format-chip">HDR</span>
+            <span class="format-chip">4K</span>
+          </div>
+        </div>
+
+        <div class="hero-panel">
+          <!-- Primary action: paste a video URL. The big, prominent input. -->
+          <span class="hero-panel-label">Play from a link</span>
+          <div class="url-bar hero-url-bar">
+            <input
+              type="text"
+              id="url-input"
+              placeholder="https://…  paste any video link"
+              aria-label="Video URL"
+            />
+            <!-- One-tap paste — the whole point of this bar is a link the
+                 visitor copied somewhere else, and on phones that's otherwise
+                 a long-press-and-aim. Starts hidden and is only revealed by
+                 the script when the browser can actually read the clipboard,
+                 so it's never a button that does nothing. -->
+            <button
+              type="button"
+              class="url-bar-paste"
+              id="paste-btn"
+              title="Paste link"
+              aria-label="Paste video link from clipboard"
+              hidden
+            >
+              <svg class="paste-icon" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                <rect x="8" y="2" width="8" height="4" rx="1" ry="1"></rect>
+                <path d="M16 4h2a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h2"></path>
+              </svg>
+              <svg class="paste-icon-done" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                <polyline points="20 6 9 17 4 12"></polyline>
+              </svg>
+            </button>
+
+            <!-- Protected toggle is dev-only: only visible when the
+                 corner developer-mode chip is enabled. -->
+            <label class="url-bar-toggle dev-only" id="encrypt-toggle-label" title="Route the URL through a signed token proxy — hides the source URL and requires auth per request.">
+              <input type="checkbox" id="encrypt-toggle" />
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                <rect x="3" y="11" width="18" height="11" rx="2" ry="2"/>
+                <path d="M7 11V7a5 5 0 0 1 10 0v4"/>
+              </svg>
+              <span>Protected</span>
+            </label>
+            <button class="url-bar-btn" id="load-btn">
+              <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+                <polygon points="5 3 19 12 5 21 5 3"></polygon>
+              </svg>
+              Play
+            </button>
+          </div>
+
+          <!-- "or pick a file" divider -->
+          <div class="hero-or" aria-hidden="true"><span>or pick a video file</span></div>
+
+          <!-- Secondary action: opens the file picker. Drag &amp; drop also works anywhere on the page. -->
+          <label class="hero-cta-primary" tabindex="0" draggable="false" aria-label="Pick a video file to play">
+            <span class="hero-cta-icon" aria-hidden="true" draggable="false">
+              <!-- Points chosen so the triangle actually sits in the middle of
+                   the circle: the old 6,4 22,12 6,20 spans x 6-22, whose centre
+                   is 14 in a viewBox centred on 12 — it hung two units right.
+                   4-20 puts the shape dead centre. -->
+              <svg viewBox="0 0 24 24" fill="currentColor" draggable="false">
+                <polygon points="4 4 20 12 4 20 4 4"></polygon>
+              </svg>
+            </span>
+            <span class="hero-cta-text">
+              <strong>Pick a video file</strong>
+              <small>or just drop one anywhere on the page</small>
+            </span>
+            <input type="file" id="file-input" accept="video/*,audio/*,.mkv,.ts,.m2ts,.mts,.evo,.avi,.flv,.wmv,.mov,.mka,.m4b,.opus,.oga,.dts,.ac3,.ec3,.eac3" multiple />
           </label>
-          <button class="url-bar-btn" id="load-btn">
-            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
-              <polygon points="5 3 19 12 5 21 5 3"></polygon>
-            </svg>
-            Play
-          </button>
-        </div>
 
-        <!-- "or pick a file" divider -->
-        <div class="hero-or" aria-hidden="true"><span>or pick a video file</span></div>
-
-        <!-- Secondary action: opens the file picker. Drag &amp; drop also works anywhere on the page. -->
-        <label class="hero-cta-primary" tabindex="0" draggable="false" aria-label="Pick a video file to play">
-          <span class="hero-cta-icon" aria-hidden="true" draggable="false">
-            <svg viewBox="0 0 24 24" fill="currentColor" draggable="false">
-              <polygon points="6 4 22 12 6 20 6 4"></polygon>
-            </svg>
-          </span>
-          <span class="hero-cta-text">
-            <strong>Pick a video file</strong>
-            <small>or just drop one anywhere on the page</small>
-          </span>
-          <input type="file" id="file-input" accept="video/*,audio/*,.mkv,.ts,.m2ts,.mts,.evo,.avi,.flv,.wmv,.mov,.mka,.m4b,.opus,.oga,.dts,.ac3,.ec3,.eac3" multiple />
-        </label>
-
-        <!-- Subtle secondary actions -->
-        <div class="hero-secondary">
-          <button class="hero-link-btn" id="folder-btn" type="button" title="Open a folder as a playlist">
-            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-              <path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"></path>
-            </svg>
-            Open a folder
-          </button>
-          <input type="file" id="folder-input-fallback" webkitdirectory multiple hidden />
-          <button class="hero-link-btn" id="playlist-show-btn" type="button" title="Show playlist" hidden>
-            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-              <line x1="8" y1="6" x2="21" y2="6"></line><line x1="8" y1="12" x2="21" y2="12"></line><line x1="8" y1="18" x2="21" y2="18"></line><line x1="3" y1="6" x2="3.01" y2="6"></line><line x1="3" y1="12" x2="3.01" y2="12"></line><line x1="3" y1="18" x2="3.01" y2="18"></line>
-            </svg>
-            Show playlist
-          </button>
-          <button class="hero-link-btn btn-embed" id="embed-btn" title="Copy embed code (developer feature)" aria-haspopup="dialog">
-            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-              <polyline points="16 18 22 12 16 6"></polyline>
-              <polyline points="8 6 2 12 8 18"></polyline>
-            </svg>
-            Embed
-          </button>
-          <dialog class="embed-dialog" id="embed-dialog" aria-label="Embed options">
-            <div class="embed-dialog-head">
-              <span class="embed-dialog-title">Embed options</span>
-              <button class="embed-dialog-close" id="embed-dialog-close" type="button" aria-label="Close">
-                <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"></line><line x1="6" y1="6" x2="18" y2="18"></line></svg>
-              </button>
+          <!-- Subtle secondary actions -->
+          <div class="hero-secondary">
+            <button class="hero-link-btn" id="folder-btn" type="button" title="Open a folder as a playlist">
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                <path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"></path>
+              </svg>
+              Open a folder
+            </button>
+            <input type="file" id="folder-input-fallback" webkitdirectory multiple hidden />
+            <button class="hero-link-btn" id="playlist-show-btn" type="button" title="Show playlist" hidden>
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                <line x1="8" y1="6" x2="21" y2="6"></line><line x1="8" y1="12" x2="21" y2="12"></line><line x1="8" y1="18" x2="21" y2="18"></line><line x1="3" y1="6" x2="3.01" y2="6"></line><line x1="3" y1="12" x2="3.01" y2="12"></line><line x1="3" y1="18" x2="3.01" y2="18"></line>
+              </svg>
+              Show playlist
+            </button>
+            <button class="hero-link-btn btn-embed" id="embed-btn" title="Copy embed code (developer feature)" aria-haspopup="dialog">
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                <polyline points="16 18 22 12 16 6"></polyline>
+                <polyline points="8 6 2 12 8 18"></polyline>
+              </svg>
+              Embed
+            </button>
+            <dialog class="embed-dialog" id="embed-dialog" aria-label="Embed options">
+              <div class="embed-dialog-head">
+                <span class="embed-dialog-title">Embed options</span>
+                <button class="embed-dialog-close" id="embed-dialog-close" type="button" aria-label="Close">
+                  <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"></line><line x1="6" y1="6" x2="18" y2="18"></line></svg>
+                </button>
+              </div>
+              <div class="embed-dialog-body">
+                <label class="embed-opt"><input type="checkbox" data-attr="autoplay" checked> Autoplay</label>
+                <label class="embed-opt"><input type="checkbox" data-attr="muted"> Muted</label>
+                <label class="embed-opt"><input type="checkbox" data-attr="loop"> Loop</label>
+                <label class="embed-opt"><input type="checkbox" data-attr="thumb" checked> Seek thumbnails</label>
+                <label class="embed-opt"><input type="checkbox" data-attr="resume"> Resume playback</label>
+                <label class="embed-opt"><input type="checkbox" data-attr="ambientmode"> Ambient glow</label>
+                <textarea class="embed-code" id="embed-code" readonly rows="4" spellcheck="false" aria-label="Embed code"></textarea>
+                <button class="embed-copy-btn" id="embed-copy-btn" type="button">Copy embed code</button>
+              </div>
+            </dialog>
+            <a class="hero-link-btn" href="/compare" title="Compare your file against the native <video> tag">
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                <rect x="3" y="4" width="8" height="16" rx="1"></rect>
+                <rect x="13" y="4" width="8" height="16" rx="1"></rect>
+              </svg>
+              Compare to &lt;video&gt;
+            </a>
+            <div class="cache-info dev-only" id="cache-info" hidden>
+              <span class="cache-size" id="cache-size" title="Cached thumbnails">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                  <ellipse cx="12" cy="5" rx="9" ry="3"/><path d="M3 5v14a9 3 0 0 0 18 0V5"/><path d="M3 12a9 3 0 0 0 18 0"/>
+                </svg>
+                <span id="cache-size-text">—</span>
+              </span>
+              <button type="button" class="cache-clear dev-only" id="cache-clear-btn" title="Clear thumbnail cache">Clear cache</button>
             </div>
-            <div class="embed-dialog-body">
-              <label class="embed-opt"><input type="checkbox" data-attr="autoplay" checked> Autoplay</label>
-              <label class="embed-opt"><input type="checkbox" data-attr="muted"> Muted</label>
-              <label class="embed-opt"><input type="checkbox" data-attr="loop"> Loop</label>
-              <label class="embed-opt"><input type="checkbox" data-attr="thumb" checked> Seek thumbnails</label>
-              <label class="embed-opt"><input type="checkbox" data-attr="resume"> Resume playback</label>
-              <label class="embed-opt"><input type="checkbox" data-attr="ambientmode"> Ambient glow</label>
-              <textarea class="embed-code" id="embed-code" readonly rows="4" spellcheck="false" aria-label="Embed code"></textarea>
-              <button class="embed-copy-btn" id="embed-copy-btn" type="button">Copy embed code</button>
-            </div>
-          </dialog>
-          <a class="hero-link-btn" href="/compare" title="Compare your file against the native <video> tag">
-            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-              <rect x="3" y="4" width="8" height="16" rx="1"></rect>
-              <rect x="13" y="4" width="8" height="16" rx="1"></rect>
-            </svg>
-            Compare to &lt;video&gt;
-          </a>
-        </div>
+          </div>
 
-        <div class="cache-info dev-only" id="cache-info" hidden>
-          <span class="cache-size" id="cache-size" title="Cached thumbnails">
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-              <ellipse cx="12" cy="5" rx="9" ry="3"/><path d="M3 5v14a9 3 0 0 0 18 0V5"/><path d="M3 12a9 3 0 0 0 18 0"/>
-            </svg>
-            <span id="cache-size-text">—</span>
-          </span>
-          <button type="button" class="cache-clear dev-only" id="cache-clear-btn" title="Clear thumbnail cache">Clear cache</button>
-        </div>
-
-        <!-- Subtle trust strip -->
-        <div class="hero-trust">
-          <span class="trust-item">
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/></svg>
-            Stays on your device
-          </span>
-          <span class="trust-dot"></span>
-          <span class="trust-item">
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg>
-            Free, no sign-up
-          </span>
-          <span class="trust-dot"></span>
-          <a class="trust-item trust-item-verified" href="https://chromewebstore.google.com/detail/movi-player/ckleeigcopjnpehkjokijokjegknfgej" target="_blank" rel="noopener" title="Verified publisher on the Chrome Web Store">
-            <svg viewBox="0 0 24 24" aria-hidden="true"><path fill="#4d9bff" d="M23 12l-2.44-2.78.34-3.68-3.61-.82-1.89-3.18L12 3 8.6 1.54 6.71 4.72 3.1 5.53l.34 3.68L1 12l2.44 2.78-.34 3.69 3.61.82 1.89 3.18L12 21l3.4 1.46 1.89-3.18 3.61-.82-.34-3.68L23 12z"/><path fill="#fff" d="M10.09 16.72 6 12.59l1.41-1.41 2.68 2.68 6.68-6.68L18.18 8.6l-8.09 8.12z"/></svg>
-            Verified Chrome extension
-          </a>
-        </div>
-
-        <!-- Install/usage badges, proxied same-origin from /badge/*.svg (worker.js) -->
-        <div class="hero-badges" aria-label="Extension stats">
-          <!-- No Chrome badge here. The store publishes a "users" figure, not
-               installs, and it does not track them: the dashboard showed 197
-               installs over four weeks and climbing while the public number
-               read 5. Standing next to real download counts it read as a dead
-               extension. The verified-publisher item above carries the trust
-               this was meant to; /badge/chrome.svg still exists if a metric
-               worth showing ever appears (ratings, once there are some). -->
-          <a href="https://marketplace.visualstudio.com/items?itemName=mrujjwalg.movi-player-vscode" rel="noopener" target="_blank" title="Movi Player on the VS Code Marketplace">
-            <img src="/badge/vscode.svg" height="20" loading="lazy" decoding="async" alt="VS Code Marketplace downloads" />
-          </a>
-          <a href="https://www.npmjs.com/package/movi-player" rel="noopener" target="_blank" title="movi-player on npm">
-            <img src="/badge/npm.svg" height="20" loading="lazy" decoding="async" alt="npm total downloads" />
-          </a>
-          <a href="https://www.jsdelivr.com/package/npm/movi-player" rel="noopener" target="_blank" title="movi-player on jsDelivr">
-            <img src="/badge/jsdelivr.svg" height="20" loading="lazy" decoding="async" alt="jsDelivr CDN downloads" />
-          </a>
-        </div>
-
-        <!-- Format strip — small footnote so it doesn't dominate the hero -->
-        <div class="hero-formats" aria-label="Supported formats">
-          <span class="format-chip">MKV</span>
-          <span class="format-chip">MP4</span>
-          <span class="format-chip">HEVC</span>
-          <span class="format-chip">AV1</span>
-          <span class="format-chip">HDR</span>
-          <span class="format-chip">4K</span>
         </div>
       </div>
     </section>
@@ -4240,7 +4256,8 @@
     <section class="features-section">
       <h2>Why people love MoviPlayer</h2>
       <p class="section-desc">A simple, free <strong>online video player</strong> for the files other players give up on. Drop a movie, paste a link &mdash; it just plays.</p>
-      <div class="features-grid">
+      <!-- Four cards, so two columns — a 3+1 row leaves an orphan. -->
+      <div class="features-grid features-grid--2up">
         <div class="feature-card">
           <div class="feature-icon">
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="2" width="20" height="20" rx="2.18" ry="2.18"/><line x1="7" y1="2" x2="7" y2="22"/><line x1="17" y1="2" x2="17" y2="22"/><line x1="2" y1="12" x2="22" y2="12"/><line x1="2" y1="7" x2="7" y2="7"/><line x1="2" y1="17" x2="7" y2="17"/><line x1="17" y1="7" x2="22" y2="7"/><line x1="17" y1="17" x2="22" y2="17"/></svg>
@@ -4305,7 +4322,36 @@
     <section class="features-section">
       <h2>What can it play?</h2>
       <p class="section-desc">Pretty much anything. From old AVI files to modern 4K HDR movies &mdash; right in your browser, with no software to install. Behind the scenes it uses FFmpeg (the same engine that powers VLC and most pro tools) along with your browser's WebCodecs API for fast, hardware-accelerated playback.</p>
-      <p class="section-desc"><strong>File types:</strong> MKV, MP4, AVI, FLV, MOV, MPEG-TS, WebM and more. <strong>Video codecs:</strong> H.264, H.265 (HEVC), AV1, VP8, VP9. <strong>Audio:</strong> AAC, Opus, FLAC, MP3, AC3, and more. <strong>HDR:</strong> HDR10 and HLG also work on compatible displays.</p>
+
+      <div class="spec-panel">
+        <div class="spec-panel-head">
+          <div>
+            <h3>Supported codecs &amp; formats</h3>
+            <p>Demuxed by FFmpeg (WebAssembly), decoded by WebCodecs.</p>
+          </div>
+          <a href="/compare">See it vs native &lt;video&gt; &rarr;</a>
+        </div>
+        <div class="spec-grid">
+          <div class="spec-chip"><b>MKV</b><span>Container</span></div>
+          <div class="spec-chip"><b>MP4</b><span>Container</span></div>
+          <div class="spec-chip"><b>AVI</b><span>Container</span></div>
+          <div class="spec-chip"><b>MOV</b><span>Container</span></div>
+          <div class="spec-chip"><b>FLV</b><span>Container</span></div>
+          <div class="spec-chip"><b>WebM</b><span>Container</span></div>
+          <div class="spec-chip"><b>MPEG-TS</b><span>Container</span></div>
+          <div class="spec-chip"><b>H.264</b><span>Video</span></div>
+          <div class="spec-chip"><b>HEVC</b><span>H.265 video</span></div>
+          <div class="spec-chip"><b>AV1</b><span>Video</span></div>
+          <div class="spec-chip"><b>VP8 / VP9</b><span>Video</span></div>
+          <div class="spec-chip"><b>AAC</b><span>Audio</span></div>
+          <div class="spec-chip"><b>Opus</b><span>Audio</span></div>
+          <div class="spec-chip"><b>FLAC</b><span>Audio</span></div>
+          <div class="spec-chip"><b>MP3 / AC3</b><span>Audio</span></div>
+          <div class="spec-chip"><b>HDR10 / HLG</b><span>Colour</span></div>
+          <div class="spec-chip"><b>4K</b><span>Resolution</span></div>
+          <div class="spec-chip"><b>SRT / ASS</b><span>Subtitles</span></div>
+        </div>
+      </div>
     </section>
 
     <!-- ===== WHY THE BROWSER FAILS (pain-point / search-intent block) ===== -->
@@ -4340,6 +4386,20 @@
           </div>
           <h3>Works on locked-down work laptops</h3>
           <p>Can&rsquo;t install VLC on a managed or work laptop? You don&rsquo;t need to. MoviPlayer is a browser video player with no install &mdash; just open the page and play, even where software is blocked.</p>
+        </div>
+        <div class="feature-card">
+          <div class="feature-icon">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M11 5 6 9H2v6h4l5 4z"/><line x1="23" y1="9" x2="17" y2="15"/><line x1="17" y1="9" x2="23" y2="15"/></svg>
+          </div>
+          <h3>Video plays but there&rsquo;s no sound</h3>
+          <p>Movie rips often carry AC3, E-AC3, DTS or TrueHD audio, and no browser ships a decoder for any of them &mdash; you get picture and silence. MoviPlayer decodes those tracks in software, and lets you switch between every audio track in the file.</p>
+        </div>
+        <div class="feature-card">
+          <div class="feature-icon">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="4" width="20" height="16" rx="2"/><line x1="6" y1="14" x2="12" y2="14"/><line x1="15" y1="14" x2="18" y2="14"/><line x1="6" y1="17" x2="9" y2="17"/><line x1="12" y1="17" x2="18" y2="17"/></svg>
+          </div>
+          <h3>Subtitles that never show up</h3>
+          <p>The &lt;video&gt; tag only reads WebVTT from a separate &lt;track&gt;, so the SRT and ASS subtitles baked into an MKV are invisible to it. MoviPlayer reads them straight out of the file &mdash; styling and all &mdash; and takes .srt or .ass files you drop in alongside.</p>
         </div>
       </div>
       <p class="section-desc" style="margin-top: 2rem; margin-bottom: 0;">There&rsquo;s no server transcoding involved: your file is never uploaded or re-encoded in the cloud. Demuxing, decoding and subtitles all happen on your own device.</p>
@@ -4473,11 +4533,45 @@
     </section>
 
     <!-- ===== FOOTER ===== -->
-    <footer class="footer">
-      <p>Made with <a href="https://github.com/mrujjwalg/movi-player" target="_blank" rel="noopener">movi-player</a> &mdash; an open-source video player that runs in your browser.</p>
-      <p class="disclaimer"><a href="/docs">Docs</a> &middot; <a href="https://chromewebstore.google.com/detail/movi-player/ckleeigcopjnpehkjokijokjegknfgej" rel="noopener">Chrome extension</a> &middot; <a href="https://marketplace.visualstudio.com/items?itemName=mrujjwalg.movi-player-vscode" target="_blank" rel="noopener">VS Code extension</a> &middot; <a href="https://www.npmjs.com/package/movi-player" target="_blank" rel="noopener">npm package</a> &middot; <a href="https://github.com/mrujjwalg/movi-player/issues" rel="noopener">Report a problem</a> &middot; <a href="#comments">Leave feedback</a></p>
-      <p class="disclaimer" style="margin-top: 0.5rem;"><a href="/docs/privacy-policy">Privacy Policy</a> &middot; <a href="/docs/terms-of-service">Terms of Service</a> &middot; <a href="mailto:abuse@moviplayer.com">Report abuse / copyright</a></p>
-      <p class="disclaimer" style="margin-top: 0.5rem;">You bring the videos &mdash; we don't host or store any media. Whatever you play is your own responsibility.</p>
+    <!-- ===== FOOTER (identical on every page — see app/shared.css) ===== -->
+    <footer class="site-footer">
+      <div class="site-footer-inner">
+        <div class="site-footer-brand">
+          <a href="/" class="brand" aria-label="MoviPlayer — home">
+            <svg class="brand-logo" viewBox="0 0 100 100" aria-hidden="true">
+              <defs>
+                <linearGradient id="footer-logo-grad" x1="0%" y1="0%" x2="100%" y2="100%">
+                  <stop offset="0%" stop-color="#8a7cf2"/>
+                  <stop offset="100%" stop-color="#6c5dd3"/>
+                </linearGradient>
+              </defs>
+              <circle cx="50" cy="50" r="46" fill="url(#footer-logo-grad)"/>
+              <polygon points="40,29 40,71 73,50" fill="#ffffff"/>
+            </svg>
+            <span class="brand-text">MoviPlayer</span>
+          </a>
+          <p>Made with <a href="https://github.com/mrujjwalg/movi-player" target="_blank" rel="noopener">movi-player</a> &mdash; an open-source video player that runs in your browser.</p>
+        </div>
+        <div class="site-footer-links">
+          <a href="/">Player</a>
+          <a href="/examples">Examples</a>
+          <a href="/compare">Compare</a>
+          <a href="/docs">Docs</a>
+          <a href="https://chromewebstore.google.com/detail/movi-player/ckleeigcopjnpehkjokijokjegknfgej" rel="noopener" target="_blank">Chrome extension</a>
+          <a href="https://marketplace.visualstudio.com/items?itemName=mrujjwalg.movi-player-vscode" rel="noopener" target="_blank">VS Code extension</a>
+          <a href="https://www.npmjs.com/package/movi-player" rel="noopener" target="_blank">npm package</a>
+          <a href="https://github.com/mrujjwalg/movi-player" rel="noopener" target="_blank">GitHub</a>
+          <a href="https://github.com/mrujjwalg/movi-player/issues" rel="noopener" target="_blank">Report a problem</a>
+          <a href="/#comments">Leave feedback</a>
+          <a href="/docs/privacy-policy">Privacy Policy</a>
+          <a href="/docs/terms-of-service">Terms of Service</a>
+          <a href="mailto:abuse@moviplayer.com">Report abuse / copyright</a>
+        </div>
+      </div>
+      <div class="site-footer-base">
+        <p>You bring the videos &mdash; we don't host or store any media. Whatever you play is your own responsibility.</p>
+        <p>&copy; MoviPlayer &middot; Engineered for high-fidelity playback.</p>
+      </div>
     </footer>
 
     <!-- Hero micro-interactions: ripple on Play, magnetic chip tilt -->
@@ -4507,6 +4601,53 @@
           cta.addEventListener("dragstart", function (e) { e.preventDefault(); });
         }
       })();
+
+      // --- Theme Logic ---
+      const themeToggle = document.getElementById("theme-toggle");
+
+      const icons = {
+        auto: `<svg class="theme-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="3" width="20" height="14" rx="2" ry="2"></rect><line x1="8" y1="21" x2="16" y2="21"></line><line x1="12" y1="17" x2="12" y2="21"></line></svg>`,
+        light: `<svg class="theme-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="5"></circle><line x1="12" y1="1" x2="12" y2="3"></line><line x1="12" y1="21" x2="12" y2="23"></line><line x1="4.22" y1="4.22" x2="5.64" y2="5.64"></line><line x1="18.36" y1="18.36" x2="19.78" y2="19.78"></line><line x1="1" y1="12" x2="3" y2="12"></line><line x1="21" y1="12" x2="23" y2="12"></line><line x1="4.22" y1="19.78" x2="5.64" y2="18.36"></line><line x1="18.36" y1="5.64" x2="19.78" y2="4.22"></line></svg>`,
+        dark: `<svg class="theme-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"></path></svg>`,
+      };
+
+      const modes = ["auto", "light", "dark"];
+      let currentMode = localStorage.getItem("theme-preference") || "auto";
+
+      const applyTheme = (mode) => {
+        let effectiveTheme = mode;
+        if (mode === "auto") {
+          effectiveTheme = window.matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light";
+        }
+
+        if (effectiveTheme === "light") {
+          document.documentElement.setAttribute("data-theme", "light");
+        } else {
+          document.documentElement.removeAttribute("data-theme");
+        }
+
+        themeToggle.innerHTML = icons[mode];
+        themeToggle.setAttribute("title", `Theme: ${mode.charAt(0).toUpperCase() + mode.slice(1)}`);
+
+        // Queried live rather than captured: this now runs before the
+        // player bundle has defined the element, and any <movi-player>
+        // on the page should follow the page chrome.
+        document
+          .querySelectorAll("movi-player")
+          .forEach((p) => p.setAttribute("theme", effectiveTheme));
+      };
+
+      window.matchMedia("(prefers-color-scheme: dark)").addEventListener("change", () => {
+        if (currentMode === "auto") applyTheme("auto");
+      });
+
+      themeToggle.addEventListener("click", () => {
+        currentMode = modes[(modes.indexOf(currentMode) + 1) % modes.length];
+        localStorage.setItem("theme-preference", currentMode);
+        applyTheme(currentMode);
+      });
+
+      applyTheme(currentMode);
     </script>
 
     <!-- Movi Player from CDN -->
@@ -6568,50 +6709,6 @@
           urlInput.disabled = true;
         })();
       }
-
-      // --- Theme Logic ---
-      const themeToggle = document.getElementById("theme-toggle");
-
-      const icons = {
-        auto: `<svg class="theme-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="3" width="20" height="14" rx="2" ry="2"></rect><line x1="8" y1="21" x2="16" y2="21"></line><line x1="12" y1="17" x2="12" y2="21"></line></svg>`,
-        light: `<svg class="theme-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="5"></circle><line x1="12" y1="1" x2="12" y2="3"></line><line x1="12" y1="21" x2="12" y2="23"></line><line x1="4.22" y1="4.22" x2="5.64" y2="5.64"></line><line x1="18.36" y1="18.36" x2="19.78" y2="19.78"></line><line x1="1" y1="12" x2="3" y2="12"></line><line x1="21" y1="12" x2="23" y2="12"></line><line x1="4.22" y1="19.78" x2="5.64" y2="18.36"></line><line x1="18.36" y1="5.64" x2="19.78" y2="4.22"></line></svg>`,
-        dark: `<svg class="theme-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"></path></svg>`,
-      };
-
-      const modes = ["auto", "light", "dark"];
-      let currentMode = localStorage.getItem("theme-preference") || "auto";
-
-      const applyTheme = (mode) => {
-        let effectiveTheme = mode;
-        if (mode === "auto") {
-          effectiveTheme = window.matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light";
-        }
-
-        if (effectiveTheme === "light") {
-          document.documentElement.setAttribute("data-theme", "light");
-        } else {
-          document.documentElement.removeAttribute("data-theme");
-        }
-
-        themeToggle.innerHTML = icons[mode];
-        themeToggle.setAttribute("title", `Theme: ${mode.charAt(0).toUpperCase() + mode.slice(1)}`);
-
-        if (player) {
-          player.setAttribute("theme", effectiveTheme);
-        }
-      };
-
-      window.matchMedia("(prefers-color-scheme: dark)").addEventListener("change", () => {
-        if (currentMode === "auto") applyTheme("auto");
-      });
-
-      themeToggle.addEventListener("click", () => {
-        currentMode = modes[(modes.indexOf(currentMode) + 1) % modes.length];
-        localStorage.setItem("theme-preference", currentMode);
-        applyTheme(currentMode);
-      });
-
-      applyTheme(currentMode);
 
       // Forward document keyboard events to player
       document.addEventListener("keydown", (e) => {

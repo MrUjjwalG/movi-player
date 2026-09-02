@@ -6,13 +6,28 @@ import DRIVE_HTML from "./drive.html";
 import SITEMAP from "./sitemap.xml";
 import ROBOTS from "./robots.txt";
 import LLMS from "./llms.txt";
+import SHARED_CSS from "./shared.css";
 
 const BUILD_VERSION = "__BUILD_VERSION__";
-const HTML_WITH_VERSION = HTML_RAW.replace(/__BUILD_VERSION__/g, BUILD_VERSION);
-const TEST_NATIVE_WITH_VERSION = TEST_NATIVE_HTML.replace(/__BUILD_VERSION__/g, BUILD_VERSION);
-const COMPARE_WITH_VERSION = COMPARE_HTML.replace(/__BUILD_VERSION__/g, BUILD_VERSION);
-const EXAMPLES_WITH_VERSION = EXAMPLES_HTML.replace(/__BUILD_VERSION__/g, BUILD_VERSION);
-const DRIVE_WITH_VERSION = DRIVE_HTML.replace(/__BUILD_VERSION__/g, BUILD_VERSION);
+
+// The shared design system (app/shared.css) is spliced into every page in
+// place of the <!--__SHARED_CSS__--> marker, which sits at the very end of
+// each <head> — i.e. AFTER that page's own <style>. Later wins, so one edit
+// to shared.css re-skins the whole site without any page having to give up
+// the layout rules its own JS depends on. Inlined rather than linked: it's a
+// few KB on the critical path to first paint, and a <link> would cost every
+// page an extra round trip before it could render.
+const SHARED_STYLE = "<style>" + SHARED_CSS + "</style>";
+const bake = (html) =>
+  html
+    .replace(/__BUILD_VERSION__/g, BUILD_VERSION)
+    .replace("<!--__SHARED_CSS__-->", SHARED_STYLE);
+
+const HTML_WITH_VERSION = bake(HTML_RAW);
+const TEST_NATIVE_WITH_VERSION = bake(TEST_NATIVE_HTML);
+const COMPARE_WITH_VERSION = bake(COMPARE_HTML);
+const EXAMPLES_WITH_VERSION = bake(EXAMPLES_HTML);
+const DRIVE_WITH_VERSION = bake(DRIVE_HTML);
 
 // Turnstile site key is injected per-request from env so it can be
 // rotated via wrangler secret without a redeploy. When empty the
@@ -792,6 +807,9 @@ const MIME_TYPES = {
   map: "application/json",
   svg: "image/svg+xml",
   png: "image/png",
+  jpg: "image/jpeg",
+  jpeg: "image/jpeg",
+  webp: "image/webp",
   ico: "image/x-icon",
   mp4: "video/mp4",
   m4v: "video/mp4",
