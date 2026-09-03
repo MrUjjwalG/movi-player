@@ -7,12 +7,18 @@ chrome.runtime.onInstalled.addListener(() => {
   });
 });
 
+// Toolbar icon opens the player page. There is no popup: everything it used
+// to hold — paste a link, the right-click tip, the two settings — lives on
+// the player page, which has room for it and can show a real URL field
+// instead of a clipboard read that fails silently when permission is denied.
+chrome.action.onClicked.addListener(() => {
+  chrome.tabs.create({ url: chrome.runtime.getURL("player.html") });
+});
+
 // Keep the probeBlankLinks storage flag in sync with the actual permission
-// state. The popup triggers chrome.permissions.request(), but Chrome closes
-// the popup as soon as the prompt steals focus — so the request callback
-// runs in a dead context. Listening here in the persistent service worker
-// avoids that race entirely. Also catches the case where the user revokes
-// "<all_urls>" from chrome://extensions.
+// state. The player page triggers chrome.permissions.request(); listening
+// here in the background rather than there also catches the case where the
+// user revokes "<all_urls>" from the browser's own extensions page.
 chrome.permissions.onAdded.addListener((perms) => {
   if (perms.origins?.includes("<all_urls>")) {
     chrome.storage.local.set({ probeBlankLinks: true });

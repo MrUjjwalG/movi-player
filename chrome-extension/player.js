@@ -13,6 +13,10 @@ const dropZone = document.getElementById("dropZone");
 const filePicker = document.getElementById("filePicker");
 const folderPicker = document.getElementById("folderPicker");
 const loadingOverlay = document.getElementById("loadingOverlay");
+// Whether anything has been loaded this session — gates the picker's close
+// button and Escape, so the back arrow can't strand you on an empty picker.
+// Declared up here because loadFile() sets it well above the block that reads it.
+let hasMedia = false;
 const loadingName = document.getElementById("loadingName");
 
 const playlistPanel = document.getElementById("playlistPanel");
@@ -365,6 +369,7 @@ let metaProcessing = false;
 let thumbWasmPromise = null;
 
 function loadFile(file) {
+  hasMedia = true;
   overlay.classList.add("hidden");
   document.title = file.name + " — Movi Player";
   if (playerEl.setFile) playerEl.setFile(file);
@@ -595,6 +600,7 @@ function playPlaylistItem(i, { forcePlay = false } = {}) {
   if (!file) return;
   playlistIndex = i;
   currentFile = file;
+  hasMedia = true;
   overlay.classList.add("hidden");
   document.title = file.name + " — Movi Player";
   // Drop poster so previous item's poster doesn't bleed in
@@ -1082,6 +1088,31 @@ async function pickFolder({ append = false } = {}) {
   folderPicker.click();
 }
 
+// ─── Back to the picker ───────────────────────────────────
+// The title bar's arrow (titlemode="back") only fires an event; this is what
+// it means here. Anything already playing keeps playing behind the picker —
+// the close button and Escape put you straight back to it, so the arrow is
+// never a one-way door.
+function showPicker() {
+  overlay.classList.remove("hidden");
+  overlay.classList.toggle("dismissible", hasMedia);
+  try { playerEl.pause?.(); } catch {}
+  // A reload of ?url=... would replay the video the viewer just stepped out
+  // of, so the address bar goes back to the bare page too.
+  if (window.location.search) {
+    history.replaceState(null, "", window.location.pathname);
+  }
+  document.title = "Movi Player";
+}
+
+function hidePicker() {
+  if (!hasMedia) return;
+  overlay.classList.add("hidden");
+}
+
+playerEl.addEventListener("back", showPicker);
+document.getElementById("overlayClose")?.addEventListener("click", hidePicker);
+
 // ─── URL / single-file load ───────────────────────────────
 function filenameFromPath(path) {
   try {
@@ -1138,6 +1169,7 @@ if (url) {
   if (url.startsWith("file://")) {
     const name = filenameFromPath(url).replace(/\.[^.]+$/, "");
     document.title = (name || "Video") + " — Movi Player";
+    hasMedia = true;
     loadFileUrl(url);
   } else {
     let name = decodeURIComponent(url.split("/").pop().split("?")[0]);
@@ -1149,6 +1181,7 @@ if (url) {
       } catch {}
     }
     document.title = (name || "Video") + " — Movi Player";
+    hasMedia = true;
     customElements.whenDefined("movi-player").then(() => { playerEl.src = url; });
   }
 } else {
@@ -1326,9 +1359,146 @@ setInterval(() => {
   refreshCacheInfo();
 }, 4000);
 
+// ─── Link field, and the two settings the popup used to own ──────────
+// All of this ran in popup.js until the popup was removed. The toolbar icon
+// opens this page directly now, so it lives here.
+(() => {
+  const linkForm = document.getElementById("linkForm");
+  const linkInput = document.getElementById("linkInput");
+  const linkPaste = document.getElementById("linkPaste");
+
+  // Navigating rather than setting playerEl.src reuses the whole ?url= path
+  // above — the file-vs-stream branch, the title, the name derivation.
+  const play = (raw) => {
+    const value = (raw || "").trim();
+    if (!/^https?:\/\//i.test(value)) {
+      linkInput.value = value;
+      linkInput.focus();
+      linkInput.setCustomValidity("Enter a link starting with http:// or https://");
+      linkInput.reportValidity();
+      setTimeout(() => linkInput.setCustomValidity(""), 10);
+      return;
+    }
+    location.href = `player.html?url=${encodeURIComponent(value)}`;
+  };
+
+  linkForm?.addEventListener("submit", (e) => {
+    e.preventDefault();
+    play(linkInput.value);
+  });
+  linkInput?.addEventListener("input", () => linkInput.setCustomValidity(""));
+
+  linkPaste?.addEventListener("click", async () => {
+    try {
+      const text = await navigator.clipboard.readText();
+      linkInput.value = (text || "").trim();
+      linkInput.focus();
+    } catch {
+      // Clipboard read refused — the field is still there to type into,
+      // which is the whole reason it exists.
+      linkInput.focus();
+    }
+  });
+
+  // ── Detect-download-links toggle ──
+  // Source of truth is the storage flag (the user's preference). The
+  // permission only makes the HEAD probes succeed; we never try to revoke it
+  // on OFF, because a permission granted as required on an older install
+  // cannot be revoked without a reinstall. The flag alone gates the content
+  // script, which fully disables the feature.
+  const probeToggle = document.getElementById("probe-toggle");
+  const probeSub = document.getElementById("probe-sub");
+  const PROBE_ORIGINS = { origins: ["<all_urls>"] };
+
+  if (probeToggle) {
+    chrome.storage.local.get("probeBlankLinks", (data) => {
+      probeToggle.checked = !!data.probeBlankLinks;
+    });
+
+    probeToggle.addEventListener("change", () => {
+      if (!probeToggle.checked) {
+        chrome.storage.local.set({ probeBlankLinks: false });
+        return;
+      }
+      // Resolves granted=true instantly with no prompt when the permission is
+      // already held, so this covers both first run and every run after.
+      chrome.permissions.request(PROBE_ORIGINS, (granted) => {
+        probeToggle.checked = granted;
+        chrome.storage.local.set({ probeBlankLinks: granted });
+        if (!granted) {
+          probeSub.textContent = "Permission denied";
+          probeSub.style.color = "#ef4444";
+          setTimeout(() => {
+            probeSub.textContent = "Scan CDN / no-extension links for video";
+            probeSub.style.color = "";
+          }, 2000);
+        }
+      });
+    });
+  }
+
+  // ── Experimental features row ──
+  // `window.chrome` is NOT a Chromium test inside an extension page — Firefox
+  // defines a `chrome` alias for the WebExtension APIs too, so this row would
+  // otherwise offer a chrome://flags link Firefox cannot open. The extension
+  // URL scheme is the honest signal.
+  const flagBtn = document.getElementById("open-flags");
+  const flagSub = document.getElementById("flags-sub");
+  const isChromium = (() => {
+    try {
+      return chrome.runtime.getURL("").startsWith("chrome-extension://");
+    } catch {
+      return false;
+    }
+  })();
+
+  // Same probe as app/compare.html: setting WebGL2 drawingBufferColorSpace to
+  // rec2100-pq only sticks when the experimental flag is on in Chromium.
+  const flagEnabled = (() => {
+    if (!isChromium) return false;
+    try {
+      const gl = document.createElement("canvas").getContext("webgl2");
+      if (!gl || gl.drawingBufferColorSpace === undefined) return false;
+      gl.drawingBufferColorSpace = "rec2100-pq";
+      return gl.drawingBufferColorSpace === "rec2100-pq";
+    } catch {
+      return false;
+    }
+  })();
+
+  if (flagBtn && flagSub) {
+    if (flagEnabled) {
+      // Already on — a check badge, not a button, so it does not suggest the
+      // user still has something to do.
+      flagSub.textContent = "Enabled — HDR & codecs unlocked";
+      flagSub.style.color = "#10b981";
+      const badge = document.createElement("span");
+      badge.className = "setting-badge";
+      badge.title = "Experimental features enabled";
+      badge.textContent = "\u2713";
+      flagBtn.replaceWith(badge);
+    } else if (!isChromium) {
+      flagBtn.style.display = "none";
+      flagSub.textContent = "Chrome only";
+    } else {
+      flagBtn.addEventListener("click", () => {
+        chrome.tabs.create({ url: "chrome://flags/#enable-experimental-web-platform-features" });
+      });
+    }
+  }
+})();
+
 // ─── Forward keyboard ─────────────────────────────────────
 document.addEventListener("keydown", (e) => {
   if (e.target.tagName === "INPUT" || e.target.tagName === "TEXTAREA" || e.target.isContentEditable) return;
+  // Escape leaves the picker when there is a video behind it — checked before
+  // the player sees the key, which would otherwise take it as "exit
+  // fullscreen" and leave the picker up.
+  if (e.code === "Escape" && !overlay.classList.contains("hidden") && hasMedia) {
+    hidePicker();
+    e.preventDefault();
+    return;
+  }
   if (!playerEl || !playerEl.shadowRoot) return;
   if (document.activeElement === playerEl || playerEl.contains(e.target)) return;
 

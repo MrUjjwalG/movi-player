@@ -580,6 +580,33 @@
       color: var(--text-primary);
     }
     .file-overlay.hidden { display: none; }
+
+    /* Close button — only when there is something to go back TO. Without it
+       the title bar's back arrow would be a one-way door: the picker covers
+       the whole viewport and nothing else dismisses it. */
+    .overlay-close {
+      position: absolute;
+      top: 18px;
+      right: 20px;
+      width: 38px;
+      height: 38px;
+      display: none;
+      align-items: center;
+      justify-content: center;
+      border-radius: 50%;
+      background: rgba(255, 255, 255, 0.04);
+      border: 1px solid var(--border-subtle);
+      color: var(--text-secondary);
+      cursor: pointer;
+      transition: all 0.15s;
+    }
+    .file-overlay.dismissible .overlay-close { display: flex; }
+    .overlay-close:hover {
+      background: rgba(255, 255, 255, 0.08);
+      border-color: var(--accent);
+      color: var(--text-primary);
+    }
+    .overlay-close svg { width: 17px; height: 17px; }
     .drop-zone {
       display: flex;
       flex-direction: column;
@@ -700,6 +727,172 @@
       background: var(--accent);
       opacity: 0.7;
     }
+    /* ─── Link row, tip and settings (moved off the old popup) ─── */
+    .drop-link {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      width: min(520px, 88vw);
+      padding: 5px 5px 5px 16px;
+      background: rgba(255, 255, 255, 0.03);
+      border: 1px solid var(--border-subtle);
+      border-radius: 999px;
+      transition: border-color 0.18s, background 0.18s;
+    }
+    .drop-link:focus-within {
+      border-color: var(--accent);
+      background: rgba(255, 255, 255, 0.05);
+    }
+    .drop-link input {
+      flex: 1;
+      min-width: 0;
+      background: none;
+      border: none;
+      outline: none;
+      color: var(--text-primary);
+      font-family: inherit;
+      font-size: 13px;
+      padding: 8px 0;
+    }
+    .drop-link input::placeholder { color: var(--text-muted); }
+    .drop-link .link-paste {
+      background: none;
+      border: none;
+      color: var(--text-muted);
+      cursor: pointer;
+      padding: 6px;
+      border-radius: 8px;
+      display: inline-flex;
+      transition: color 0.15s, background 0.15s;
+    }
+    .drop-link .link-paste:hover { color: var(--text-primary); background: rgba(255,255,255,0.06); }
+    .drop-link .link-paste svg { width: 15px; height: 15px; }
+    .drop-link .link-go {
+      background: var(--accent);
+      color: #fff;
+      border: none;
+      border-radius: 999px;
+      padding: 9px 20px;
+      font-family: inherit;
+      font-size: 12.5px;
+      font-weight: 600;
+      cursor: pointer;
+      transition: background 0.15s;
+    }
+    .drop-link .link-go:hover { background: #7C3AED; }
+
+    .drop-or {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      width: min(520px, 88vw);
+      font-size: 11px;
+      color: var(--text-muted);
+    }
+    .drop-or::before,
+    .drop-or::after {
+      content: "";
+      flex: 1;
+      height: 1px;
+      background: var(--border-subtle);
+    }
+
+    .drop-tip {
+      display: flex;
+      align-items: flex-start;
+      gap: 8px;
+      width: min(520px, 88vw);
+      padding: 10px 13px;
+      background: rgba(139, 92, 246, 0.05);
+      border: 1px solid rgba(139, 92, 246, 0.15);
+      border-radius: 10px;
+      font-size: 11.5px;
+      color: var(--text-muted);
+      line-height: 1.5;
+    }
+    .drop-tip svg { width: 13px; height: 13px; color: var(--accent); flex-shrink: 0; margin-top: 1px; }
+    .drop-tip b { color: var(--text-secondary); font-weight: 600; }
+
+    .drop-settings {
+      width: min(520px, 88vw);
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+    }
+    .setting {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      padding: 12px 14px;
+      background: rgba(255, 255, 255, 0.02);
+      border: 1px solid var(--border-subtle);
+      border-radius: 12px;
+      transition: border-color 0.18s;
+      text-align: left;
+    }
+    .setting:hover { border-color: rgba(139, 92, 246, 0.4); }
+    .setting-text { flex: 1; min-width: 0; }
+    .setting-label { font-size: 12.5px; font-weight: 600; letter-spacing: -0.1px; }
+    .setting-sub { font-size: 10.5px; color: var(--text-muted); margin-top: 2px; line-height: 1.4; }
+
+    .switch { position: relative; width: 34px; height: 20px; flex-shrink: 0; }
+    .switch input { opacity: 0; width: 0; height: 0; }
+    .switch .slider {
+      position: absolute;
+      inset: 0;
+      background: #2a2a3a;
+      border-radius: 20px;
+      cursor: pointer;
+      transition: background 0.18s;
+    }
+    .switch .slider::before {
+      content: "";
+      position: absolute;
+      width: 14px;
+      height: 14px;
+      left: 3px;
+      top: 3px;
+      background: #fff;
+      border-radius: 50%;
+      transition: transform 0.18s;
+    }
+    .switch input:checked + .slider { background: var(--accent); }
+    .switch input:checked + .slider::before { transform: translateX(14px); }
+    .switch input:focus-visible + .slider { outline: 2px solid var(--accent); outline-offset: 2px; }
+
+    .setting-btn {
+      background: rgba(139, 92, 246, 0.12);
+      color: var(--accent);
+      border: 1px solid rgba(139, 92, 246, 0.3);
+      border-radius: 8px;
+      padding: 6px 12px;
+      font-size: 11px;
+      font-weight: 600;
+      cursor: pointer;
+      font-family: inherit;
+      transition: all 0.15s;
+      flex-shrink: 0;
+    }
+    .setting-btn:hover { background: rgba(139, 92, 246, 0.2); border-color: var(--accent); }
+    .setting-badge {
+      width: 24px;
+      height: 24px;
+      border-radius: 50%;
+      background: rgba(16, 185, 129, 0.15);
+      color: #10b981;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 12px;
+      font-weight: 700;
+      flex-shrink: 0;
+    }
+
+    /* The hero now carries the link row, the tip and two settings on top of
+       the brand and the pickers. On a short window that is more than fits, so
+       it scrolls rather than clipping. */
+    .drop-zone { gap: 22px; overflow-y: auto; padding: 84px 20px 72px; }
+
     .promo-links {
       position: absolute;
       bottom: 20px;
@@ -795,12 +988,19 @@
 <body>
   <div class="player-shell" id="playerShell">
     <div class="player-main">
+      <!-- back-windowed: the arrow everywhere except fullscreen, where the
+           picture is the whole point and the picker is not where anyone is
+           heading — but the title itself stays. (The placement token
+           "windowed" would have taken the title with it.) The element only
+           fires a `back` event; what it means is the host's call, and here it
+           means "show the picker again" — see player.js. -->
       <movi-player
         id="player"
         controls
         thumb
         fastseek
         showtitle
+        titlemode="back-windowed"
         ambientmode
         resume
       ></movi-player>
@@ -884,6 +1084,11 @@
   </div>
 
   <div class="file-overlay hidden" id="fileOverlay">
+    <button type="button" class="overlay-close" id="overlayClose" title="Back to the video" aria-label="Back to the video">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
+        <line x1="6" y1="6" x2="18" y2="18"/><line x1="6" y1="18" x2="18" y2="6"/>
+      </svg>
+    </button>
     <div class="promo-links">
       <a href="https://github.com/MrUjjwalG/movi-player" target="_blank">
         <svg viewBox="0 0 24 24" fill="currentColor"><path d="M12 .3a12 12 0 00-3.8 23.4c.6.1.8-.3.8-.6v-2c-3.3.7-4-1.6-4-1.6-.6-1.4-1.4-1.8-1.4-1.8-1-.7.1-.7.1-.7 1.2.1 1.8 1.2 1.8 1.2 1 1.8 2.8 1.3 3.5 1 .1-.8.4-1.3.7-1.6-2.7-.3-5.5-1.3-5.5-6 0-1.2.5-2.3 1.3-3.1-.2-.4-.6-1.6.1-3.2 0 0 1-.3 3.4 1.2a11.5 11.5 0 016 0c2.3-1.5 3.3-1.2 3.3-1.2.7 1.6.3 2.8.2 3.2.7.8 1.2 1.9 1.2 3.1 0 4.6-2.8 5.6-5.5 5.9.5.4.9 1.2.9 2.4v3.5c0 .3.2.7.8.6A12 12 0 0012 .3"/></svg>
@@ -924,8 +1129,51 @@
           <input type="file" id="folderPicker" webkitdirectory multiple style="display:none">
         </label>
       </div>
+      <div class="drop-or"><span>or paste a link</span></div>
+
+      <!-- The popup's "Paste Link" tile read the clipboard and failed with a
+           two-second red hint when permission was denied. A real field works
+           either way; the clipboard button is a shortcut, not the only door. -->
+      <form class="drop-link" id="linkForm">
+        <input type="url" id="linkInput" placeholder="https://…  paste any video link" aria-label="Video link" autocomplete="off" spellcheck="false">
+        <button type="button" class="link-paste" id="linkPaste" title="Paste from clipboard" aria-label="Paste from clipboard">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <rect x="8" y="2" width="8" height="4" rx="1"/><path d="M16 4h2a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h2"/>
+          </svg>
+        </button>
+        <button type="submit" class="link-go">Play</button>
+      </form>
+
       <div class="drop-formats">
         <span>100% Local</span><span>HDR &amp; 4K</span><span>HEVC · AV1</span><span>MKV · TS</span>
+      </div>
+
+      <div class="drop-tip">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+          <circle cx="12" cy="12" r="10"/><path d="M12 16v-4M12 8h.01"/>
+        </svg>
+        <span>Right-click any video link on the web and choose <b>Open with Movi Player</b></span>
+      </div>
+
+      <div class="drop-settings">
+        <div class="setting">
+          <div class="setting-text">
+            <div class="setting-label">Detect download links</div>
+            <div class="setting-sub" id="probe-sub">Scan CDN / no-extension links for video</div>
+          </div>
+          <label class="switch">
+            <input type="checkbox" id="probe-toggle" aria-label="Detect download links">
+            <span class="slider"></span>
+          </label>
+        </div>
+
+        <div class="setting">
+          <div class="setting-text">
+            <div class="setting-label">Experimental features</div>
+            <div class="setting-sub" id="flags-sub">Better codec &amp; HDR support in Chrome</div>
+          </div>
+          <button type="button" class="setting-btn" id="open-flags">Enable</button>
+        </div>
       </div>
     </div>
     <div class="cache-info" id="cacheInfo">

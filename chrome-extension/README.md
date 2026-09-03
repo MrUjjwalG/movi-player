@@ -5,13 +5,18 @@ Play any video URL with Movi Player directly in Chrome.
 This folder is also the **source of truth for the Firefox add-on** — everything
 except `manifest.json` is copied into [`../firefox-extension/`](../firefox-extension/)
 by its `build.sh`. Keep changes here browser-agnostic (no bare `window.chrome`
-checks, no unconditional `chrome://` links); see `popup.js` for the pattern.
+checks, no unconditional `chrome://` links); see the settings block at the
+bottom of `player.js` for the pattern.
 
 ## Features
 
 - **Play button overlay** on video links detected on any page
 - **Right-click context menu** → "Open with Movi Player" on any link
-- **Popup** to paste and play any video URL
+- **Toolbar icon** opens the player page — pick files, paste a link, and the
+  two settings all live there (there is no popup)
+- **Back arrow in the title bar** returns to that picker without losing what is
+  playing — close it or press Escape to go back to the video. Not shown in
+  fullscreen (`titlemode="back-windowed"`), where the title still is
 - Supports: MP4, MKV, WebM, MOV, TS, AVI, HLS (`.m3u8`), MPEG-DASH (`.mpd`), HEVC, AV1, HDR
 
 ## Setup

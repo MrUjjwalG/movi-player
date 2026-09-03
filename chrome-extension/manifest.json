@@ -34,11 +34,11 @@
   ],
   "web_accessible_resources": [
     {
-      "resources": ["player.html", "player.js", "popup.js", "dist/*"],
+      "resources": ["player.html", "player.js", "dist/*"],
       "matches": ["<all_urls>", "file:///*"]
     }
   ],
   "action": {
-    "default_popup": "popup.html"
+    "default_title": "Open Movi Player"
   }
 }

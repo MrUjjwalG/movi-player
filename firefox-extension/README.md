@@ -28,7 +28,7 @@ this README are the only tracked files here.
 
 ## Why only manifest.json differs
 
-The popup, content script, player page, icons and player bundle are byte-for-byte
+The content script, player page, icons and player bundle are byte-for-byte
 the Chrome extension's, so there is one copy of the UI to maintain. The manifest
 is the only Gecko-specific file:
 
@@ -72,7 +72,7 @@ isn't JS. Same element, same API — the bundle reaches the engine through
 ## Permissions
 
 Host access is optional. Firefox MV3 treats host permissions as opt-in, so the
-"Scan CDN / no-extension links for video" toggle in the popup requests
+"Scan CDN / no-extension links for video" toggle on the player page requests
 `<all_urls>` on demand — everything else works without it.
 
 File (`file:///*`) access is granted from **about:addons → Movi Player →

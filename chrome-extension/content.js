@@ -86,7 +86,8 @@ let activeProbes = 0;
 const MAX_CONCURRENT_PROBES = 4;
 
 // Gated by an opt-in setting. Default off — the feature requires the
-// `<all_urls>` host permission, which the user grants from the popup toggle.
+// `<all_urls>` host permission, which the user grants from the toggle on the
+// player page.
 // Probing is hover-triggered, so nothing extra to do on enable/disable
 // beyond keeping this flag fresh.
 let probeEnabled = false;
