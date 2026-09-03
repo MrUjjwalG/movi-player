@@ -50,6 +50,7 @@ The `<movi-player>` custom element is a drop-in replacement for the native `<vid
 | `fastseek`    | `boolean`           | -                                  | Enable skip buttons and gestures                  |
 | `showtitle`   | `boolean`           | -                                  | Show video title bar                              |
 | `titlemode`   | `string`            | `both`                             | Where the title bar shows — `both`, `fullscreen`, `windowed`; add `back` for a back arrow that fires a `back` event (scope it with `back-mobile`, `back-fullscreen`, `back-windowed`, `back-mobile-fullscreen`) |
+| `subtitlepicker` | `boolean` | `false` | Adds an "Add subtitle file…" row to the subtitle menu for picking a local SRT/VTT/TTML. Read in the page, never uploaded |
 | `chapters`    | `string`            | -                                  | Chapters from outside the media, as JSON `[{title, start}]` (or set the `chapters` property) |
 | `resume`      | `boolean`           | -                                  | Resume from last position                         |
 | `stablevolume`| `boolean`           | -                                  | Loudness normalization                            |

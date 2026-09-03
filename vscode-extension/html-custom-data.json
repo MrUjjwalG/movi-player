@@ -732,6 +732,19 @@
           ]
         },
         {
+          "name": "subtitlepicker",
+          "description": {
+            "kind": "markdown",
+            "value": "Adds an \"Add subtitle file…\" row to the subtitle menu for picking a local SRT/VTT/TTML. Read in the page, never uploaded"
+          },
+          "references": [
+            {
+              "name": "Documentation",
+              "url": "https://moviplayer.com/docs/api/element#subtitlepicker"
+            }
+          ]
+        },
+        {
           "name": "chapters",
           "description": {
             "kind": "markdown",

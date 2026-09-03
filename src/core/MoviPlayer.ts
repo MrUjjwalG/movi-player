@@ -11778,6 +11778,26 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
   /**
    * Get available external subtitle tracks
    */
+  /**
+   * Add an external subtitle track after the source has loaded.
+   *
+   * The config path (`config.subtitleTracks`) is read once, when the source is
+   * opened — everything that arrives later, a file the viewer picked among it,
+   * had no way in short of reloading the video. Nothing else needs to change:
+   * selectSubtitleLang() already fetches the URL on demand, so a `blob:` from
+   * a picked File loads exactly like a hosted `.srt` does.
+   *
+   * `lang` is the key the menu and selectSubtitleLang() address a track by, so
+   * an entry with an existing lang replaces it rather than adding a duplicate
+   * the viewer cannot tell apart.
+   */
+  addSubtitleTrack(entry: SubtitleSourceEntry): void {
+    const at = this._subtitleTracks.findIndex((t) => t.lang === entry.lang);
+    if (at >= 0) this._subtitleTracks[at] = entry;
+    else this._subtitleTracks.push(entry);
+    Logger.info(TAG, `External subtitle added: ${entry.label} (${entry.lang})`);
+  }
+
   getSubtitleLangs(): { lang: string; label: string; active: boolean }[] {
     return this._subtitleTracks.map((t) => ({
       lang: t.lang,

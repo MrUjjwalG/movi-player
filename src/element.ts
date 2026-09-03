@@ -192,6 +192,9 @@ export interface MoviPlayerAttributes {
    *  `both` (default) / `fullscreen` / `windowed`, and `back` — scoped with
    *  `back-mobile`, `back-fullscreen` or `back-mobile-fullscreen`. */
   titlemode?: string;
+  /** Offer "Add subtitle file…" in the subtitle menu (SRT/VTT/TTML, read
+   *  locally — the file never leaves the page). */
+  subtitlepicker?: boolean | "";
   /** Chapters from outside the media file, as a JSON array of
    *  `{ title, start, end?, image? }` (seconds). `image` is a URL the timeline
    *  tile shows instead of decoding a frame at `start`. Use the `chapters`

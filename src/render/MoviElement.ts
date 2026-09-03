@@ -1208,6 +1208,10 @@ export class MoviElement extends HTMLElement {
   private _bufferSize: number = 0; // Custom buffer size in seconds
   private _title: string | null = null; // Video title to display
   private _showTitle: boolean = false; // Show title at top if true
+  /** `subtitlepicker` — offer "Add subtitle file…" in the subtitle menu. */
+  private _subtitlePicker: boolean = false;
+  /** Object URLs minted for picked subtitle files, revoked on teardown. */
+  private _pickedSubtitleUrls: string[] = [];
   /** Where the title bar is allowed to appear — see `applyTitleMode`. */
   private _titleMode: "both" | "fullscreen" | "windowed" = "both";
   /** Whether the title bar carries a back arrow (`titlemode` "back" token). */
@@ -1507,6 +1511,7 @@ export class MoviElement extends HTMLElement {
       "title",
       "showtitle",
       "titlemode",
+      "subtitlepicker",
       "chapters",
       "resume",
       "stablevolume",
@@ -12536,8 +12541,10 @@ export class MoviElement extends HTMLElement {
     const externalSubs = this.player.getSubtitleLangs();
     const hasExternalSubs = externalSubs.length > 0;
 
-    // Hide container if no subtitle tracks (muxed or external)
-    if (subtitleTracks.length === 0 && !hasExternalSubs) {
+    // Hide container if no subtitle tracks (muxed or external). Not when the
+    // picker is on: a file the viewer is about to add is exactly the case
+    // where the menu is empty, and hiding the button hides the way to add it.
+    if (subtitleTracks.length === 0 && !hasExternalSubs && !this._subtitlePicker) {
       subtitleTrackContainer.style.display = "none";
       return;
     }
@@ -12659,6 +12666,18 @@ export class MoviElement extends HTMLElement {
       `)
       .join("");
 
+    // "Add subtitle file…" — last, under the tracks it will join.
+    if (this._subtitlePicker) {
+      menuHTML += `
+        <div class="movi-subtitle-track-item movi-subtitle-pick-item" data-subtitle-pick="1">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" width="16" height="16">
+            <path d="M12 5v14M5 12h14"/>
+          </svg>
+          <span class="movi-subtitle-track-label">Add subtitle file…</span>
+        </div>
+      `;
+    }
+
     subtitleTrackList.innerHTML = menuHTML;
     this.flashSubtitleListFade(subtitleTrackList);
 
@@ -12669,9 +12688,11 @@ export class MoviElement extends HTMLElement {
     if (subtitleFooter) {
       const count = subtitleTracks.length + externalSubs.length;
       subtitleFooter.textContent =
-        count === 1
-          ? "1 subtitle track available"
-          : `${count} subtitle tracks available`;
+        count === 0
+          ? "SRT, VTT or TTML"
+          : count === 1
+            ? "1 subtitle track available"
+            : `${count} subtitle tracks available`;
     }
 
     // Add click handlers
@@ -12680,6 +12701,12 @@ export class MoviElement extends HTMLElement {
       .forEach((item) => {
         item.addEventListener("click", (e) => {
           e.stopPropagation();
+          // The picker row shares the item class for its styling but is not a
+          // track — it opens the file dialog and nothing else.
+          if ((item as HTMLElement).dataset.subtitlePick) {
+            this.openSubtitleFilePicker();
+            return;
+          }
           const trackIdStr = (item as HTMLElement).dataset.trackId;
           const subtitleLang = (item as HTMLElement).dataset.subtitleLang;
 
@@ -18041,6 +18068,27 @@ export class MoviElement extends HTMLElement {
 
       .movi-subtitle-track-header > span {
         flex: 1;
+      }
+
+      /* "Add subtitle file…" — an action sitting under the tracks, so it takes
+         the accent and a rule above it rather than reading as one more track
+         you could select. */
+      .movi-subtitle-pick-item {
+        /* --movi-primary, not --movi-accent: primary is the brand colour the
+           themecolor attribute cascades into, so a host that themes the
+           player themes this row with it. */
+        color: var(--movi-primary);
+        border-top: 1px solid rgba(255, 255, 255, 0.08);
+        margin-top: 4px;
+        padding-top: 10px;
+      }
+      .movi-subtitle-pick-item .movi-subtitle-track-label {
+        color: inherit;
+        font-weight: 600;
+      }
+      .movi-subtitle-pick-item svg {
+        flex: 0 0 auto;
+        opacity: 0.9;
       }
 
       .movi-subtitle-customize-btn,
@@ -24665,6 +24713,10 @@ export class MoviElement extends HTMLElement {
       case "titlemode":
         this.applyTitleMode(newValue);
         break;
+      case "subtitlepicker":
+        this._subtitlePicker = newValue !== null;
+        this.updateSubtitleTrackMenu();
+        break;
       case "chapters":
         this.applyChapters(newValue);
         break;
@@ -28507,6 +28559,12 @@ export class MoviElement extends HTMLElement {
       this.classList.remove("movi-native-video");
       this.syncMenuPortalAudioClasses();
     }
+
+    // Subtitle files the viewer picked belong to the video that was playing;
+    // the next source gets its own. Revoking here rather than on select keeps
+    // them re-selectable for as long as that video is up.
+    for (const url of this._pickedSubtitleUrls) URL.revokeObjectURL(url);
+    this._pickedSubtitleUrls = [];
 
     // Revoke any postertime-generated poster URL and hide the overlay so
     // the next source doesn't briefly flash the old frame.
@@ -38018,6 +38076,64 @@ export class MoviElement extends HTMLElement {
     if (this._titleMode === "both") return true;
     const away = this.isFullscreenActive() || !!this._pipWindow;
     return this._titleMode === "fullscreen" ? away : !away;
+  }
+
+  /**
+   * Open the file dialog behind `subtitlepicker`, and load whatever comes back.
+   *
+   * The input is minted per use rather than kept in the shadow tree: a file
+   * input that has already been used keeps its value, and re-picking the same
+   * file then fires no `change` at all.
+   */
+  private openSubtitleFilePicker(): void {
+    const input = document.createElement("input");
+    input.type = "file";
+    // The external-subtitle path parses VTT, SRT and TTML. ASS/SSA is not on
+    // that list — it is only understood inside a container, where the muxed
+    // path handles it — so it is not offered here rather than accepted and
+    // failing after the pick.
+    input.accept = ".srt,.vtt,.ttml,.dfxp,text/vtt,application/x-subrip";
+    input.style.display = "none";
+    input.addEventListener("change", () => {
+      const file = input.files?.[0];
+      input.remove();
+      if (file) void this.addSubtitleFile(file);
+    });
+    this.shadowRoot?.appendChild(input);
+    input.click();
+  }
+
+  /**
+   * Add a subtitle file to the track list and show it.
+   *
+   * Public because the picker is one way in and not always the right one — a
+   * host with its own "add subtitles" button, or one that drops a file on the
+   * player, wants the same path without the element's dialog.
+   *
+   * The file never leaves the page: it becomes a `blob:` URL, which the core
+   * fetches exactly as it would a hosted file.
+   */
+  async addSubtitleFile(file: File | Blob, label?: string): Promise<boolean> {
+    if (!this.player) return false;
+    const name =
+      label ||
+      (file instanceof File ? file.name.replace(/\.[^.]+$/, "") : "Subtitle");
+    const ext = (file instanceof File ? file.name : "").toLowerCase();
+    const format: "vtt" | "srt" | "ttml" = /\.srt$/.test(ext)
+      ? "srt"
+      : /\.(ttml|dfxp)$/.test(ext)
+        ? "ttml"
+        : "vtt";
+    const url = URL.createObjectURL(file);
+    this._pickedSubtitleUrls.push(url);
+    // The lang doubles as the menu's key, so it has to be unique per add —
+    // two files named the same would otherwise replace each other.
+    const lang = `file-${this._pickedSubtitleUrls.length}`;
+    this.player.addSubtitleTrack({ url, lang, label: name, format });
+    this.updateSubtitleTrackMenu();
+    const ok = await this.player.selectSubtitleLang(lang);
+    this.updateSubtitleTrackMenu();
+    return ok;
   }
 
   private handleBackClick(): void {

@@ -219,6 +219,10 @@
               "description": "Decides where the title bar is allowed to appear, and whether it carries a back arrow. Space- or comma-separated tokens, in any order:"
             },
             {
+              "name": "subtitlepicker",
+              "description": "Adds an \"Add subtitle file…\" row to the subtitle menu for picking a local SRT/VTT/TTML. Read in the page, never uploaded"
+            },
+            {
               "name": "chapters",
               "description": "Chapters that aren't in the media file. The player already reads chapter atoms out of MKV/MP4 containers; this is for the sources that keep them somewhere else — YouTube in the watch page, a CMS in its own database. Each entry is `{title, start, end?, image?}`, where `image` is artwork the timeline tile shows in place of a frame decoded at `start`."
             },
