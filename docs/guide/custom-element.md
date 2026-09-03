@@ -49,7 +49,7 @@ The `<movi-player>` custom element is a drop-in replacement for the native `<vid
 | `thumb`       | `boolean`, `string` | -                                  | Seek preview thumbnails; `thumb="precise"` decodes to the hovered frame instead of the keyframe before it |
 | `fastseek`    | `boolean`           | -                                  | Enable skip buttons and gestures                  |
 | `showtitle`   | `boolean`           | -                                  | Show video title bar                              |
-| `titlemode`   | `string`            | `both`                             | Where the title bar shows — `both`, `fullscreen`, `windowed`; add `back` for a back arrow that fires a `back` event (scope it with `back-mobile`, `back-fullscreen`, `back-mobile-fullscreen`) |
+| `titlemode`   | `string`            | `both`                             | Where the title bar shows — `both`, `fullscreen`, `windowed`; add `back` for a back arrow that fires a `back` event (scope it with `back-mobile`, `back-fullscreen`, `back-windowed`, `back-mobile-fullscreen`) |
 | `chapters`    | `string`            | -                                  | Chapters from outside the media, as JSON `[{title, start}]` (or set the `chapters` property) |
 | `resume`      | `boolean`           | -                                  | Resume from last position                         |
 | `stablevolume`| `boolean`           | -                                  | Loudness normalization                            |

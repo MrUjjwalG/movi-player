@@ -1216,6 +1216,8 @@ export class MoviElement extends HTMLElement {
   private _titleBackMobileOnly: boolean = false;
   /** Back arrow restricted to fullscreen (`titlemode` "back-fullscreen"). */
   private _titleBackFullscreenOnly: boolean = false;
+  /** Back arrow dropped in fullscreen (`titlemode` "back-windowed"). */
+  private _titleBackWindowedOnly: boolean = false;
   private _resume: boolean = false; // Resume playback from last position (opt-in)
   /** Crop the black bars that are baked into the picture — see `cropbars`. */
   private _cropBars = false;
@@ -37273,12 +37275,18 @@ export class MoviElement extends HTMLElement {
    *
    *   titlemode="back-mobile"              arrow on phones
    *   titlemode="back-fullscreen"          arrow only while fullscreen
+   *   titlemode="back-windowed"            arrow everywhere BUT fullscreen
    *   titlemode="back-mobile-fullscreen"   arrow only when a phone is fullscreen
    *
+   * `back-windowed` is not the same as the placement token `windowed`: that
+   * one gates the whole bar, taking the title out of fullscreen with the
+   * arrow. This scopes the arrow alone.
+   *
    * `mobile` means touch input or a phone-width container, and is decided in
-   * CSS so a desktop window narrowed to phone width counts. `fullscreen` is
-   * decided here, since the pseudo and host-driven fullscreen routes aren't
-   * visible to a media query.
+   * CSS so a desktop window narrowed to phone width counts. `fullscreen` and
+   * its mirror `windowed` (aliases `inline`, `normal`) are decided here, since
+   * the pseudo and host-driven fullscreen routes aren't visible to a media
+   * query.
    */
   // ——— The queue ———————————————————————————————————————————————————————
   //
@@ -37956,12 +37964,24 @@ export class MoviElement extends HTMLElement {
       .filter(Boolean);
     // Anything of the shape back[-mobile][-fullscreen], in any order, with
     // ":" accepted in place of "-" — both read naturally as a scope.
-    const backToken = tokens.find((t) => /^back([-:](mobile|fullscreen|fs))*$/.test(t));
+    const backToken = tokens.find((t) =>
+      /^back([-:](mobile|fullscreen|fs|windowed|inline|normal))*$/.test(t),
+    );
     this._titleBack = !!backToken;
     this._titleBackMobileOnly = !!backToken?.includes("mobile");
     this._titleBackFullscreenOnly = !!(
       backToken &&
       (backToken.includes("fullscreen") || /[-:]fs$/.test(backToken))
+    );
+    // The mirror of `fullscreen`, and the reason it has to exist: the bar's
+    // own `windowed` placement would take the title out of fullscreen along
+    // with the arrow. This scopes the arrow alone, so "name in fullscreen, no
+    // arrow there" is one attribute. Same three words the placement takes.
+    this._titleBackWindowedOnly = !!(
+      backToken &&
+      (backToken.includes("windowed") ||
+        backToken.includes("inline") ||
+        backToken.includes("normal"))
     );
     if (tokens.includes("fullscreen") || tokens.includes("fs")) {
       this._titleMode = "fullscreen";
@@ -38174,7 +38194,8 @@ export class MoviElement extends HTMLElement {
     // CSS — :fullscreen wouldn't catch the iOS pseudo or host-driven routes.
     const backHere =
       this._titleBack &&
-      (!this._titleBackFullscreenOnly || this.isFullscreenActive());
+      (!this._titleBackFullscreenOnly || this.isFullscreenActive()) &&
+      (!this._titleBackWindowedOnly || !this.isFullscreenActive());
     titleBar.classList.toggle("movi-title-with-back", backHere);
     titleBar.classList.toggle(
       "movi-title-back-mobile",
