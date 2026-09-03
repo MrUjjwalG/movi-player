@@ -38,6 +38,17 @@
       "matches": ["<all_urls>", "file:///*"]
     }
   ],
+  "file_handlers": [
+    {
+      "action": "/player.html",
+      "name": "Video or audio",
+      "accept": {
+        "video/*": [".mp4", ".m4v", ".mkv", ".webm", ".mov", ".avi", ".flv", ".wmv", ".ts", ".m2ts", ".mts", ".evo", ".mpg", ".mpeg", ".3gp", ".ogv"],
+        "audio/*": [".mp3", ".m4a", ".m4b", ".aac", ".flac", ".wav", ".ogg", ".oga", ".opus", ".mka", ".ac3", ".ec3", ".eac3", ".dts"]
+      },
+      "launch_type": "single-client"
+    }
+  ],
   "action": {
     "default_title": "Open Movi Player"
   }

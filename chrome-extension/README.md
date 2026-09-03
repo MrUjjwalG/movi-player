@@ -10,6 +10,13 @@ bottom of `player.js` for the pattern.
 
 ## Features
 
+- **ChromeOS Files app** — the extension registers as a file handler, so
+  double-clicking a video in Files opens it here (multi-select becomes a
+  playlist). ChromeOS + Chrome 120 or newer; everywhere else the code is inert
+- **Next / Previous in the player** — a folder or multi-select is handed to the
+  element's own queue, so the bar gets skip buttons, Shift+N / Shift+P work, and
+  the OS media keys and lock screen carry the skip pair. The items are src-less:
+  the element owns the controls, this page still does the loading
 - **Play button overlay** on video links detected on any page
 - **Right-click context menu** → "Open with Movi Player" on any link
 - **Toolbar icon** opens the player page — pick files, paste a link, and the

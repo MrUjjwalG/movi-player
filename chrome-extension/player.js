@@ -370,6 +370,9 @@ let thumbWasmPromise = null;
 
 function loadFile(file) {
   hasMedia = true;
+  // Opening one file leaves the queue behind; without this the bar keeps a
+  // Next button pointing into a playlist that is no longer on screen.
+  if (!playlist.length) { try { playerEl.playlist = []; } catch {} }
   overlay.classList.add("hidden");
   document.title = file.name + " — Movi Player";
   if (playerEl.setFile) playerEl.setFile(file);
@@ -505,6 +508,40 @@ playlistPanel.addEventListener("keydown", (e) => {
   }
 });
 
+// ─── The player's own queue ───────────────────────────────
+// The element has a queue of its own, and a queue of src-less items is one it
+// never loads: it owns only the control surface — the Next/Previous buttons in
+// the bar, Shift+N / Shift+P, and the skip pair on the lock screen and the
+// system media keys — and announces every move as a cancelable `itemchange`.
+//
+// That is exactly what this page needs. Its items are local Files, and
+// playPlaylistItem() does more than write a src (poster, autoplay rules,
+// thumbnail metadata, progress), so the loading stays here. Handing over the
+// list buys the buttons and the OS controls without moving any of that.
+function syncPlayerQueue() {
+  try {
+    playerEl.playlist = playlist.map((f, i) => ({ id: String(i), title: f.name }));
+    playerEl.playlistIndex = playlistIndex;
+  } catch {
+    // An older bundled element without the queue — the panel still works.
+  }
+}
+
+playerEl.addEventListener("itemchange", (e) => {
+  // Nothing is written by the element; this page loads the item.
+  e.preventDefault();
+  const { index, previousIndex } = e.detail || {};
+  if (typeof index !== "number") return;
+  // Forward moves follow the shuffle run when it is on, so the bar's Next and
+  // the panel's Next never disagree. Backward is linear either way — the panel
+  // has no Previous of its own to match.
+  const forward = typeof previousIndex === "number" && index > previousIndex;
+  const target = forward && shuffleEnabled ? getNextIndex() : index;
+  if (target >= 0 && target < playlist.length) {
+    playPlaylistItem(target, { forcePlay: true });
+  }
+});
+
 function setPlaylist(files, { rootName } = {}) {
   const videos = files.filter(isVideoFile);
   if (!videos.length) return;
@@ -526,6 +563,7 @@ function setPlaylist(files, { rootName } = {}) {
     applySearchFilter();
   }
   if (shuffleEnabled) rebuildShuffleOrder();
+  syncPlayerQueue();
   playPlaylistItem(0);
 }
 
@@ -546,6 +584,7 @@ function appendToPlaylist(files) {
   }
   renderPlaylist();
   if (shuffleEnabled) rebuildShuffleOrder();
+  syncPlayerQueue();
   if (wasEmpty) playPlaylistItem(0);
 }
 
@@ -609,6 +648,12 @@ function playPlaylistItem(i, { forcePlay = false } = {}) {
   playerEl.setAttribute("postertime", "10%");
   if (playerEl.setFile) playerEl.setFile(file);
   else playerEl.src = file;
+  // AFTER the source, not before. The items handed to the element are src-less,
+  // so a source it did not write itself is one from outside the queue and it
+  // resets the index to -1 — which is exactly right, and exactly what would
+  // undo this write if it came first. Writing the index says where the queue
+  // IS without announcing a move, so it cannot bounce back as an itemchange.
+  try { playerEl.playlistIndex = i; } catch {}
   if (autoplayEnabled || forcePlay) playerEl.play?.().catch(() => {});
   updateActiveItem(i);
 }
@@ -1086,6 +1131,42 @@ async function pickFolder({ append = false } = {}) {
   }
   folderPicker.dataset.append = append ? "1" : "";
   folderPicker.click();
+}
+
+// ─── ChromeOS Files app ───────────────────────────────────
+// Registered as a file handler in the manifest, so double-clicking a video in
+// the ChromeOS Files app opens it here. The files arrive through the Launch
+// Handler API rather than a picker: FileSystemFileHandles, which have to be
+// resolved to Files before the player can take them.
+//
+// The consumer is set synchronously, at module evaluation. A launch that
+// arrives before one is registered is queued, but only until the page decides
+// it is not interested — registering after an await risks dropping it.
+//
+// Feature-detected because this page also ships to Firefox, and to Chrome off
+// ChromeOS, where launchQueue does not exist.
+if (
+  "launchQueue" in window &&
+  typeof LaunchParams !== "undefined" &&
+  "files" in LaunchParams.prototype
+) {
+  window.launchQueue.setConsumer(async (params) => {
+    if (!params.files?.length) return;
+    const files = [];
+    for (const handle of params.files) {
+      try {
+        files.push(await handle.getFile());
+      } catch {
+        // A handle whose permission has lapsed or whose file has moved —
+        // skip it rather than failing the whole launch.
+      }
+    }
+    if (!files.length) return;
+    // Files-app multi-select becomes a playlist, the way picking several in
+    // the page's own dialog already does.
+    if (files.length === 1) loadFile(files[0]);
+    else setPlaylist(files);
+  });
 }
 
 // ─── Back to the picker ───────────────────────────────────
