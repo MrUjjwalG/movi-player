@@ -4538,6 +4538,17 @@
     </section>
 
     <!-- ===== FOOTER ===== -->
+    <!-- Floating "back to the player": revealed by the observer above once
+         the picture scrolls out of view. -->
+    <button type="button" class="to-player" id="to-player" aria-label="Back to the player">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+        <rect x="2" y="4" width="20" height="14" rx="2"></rect>
+        <polygon points="10 8.5 15 11 10 13.5" fill="currentColor" stroke="none"></polygon>
+        <line x1="8" y1="21" x2="16" y2="21"></line>
+      </svg>
+      <span>Back to player</span>
+    </button>
+
     <!-- ===== FOOTER (identical on every page — see app/shared.css) ===== -->
     <footer class="site-footer">
       <div class="site-footer-inner">
@@ -4653,6 +4664,46 @@
       });
 
       applyTheme(currentMode);
+
+      // --- Back to the player ---------------------------------------------
+      // One definition of "scroll the picture into view", used by the button
+      // below and by the module (window.moviScrollToPlayer).
+      //
+      // Measure the player itself, not .player-section: the section carries
+      // 100px of block padding (pulled back out with a negative margin) so the
+      // ambient halo has somewhere to live inside its clip, and measuring that
+      // box left the picture 100px lower than intended.
+      window.moviScrollToPlayer = function () {
+        var target =
+          document.querySelector(".player-wrapper") ||
+          document.querySelector(".player-section");
+        if (!target) return;
+        var navbarH = 64;
+        var top = target.getBoundingClientRect().top + window.scrollY - navbarH - 48;
+        window.scrollTo({ top: top, behavior: "smooth" });
+      };
+
+      (function () {
+        var btn = document.getElementById("to-player");
+        var stage = document.querySelector(".player-wrapper");
+        if (!btn || !stage) return;
+
+        btn.addEventListener("click", function () {
+          window.moviScrollToPlayer();
+        });
+
+        // Shown only once the picture has left the viewport, so it never sits
+        // over the thing it would take you to. An observer rather than a
+        // scroll handler: no work per frame while you read the page.
+        if (!("IntersectionObserver" in window)) return;
+        new IntersectionObserver(
+          function (entries) {
+            btn.classList.toggle("visible", !entries[0].isIntersecting);
+          },
+          // A sliver of the player still counts as "you can see it".
+          { threshold: 0.12 },
+        ).observe(stage);
+      })();
     </script>
 
     <!-- Movi Player from CDN -->
@@ -5035,20 +5086,10 @@
         document.title = name ? `${name} - MoviPlayer` : defaultTitle;
       };
 
-      const scrollToPlayer = () => {
-        // Measure the player itself, not .player-section. The section carries
-        // 100px of block padding (pulled back out with a negative margin) so
-        // the ambient halo has somewhere to live inside the clip — measuring
-        // its box left the picture 100px lower than intended, and the gap on
-        // top of that put it barely above the fold on a laptop.
-        const target =
-          document.querySelector(".player-wrapper") ||
-          document.querySelector(".player-section");
-        if (!target) return;
-        const navbarH = 64;
-        const top = target.getBoundingClientRect().top + window.scrollY - navbarH - 48;
-        window.scrollTo({ top, behavior: "smooth" });
-      };
+      // Defined in the classic <script> above so the floating "back to the
+      // player" button and this share one definition — and so the button
+      // still works if this module's import of the bundle ever fails.
+      const scrollToPlayer = () => window.moviScrollToPlayer?.();
 
       // --- Navbar scroll effect ---
       window.addEventListener("scroll", () => {
