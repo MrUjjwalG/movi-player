@@ -1174,9 +1174,17 @@ if (
 // it means here. Anything already playing keeps playing behind the picker —
 // the close button and Escape put you straight back to it, so the arrow is
 // never a one-way door.
+// Whether the video was playing when the picker went up, so closing it puts
+// playback back the way it was found. Without this, stepping out and back in
+// left a paused video and no sign of why.
+let wasPlayingBeforePicker = false;
+
 function showPicker() {
   overlay.classList.remove("hidden");
   overlay.classList.toggle("dismissible", hasMedia);
+  // `paused` is play INTENT, not pipeline state — a buffering video still reads
+  // as playing, which is the answer this wants.
+  try { wasPlayingBeforePicker = !playerEl.paused; } catch { wasPlayingBeforePicker = false; }
   try { playerEl.pause?.(); } catch {}
   // A reload of ?url=... would replay the video the viewer just stepped out
   // of, so the address bar goes back to the bare page too.
@@ -1189,6 +1197,10 @@ function showPicker() {
 function hidePicker() {
   if (!hasMedia) return;
   overlay.classList.add("hidden");
+  // Resume only if it was running when we left. A video the viewer had
+  // deliberately paused stays paused — coming back is not a request to start
+  // it.
+  if (wasPlayingBeforePicker) playerEl.play?.().catch(() => {});
 }
 
 playerEl.addEventListener("back", showPicker);

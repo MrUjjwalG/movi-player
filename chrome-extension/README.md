@@ -25,8 +25,9 @@ bottom of `player.js` for the pattern.
 - **Toolbar icon** opens the player page — pick files, paste a link, and the
   two settings all live there (there is no popup)
 - **Back arrow in the title bar** returns to that picker without losing what is
-  playing — close it or press Escape to go back to the video. Not shown in
-  fullscreen (`titlemode="back-windowed"`), where the title still is
+  playing — close it or press Escape to go back to the video, and it picks up
+  where it left off if it was running. Not shown in fullscreen
+  (`titlemode="back-windowed"`), where the title still is
 - Supports: MP4, MKV, WebM, MOV, TS, AVI, HLS (`.m3u8`), MPEG-DASH (`.mpd`), HEVC, AV1, HDR
 
 ## Setup
