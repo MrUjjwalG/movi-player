@@ -1,11 +1,23 @@
-// Context menu: "Open with Movi Player" on links and on <video> elements
-chrome.runtime.onInstalled.addListener(() => {
-  chrome.contextMenus.create({
-    id: "open-with-movi",
-    title: "Open with Movi Player",
-    contexts: ["link", "video"],
+// Context menu: "Open with Movi Player" on links and on <video> elements.
+//
+// Built on every worker start, not on onInstalled. The extension is
+// `"incognito": "split"`, so the incognito profile runs a background of its
+// own — and that one starts when an incognito window opens, long after the
+// install event it would never see. Menus are per-profile, so without this the
+// item simply would not exist in incognito.
+//
+// removeAll() first because create() throws on a duplicate id, and a worker
+// that is evicted and woken again runs this line each time.
+function ensureContextMenu() {
+  chrome.contextMenus.removeAll(() => {
+    chrome.contextMenus.create({
+      id: "open-with-movi",
+      title: "Open with Movi Player",
+      contexts: ["link", "video"],
+    });
   });
-});
+}
+ensureContextMenu();
 
 // Toolbar icon opens the player page. There is no popup: everything it used
 // to hold — paste a link, the right-click tip, the two settings — lives on
@@ -65,6 +77,10 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
 
 // In-memory cache so repeated probes for the same URL don't re-hit the network.
 // Service worker may be evicted; that's fine — cache is best-effort.
+//
+// Under "split" incognito each profile runs its own worker and therefore its
+// own cache, which is the behaviour you want anyway: a URL probed in incognito
+// leaves no trace in the normal session's cache.
 const probeCache = new Map();
 const MEDIA_EXT_RE = /\.(mp4|mkv|webm|mov|avi|ts|m3u8|mpd|flv|m4v|ogv|wmv|m2ts|mts|evo|3gp|mpg|mpeg|mp3|m4a|m4b|aac|flac|wav|wave|ogg|oga|opus|ac3|ec3|eac3|mka|dts)(\?|$|")/i;
 

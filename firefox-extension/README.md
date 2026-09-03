@@ -35,6 +35,8 @@ is the only Gecko-specific file:
 | Key | Chrome | Firefox |
 | --- | --- | --- |
 | `background` | `service_worker` | `scripts` — Gecko MV3 uses an event page, not a service worker |
+| `incognito` | `split`, so the player page opens in the private window it was launched from | omitted — Firefox has no `split`, and installs an extension asking for it as `not_allowed`, which would shut the add-on out of private windows entirely. No key means the default `spanning` |
+| `file_handlers` | registers as a ChromeOS file handler, so the Files app can open videos here | omitted — the key is ChromeOS-only |
 | `browser_specific_settings.gecko` | — | add-on `id` (required for signing), `strict_min_version`, `data_collection_permissions` (required by AMO) |
 | `cross_origin_embedder_policy` / `..._opener_policy` | set | dropped — Chrome-only manifest keys. The player only uses `SharedArrayBuffer` when `crossOriginIsolated` is true and falls back to single-threaded WASM + Asyncify I/O otherwise, so nothing here needs them |
 

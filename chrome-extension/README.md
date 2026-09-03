@@ -17,6 +17,9 @@ bottom of `player.js` for the pattern.
   element's own queue, so the bar gets skip buttons, Shift+N / Shift+P work, and
   the OS media keys and lock screen carry the skip pair. The items are src-less:
   the element owns the controls, this page still does the loading
+- **Works in incognito** — `"incognito": "split"`, so the player page opens in
+  the incognito window it was launched from rather than being pushed into a
+  normal one. Still has to be allowed at `chrome://extensions` first
 - **Play button overlay** on video links detected on any page
 - **Right-click context menu** → "Open with Movi Player" on any link
 - **Toolbar icon** opens the player page — pick files, paste a link, and the
@@ -50,6 +53,23 @@ cp -r dist chrome-extension/dist
 - **Background Script** handles context menu clicks and opens player tab
 - **Player Page** loads `movi-player` element with the video URL — full controls, seek, subtitles, HDR
 - **No server needed** — everything runs locally in the browser via WASM
+
+## The `file_handlers` warning
+
+Loading this on anything but ChromeOS puts a warning on the extension's card:
+
+> `'file_handlers'` is only allowed for packaged apps, but this is a extension.
+
+It is a warning, not a load failure, and the key is deliberate. `file_handlers`
+was a packaged-app key first; ChromeOS 120 opened it to extensions so they can
+appear in the Files app's "Open with". Desktop Chrome has no extension-side
+implementation, falls back to the old apps-only check, and says so. The key
+does nothing there and breaks nothing.
+
+It stays in the one package on purpose: ChromeOS users install the same Chrome
+extension as everyone else, and a second ChromeOS-only build would be two
+packages to keep in step for one manifest key. **Don't delete it to silence the
+warning** — that is the ChromeOS Files app integration.
 
 ## COOP/COEP Note
 
