@@ -38,6 +38,7 @@ import { Demuxer } from "../demux";
 import { TrackManager } from "./TrackManager";
 import { Clock } from "./Clock";
 import { PlayerStateManager } from "./PlayerState";
+import { raiseLinkBps } from "../utils/LinkRate";
 import { Logger, LogLevel } from "../utils/Logger";
 import {
   Storyboard,
@@ -3195,6 +3196,15 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
       TAG,
       `Startup speed test: ${(bits / 1e6).toFixed(1)}Mbps sustained (past the proxy burst)`,
     );
+    // Keep it for the next open. Only the element's pre-play probe was writing
+    // this store, so a session whose probe came up empty — a proxy that bursts
+    // before it paces, which is exactly where the probe struggles — measured a
+    // perfectly good link here and then threw the number away, and the next
+    // open started from "no link measurement yet" on the smallest rung again.
+    // raise, not persist: a reading taken mid-playback is a floor (the stream
+    // is paced to its own bitrate), so it may lift a stored estimate but must
+    // never drag a better one down. Same rule the Shaka and DASH wrappers use.
+    raiseLinkBps(bps);
     if (this._autoQuality) void this.abrTick();
   }
 
@@ -5301,7 +5311,20 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
     // half-second flash on one where the re-prime takes longer — which is where
     // it was reported, on a speed change that no longer stops the picture but
     // still flashed a loading ring at it. The resume below clears it instead.
-    if (!this.needsSeekResumeQueue()) {
+    // …nor while the SOUND half of the same seek is still coming up.
+    // needsSeekResumeQueue() asks only about the video renderer's queue, which
+    // is the whole story when the two sides fill together. With split audio —
+    // a separate demuxer on its own URL, which the prebuffer never touches
+    // (it reads this.demuxer, and a video-only file has no audio track to
+    // count) — they do not: a cached video refills instantly while audio is
+    // still opening from zero. The guard went false there, this cleared the
+    // suppression, and the buffering the seek itself then caused waiting for
+    // audio drew a spinner over a picture that was already running.
+    //
+    // Deliberately only the spinner: needsSeekResumeQueue() also gates
+    // clock.pause() and stopPresentationLoop(), and holding THAT for audio
+    // would trade the flash for a frozen picture.
+    if (!this.needsSeekResumeQueue() && !this.audioSideStillPriming()) {
       this.suppressSeekSpinner = false;
     }
 
@@ -5635,6 +5658,20 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
       return false;
     }
     return this.videoRenderer.getQueueSize() < this.seekResumeQueueTarget();
+  }
+
+  /** Whether the audio side has yet to reach a resumable cushion — the sound
+   *  half of the question needsSeekResumeQueue() asks about the picture.
+   *  Mirrors `audioReady` in the rebuffer check, at its lightest target: this
+   *  decides how long to keep a spinner hidden, not when to resume. */
+  private audioSideStillPriming(): boolean {
+    if (this.disableAudio) return false;
+    // The split demuxer counts even when the container itself has no audio
+    // track — it IS the audio in that case.
+    const hasAudio =
+      !!this.trackManager.getActiveAudioTrack() || !!this.audioDemuxer;
+    if (!hasAudio) return false;
+    return this.audioRenderer.getBufferedDuration() <= 0.1;
   }
 
   /** Frames the renderer should hold before playback restarts after a seek. */
