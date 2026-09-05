@@ -118,7 +118,13 @@ export function linkSeedBps(): number {
   if (measured > 0) return measured;
   const dl = netInfo()?.downlink;
   if (typeof dl !== "number" || !(dl > 0)) return 0;
-  const bps = (dl * 1e6) / 8;
+  // `downlink` is Mbit/s, and everything downstream of this — the probe's own
+  // return value, `_applyProbePick`'s `bits` — is bits/s. Dividing by 8 turned
+  // it into BYTES/s and handed the pick a number eight times too small: a
+  // 1.45Mbps estimate arrived as 0.18Mbps, 55% of that priced out even the
+  // 240p rung, and Auto opened on 144p over a link the ABR then measured at
+  // 38Mbps.
+  const bps = dl * 1e6;
   return bps > LINK_BPS_SANE_MAX ? 0 : bps;
 }
 

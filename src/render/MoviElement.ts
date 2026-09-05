@@ -9210,6 +9210,7 @@ export class MoviElement extends HTMLElement {
     this._streamEngineTried = false;
     this._engineTried.clear();
     this._startProbeDone = false;
+    this._startPickConfirmed = false;
     this._measuredStartBps = 0;
     this._forcedDashRendition = null;
     this._hasEverPlayed = false;
@@ -9918,6 +9919,12 @@ export class MoviElement extends HTMLElement {
   private _measuredStartBps = 0;
   // One pre-play probe per source (reset when src changes).
   private _startProbeDone = false;
+  // Whether the confirm pass has actually measured the rung we intend to open.
+  // Separate from `_startProbeDone`, which only says a probe was STARTED: an
+  // init that gets superseded mid-confirm sets the latch and leaves the pick
+  // riding on an unconfirmed seed, and the next init then re-applied that seed
+  // and opened on it. Reset with `_startProbeDone` when the src changes.
+  private _startPickConfirmed = false;
 
   /**
    * Pre-play speed test: measure the link, then set the opening rung from it.
@@ -9966,15 +9973,11 @@ export class MoviElement extends HTMLElement {
       } catch {
         /* the prober logs its own failure */
       }
-      if (this._measuredStartBps > 0) {
-        await this._applyProbePick(this._measuredStartBps, true);
-      }
+      await this._reapplyStartPick();
       return;
     }
     if (this._startProbeDone) {
-      if (this._measuredStartBps > 0) {
-        await this._applyProbePick(this._measuredStartBps, true);
-      }
+      await this._reapplyStartPick();
       return;
     }
     this._startProbeDone = true;
@@ -9985,6 +9988,23 @@ export class MoviElement extends HTMLElement {
     } finally {
       this._startProbeInFlight = null;
     }
+  }
+
+  /**
+   * Put an earlier init's decision back into `_src` — and finish the job if
+   * that init never got to.
+   *
+   * Re-applying alone is what the two latch branches used to do, and it is
+   * only half of the pass: the opening pick is a SEED until the confirm pass
+   * has read the rung's own stream and re-picked from that. An init that is
+   * superseded mid-confirm sets the latch, leaves the seed pick standing, and
+   * the init that replaces it then re-applied the seed and opened on it — the
+   * confirmation silently skipped because a probe had technically "run".
+   */
+  private async _reapplyStartPick(): Promise<void> {
+    if (!(this._measuredStartBps > 0)) return;
+    await this._applyProbePick(this._measuredStartBps, true);
+    if (!this._startPickConfirmed) await this._confirmStartPick();
   }
 
   /**
@@ -10050,16 +10070,32 @@ export class MoviElement extends HTMLElement {
       signal: this._sourceAbort.signal,
     });
     if (bits <= 0) {
-      // Unmeasurable — keep the smallest rung. Logged with the elapsed time
-      // because the two causes look identical from the outside and need
-      // opposite fixes: a full 6s means the fetch timed out (slow link, or the
-      // proxy was still opening upstream), while a near-instant give-up means
-      // the response was unusable — too small, an error status, or a shape the
-      // probe couldn't time.
+      // Unmeasurable — but giving up here is what "opening on the smallest
+      // rung" meant in practice: 144p, with nothing left to lift it. One
+      // failed reading is not proof of a slow link. The probe returns nothing
+      // for a 502 from the proxy, for a body that was truncated when the
+      // upstream dropped mid-pipe, and for anything under 500KB inside the 6s
+      // cap — none of which is a measurement of the link.
+      //
+      // So try once more, deliberately on a DIFFERENT rung and a different
+      // request shape: the confirm pass reads the head of the rung we would
+      // actually open. That is a different URL (this probe uses a mid rung),
+      // a different reader with its own fallbacks — a single-chunk body that
+      // reads as "nothing" here still times cleanly there — and it is the
+      // cheaper of the two attempts, because its bytes are handed to
+      // HttpSource as the opening buffer instead of being discarded. A
+      // genuinely slow link pays latency it was going to pay anyway rather
+      // than a second wasted 3MB.
+      //
+      // Logged with the elapsed time because the causes look identical from
+      // the outside and need opposite fixes: a full 6s means the fetch timed
+      // out (slow link, or the proxy was still opening upstream), while a
+      // near-instant give-up means the response was unusable.
       Logger.info(
         TAG,
-        `Pre-play speed test: unmeasured after ${Math.round(performance.now() - startedAt)}ms — opening on the smallest rung`,
+        `Pre-play speed test: unmeasured after ${Math.round(performance.now() - startedAt)}ms — retrying on the opening rung`,
       );
+      await this._confirmStartPick();
       return;
     }
     this._measuredStartBps = bits;
@@ -10090,9 +10126,17 @@ export class MoviElement extends HTMLElement {
         (b.bandwidth || this._estimateBitrate(b.height)),
     );
     let idx = byBitrate.findIndex((q) => q.src === this._src);
-    // Already on the cheapest rung (or the pick isn't in the ladder) — there is
-    // nothing a confirmation could change.
-    if (idx <= 0) return;
+    // Only a pick that isn't in the ladder at all is beyond confirming. The
+    // CHEAPEST rung used to bail out here too, back when this pass could only
+    // step down — but it goes both ways now, and the bottom rung is precisely
+    // where an upward correction matters most: a seed that reads low opens on
+    // 144p, and this guard then skipped the one thing that would have caught
+    // it. Nothing lifted the pick and the viewer watched the ABR climb the
+    // ladder instead.
+    if (idx < 0) {
+      this._startPickConfirmed = true;
+      return;
+    }
 
     // `idx > 0` was the down-only guard; the loop can move up now, so the
     // only bound left is the attempt count — at most two head reads.
@@ -10110,6 +10154,7 @@ export class MoviElement extends HTMLElement {
         return;
       }
       this._measuredStartBps = bits;
+      this._startPickConfirmed = true;
       persistLinkBps(bits);
 
       // Re-pick from what was just measured. This goes BOTH ways on purpose.
@@ -24877,6 +24922,7 @@ export class MoviElement extends HTMLElement {
           this._engineTried.clear();
           // Fresh source → fresh pre-play speed test.
           this._startProbeDone = false;
+          this._startPickConfirmed = false;
           this._measuredStartBps = 0;
           this._forcedDashRendition = null;
           // A quality switch on a premuxed ladder DOES come through here — each
