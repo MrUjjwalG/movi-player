@@ -29,6 +29,9 @@ const MAX_FETCH_SIZE = 5 * 1024 * 1024;
 export interface PeekableSource {
   peekMetadata(offset: number, length: number): Uint8Array | null;
   peekRange(offset: number, length: number): Uint8Array | null;
+  /** Opening bytes the main source held on to. Optional: not every peekable
+   *  source keeps a head cache. */
+  peekHead?(offset: number, length: number): Uint8Array | null;
 }
 
 export class ThumbnailHttpSource implements SourceAdapter {
@@ -160,6 +163,15 @@ export class ThumbnailHttpSource implements SourceAdapter {
       return new ArrayBuffer(0);
     }
 
+    // FFmpeg over-reads at the end of the file — it asks for a full block and
+    // takes whatever comes back. Asking the caches for bytes that do not exist
+    // is a guaranteed miss, and the miss is expensive: the MKV Cues sit in the
+    // last 2.5KB, the main source has them cached from its own open, and a
+    // 512KB request for them borrowed nothing and paid a round trip on every
+    // first hover. Ask for what the file can actually give.
+    if (this.size > 0) length = Math.min(length, this.size - offset);
+    if (length <= 0) return new ArrayBuffer(0);
+
     // Serve from buffer if available
     if (this.isInBuffer(offset, length)) {
       const localOffset = offset - this.bufferStart;
@@ -175,6 +187,16 @@ export class ThumbnailHttpSource implements SourceAdapter {
     // served (format-agnostic); sliding window covers keyframe bytes near
     // current playback (seekbar hover previews).
     if (this.borrowSource) {
+      // The head first: a fresh demuxer open starts by probing offset 0, and
+      // that is the one region the main source's sliding window never keeps
+      // (its first stream restarts elsewhere for a metadata read and comes
+      // back a few hundred bytes in). The head cache is what survives it.
+      const head = this.borrowSource.peekHead?.(offset, length);
+      if (head) {
+        this.position = offset + length;
+        Logger.debug(TAG, `Read borrowed from main head cache: offset=${offset}, length=${length}`);
+        return head.buffer as ArrayBuffer;
+      }
       const meta = this.borrowSource.peekMetadata(offset, length);
       if (meta) {
         this.position = offset + length;

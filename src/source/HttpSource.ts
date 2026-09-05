@@ -71,6 +71,19 @@ const METADATA_CACHE_MAX_CHUNK = 128 * 1024; // Reads larger than this skip the 
 const METADATA_CACHE_MAX_BYTES = 8 * 1024 * 1024; // 8MB total cap
 const METADATA_CACHE_MAX_ENTRIES = 128;
 
+// How much of the FILE HEAD to keep for the life of the source, out of bytes
+// we were downloading anyway.
+//
+// The opening bytes are the one region every fresh demuxer re-reads, and the
+// sliding window is the one place they never survive: the very first stream
+// starts at 0, a metadata read then seeks the stream elsewhere (MKV Cues at
+// EOF), and when it comes back the window restarts at 823 — the EBML header
+// is gone. Nothing above 0 is affected, so the loss is invisible to playback
+// but total for anyone re-opening the file: the thumbnail demuxer's probe
+// read at offset 0 missed the borrow by 823 bytes and paid a 2MB range fetch
+// (1.6s of the ~2.1s a first hover took on a 1.5MB/s link).
+const HEAD_CACHE_BYTES = 1024 * 1024;
+
 export class HttpSource implements SourceAdapter {
   private url: string;
   private headers: Record<string, string>;
@@ -80,6 +93,14 @@ export class HttpSource implements SourceAdapter {
 
   // Persistent Cache
   private headBuffer: Uint8Array | null = null;
+  /**
+   * How many bytes of `headBuffer`, counted from 0, are real.
+   *
+   * The buffer is allocated to its full capacity up front but filled as the
+   * download passes over the head, so its `.length` says nothing about what is
+   * present — every reader has to go by this instead, or it serves zeros.
+   */
+  private headFilled: number = 0;
 
   /**
    * Opening bytes handed over by whoever fetched them first, keyed by URL.
@@ -277,6 +298,7 @@ export class HttpSource implements SourceAdapter {
     const warm = HttpSource.warmHead;
     if (warm && warm.url === url) {
       this.headBuffer = warm.bytes;
+      this.headFilled = warm.bytes.byteLength;
       HttpSource.warmHead = null;
       Logger.info(
         TAG,
@@ -887,10 +909,44 @@ export class HttpSource implements SourceAdapter {
    */
   peekHead(offset: number, length: number): Uint8Array | null {
     if (!this.headBuffer) return null;
-    if (offset < 0 || offset + length > this.headBuffer.length) return null;
+    if (offset < 0 || offset + length > this.headFilled) return null;
     const out = new Uint8Array(length);
     out.set(this.headBuffer.subarray(offset, offset + length));
     return out;
+  }
+
+  /**
+   * Keep the opening bytes of the file as they stream past.
+   *
+   * Called from both write paths with the ABSOLUTE offset of the chunk being
+   * written. Only extends contiguously from what is already held: a chunk that
+   * starts past `headFilled` would leave a hole, and a hole in a buffer whose
+   * only bound is a length is indistinguishable from data. Chunks that overlap
+   * what we have (the restarted stream re-sending bytes 823+) are welcome —
+   * only the new tail of them is copied.
+   */
+  private captureHead(absOffset: number, bytes: Uint8Array): void {
+    const cap = Math.min(
+      Math.max(HEAD_CACHE_BYTES, this.headFilled),
+      this.size > 0 ? this.size : Number.MAX_SAFE_INTEGER,
+    );
+    if (this.headFilled >= cap) return;
+    if (absOffset > this.headFilled) return; // would leave a hole
+    const end = absOffset + bytes.byteLength;
+    if (end <= this.headFilled) return; // nothing new in it
+
+    if (!this.headBuffer || this.headBuffer.byteLength < cap) {
+      const grown = new Uint8Array(cap);
+      if (this.headBuffer) grown.set(this.headBuffer.subarray(0, this.headFilled));
+      this.headBuffer = grown;
+    }
+    const copyEnd = Math.min(end, cap);
+    const from = this.headFilled - absOffset;
+    this.headBuffer.set(
+      bytes.subarray(from, from + (copyEnd - this.headFilled)),
+      this.headFilled,
+    );
+    this.headFilled = copyEnd;
   }
 
   /**
@@ -1308,6 +1364,10 @@ export class HttpSource implements SourceAdapter {
 
               if (locked) {
                 buffer.set(value, currentWritePos);
+                this.captureHead(
+                  this.atomicGetBufferStart() + currentWritePos,
+                  value,
+                );
                 const newWritePos = currentWritePos + value.length;
                 this.atomicSetWritePos(newWritePos);
 
@@ -1727,7 +1787,9 @@ export class HttpSource implements SourceAdapter {
       }
       if (!locked) { await new Promise((r) => setTimeout(r, 5)); continue; }
 
-      buffer.set(value.subarray(written, written + chunk), writePos);
+      const slice = value.subarray(written, written + chunk);
+      buffer.set(slice, writePos);
+      this.captureHead(this.atomicGetBufferStart() + writePos, slice);
       const newWritePos = writePos + chunk;
       this.atomicSetWritePos(newWritePos);
       const end = this.atomicGetBufferStart() + newWritePos;
@@ -1998,7 +2060,7 @@ export class HttpSource implements SourceAdapter {
     }
 
     // Check persistent head cache first (avoids stream restart for metadata)
-    if (this.headBuffer && offset + length <= this.headBuffer.length) {
+    if (this.headBuffer && offset + length <= this.headFilled) {
       const result = new Uint8Array(length);
       result.set(this.headBuffer.subarray(offset, offset + length));
       this.position = offset + length;
@@ -2383,9 +2445,17 @@ export class HttpSource implements SourceAdapter {
     // the freeze watchdog took a healthy 1080p down to 720p on that reading
     // ("ABR emergency downshift (starved 0.0s at 5.0s)") while every read was
     // being served from this very cache.
-    const headEnd = this.headBuffer?.length ?? 0;
+    //
+    // The head cache is now filled from the download itself, not just from a
+    // pre-play probe, so it exists on ordinary playback too — and the window
+    // is then usually somewhere else entirely. Only count the window on top of
+    // the head when the two actually meet; a window that starts past the head
+    // is a separate island, and reporting across the gap is the phantom
+    // "already buffered ahead" the clamp below exists to prevent.
+    const headEnd = this.headFilled;
     if (headEnd > this.position) {
-      const end = Math.max(headEnd, currentBufferEnd);
+      const end =
+        bufferStart <= headEnd ? Math.max(headEnd, currentBufferEnd) : headEnd;
       return this.size > 0 ? Math.min(end, this.size) : end;
     }
 

@@ -1282,6 +1282,9 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
   // How long to wait before re-asking when the warm-up came due while playback
   // was still young, or while the pipeline was busy seeking/rebuffering.
   private static readonly PREVIEW_WARM_RETRY_MS = 2000;
+  // Idle wait before the preview reader's 2MB fetch window is released.
+  private _thumbBufferIdleTimer: ReturnType<typeof setTimeout> | null = null;
+  private static readonly THUMB_BUFFER_IDLE_MS = 8000;
   private previewInitGaveUp: boolean = false; // Stop retrying once init has failed too often
 
   // Debug flag to disable audio processing
@@ -9352,11 +9355,16 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
       this.isPreviewGenerating = false;
       this.previewInFlight = null;
       releaseInFlight();
-      // Clear ThumbnailHttpSource buffer to free memory (512KB)
-      // This clears the buffer after each thumbnail generation
-      if (this.thumbnailSource && "clearBuffer" in this.thumbnailSource) {
-        (this.thumbnailSource as any).clearBuffer();
-      }
+      // Let the ThumbnailHttpSource keep its 2MB window for a while yet.
+      //
+      // Dropping it here — after every single frame — threw away the block the
+      // fetch had just paid for, and a scrub is a run of hovers a fraction of
+      // a second apart that land INSIDE that same block: measured on a 1.5MB/s
+      // link, hovers at 100.8s and 101.6s of an un-downloaded stretch both sat
+      // inside 114.9-117.0MB, and the second one re-fetched all 2MB of it
+      // (1.65s) because the first one's copy had already been discarded.
+      // Clear it once the scrub is over instead.
+      this.scheduleThumbBufferClear();
     }
   }
 
@@ -9786,8 +9794,26 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
     }
   }
 
+  /**
+   * Drop the preview reader's fetch window once hovering has stopped, so the
+   * 2MB it holds isn't kept for the rest of the session — but not between two
+   * hovers of the same scrub, which is what it exists for.
+   */
+  private scheduleThumbBufferClear(): void {
+    if (this._thumbBufferIdleTimer) clearTimeout(this._thumbBufferIdleTimer);
+    this._thumbBufferIdleTimer = setTimeout(() => {
+      this._thumbBufferIdleTimer = null;
+      const src = this.thumbnailSource as { clearBuffer?: () => void } | null;
+      if (src && typeof src.clearBuffer === "function") src.clearBuffer();
+    }, MoviPlayer.THUMB_BUFFER_IDLE_MS);
+  }
+
   private destroyPreviewPipeline() {
     this._previewGeneration++;
+    if (this._thumbBufferIdleTimer) {
+      clearTimeout(this._thumbBufferIdleTimer);
+      this._thumbBufferIdleTimer = null;
+    }
     this.releaseSharedThumbModule();
     // A build that was still in flight holds a context too, and an init that
     // threw between creating it and publishing it leaves it here.
