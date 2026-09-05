@@ -36,7 +36,11 @@ import { IS_SLIM, BUILD } from "../build-flags";
 import { setWasmUrl } from "../wasm/FFmpegLoader";
 import { probeLinkBandwidth } from "../utils/bandwidthProbe";
 import { childAbort } from "../utils/abort";
-import { loadPersistedLinkBps, persistLinkBps } from "../utils/LinkRate";
+import {
+  linkSeedBps,
+  loadPersistedLinkBps,
+  persistLinkBps,
+} from "../utils/LinkRate";
 // Static, though it is used once and only on an encrypted source. It was a
 // dynamic import, and a dynamic import that saves nothing is worse than a
 // static one: the module is re-exported from the public API (src/element.ts and
@@ -10003,11 +10007,14 @@ export class MoviElement extends HTMLElement {
     // actually intend to open, keeps its bytes as the opening buffer, and
     // steps down if the rate has fallen since. The measurement that used to
     // cost its own request now comes from bytes we needed anyway.
-    const seed = loadPersistedLinkBps();
+    // Measured if we have it, otherwise the browser's own estimate — see
+    // linkSeedBps(). Either way the confirm pass below is what makes it safe.
+    const seed = linkSeedBps();
     if (seed > 0) {
+      const measured = loadPersistedLinkBps() > 0;
       Logger.info(
         TAG,
-        `Pre-play: seeding from the last measured link (${(seed / 1e6).toFixed(1)}Mbps) — no separate probe`,
+        `Pre-play: seeding from ${measured ? "the last measured link" : "the browser's link estimate"} (${(seed / 1e6).toFixed(1)}Mbps) — no separate probe`,
       );
       this._measuredStartBps = seed;
       await this._applyProbePick(seed, false);

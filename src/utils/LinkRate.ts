@@ -93,6 +93,35 @@ export function loadPersistedLinkBps(): number {
 
 let sessionLinkSig = "";
 
+/**
+ * Where to start when nothing has been measured yet.
+ *
+ * A stored measurement wins — it is the only number that came from timing this
+ * app's own bytes. Failing that, the browser's own estimate is a far better
+ * answer than the smallest rung: a probe that comes up empty (a proxy that
+ * bursts before it paces is where that happens) used to open on 144p over a
+ * link that turned out to be tens of megabits.
+ *
+ * Deliberately NOT part of loadPersistedLinkBps(). That one means "what we
+ * measured", and raiseLinkBps() compares against it — seeding it from the
+ * browser would stop any real measurement below the estimate from ever being
+ * stored.
+ *
+ * It is a floor, not a reading. `downlink` is recently observed application
+ * throughput rounded to 25kbps, absent on Safari and Firefox, and on a fresh
+ * link derived from the connection type rather than measured at all. Safe here
+ * only because the caller confirms it: the pre-play confirm pass reads the head
+ * of the rung it intends to open and steps down if the link cannot hold it.
+ */
+export function linkSeedBps(): number {
+  const measured = loadPersistedLinkBps();
+  if (measured > 0) return measured;
+  const dl = netInfo()?.downlink;
+  if (typeof dl !== "number" || !(dl > 0)) return 0;
+  const bps = (dl * 1e6) / 8;
+  return bps > LINK_BPS_SANE_MAX ? 0 : bps;
+}
+
 // No home link delivers this. Anything above it is a measurement artefact —
 // a cache hit, a clock that barely moved — and remembering it would seed the
 // next load's pick with a number nothing can live up to.
