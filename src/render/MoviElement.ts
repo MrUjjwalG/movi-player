@@ -7122,13 +7122,28 @@ export class MoviElement extends HTMLElement {
         }
         hideContextMenu();
       } else if (speed) {
-        // Set playback speed
-        const playbackSpeed = parseFloat(speed);
-        if (this.player) {
-          this.player.setPlaybackRate(playbackSpeed);
-          this._playbackRate = playbackSpeed;
-          this.setAttribute("playbackrate", playbackSpeed.toString());
-        }
+        // Through the public setter, exactly as the gear panel's speed list
+        // does — NOT by writing the field and reflecting the attribute by
+        // hand.
+        //
+        // That hand-rolled pair is a trap. Writing `playbackrate` without
+        // first recording it as the viewer's choice looks, to the persistence
+        // layer, precisely like a HOST re-asserting its markup over a
+        // remembered setting — so hostOverridingStoredChoice put the stored
+        // value straight back, one tick later, from inside the same click.
+        // The result was a menu that announced "Speed 0.25x" over a video
+        // still playing at 1x, and only once the viewer had used the gear
+        // panel earlier in the session (before that there was no stored
+        // choice to override, and the same code worked).
+        //
+        // The setter also brings the ceiling with it: 8K+ sources cannot
+        // sustain over 1.5x in any browser today, and this path was handing
+        // the decoder 2x regardless.
+        const playbackSpeed = Math.min(
+          parseFloat(speed),
+          this.getMaxAllowedRate(),
+        );
+        this.playbackRate = playbackSpeed;
 
         // Update active state (query the item's own submenu — the speed submenu
         // is a moved-out sibling of contextMenu, so contextMenu wouldn't find
@@ -7146,11 +7161,10 @@ export class MoviElement extends HTMLElement {
       } else if (item.dataset.fit) {
         const fitMode = item.dataset.fit as "contain" | "cover" | "fill" | "zoom";
         const viaControl = this._objectFit === "control";
-        if (viaControl) {
-          this._currentFit = fitMode;
-        } else {
-          this._objectFit = fitMode;
-        }
+        // setFit, not the raw fields: it picks the right one of the two AND
+        // records the choice. Written by hand here, an aspect chosen from this
+        // menu applied to the picture and was forgotten by the next load.
+        this.setFit(fitMode);
         this.updateFitMode();
         this.updateAspectRatioIcon();
         // The context menu applies the fit itself rather than going through
@@ -7672,6 +7686,16 @@ export class MoviElement extends HTMLElement {
     let hideTimeout: number | null = null;
 
     const showSubmenu = () => {
+      // A closed menu has no submenus.
+      //
+      // Closing the menu moves it and its panels out of the body portal, and
+      // that changes what sits under the pointer — so the browser fires
+      // mouseenter at whatever is there now, including the very row the
+      // pointer was on. Unguarded, that re-opened the panel for a menu that
+      // had already gone: back home its coordinates are player-relative, so it
+      // appeared in the player's top-left corner and sat there until the 150ms
+      // hide timer took it away again. That is the flash after picking an item.
+      if (!this._contextMenuVisible) return;
       // Clear any pending hide timeout
       if (hideTimeout !== null) {
         clearTimeout(hideTimeout);
