@@ -6957,8 +6957,14 @@ export class MoviElement extends HTMLElement {
         }
         hideContextMenu();
       } else if (action === "speed") {
-        // Show speed submenu (changed from toggle to add)
-        const submenu = shadowRoot.querySelector(
+        // contextMenuRoot(), not shadowRoot: on desktop the menu and its
+        // panels are MOVED into a body-level portal so they escape the
+        // player's containing block, and from there shadowRoot finds none of
+        // them. This looked exactly like "playback speed does nothing" — the
+        // row was clickable, the panel it was meant to reveal was simply never
+        // found, so nothing opened and no speed could be picked. Same trap the
+        // fit branch below already documents.
+        const submenu = this.contextMenuRoot().querySelector(
           '.movi-context-menu-submenu[data-submenu="speed"]',
         ) as HTMLElement;
         if (submenu) {
@@ -6973,8 +6979,8 @@ export class MoviElement extends HTMLElement {
           submenu.classList.add("movi-context-menu-submenu-visible");
         }
       } else if (action === "audio-track") {
-        // Show audio track submenu (changed from toggle to add)
-        const submenu = shadowRoot.querySelector(
+        // Portal-aware lookup — see the speed branch above.
+        const submenu = this.contextMenuRoot().querySelector(
           ".movi-context-menu-submenu-audio",
         ) as HTMLElement;
         if (submenu) {
@@ -7010,8 +7016,8 @@ export class MoviElement extends HTMLElement {
         }
         hideContextMenu();
       } else if (action === "audio-output") {
-        // Show the audio output device submenu
-        const submenu = shadowRoot.querySelector(
+        // Portal-aware lookup — see the speed branch above.
+        const submenu = this.contextMenuRoot().querySelector(
           ".movi-context-menu-submenu-audiodevice",
         ) as HTMLElement;
         if (submenu) {
@@ -7033,8 +7039,8 @@ export class MoviElement extends HTMLElement {
         this.showOSD(OSD.audio, label);
         hideContextMenu();
       } else if (action === "subtitle-track") {
-        // Show subtitle track submenu (changed from toggle to add)
-        const submenu = shadowRoot.querySelector(
+        // Portal-aware lookup — see the speed branch above.
+        const submenu = this.contextMenuRoot().querySelector(
           ".movi-context-menu-submenu-subtitle",
         ) as HTMLElement;
         if (submenu) {
