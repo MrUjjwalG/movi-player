@@ -46,6 +46,13 @@ const DURATION_SCAN_BUDGET_MS = { local: 1000, remote: 3000 };
 // anyway, so it would just burn bandwidth on its way to giving up.
 const REMOTE_DURATION_SCAN_MAX_BYTES = 64 * 1024 * 1024;
 
+// …and the same idea for the background rescan, which is allowed to read a
+// local file end to end. The bytes are free but the pass is not: it is real
+// disk and real battery for a number the viewer may never look at. A file this
+// size finishes in about a minute at a pessimistic 10MB/s; past it, the scan
+// would spend minutes to time out anyway.
+const LOCAL_DURATION_RESCAN_MAX_BYTES = 1536 * 1024 * 1024;
+
 /**
  * Adapter to convert SourceAdapter to DataSource interface
  */
@@ -264,7 +271,36 @@ export class Demuxer {
    * any loopback URL that carries an absolute http(s) URL in its query — that's
    * the network wearing a local address.
    */
-  private static isLocallyBacked(key: string): boolean {
+  /**
+   * How long a BACKGROUND rescan may spend reading this source end to end, or
+   * null when it isn't worth attempting.
+   *
+   * The blocking scan above is capped in the single seconds because a load is
+   * waiting on it, and on anything but a small file it gives up having read a
+   * few percent (a 291MB Matroska got 14MB in). Off the load path there is
+   * nothing to hold up, so the budget can be the honest cost of one pass —
+   * what remains is deciding which sources are worth a pass at all.
+   *
+   * Local: bytes are free, but the pass is still real disk and real battery,
+   * so it is bounded by a size the scan can finish in about a minute at a
+   * pessimistic 10MB/s. Remote keeps the download gate it already had.
+   */
+  static durationRescanBudgetMs(key: string, size: number): number | null {
+    if (key.startsWith("hls-segments:")) return null;
+    if (!Number.isFinite(size) || size <= 0) return null;
+
+    if (Demuxer.isLocallyBacked(key)) {
+      if (size > LOCAL_DURATION_RESCAN_MAX_BYTES) return null;
+      // Assume 10MB/s — well under any real disk, so a file that fits the gate
+      // above finishes inside its budget rather than timing out at 99%.
+      return Math.min(120_000, Math.max(10_000, (size / (10 * 1024 * 1024)) * 1000));
+    }
+
+    if (size > REMOTE_DURATION_SCAN_MAX_BYTES) return null;
+    return 60_000;
+  }
+
+  static isLocallyBacked(key: string): boolean {
     if (key.startsWith("file:") || key.startsWith("blob:")) return true;
 
     try {

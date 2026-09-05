@@ -55,7 +55,7 @@ import {
   type RenderSource,
 } from "../render/CanvasRenderer";
 import { AudioRenderer } from "../render/AudioRenderer";
-import { updateAllBindingsLogLevel, ThumbnailBindings } from "../wasm/bindings";
+import { updateAllBindingsLogLevel, ThumbnailBindings, WasmBindings } from "../wasm/bindings";
 import { loadWasmModuleNew, resetWasmModule } from "../wasm/FFmpegLoader";
 import { ShakaPlayerWrapper } from "../render/ShakaPlayerWrapper";
 import { HLSPlayerWrapper } from "../render/HLSPlayerWrapper";
@@ -1285,6 +1285,11 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
   // Idle wait before the preview reader's 2MB fetch window is released.
   private _thumbBufferIdleTimer: ReturnType<typeof setTimeout> | null = null;
   private static readonly THUMB_BUFFER_IDLE_MS = 8000;
+  // Background recovery of a duration the container never stored. One attempt
+  // per source; see rescanDurationInBackground.
+  private _durationRescanTimer: ReturnType<typeof setTimeout> | null = null;
+  private _durationRescanDone: boolean = false;
+  private static readonly DURATION_RESCAN_DELAY_MS = 3000;
   private previewInitGaveUp: boolean = false; // Stop retrying once init has failed too often
 
   // Debug flag to disable audio processing
@@ -2107,6 +2112,13 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
     // Clean up any existing preview pipeline
     this.destroyPreviewPipeline();
 
+    // The new source gets its own shot at a missing duration.
+    if (this._durationRescanTimer) {
+      clearTimeout(this._durationRescanTimer);
+      this._durationRescanTimer = null;
+    }
+    this._durationRescanDone = false;
+
     // Adaptive streaming — only when the caller used SourceConfig (a custom
     // SourceAdapter bypasses URL detection entirely). HLS (.m3u8) and DASH
     // (.mpd) both go through Shaka Player (one engine, MSE under the hood). This
@@ -2616,6 +2628,10 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
       // idempotent), so previews still work — they just don't steal decode
       // headroom from a struggling startup.
       this.schedulePreviewWarm(MoviPlayer.PREVIEW_WARM_DELAY_MS);
+
+      // A container that never wrote its duration down gets one more chance,
+      // off the load path this time — see rescanDurationInBackground.
+      if (!(this.mediaInfo.duration > 0)) this.scheduleDurationRescan();
 
       Logger.info(
         TAG,
@@ -9795,6 +9811,131 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
   }
 
   /**
+   * Is the source playing without a duration anybody could find?
+   *
+   * True only once the media is actually open — during a load the duration is
+   * legitimately unknown and the UI should stay blank, not pretend the file is
+   * endless. Drives the seek bar's live-edge rendering and hides the 0:00 that
+   * would otherwise sit where a total ought to be.
+   */
+  hasUnknownDuration(): boolean {
+    if (!this.mediaInfo) return false;
+    if (this.mediaInfo.duration > 0) return false;
+    const state = this.stateManager.getState();
+    return state !== "idle" && state !== "loading" && state !== "error";
+  }
+
+  /**
+   * Try once more for a missing duration, with playback already running.
+   *
+   * The scan inside open() has a load waiting on it, so it is capped in the
+   * single seconds and gives up having read a few percent of anything but a
+   * small file — a 291MB Matroska got 14MB in before its second was up. Off
+   * the load path there is nothing to hold up, so the same pass can be given
+   * the time it actually needs.
+   *
+   * It cannot run on the playing context: movi_scan_duration reads that
+   * context to EOF and then seeks it back, which would take every packet out
+   * of the demuxer's mouth. So it opens its own, over its own reader, exactly
+   * as the preview pipeline does — and for the same reason.
+   */
+  private scheduleDurationRescan(): void {
+    if (this._durationRescanDone || this._durationRescanTimer) return;
+    if (this._destroyed || this.streamWrapper) return;
+    // No SourceConfig means a caller-supplied adapter: we don't know how to
+    // build a second reader for it, and sharing the one playback is using
+    // would interleave a whole-file sweep into its reads.
+    if (!this.config.source) return;
+
+    this._durationRescanTimer = setTimeout(() => {
+      this._durationRescanTimer = null;
+      void this.rescanDurationInBackground();
+    }, MoviPlayer.DURATION_RESCAN_DELAY_MS);
+  }
+
+  private async rescanDurationInBackground(): Promise<void> {
+    if (this._durationRescanDone || this._destroyed) return;
+    this._durationRescanDone = true; // one attempt per source, win or lose
+
+    const sourceConfig = this.config.source;
+    if (!sourceConfig || !this.source) return;
+
+    const budgetMs = Demuxer.durationRescanBudgetMs(
+      this.source.getKey(),
+      this.fileSize,
+    );
+    if (budgetMs === null) {
+      Logger.debug(TAG, "Duration rescan: source isn't worth a full pass");
+      return;
+    }
+
+    // The generation this attempt belongs to. Everything below is a long await
+    // over a reader we own, and a load() of a new source (or destroy()) can
+    // land inside any of them — the result would then be the OLD file's
+    // duration, published over the new one's.
+    const gen = this._previewGeneration;
+    const superseded = () => this._destroyed || gen !== this._previewGeneration;
+
+    let scanSource: SourceAdapter | null = null;
+    let bindings: WasmBindings | null = null;
+    try {
+      const cfg =
+        typeof sourceConfig === "string"
+          ? ({ type: "url", url: sourceConfig } as SourceConfig)
+          : sourceConfig;
+      scanSource = await this.createSource(cfg);
+      // A second reader over the same File: no preload sweep of its own, and
+      // no cache-clearing on close. See FileSource.markSecondary.
+      if (scanSource instanceof FileSource) scanSource.markSecondary();
+      if (superseded()) return;
+
+      const module = await loadWasmModuleNew({
+        wasmBinary: this.config.wasmBinary,
+      });
+      if (superseded()) return;
+
+      bindings = new WasmBindings(module);
+      if (!bindings.create()) throw new Error("Failed to create scan context");
+      bindings.setDataSource({
+        read: async (offset: number, size: number): Promise<Uint8Array> =>
+          new Uint8Array(await scanSource!.read(offset, size)),
+        getSize: async (): Promise<number> => scanSource!.getSize(),
+      });
+      await bindings.open();
+      if (superseded()) return;
+
+      Logger.info(
+        TAG,
+        `Duration rescan: scanning in the background (budget ${Math.round(budgetMs / 1000)}s)`,
+      );
+      const started = performance.now();
+      const scanned = await bindings.scanDuration(budgetMs);
+      const elapsed = Math.round(performance.now() - started);
+      if (superseded()) return;
+
+      if (!(scanned > 0)) {
+        Logger.warn(TAG, `Duration rescan found nothing usable (${elapsed}ms)`);
+        return;
+      }
+      if (!this.mediaInfo || this.mediaInfo.duration > 0) return;
+
+      Logger.info(TAG, `Duration rescan recovered ${scanned}s (${elapsed}ms)`);
+      this.mediaInfo.duration = scanned;
+      this.clock.setDuration(scanned + this.startTime);
+      this.emit("durationChange", scanned);
+    } catch (e) {
+      Logger.warn(TAG, "Duration rescan failed (non-critical)", e);
+    } finally {
+      try {
+        bindings?.destroy();
+      } catch {}
+      try {
+        scanSource?.close();
+      } catch {}
+    }
+  }
+
+  /**
    * Drop the preview reader's fetch window once hovering has stopped, so the
    * 2MB it holds isn't kept for the rest of the session — but not between two
    * hovers of the same scrub, which is what it exists for.
@@ -9810,6 +9951,10 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
 
   private destroyPreviewPipeline() {
     this._previewGeneration++;
+    if (this._durationRescanTimer) {
+      clearTimeout(this._durationRescanTimer);
+      this._durationRescanTimer = null;
+    }
     if (this._thumbBufferIdleTimer) {
       clearTimeout(this._thumbBufferIdleTimer);
       this._thumbBufferIdleTimer = null;

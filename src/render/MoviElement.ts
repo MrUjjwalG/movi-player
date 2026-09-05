@@ -17523,6 +17523,11 @@ export class MoviElement extends HTMLElement {
       :host(.movi-live) .movi-time-separator,
       :host(.movi-live) .movi-duration { display: none; }
       :host(.movi-live) .movi-live-badge { display: inline-flex; }
+      /* A container that never stored a duration. There is no total, so don't
+         print one: a 0:00 sitting where the length belongs reads as a broken
+         file. The elapsed time stays — it is the one number still true. */
+      :host(.movi-unknown-duration) .movi-time-separator,
+      :host(.movi-unknown-duration) .movi-duration { display: none; }
 
       .movi-progress-container {
         width: 100%;
@@ -25471,6 +25476,15 @@ export class MoviElement extends HTMLElement {
    * Cheap + idempotent — safe to call on every timeupdate.
    */
   private updateLiveState(): void {
+    // A playing file whose container never wrote a duration down is the other
+    // timeline with no end: the bar runs to the edge like a live one (see
+    // updateProgressBar) and the total is hidden rather than shown as 0:00.
+    // Comes off by itself if the background rescan finds the real length.
+    this.classList.toggle(
+      "movi-unknown-duration",
+      !!this.player?.hasUnknownDuration?.(),
+    );
+
     const isLive = !!this.player?.isLiveStream?.();
     this.classList.toggle("movi-live", isLive);
     if (!isLive) return;
@@ -30020,6 +30034,16 @@ export class MoviElement extends HTMLElement {
           progressBuffer.style.width = "0%";
         }
       }
+    } else if (this.player?.hasUnknownDuration?.()) {
+      // Playing, but the container never stored a length and the scan hasn't
+      // recovered one. There is no scale to place a playhead on, and a handle
+      // parked at 0 while the picture plays reads as a stuck bar. Run it to
+      // the edge instead, the way a live stream does — the honest picture of
+      // "we are at the far end of everything known". It becomes a real bar on
+      // its own if the background rescan lands a duration.
+      if (progressFilled) progressFilled.style.width = "100%";
+      if (progressHandle) progressHandle.style.left = "100%";
+      if (progressBuffer) progressBuffer.style.width = "0%";
     } else if (!this._qualitySwitchInProgress) {
       // No media loaded yet (duration 0 — initial load or a source change to a
       // new track). Without this the filled/handle/buffer keep the PREVIOUS
