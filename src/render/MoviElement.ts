@@ -6575,7 +6575,7 @@ export class MoviElement extends HTMLElement {
     };
 
     // Helper to hide context menu
-    const hideContextMenu = () => {
+    const hideContextMenu: () => void = () => {
       contextMenu.classList.remove("visible");
       // Restore the host's paint/overflow clip (lifted while the desktop menu
       // was open so it could spill outside the player).
@@ -6625,7 +6625,18 @@ export class MoviElement extends HTMLElement {
         // appear pinned to the player's top-left. The panels are hidden now and
         // every desktop open re-runs showSubmenu to set fresh coords, so leaving
         // the last values is harmless — and avoids the top-left pin.
-        const closedSubs = this._portaledSubs;
+        // Snapshot PLUS a live sweep of the portal — the same belt-and-braces
+        // unportalContextMenu uses for the move itself. A panel missing from
+        // this list keeps its visible class through the reparent, which is the
+        // one way a panel can end up painting at its old coordinates against a
+        // new containing block.
+        const closedSet = new Set<Element>(this._portaledSubs);
+        for (const sm of Array.from(
+          this._menuPortalRoot?.querySelectorAll(MoviElement.SUBMENU_SELECTOR) || [],
+        )) {
+          closedSet.add(sm);
+        }
+        const closedSubs = Array.from(closedSet);
         for (const sm of closedSubs) {
           const el = sm as HTMLElement;
           el.style.transition = "none";
@@ -7268,6 +7279,7 @@ export class MoviElement extends HTMLElement {
     // reached nothing at all, which looked like the deepest rows simply not
     // working.
     this._menuItemClickHandler = itemClickHandler;
+    this._hideContextMenu = hideContextMenu;
 
     // Handle hover for submenu
     const speedItem = contextMenu.querySelector(
@@ -13291,12 +13303,15 @@ export class MoviElement extends HTMLElement {
       this.setBottomMenuOpen(el, false);
     }
     if (keep !== ".movi-context-menu") {
-      // The menu itself travels to the portal while open — which is the only
-      // state in which there is anything here to close.
+      // Through the menu's own close, not a display poke. The desktop menu is
+      // in the body portal while it is open, and hiding it where it stands
+      // leaves it there with _portaledSubs stale — the next open then skips
+      // the snapshot, and the close after that has no list of panels to
+      // silence before moving them home.
       const ctx = this.contextMenuRoot().querySelector(
         ".movi-context-menu",
       ) as HTMLElement | null;
-      if (ctx && ctx.style.display !== "none") ctx.style.display = "none";
+      if (ctx && ctx.style.display !== "none") this._hideContextMenu?.();
     }
 
     // Full close (not the open-one/close-others case): re-arm the auto-hide
@@ -33982,6 +33997,11 @@ export class MoviElement extends HTMLElement {
   /** The context menu's item-click delegate, kept so panels created after the
    *  menu was wired can be given it too. See setupContextMenu. */
   private _menuItemClickHandler: ((e: Event) => void) | null = null;
+  /** The context menu's own close, so callers outside setupContextMenu can
+   *  close it PROPERLY — the desktop close is a portal dance (freeze the host,
+   *  hide, move menu + panels home), and skipping it leaves the menu parked in
+   *  the portal with the element's own state saying it is still open. */
+  private _hideContextMenu: (() => void) | null = null;
 
   private _customControls = new Map<
     string,
@@ -38962,15 +38982,25 @@ export class MoviElement extends HTMLElement {
   private portalContextMenu(menu: HTMLElement): void {
     const root = this.ensureMenuPortal();
     if (!root) return;
-    if (menu.parentNode !== root) {
-      this._menuHome = menu.parentNode;
-      this._portaledSubs = this.shadowRoot
-        ? Array.from(
-            this.shadowRoot.querySelectorAll(MoviElement.SUBMENU_SELECTOR),
-          )
-        : [];
-      root.appendChild(menu);
-      for (const sub of this._portaledSubs) root.appendChild(sub);
+    if (menu.parentNode !== root) this._menuHome = menu.parentNode;
+    // Re-taken on every open, not just the first. It used to sit inside the
+    // move-it-there branch, so a menu that was still in the portal (closed by
+    // something that skipped the unportal) opened again with the list from
+    // last time — and the close that followed had no panels to silence before
+    // moving them home. Sweep both roots: whatever is here, whatever is there.
+    const subs = new Set<Element>();
+    for (const r of [this.shadowRoot, root]) {
+      if (!r) continue;
+      for (const sub of Array.from(
+        r.querySelectorAll(MoviElement.SUBMENU_SELECTOR),
+      )) {
+        subs.add(sub);
+      }
+    }
+    this._portaledSubs = Array.from(subs);
+    if (menu.parentNode !== root) root.appendChild(menu);
+    for (const sub of this._portaledSubs) {
+      if (sub.parentNode !== root) root.appendChild(sub);
     }
     // Carry over inline theme overrides (e.g. themecolor -> --movi-primary) so
     // the portaled menu matches; the cloned styles supply the defaults.
