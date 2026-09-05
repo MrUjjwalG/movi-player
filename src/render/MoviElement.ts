@@ -6968,6 +6968,13 @@ export class MoviElement extends HTMLElement {
           '.movi-context-menu-submenu[data-submenu="speed"]',
         ) as HTMLElement;
         if (submenu) {
+          // Give it coordinates before showing it. The mobile menu lays its
+          // panels out itself (full-width slide-in), so only the desktop one
+          // is placed here.
+          if (!contextMenu.classList.contains("movi-context-menu-mobile")) {
+            this.positionSubmenu(item, submenu);
+          }
+          this.syncSpeedSubmenuActive(submenu);
           contextMenu.scrollTop = 0;
           submenu.classList.add("movi-context-menu-submenu-visible");
         }
@@ -6975,6 +6982,9 @@ export class MoviElement extends HTMLElement {
         const submenu = this.contextMenuRoot().querySelector('.movi-context-menu-submenu[data-submenu="fit"]') as HTMLElement;
         if (submenu) {
           this.syncFitSubmenuActive(submenu); // touch: reflect current fit
+          if (!contextMenu.classList.contains("movi-context-menu-mobile")) {
+            this.positionSubmenu(item, submenu);
+          }
           contextMenu.scrollTop = 0;
           submenu.classList.add("movi-context-menu-submenu-visible");
         }
@@ -6984,6 +6994,12 @@ export class MoviElement extends HTMLElement {
           ".movi-context-menu-submenu-audio",
         ) as HTMLElement;
         if (submenu) {
+          // Give it coordinates before showing it. The mobile menu lays its
+          // panels out itself (full-width slide-in), so only the desktop one
+          // is placed here.
+          if (!contextMenu.classList.contains("movi-context-menu-mobile")) {
+            this.positionSubmenu(item, submenu);
+          }
           contextMenu.scrollTop = 0;
           submenu.classList.add("movi-context-menu-submenu-visible");
         }
@@ -7021,6 +7037,12 @@ export class MoviElement extends HTMLElement {
           ".movi-context-menu-submenu-audiodevice",
         ) as HTMLElement;
         if (submenu) {
+          // Give it coordinates before showing it. The mobile menu lays its
+          // panels out itself (full-width slide-in), so only the desktop one
+          // is placed here.
+          if (!contextMenu.classList.contains("movi-context-menu-mobile")) {
+            this.positionSubmenu(item, submenu);
+          }
           contextMenu.scrollTop = 0;
           submenu.classList.add("movi-context-menu-submenu-visible");
         }
@@ -7044,6 +7066,12 @@ export class MoviElement extends HTMLElement {
           ".movi-context-menu-submenu-subtitle",
         ) as HTMLElement;
         if (submenu) {
+          // Give it coordinates before showing it. The mobile menu lays its
+          // panels out itself (full-width slide-in), so only the desktop one
+          // is placed here.
+          if (!contextMenu.classList.contains("movi-context-menu-mobile")) {
+            this.positionSubmenu(item, submenu);
+          }
           contextMenu.scrollTop = 0;
           submenu.classList.add("movi-context-menu-submenu-visible");
         }
@@ -7527,6 +7555,99 @@ export class MoviElement extends HTMLElement {
       );
   }
 
+  /**
+   * Place a submenu panel beside its row.
+   *
+   * Lived inside the hover closure, which is why a submenu opened by CLICK
+   * came up with no coordinates at all: portaled, an unpositioned panel
+   * resolves to its containing block's origin, so it appeared pinned to the
+   * top-left — and moved again on close, when the panel went home and the same
+   * empty coords started resolving against the player. Both paths now measure
+   * through here, so a click opens the panel exactly where a hover does.
+   */
+  private positionSubmenu(item: HTMLElement, submenu: HTMLElement): void {
+    // The menu (and its submenu panels) may be in the body portal (desktop)
+    // rather than the shadow root — find it wherever it lives.
+    const contextMenu = (this._menuPortalRoot?.querySelector(
+      ".movi-context-menu",
+    ) ||
+      this.shadowRoot?.querySelector(
+        ".movi-context-menu",
+      )) as HTMLElement | null;
+    if (contextMenu) {
+      // Use VIEWPORT coordinates when the menu itself is viewport-positioned:
+      // the desktop menu is portaled (absolute inside the fixed portal host at
+      // 0,0), and the audio-strip menu is fixed (strip mode drops the host's
+      // container-type, so a fixed submenu is viewport-relative too and lines
+      // up with it — the tiny 56px strip's bounds must NOT confine it).
+      // Otherwise the submenu is :host-relative and confined to the player.
+      const portaled = contextMenu.getRootNode() === this._menuPortalRoot;
+      const strip = this.classList.contains("movi-audio-strip");
+      const useViewport = portaled || strip;
+      // Strip: pin the submenu to the viewport like the strip menu.
+      submenu.style.position = strip ? "fixed" : "";
+      const itemRect = item.getBoundingClientRect();
+      const menuRect = contextMenu.getBoundingClientRect();
+      const playerRect = this.getBoundingClientRect();
+      const submenuWidth = submenu.offsetWidth || 160;
+      const gap = 4;
+      const padding = 10;
+
+      const originLeft = useViewport ? 0 : playerRect.left;
+      const originTop = useViewport ? 0 : playerRect.top;
+      const boundsLeft = useViewport ? 0 : playerRect.left;
+      const boundsRight = useViewport ? window.innerWidth : playerRect.right;
+      const boundsBottom = useViewport ? window.innerHeight : playerRect.bottom;
+
+      const spaceOnRight = boundsRight - menuRect.right;
+      const spaceOnLeft = menuRect.left - boundsLeft;
+
+      submenu.style.right = "auto";
+      submenu.style.marginLeft = "0";
+      submenu.style.marginRight = "0";
+
+      // Positions are relative to the submenu's containing block (viewport
+      // origin when portaled, else :host), so subtract the origin.
+      if (spaceOnRight >= submenuWidth + padding) {
+        // 1. RIGHT (Preferred)
+        submenu.style.left = `${menuRect.right + gap - originLeft}px`;
+        submenu.style.transform = "translateX(-8px)";
+      } else if (spaceOnLeft >= submenuWidth + padding) {
+        // 2. LEFT
+        submenu.style.left = `${menuRect.left - submenuWidth - gap - originLeft}px`;
+        submenu.style.transform = "translateX(8px)";
+      } else {
+        // 3. OVERLAP (tight space)
+        submenu.style.left = `${menuRect.left + 20 - originLeft}px`;
+        submenu.style.transform = "translateY(10px)";
+      }
+
+      let topPx = itemRect.top - originTop;
+      submenu.style.top = `${topPx}px`;
+
+      // Measure submenu height (force layout if hidden)
+      const wasClassVisible = submenu.classList.contains(
+        "movi-context-menu-submenu-visible",
+      );
+      if (!wasClassVisible) {
+        submenu.style.visibility = "hidden";
+        submenu.style.display = "block";
+      }
+      const submenuHeight = submenu.getBoundingClientRect().height;
+      if (!wasClassVisible) {
+        submenu.style.display = "";
+        submenu.style.visibility = "";
+      }
+
+      // Clamp to the bounds (viewport when portaled, else player).
+      const maxTop = boundsBottom - originTop - padding - submenuHeight;
+      if (topPx > maxTop) {
+        topPx = Math.max(padding, maxTop);
+        submenu.style.top = `${topPx}px`;
+      }
+    }
+  }
+
   private setupSubmenuHover(item: HTMLElement, submenu: HTMLElement): void {
     // Check if listeners are already attached (using a data attribute)
     if (item.dataset.hoverSetup === "true") {
@@ -7544,86 +7665,7 @@ export class MoviElement extends HTMLElement {
         clearTimeout(hideTimeout);
         hideTimeout = null;
       }
-      // The menu (and its submenu panels) may be in the body portal (desktop)
-      // rather than the shadow root — find it wherever it lives.
-      const contextMenu = (this._menuPortalRoot?.querySelector(
-        ".movi-context-menu",
-      ) ||
-        this.shadowRoot?.querySelector(
-          ".movi-context-menu",
-        )) as HTMLElement | null;
-      if (contextMenu) {
-        // Use VIEWPORT coordinates when the menu itself is viewport-positioned:
-        // the desktop menu is portaled (absolute inside the fixed portal host at
-        // 0,0), and the audio-strip menu is fixed (strip mode drops the host's
-        // container-type, so a fixed submenu is viewport-relative too and lines
-        // up with it — the tiny 56px strip's bounds must NOT confine it).
-        // Otherwise the submenu is :host-relative and confined to the player.
-        const portaled = contextMenu.getRootNode() === this._menuPortalRoot;
-        const strip = this.classList.contains("movi-audio-strip");
-        const useViewport = portaled || strip;
-        // Strip: pin the submenu to the viewport like the strip menu.
-        submenu.style.position = strip ? "fixed" : "";
-        const itemRect = item.getBoundingClientRect();
-        const menuRect = contextMenu.getBoundingClientRect();
-        const playerRect = this.getBoundingClientRect();
-        const submenuWidth = submenu.offsetWidth || 160;
-        const gap = 4;
-        const padding = 10;
-
-        const originLeft = useViewport ? 0 : playerRect.left;
-        const originTop = useViewport ? 0 : playerRect.top;
-        const boundsLeft = useViewport ? 0 : playerRect.left;
-        const boundsRight = useViewport ? window.innerWidth : playerRect.right;
-        const boundsBottom = useViewport ? window.innerHeight : playerRect.bottom;
-
-        const spaceOnRight = boundsRight - menuRect.right;
-        const spaceOnLeft = menuRect.left - boundsLeft;
-
-        submenu.style.right = "auto";
-        submenu.style.marginLeft = "0";
-        submenu.style.marginRight = "0";
-
-        // Positions are relative to the submenu's containing block (viewport
-        // origin when portaled, else :host), so subtract the origin.
-        if (spaceOnRight >= submenuWidth + padding) {
-          // 1. RIGHT (Preferred)
-          submenu.style.left = `${menuRect.right + gap - originLeft}px`;
-          submenu.style.transform = "translateX(-8px)";
-        } else if (spaceOnLeft >= submenuWidth + padding) {
-          // 2. LEFT
-          submenu.style.left = `${menuRect.left - submenuWidth - gap - originLeft}px`;
-          submenu.style.transform = "translateX(8px)";
-        } else {
-          // 3. OVERLAP (tight space)
-          submenu.style.left = `${menuRect.left + 20 - originLeft}px`;
-          submenu.style.transform = "translateY(10px)";
-        }
-
-        let topPx = itemRect.top - originTop;
-        submenu.style.top = `${topPx}px`;
-
-        // Measure submenu height (force layout if hidden)
-        const wasClassVisible = submenu.classList.contains(
-          "movi-context-menu-submenu-visible",
-        );
-        if (!wasClassVisible) {
-          submenu.style.visibility = "hidden";
-          submenu.style.display = "block";
-        }
-        const submenuHeight = submenu.getBoundingClientRect().height;
-        if (!wasClassVisible) {
-          submenu.style.display = "";
-          submenu.style.visibility = "";
-        }
-
-        // Clamp to the bounds (viewport when portaled, else player).
-        const maxTop = boundsBottom - originTop - padding - submenuHeight;
-        if (topPx > maxTop) {
-          topPx = Math.max(padding, maxTop);
-          submenu.style.top = `${topPx}px`;
-        }
-      }
+      this.positionSubmenu(item, submenu);
 
       // Hover-open: reflect live state. Both of these submenus are static
       // markup whose active row is otherwise only set by clicking in them.
@@ -13249,7 +13291,9 @@ export class MoviElement extends HTMLElement {
       this.setBottomMenuOpen(el, false);
     }
     if (keep !== ".movi-context-menu") {
-      const ctx = this.shadowRoot.querySelector(
+      // The menu itself travels to the portal while open — which is the only
+      // state in which there is anything here to close.
+      const ctx = this.contextMenuRoot().querySelector(
         ".movi-context-menu",
       ) as HTMLElement | null;
       if (ctx && ctx.style.display !== "none") ctx.style.display = "none";
@@ -28791,13 +28835,19 @@ export class MoviElement extends HTMLElement {
     ) as HTMLElement;
     const isLoading = loadingIndicator?.style.display === "flex";
 
-    const contextMenuPlayIcon = this.shadowRoot?.querySelector(
+    // Through contextMenuRoot(): this runs on the UI tick, and the desktop
+    // menu spends its whole visible life in the body portal — which is exactly
+    // when these need updating. Looked up in the shadow root they came back
+    // null for as long as the menu was open, so pressing space with the menu
+    // up left its row reading "Play" over a playing video.
+    const menuRoot = this.contextMenuRoot();
+    const contextMenuPlayIcon = menuRoot.querySelector(
       ".movi-context-menu-play-icon",
     ) as HTMLElement;
-    const contextMenuPauseIcon = this.shadowRoot?.querySelector(
+    const contextMenuPauseIcon = menuRoot.querySelector(
       ".movi-context-menu-pause-icon",
     ) as HTMLElement;
-    const contextMenuLabel = this.shadowRoot?.querySelector(
+    const contextMenuLabel = menuRoot.querySelector(
       '.movi-context-menu-item[data-action="play-pause"] .movi-context-menu-label',
     ) as HTMLElement;
 
@@ -39014,11 +39064,14 @@ export class MoviElement extends HTMLElement {
     const hdrContainer = this.shadowRoot?.querySelector(
       ".movi-hdr-container",
     ) as HTMLElement;
-    const hdrMenuItem = this.shadowRoot?.querySelector(
+    // Both live inside the menu, which is in the body portal while it is
+    // open — see updatePlayPauseIcon.
+    const hdrMenuRoot = this.contextMenuRoot();
+    const hdrMenuItem = hdrMenuRoot.querySelector(
       '.movi-context-menu-item[data-action="hdr-toggle"]',
     ) as HTMLElement;
 
-    const hdrDivider = this.shadowRoot?.querySelector(
+    const hdrDivider = hdrMenuRoot.querySelector(
       ".movi-hdr-divider",
     ) as HTMLElement;
 
