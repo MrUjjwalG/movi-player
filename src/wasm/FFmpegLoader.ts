@@ -4,6 +4,7 @@
 
 import type { MoviWasmModule } from './types';
 import { Logger } from '../utils/Logger';
+import { IS_SLIM } from '../build-flags';
 // Static import of the generated module (bundled into index.js)
 // @ts-ignore - movi.js is Emscripten-generated, no types available
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -67,12 +68,113 @@ export function setWasmUrl(url: string | null): void {
   wasmUrlOverride = url && url.trim() ? url.trim() : null;
 }
 
-/** Build a `locateFile` that redirects the .wasm request to the override URL. */
+// The URL the glue actually resolved `movi.wasm` to, learned from the
+// `locateFile` below on the first module that loads without an override. With
+// no override set, the glue's own default is `new URL("movi.wasm",
+// import.meta.url)` against the BUNDLE's location, which nothing here can
+// compute — so it is remembered as it happens rather than guessed.
+let resolvedWasmUrl: string | null = null;
+
+/**
+ * Build a `locateFile` for the slim build's external `movi.wasm`.
+ *
+ * Two jobs: redirect the request to a `wasmurl` override when one is set (the
+ * original purpose), and remember whatever URL comes out either way, so
+ * {@link compiledWasmModule} can compile from it. Returning `undefined` leaves
+ * the glue on its own default path, which is what the embedded build wants.
+ */
 function wasmLocateFile(): ((path: string, prefix: string) => string) | undefined {
-  if (!wasmUrlOverride) return undefined;
-  const url = wasmUrlOverride;
-  return (path: string, prefix: string) =>
-    path.endsWith(".wasm") ? url : prefix + path;
+  if (!wasmUrlOverride && !IS_SLIM) return undefined;
+  const override = wasmUrlOverride;
+  return (path: string, prefix: string) => {
+    if (!path.endsWith(".wasm")) return prefix + path;
+    const url = override ?? prefix + path;
+    resolvedWasmUrl = url;
+    return url;
+  };
+}
+
+// The compiled 5.4MB module, shared by every instance.
+//
+// Emscripten compiles the WASM once per module it builds, and this player
+// builds several: the cached main-playback one, an isolated one for every
+// extra demuxer (a second player, the preview/thumbnail pipeline), and another
+// after a quality switch rebuilds the pipeline. Each of those was its own
+// fetch AND its own multi-megabyte compile — the repeated `movi.wasm` rows in
+// the network panel are exactly this. A `WebAssembly.Module` is immutable and
+// instantiating it is cheap, so compiling once and instantiating many times
+// gives each caller the same isolated memory it had before for a fraction of
+// the cost.
+let compiledWasmPromise: Promise<WebAssembly.Module> | null = null;
+
+/** Compile `movi.wasm` from `url`, once per page. */
+function compiledWasmModule(url: string): Promise<WebAssembly.Module> {
+  if (compiledWasmPromise) return compiledWasmPromise;
+  const promise = (async () => {
+    try {
+      // Streaming compile — the same call the glue makes, so a server that
+      // labels the file `application/wasm` still gets the fast path (and, in
+      // Chrome, the cross-page compiled-code cache that only streaming fills).
+      return await WebAssembly.compileStreaming(
+        fetch(url, { credentials: "same-origin" }),
+      );
+    } catch (error) {
+      // Wrong MIME type is the usual reason, and it is fatal to streaming but
+      // not to the buffer path — the glue has the same fallback.
+      Logger.warn(TAG, `wasm streaming compile failed (${error}); retrying via ArrayBuffer`);
+      const response = await fetch(url, { credentials: "same-origin" });
+      if (!response.ok) {
+        throw new Error(`Failed to fetch ${url}: HTTP ${response.status}`);
+      }
+      return WebAssembly.compile(await response.arrayBuffer());
+    }
+  })();
+  compiledWasmPromise = promise;
+  // A failure must not be cached — the next load should be free to try again
+  // (and to fall back to letting the glue fetch it itself).
+  promise.catch(() => {
+    if (compiledWasmPromise === promise) compiledWasmPromise = null;
+  });
+  return promise;
+}
+
+/**
+ * Build the `instantiateWasm` hook that hands Emscripten an instance of the
+ * shared compiled module, or `undefined` when there is nothing to share yet —
+ * in which case the glue fetches and compiles as it always did, and this
+ * load's `locateFile` records the URL so the NEXT one can share.
+ *
+ * The compile is awaited HERE, before the module is created, on purpose: the
+ * hook has no error channel (the glue awaits a promise the callback resolves,
+ * so a throw inside it hangs the load forever). Resolving it first means a
+ * failure just means no hook.
+ */
+async function wasmInstantiateHook(
+  wasmBinary: Uint8Array | null,
+): Promise<((imports: WebAssembly.Imports, success: (inst: WebAssembly.Instance) => void) => void) | undefined> {
+  // Bytes in hand (an embedded build, or a caller passing their own) — the
+  // glue has nothing to fetch and this buys nothing.
+  if (wasmBinary || !IS_SLIM) return undefined;
+  const url = wasmUrlOverride ?? resolvedWasmUrl;
+  if (!url) return undefined;
+  let module: WebAssembly.Module;
+  try {
+    module = await compiledWasmModule(url);
+  } catch (error) {
+    Logger.warn(TAG, `Shared WASM compile failed (${error}); falling back to the loader's own fetch`);
+    return undefined;
+  }
+  return (imports, success) => {
+    WebAssembly.instantiate(module, imports).then(
+      (instance) => success(instance),
+      (error) => {
+        // Instantiating an already-compiled module with the glue's own imports
+        // does not realistically fail; if it somehow does, say so rather than
+        // leaving a silently hung load.
+        Logger.error(TAG, 'Failed to instantiate the shared WASM module', error);
+      },
+    );
+  };
 }
 
 export interface LoaderOptions {
@@ -93,6 +195,10 @@ export interface LoaderOptions {
 export function resetWasmModule(): void {
   loadedModule = null;
   modulePromise = null;
+  // The COMPILED module is deliberately kept. What abort() kills is one
+  // instance's memory and stack, not the code — a fresh instance of the same
+  // compiled module is exactly the live one this wants to rebuild, and
+  // recompiling 5.4MB to get it would only make the recovery slower.
   // Whoever held the dead module is not going to give it back.
   sharedModuleClaimed = false;
 }
@@ -147,8 +253,15 @@ export async function loadWasmModule(options: LoaderOptions = {}): Promise<MoviW
       }
       const locateFile = wasmLocateFile();
       if (locateFile) {
-        // Slim build with a custom wasmurl — tell Emscripten where movi.wasm is.
+        // Slim build — tell Emscripten where movi.wasm is (and learn the URL).
         moduleOptions.locateFile = locateFile;
+      }
+      const instantiateWasm = await wasmInstantiateHook(wasmBinary ?? null);
+      if (instantiateWasm) {
+        // Reuse the already-compiled module instead of fetching and compiling
+        // it again. Takes priority over locateFile in the glue: with this set
+        // it never asks for the file at all.
+        moduleOptions.instantiateWasm = instantiateWasm;
       }
       const module: MoviWasmModule = await createModule(moduleOptions);
       
@@ -202,8 +315,15 @@ export async function loadWasmModuleNew(options: LoaderOptions = {}): Promise<Mo
     }
     const locateFile = wasmLocateFile();
     if (locateFile) {
-      // Slim build with a custom wasmurl — tell Emscripten where movi.wasm is.
+      // Slim build — tell Emscripten where movi.wasm is (and learn the URL).
       moduleOptions.locateFile = locateFile;
+    }
+    const instantiateWasm = await wasmInstantiateHook(wasmBinary ?? null);
+    if (instantiateWasm) {
+      // The whole point of this path is a separate WebAssembly.Memory, and it
+      // still gets one — instantiating a shared compiled module builds a fresh
+      // instance every time. Only the fetch and the compile are shared.
+      moduleOptions.instantiateWasm = instantiateWasm;
     }
 
     // Always create fresh instance - no caching
