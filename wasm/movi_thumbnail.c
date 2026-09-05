@@ -19,7 +19,11 @@ struct MoviThumbnailContext {
 
   int video_stream_index;
   AVPacket *pkt;
-  
+  // Has this context seeked even once? Matroska only parses its Cues on the
+  // first seek, so until then an indexed file looks unindexed. See the priming
+  // seek in movi_thumbnail_read_keyframe.
+  int index_primed;
+
   // Decoding support (Software fallback)
   AVCodecContext *dec_ctx;
   AVFrame *frame;
@@ -278,8 +282,32 @@ void movi_thumbnail_read_keyframe(struct MoviThumbnailContext *ctx,
   // too (movi_mkv_index_near_fmt).
   if (movi_fmt_is_matroska(ctx->fmt_ctx) &&
       movi_mkv_index_misses(st, timestamp)) {
-    movi_mkv_index_near_fmt(ctx->fmt_ctx, ctx->file_size,
-                            ctx->video_stream_index, timestamp);
+    // …but ask the file for its OWN index before deciding it hasn't got one.
+    //
+    // Matroska parses its Cues lazily, inside the first matroska_read_seek —
+    // not at open. So on the first hover the index is legitimately empty for a
+    // file that ships a perfectly good one, and the bisection below rebuilds by
+    // hand what was there all along: measured on a 17.8GB WEB-DL over a CDN,
+    // nine 2MB probes (~22MB, 36s for one thumbnail) before the real seek
+    // finally read the Cues at EOF and landed in a single fetch. The main
+    // player never shows this — it seeks to 0 once during load, which resolves
+    // its Cues by accident; the preview context never seeks until it is asked
+    // to, which is the very hover that pays for it.
+    //
+    // A seek to the start is the cheapest way to ask. With Cues it is one
+    // small read at EOF and a rewind; without them the generic fallback
+    // bisects toward timestamp 0, which converges immediately at the head —
+    // bytes the source already holds. Either way we then know whether the
+    // index is real, and the bisection is left for the files that need it.
+    if (!ctx->index_primed) {
+      ctx->index_primed = 1;
+      avformat_seek_file(ctx->fmt_ctx, -1, INT64_MIN, 0, 0,
+                         AVSEEK_FLAG_BACKWARD);
+    }
+    if (movi_mkv_index_misses(st, timestamp)) {
+      movi_mkv_index_near_fmt(ctx->fmt_ctx, ctx->file_size,
+                              ctx->video_stream_index, timestamp);
+    }
   }
 
   // A transport stream has the same problem for a different reason: it has no
