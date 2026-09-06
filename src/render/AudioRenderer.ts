@@ -1830,10 +1830,27 @@ export class AudioRenderer {
     // every other setup silent from the first seek onwards.
     if (this.inputNode && this.audioContext) {
       try {
+        const param = this.inputNode.gain;
+        const now = this.audioContext.currentTime;
         const fade = this._stableAudio ? AudioRenderer.FADE_OUT_TIME : 0.008;
-        const restoreTime = this.audioContext.currentTime + fade + 0.005;
         this._gainHoldUntil = performance.now() + 1000;
-        this.inputNode.gain.linearRampToValueAtTime(1, restoreTime);
+        // Anchored, and on a cleared timeline — not a bare ramp trusting
+        // whatever came before it.
+        //
+        // A bare one is what shipped, and it left the input parked below 1
+        // twice in one session (0.5292 and 0.0026, caught by the net). The
+        // race: this ramp is scheduled, then an underrun during the same seek
+        // fires duck(), which does cancelScheduledValues and takes the input
+        // to zero — the restore is gone. The next seek then clears the duck
+        // FLAG without putting the gain back and stops the duck's release
+        // timer, so nothing is left that would ever raise it again.
+        //
+        // Cancelling first, anchoring at wherever the value actually is, and
+        // ramping from there makes this the last word on the param whatever
+        // happened before it, which is what a reset should be.
+        param.cancelScheduledValues(now);
+        param.setValueAtTime(param.value, now);
+        param.linearRampToValueAtTime(1, now + fade + 0.005);
       } catch {
         // Fallback: set directly
         this.inputNode.gain.value = 1;
