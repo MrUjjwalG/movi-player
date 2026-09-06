@@ -797,7 +797,9 @@ function renderHtml(webview: vscode.Webview, webviewRoot: vscode.Uri): string {
       "%PLAYER_ATTRS%",
       [
         "controls",
-        "thumb",
+        // "precise": the seek-bar preview shows the frame the pointer is ON,
+        // not the keyframe before it — which on a long-GOP file is seconds away.
+        'thumb="precise"',
         "fastseek",
         "showtitle",
         settings.autoplay ? "autoplay" : "",
