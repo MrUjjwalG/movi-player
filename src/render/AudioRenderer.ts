@@ -517,6 +517,10 @@ export class AudioRenderer {
    */
   /** Decoded source sample rate, from configure(). 0 until the decoder reports. */
   private _sourceSampleRate = 0;
+  /** Channels in the last buffer actually scheduled. A track that starts
+   *  arriving as mono, or downmixed, is one of the ways "it went quiet" is
+   *  true — see the health line. */
+  private _lastChannels = 0;
 
   configure(sampleRate: number, channels: number): void {
     // Remembered for init(): opening the context at the SOURCE's rate is what
@@ -611,6 +615,7 @@ export class AudioRenderer {
     try {
       const numberOfFrames = audioData.numberOfFrames;
       const numberOfChannels = audioData.numberOfChannels;
+    this._lastChannels = numberOfChannels;
       const sampleRate = audioData.sampleRate;
       const audioTime = audioData.timestamp / 1_000_000; // Convert to seconds
 
@@ -652,6 +657,7 @@ export class AudioRenderer {
 
     try {
       const audioTime = frame.timestamp / 1_000_000;
+      this._lastChannels = frame.numberOfChannels;
       const audioBuffer = this.audioContext.createBuffer(
         frame.numberOfChannels,
         frame.numberOfFrames,
@@ -982,6 +988,12 @@ export class AudioRenderer {
     // thinks its own latency is. A cushion collapsing towards zero, a source
     // count that climbs across a track change, or an output latency that moves
     // are three different bugs, and this tells them apart.
+    //
+    // …and what the output is being multiplied BY, which none of the four
+    // said. "It went quiet after a seek" is a report these lines could not
+    // answer: the master gain, the underrun duck and the channel count are
+    // three separate ways for the same complaint to be true, and a log with
+    // none of them in it leaves guessing as the only move.
     if (
       this.audioContext &&
       now - this._lastHealthLogAt > 1
@@ -996,6 +1008,11 @@ export class AudioRenderer {
         `Output: cushion=${((this.scheduledTime - now) * 1000).toFixed(0)}ms ` +
           `queued=${(this._pendingDuration * 1000).toFixed(0)}ms ` +
           `sources=${this.activeSources.length} state=${ctx.state} ` +
+          `gain=${this.gainNode ? this.gainNode.gain.value.toFixed(3) : "-"}` +
+          `/${this.perceptualGain(this.volume).toFixed(3)} ` +
+          (this._ducked ? "DUCKED " : "") +
+          (this._muted ? "MUTED " : "") +
+          `ch=${this._lastChannels} ` +
           (this._stableAudio && this.compressorNode
             ? `gr=${this.compressorNode.reduction.toFixed(1)}dB `
             : "") +
