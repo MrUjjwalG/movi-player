@@ -209,10 +209,54 @@ function webCodecsUnavailable(): boolean {
  */
 const DECODE_CEILING_KEY = "movi:decode-ceiling:v2";
 
+/**
+ * Resolve `p`, or TIMED_OUT once `ms` have passed.
+ *
+ * The losing promise is NOT cancelled — it cannot be — so every caller must
+ * tear its demuxer down straight after, which is exactly what abandonPrep and
+ * primeRendition's discard path do. Used only where an await has no bound of
+ * its own and the thing being waited on is holding the link.
+ */
+const TIMED_OUT = Symbol("timed-out");
+async function withDeadline<T>(
+  p: Promise<T>,
+  ms: number,
+): Promise<T | typeof TIMED_OUT> {
+  let t: ReturnType<typeof setTimeout> | undefined;
+  const timer = new Promise<typeof TIMED_OUT>((r) => {
+    t = setTimeout(() => r(TIMED_OUT), Math.max(0, ms));
+  });
+  try {
+    return await Promise.race([p, timer]);
+  } finally {
+    clearTimeout(t);
+  }
+}
+
 /** `av01@2160` — what actually failed, not just how tall it was. */
 function decodeBoundKey(codec: string, height: number): string {
   const family = (codec || "").split(".")[0].toLowerCase() || "unknown";
   return `${family}@${height}`;
+}
+
+/**
+ * `av01.0.17m.08@4320` — the exact rung SHAPE, for a bar that gets written
+ * down.
+ *
+ * The family key above collapses everything a codec string carries: profile,
+ * level and BIT DEPTH. That is right for the reactive bar, which comes from
+ * this device visibly failing to play something and is a statement about the
+ * machine right now. It is wrong for a persisted capability verdict, because
+ * "8K AV1" is not one thing — a GPU can decode 8-bit and refuse 10-bit, and
+ * two videos' 8K rungs are routinely different profiles. Keyed by family, one
+ * refusal retired every 8K AV1 rung on that device for good, including the
+ * ones it could have played.
+ *
+ * Empty for a bare family ("av01"), which has no shape to be exact about.
+ */
+function decodeBoundExactKey(codec: string, height: number): string {
+  if (!codec.includes(".")) return "";
+  return `${codec.toLowerCase()}@${height}`;
 }
 
 function loadPersistedDecodeCeiling(): void {
@@ -331,7 +375,7 @@ async function screenLadderForDecode(
       if (h <= 0) continue;
       // Skip only a rung ALREADY judged for this codec — a different codec at
       // the same height is a different question.
-      if (deviceDecodeBoundHeights.has(decodeBoundKey(r.codec || "", h))) continue;
+      if (MoviPlayer.isDecodeBound(r.codec, h)) continue;
       // The rung's real frame. Only fall back to a 16:9 guess when the ladder
       // didn't declare a width — asking decodingInfo about dimensions the
       // content doesn't have gets an answer about a video nobody is playing.
@@ -433,7 +477,14 @@ async function screenLadderForDecode(
           }
         }
         if (verdict) {
-          const key = decodeBoundKey(codec, h);
+          // A verdict that gets WRITTEN DOWN is keyed by the exact rung shape,
+          // so it retires that rung and not the whole family at that height —
+          // see decodeBoundExactKey. A session-scoped one keeps the broad key:
+          // it expires with the tab anyway, and while it lasts "this machine is
+          // not comfortable at this size" is the useful reading of it.
+          const isFact = verdict === "unsupported" || verdict === "no hardware path";
+          const key =
+            (isFact && decodeBoundExactKey(codec, h)) || decodeBoundKey(codec, h);
           deviceDecodeBoundHeights.add(key);
           // Facts are written down; judgements are not.
           //
@@ -448,7 +499,6 @@ async function screenLadderForDecode(
           // never be tried again to find out whether the opinion was right.
           // Session-scoped, the next load gets to ask again, and if it really
           // can't hold it the reactive path pulls it down in a few seconds.
-          const isFact = verdict === "unsupported" || verdict === "no hardware path";
           if (isFact) {
             persistDecodeCeiling();
           } else {
@@ -660,6 +710,8 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
   /** Has THIS codec at THIS height been shown not to decode here? */
   static isDecodeBound(codec: string | undefined, height: number): boolean {
     if (!(height > 0)) return false;
+    const exact = decodeBoundExactKey(codec || "", height);
+    if (exact && deviceDecodeBoundHeights.has(exact)) return true;
     return deviceDecodeBoundHeights.has(decodeBoundKey(codec || "", height));
   }
 
@@ -782,6 +834,24 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
    *  which cannot be made seamless falls back before the reason for switching
    *  gets worse. */
   private static readonly SEAMLESS_PRIME_BUDGET_MS = 5000;
+  /**
+   * Whole-prep bound for an in-place switch — open, seek and prime together.
+   *
+   * Every await in the prep was unbounded, and the one that hurts is the rung
+   * that cannot be fed: an 8K AV1 rung is a 1.2GB file at 38.7Mbps, and on a
+   * link that measures about the same the open alone can hang for as long as
+   * it likes. Nothing rescues that, because `_abrSwitchInProgress` is held for
+   * the whole call and it gates abrDecide, the decode downshift AND
+   * abrEmergencyDownshift — so the ladder cannot step back down while the
+   * stream it is stuck on saturates the link the player is starving for.
+   *
+   * Generous on purpose. A DOWNSHIFT comes through here too, and that is the
+   * one switch a struggling player must always be able to finish; its target
+   * is a smaller rung, so it is nowhere near this. What this cuts off is a
+   * climb into a rung the link cannot carry, which is the only case that ever
+   * runs this long.
+   */
+  private static readonly SWITCH_PREP_BUDGET_MS = 12_000;
   // bandwidth → consecutive "couldn't sustain this rung" strikes + when the last
   // one hit. Each strike doubles the re-climb penalty (30s → 1m → 2m … capped),
   // so a rung the link keeps failing to hold is backed off harder and harder
@@ -2802,6 +2872,12 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
     // --- PREP (old keeps playing): build + open the new demuxer on an isolated
     // WASM module and seek it to the current position. Any failure here bails
     // out cleanly, leaving the old rendition untouched. ---
+    // …and any HANG here bails out too. See SWITCH_PREP_BUDGET_MS: the prep is
+    // several unbounded network waits held under a flag that disables every
+    // path that could rescue playback, so it needs an end.
+    const prepDeadline =
+      performance.now() + MoviPlayer.SWITCH_PREP_BUDGET_MS;
+    const prepLeft = () => prepDeadline - performance.now();
     let newSource: SourceAdapter;
     try {
       if (isHls) {
@@ -2849,7 +2925,17 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
     };
     let newInfo: MediaInfo;
     try {
-      newInfo = await newDemuxer.open();
+      const opened = await withDeadline(newDemuxer.open(), prepLeft());
+      if (opened === TIMED_OUT) {
+        // The moov never arrived in the budget. On the rung that does this —
+        // the one whose bitrate is at or above what the link can carry — the
+        // read is not slow, it is losing a race with the stream that is still
+        // playing. Abandon, which closes the source and hands the link back.
+        return abandonPrep(
+          `new demuxer open exceeded ${MoviPlayer.SWITCH_PREP_BUDGET_MS}ms — the link can't feed this rung`,
+        );
+      }
+      newInfo = opened;
     } catch (e) {
       return abandonPrep("new demuxer open failed", e);
     }
@@ -2896,6 +2982,10 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
     // hide — and only when both renditions count time from the same origin,
     // since the splice compares their frames by raw timestamp.
     let primed: { decoder: MoviVideoDecoder; frames: VideoFrame[] } | null = null;
+    // Set when the prime ran out of clock rather than bailing for a structural
+    // reason (no shared origin, a paused player, a software-backed decoder).
+    // That distinction is what the abandon below turns on.
+    const primeStatus = { exhausted: false };
     const sameOrigin = Math.abs(newStartTime - this.startTime) < 0.001;
     if (
       sameOrigin &&
@@ -2910,8 +3000,22 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
         // decoded only to be thrown away — at the resolution that most needs
         // the switch to be cheap.
         seekedTo = this.getCurrentTime();
-        await newDemuxer.seek(seekedTo + newStartTime);
-        primed = await this.primeRendition(newDemuxer, newVideoTrack, newStartTime);
+        const sought = await withDeadline(
+          newDemuxer.seek(seekedTo + newStartTime),
+          prepLeft(),
+        );
+        if (sought === TIMED_OUT) {
+          return abandonPrep(
+            "seek for the seamless prime exceeded the prep budget",
+          );
+        }
+        primed = await this.primeRendition(
+          newDemuxer,
+          newVideoTrack,
+          newStartTime,
+          prepDeadline,
+          primeStatus,
+        );
       } catch (e) {
         Logger.debug(TAG, `Seamless prime unavailable: ${e}`);
         primed = null;
@@ -2923,10 +3027,64 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
       // prime that ran for seconds and then gave up would otherwise seek to a
       // point that far behind the playhead ON TOP of the lookback, and the swap
       // would have to decode the whole deficit before showing anything.
+      // A prep that has already spent its whole budget has said what it needed
+      // to: this rung is not being fed. Falling through would commit the swap
+      // regardless — the unprimed path is a HARD switch, so the picture stops,
+      // the indicator goes up, and the player then waits on the very stream
+      // that could not prime. Abandon instead and let the next tick decide
+      // again, with the old rendition still playing throughout.
+      if (prepLeft() <= 0) {
+        return abandonPrep(
+          "prep budget spent before the swap — leaving the current rung in place",
+        );
+      }
+      // A prime that ran out of clock has already measured the thing this path
+      // is about to bet on, and the answer was no.
+      //
+      // The hard swap aims RENDITION_SWAP_LOOKBACK_S behind the playhead on
+      // purpose, so the incoming rendition starts on a frame the clock has
+      // passed — and that is only cheap because "those frames decode far
+      // faster than real time". On the rungs that fail to prime, they do not.
+      // Measured on an 8K60 AV1 rung: the prime spent its whole budget without
+      // staging a usable frame, the swap then seeked 4s back, the keyframe
+      // before that put the first frame 6.2s behind the audio, and the picture
+      // never closed the gap — three catch-up seeks each landed on an earlier
+      // keyframe and lost more ground (3.6s → 4.5s → 6.1s behind) until the
+      // resync cap ran out and the picture simply stopped under running sound.
+      //
+      // The prime is the cheapest possible test of exactly that capability and
+      // we have already paid for it. Failing it means this rung cannot chew a
+      // swap backlog either, so don't create one: leave the current rendition
+      // playing and let the next tick decide again.
+      //
+      // Only for an EXHAUSTED prime. The structural bails — no shared origin, a
+      // paused player, a prime that came up software-backed — say nothing about
+      // decode headroom, and those swaps go through as before.
+      // …and only when CLIMBING. A downshift is the switch a struggling player
+      // must always be allowed to finish — refusing it because the link was too
+      // slow to prime would strand the picture on the very rung it is trying to
+      // escape, which is the opposite of the rescue. Backlog is affordable
+      // there anyway: the target is the cheaper rung.
+      const targetBw =
+        this._dashRenditions.find((r) => r.url === newRenditionUrl)?.bandwidth ?? 0;
+      const activeBw =
+        this._dashRenditions.find((r) => r.url === this._activeDashRendition)
+          ?.bandwidth ?? 0;
+      if (primeStatus.exhausted && targetBw > activeBw) {
+        return abandonPrep(
+          "the incoming rung could not be primed inside its budget — it will not chew the swap backlog either",
+        );
+      }
       swapTime = lookbackFromNow();
       seekedTo = swapTime;
       try {
-        await newDemuxer.seek(swapTime + newStartTime);
+        const sought = await withDeadline(
+          newDemuxer.seek(swapTime + newStartTime),
+          prepLeft(),
+        );
+        if (sought === TIMED_OUT) {
+          return abandonPrep("new demuxer seek exceeded the prep budget");
+        }
       } catch (e) {
         return abandonPrep("new demuxer seek failed", e);
       }
@@ -3865,6 +4023,30 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
         } else {
           probeBits = rawProbeBits; // nothing known — the sustained estimate decides
         }
+        // …except when the link is PACED, where "the sustained estimate" is not
+        // an estimate of this rung at all.
+        //
+        // The branch above already refuses to let a don't-know become a yes
+        // when there is an earlier reading to fall back on. With NO reading it
+        // fell through to throughputBits, which is measured on the rung being
+        // LEFT — and on a CDN that paces each stream to its own bitrate that is
+        // a fact about a different file. Captured on an 8K ladder: the target
+        // probe was thrown out as a cache hit ("1953KB in 18ms — cache or short
+        // read, not the link"), and 72.9Mbps measured on the 2160p stream
+        // authorised the climb into 4320p. Nothing had measured the 8K stream.
+        //
+        // Only in the paced case. Draining or on a thin buffer, throughputBits
+        // is a real ceiling taken off a stream that is genuinely being pulled
+        // as hard as it can be, so it still means something as a limit.
+        if (paced && probeBits <= 0) {
+          this._abrUpCandidate = "";
+          this._abrUpConfirms = 0;
+          Logger.info(
+            TAG,
+            `ABR upshift to ${up.label || up.bandwidth} held — nothing has measured that rung, and the ${(throughputBits / 1e6).toFixed(1)}Mbps we have is about the one we are on`,
+          );
+          return;
+        }
         // MIN normally: with a shallow buffer the sustained number is a real
         // ceiling and the probe must not talk the estimate up past it.
         //
@@ -4174,11 +4356,22 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
     const failH = failing.height ?? 0;
     const capped = failH > 0;
     if (capped) {
-      const failKey = decodeBoundKey(
-        this.videoDecoder?.configuredCodec || failing.codec || "",
-        failH,
-      );
+      const failCodec =
+        this.videoDecoder?.configuredCodec || failing.codec || "";
+      const failKey = decodeBoundKey(failCodec, failH);
       deviceDecodeBoundHeights.add(failKey);
+      // What gets written down is the exact rung SHAPE, not the family at this
+      // height — "8K AV1" is not one thing, and a machine that cannot hold a
+      // 10-bit 8K rung may well hold an 8-bit one. The broad key still bars the
+      // whole height for THIS SESSION, which is what stops the re-climb loop;
+      // it just doesn't follow the device around forever. With no codec string
+      // to be exact about there is nothing finer to say, so the broad key is
+      // what persists, as before.
+      const failExact = decodeBoundExactKey(failCodec, failH);
+      if (failExact) {
+        deviceDecodeBoundHeights.add(failExact);
+        sessionOnlyDecodeBoundHeights.add(failKey);
+      }
       // …but only WRITE IT DOWN if the hardware path was the one that failed.
       // A software-decoding session cannot hold 720p on a phone and says
       // nothing about what the GPU can do — yet this was persisted all the
@@ -4191,6 +4384,7 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
         persistDecodeCeiling();
       } else {
         sessionOnlyDecodeBoundHeights.add(failKey);
+        if (failExact) sessionOnlyDecodeBoundHeights.add(failExact);
         Logger.info(
           TAG,
           `ABR: ${failH}p barred for this session only — software decode failing says nothing about the hardware path`,
@@ -13955,6 +14149,8 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
     newDemuxer: Demuxer,
     newTrack: VideoTrack,
     newStartTime: number,
+    prepDeadline: number,
+    status: { exhausted: boolean },
   ): Promise<{ decoder: MoviVideoDecoder; frames: VideoFrame[] } | null> {
     const staged: VideoFrame[] = [];
     const mediaTime = (f: VideoFrame) => f.timestamp / 1_000_000 - newStartTime;
@@ -14029,18 +14225,37 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
         this.getCurrentTime() + MoviPlayer.SEAMLESS_PRIME_MAX_AHEAD_S,
       );
 
-      const deadline = performance.now() + MoviPlayer.SEAMLESS_PRIME_BUDGET_MS;
+      // Its own budget, or whatever the whole prep has left — whichever runs
+      // out first. The open may already have eaten most of it.
+      const deadline = Math.min(
+        performance.now() + MoviPlayer.SEAMLESS_PRIME_BUDGET_MS,
+        prepDeadline,
+      );
       let started = false;
       let fed = 0;
       for (;;) {
         if (decoderFailed || this._destroyed) break;
-        if (performance.now() > deadline) break;
+        if (performance.now() > deadline) {
+          status.exhausted = true;
+          break;
+        }
         dropStale();
         const last = staged.length > 0 ? mediaTime(staged[staged.length - 1]) : -Infinity;
         if (last >= target && staged.length >= MoviPlayer.SEAMLESS_PRIME_MIN_FRAMES) {
           return { decoder: dec, frames: staged };
         }
-        const packet = await newDemuxer.readPacket();
+        // The deadline above is checked at the TOP of each pass, which bounds a
+        // slow DECODE but not a slow READ — and on the rung that needs this
+        // most, the read is the whole wait. Unbounded, the 5s budget was worth
+        // whatever a single readPacket felt like taking on a 1.2GB file.
+        const packet = await withDeadline(
+          newDemuxer.readPacket(),
+          deadline - performance.now(),
+        );
+        if (packet === TIMED_OUT) {
+          status.exhausted = true;
+          break;
+        }
         if (!packet) break; // EOF before we could get ahead
         if (packet.streamIndex !== newTrack.id) continue;
         // A decoder that has just configured needs a random-access point, and
