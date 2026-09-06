@@ -909,26 +909,8 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
    * Bounded and insertion-ordered: the oldest entry goes when it is full, which
    * for scrubbing is the part of the timeline the pointer has left behind.
    */
-  // Counted in cache steps, not seconds — see PREVIEW_CACHE_STEP_S. Raised
-  // with the step so the window of scrubbing a viewer can go back over
-  // without re-decoding stays about the same length of film.
-  private static readonly PREVIEW_CACHE_MAX = 200;
+  private static readonly PREVIEW_CACHE_MAX = 64;
   private previewCache = new Map<number, Blob>();
-
-  /**
-   * How finely the preview cache tells one moment from another.
-   *
-   * It was a whole second — Math.round(time) — and a whole second is also how
-   * often the picture could then change. Every hover inside it was answered
-   * with the same remembered frame, so a scrub across ten seconds of a film
-   * showed ten pictures however carefully the frame under the pointer had been
-   * decoded. The precision the decode paid for never reached the screen.
-   *
-   * A fifth of a second is fine enough to read as continuous while dragging,
-   * and still coarse enough that a pointer trembling on one spot is answered
-   * from memory rather than re-decoded.
-   */
-  private static readonly PREVIEW_CACHE_STEP_S = 0.2;
 
   /** The cache key for a time, or null when the frame can't be reused. */
   private previewKey(time: number, view?: VRView | null): number | null {
@@ -936,7 +918,7 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
     // same second is a different picture from one moment to the next.
     if (view) return null;
     if (!Number.isFinite(time)) return null;
-    return Math.round(time / MoviPlayer.PREVIEW_CACHE_STEP_S);
+    return Math.round(time);
   }
 
   private rememberPreview(key: number, blob: Blob): void {
@@ -9047,7 +9029,7 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
       }
 
       try {
-        rendered = await this.thumbnailRenderer!.decodeSequenceAndRender(run, time);
+        rendered = await this.thumbnailRenderer!.decodeSequenceAndRender(run);
         if (run.length > 1) {
           Logger.debug(
             TAG,
