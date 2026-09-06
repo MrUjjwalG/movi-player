@@ -1003,6 +1003,36 @@ export class AudioRenderer {
         outputLatency?: number;
         baseLatency?: number;
       };
+      // While playing, unmuted and unducked, the master gain IS
+      // perceptualGain(volume). Every ramp that touches it is 30ms or shorter,
+      // so a second later there is nothing legitimately in flight and any
+      // other value is a fade that lost its way back — the reported "it went
+      // quiet after a seek", caught in the wild at 0.001 against a target of
+      // 0.436 and still there twelve seconds later.
+      //
+      // The cause is still open: ninety seeks, slow and in bursts, have not
+      // reproduced it here. But the invariant does not depend on knowing the
+      // cause, and a viewer left at a fiftieth of the volume they asked for
+      // has no way back except reloading. Put it back, and say so — this line
+      // is the evidence trail for whatever is doing it.
+      if (
+        this.gainNode &&
+        this.isPlaying &&
+        !this._muted &&
+        !this._ducked &&
+        this.audioContext.state === "running"
+      ) {
+        const want = this.perceptualGain(this.volume);
+        const have = this.gainNode.gain.value;
+        if (Math.abs(have - want) > Math.max(0.01, want * 0.05)) {
+          Logger.warn(
+            TAG,
+            `Master gain drifted to ${have.toFixed(4)} with ${want.toFixed(4)} asked for — restoring`,
+          );
+          this.rampGain(want);
+        }
+      }
+
       Logger.debug(
         TAG,
         `Output: cushion=${((this.scheduledTime - now) * 1000).toFixed(0)}ms ` +
