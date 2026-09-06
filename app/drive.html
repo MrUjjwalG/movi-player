@@ -244,7 +244,7 @@
         </div>
         <div class="actions">
           <span class="connected" id="connected"><span class="dot"></span><span class="label">Connected to Drive</span></span>
-          <button class="btn btn-primary" id="pick-btn">
+          <button type="button" class="btn btn-primary" id="pick-btn">
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/></svg>
             <span class="label">Pick a video</span>
           </button>
@@ -264,7 +264,7 @@
             <span class="glyph"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><polygon points="23 7 16 12 23 17 23 7"/><rect x="1" y="5" width="15" height="14" rx="2" ry="2"/></svg></span>
             <h3>Pick a video to start</h3>
             <p>Choose any video from your Google Drive and it plays here instantly — streamed, never downloaded.</p>
-            <button class="btn btn-primary" id="empty-pick-btn">
+            <button type="button" class="btn btn-primary" id="empty-pick-btn">
               <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/></svg>
               Pick a video from Drive
             </button>
@@ -468,6 +468,32 @@
       }
     }, 150);
 
+    /**
+     * Hold the page where it is while the Picker opens.
+     *
+     * The Picker appends its dialog to the end of <body> and focuses it, and a
+     * focus lands the browser's "scroll it into view" on something below the
+     * fold — so clicking "Pick a video" slid the whole page down, smoothly,
+     * because this page sets scroll-behavior: smooth. None of that is ours to
+     * configure: the dialog is Google's, inside an iframe.
+     *
+     * So put the scroll back. Once is not enough — the dialog is built over
+     * several frames and focuses late — so it is re-asserted for a short
+     * while, instantly rather than smoothly, and then left alone.
+     */
+    function holdScroll(ms = 1200) {
+      const y = window.scrollY;
+      const x = window.scrollX;
+      const stopAt = performance.now() + ms;
+      const put = () => {
+        if (window.scrollY !== y || window.scrollX !== x) {
+          window.scrollTo({ top: y, left: x, behavior: "instant" });
+        }
+        if (performance.now() < stopAt) requestAnimationFrame(put);
+      };
+      requestAnimationFrame(put);
+    }
+
     function openPicker() {
       if (!accessToken) return ensureAuth();
       if (!pickerLoaded) { showToast("Picker is still loading — try again in a moment."); return; }
@@ -481,12 +507,18 @@
         .setTitle("Choose a video")
         .addView(view)
         .setCallback((data) => {
+          // Closing hands focus back, which scrolls for the same reason.
+          if (data.action === google.picker.Action.PICKED ||
+              data.action === google.picker.Action.CANCEL) {
+            holdScroll(600);
+          }
           if (data.action === google.picker.Action.PICKED) {
             const doc = data.docs[0];
             playDriveFile(doc.id, doc.name);
           }
         })
         .build();
+      holdScroll();
       picker.setVisible(true);
     }
     $("pick-btn").addEventListener("click", openPicker);
