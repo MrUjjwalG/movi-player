@@ -48,6 +48,19 @@ export class ThumbnailRenderer {
   // WebCodecs support
   private decoder: VideoDecoder | null = null;
   private pendingDecodeResolve: ((success: boolean) => void) | null = null;
+  /**
+   * The frame a RUN is being decoded for, and the best answer so far.
+   *
+   * A precise preview walks a whole GOP to reach one frame, and the output
+   * callback used to paint every frame it passed on the way — ninety 4K
+   * texture uploads to show the ninetieth. Painting is 80% of what a preview
+   * costs on such a source, and all but one of those paints is thrown away in
+   * the same millisecond. While this is set the callback picks instead of
+   * paints, and the one frame that was asked for is drawn at the end.
+   */
+  private seqTargetUs: number | null = null;
+  private seqBest: VideoFrame | null = null;
+  private seqBestTs: number = -Infinity;
   // Last successful decoder config args, kept so a dead/closed WebCodecs
   // decoder can be recreated on the fly instead of disabling thumbnails for
   // the rest of the session (configureDecoder is only ever called once, from
@@ -543,6 +556,27 @@ export class ThumbnailRenderer {
       try {
         this.decoder = new VideoDecoder({
           output: (frame) => {
+            // Mid-run: keep the frame closest to the hovered moment without
+            // going past it, drop the rest, and paint nothing yet.
+            if (this.seqTargetUs !== null) {
+              const ts = frame.timestamp;
+              const keep =
+                ts <= this.seqTargetUs
+                  ? ts > this.seqBestTs || this.seqBest === null
+                  : this.seqBest === null; // nothing at or before it yet
+              if (keep) {
+                this.seqBest?.close();
+                this.seqBest = frame;
+                this.seqBestTs = ts;
+              } else {
+                frame.close();
+              }
+              if (this.pendingDecodeResolve) {
+                this.pendingDecodeResolve(true);
+                this.pendingDecodeResolve = null;
+              }
+              return;
+            }
             // Render the frame immediately when decoded
             this.renderVideoFrame(frame);
             frame.close(); // Important: release frame
@@ -706,11 +740,28 @@ export class ThumbnailRenderer {
    *
    * Sent together and flushed once, because a flush is the one thing that
    * breaks a run: Chrome answers the first delta after it with "A key frame is
-   * required after configure() or flush()". Each frame is rendered as it comes
-   * out, so the final render is the final frame, and there is nothing to pick.
+   * required after configure() or flush()".
+   *
+   * Only ONE of them is painted — the one belonging to `targetSec`, or the
+   * last to arrive when no target is given. Painting each frame as it came out
+   * was most of what a precise preview cost: a 4K walk of ninety frames did
+   * ninety texture uploads to show the last, and measured 157ms of a 195ms
+   * preview. See seqTargetUs.
    */
+  /** Hand over the frame a run settled on and end the run. A method, so the
+   *  answer isn't narrowed away by the `= null` this function does on the way
+   *  in — only the decoder's own callback ever puts a frame here. */
+  private takeSeqBest(): VideoFrame | null {
+    const best = this.seqBest;
+    this.seqBest = null;
+    this.seqTargetUs = null;
+    this.seqBestTs = -Infinity;
+    return best;
+  }
+
   async decodeSequenceAndRender(
     items: Array<{ data: Uint8Array; pts: number; key: boolean }>,
+    targetSec?: number,
   ): Promise<boolean> {
     if (items.length === 0) return false;
     if (items.length === 1) {
@@ -734,6 +785,12 @@ export class ThumbnailRenderer {
     this.pendingDecodeResolve = () => {
       rendered = true;
     };
+    // Collect rather than paint until the flush has settled. Without a target
+    // the last frame wins, which is what painting-as-they-came amounted to.
+    this.seqTargetUs =
+      targetSec !== undefined ? targetSec * 1_000_000 : Number.MAX_SAFE_INTEGER;
+    this.seqBest = null;
+    this.seqBestTs = -Infinity;
     try {
       for (const item of items) {
         let data = item.data;
@@ -755,6 +812,17 @@ export class ThumbnailRenderer {
       Logger.warn(TAG, "Thumbnail sequence decode failed", e);
     } finally {
       this.pendingDecodeResolve = null;
+      // One paint, at the end, of the frame that was actually asked for.
+      const best = this.takeSeqBest();
+      if (best) {
+        try {
+          this.renderVideoFrame(best);
+        } finally {
+          best.close();
+        }
+      } else {
+        rendered = false; // nothing came out; the caller falls back
+      }
     }
     if (rendered) this.decoderRevivedUnproven = false;
     return rendered;
@@ -1184,6 +1252,9 @@ export class ThumbnailRenderer {
    * Destroy WebGL resources
    */
   destroy(): void {
+    // A run that was still picking holds a frame; frames are GPU memory and
+    // do not free themselves.
+    this.takeSeqBest()?.close();
     if (this.gl) {
       if (this.texture) {
         this.gl.deleteTexture(this.texture);
