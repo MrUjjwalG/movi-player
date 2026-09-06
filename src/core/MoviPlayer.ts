@@ -1200,13 +1200,11 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
    * between and shows the one that belongs to the hovered second instead.
    *
    * Off by default: it is the same decode the player does for playback, on the
-   * hover path, so it costs a run of frames per preview rather than one.
+   * hover path, so it costs a run of frames per preview rather than one — and
+   * the run is as long as the source's GOP, since a walk that gives up part
+   * way is a keyframe preview wearing this mode's name.
    */
   private precisePreviews = false;
-  /** Frames to walk before giving up and showing the keyframe. */
-  private static readonly PRECISE_MAX_FRAMES = 120;
-  /** …and how long to spend doing it, so a hover never hangs on a slow GOP. */
-  private static readonly PRECISE_BUDGET_MS = 900;
 
   setPrecisePreviews(enabled: boolean): void {
     this.precisePreviews = enabled;
@@ -9020,19 +9018,17 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
       // ends the run: Chrome answers the next delta with "A key frame is
       // required after configure() or flush()".
       //
-      // Bounded twice over — a frame count and a wall-clock budget — since the
-      // distance to the next keyframe is the source's business, not ours.
-      // Running out of either leaves the keyframe, which is what this mode
-      // replaces and never worse than it.
+      // Unbounded, on purpose. It used to stop at 120 frames or 900ms and
+      // keep whatever it had reached, which on the long-GOP sources this mode
+      // exists for is the keyframe again — precise previews that quietly
+      // stopped being precise exactly where the imprecision was worst. In
+      // this mode the answer is the frame under the pointer; the walk ends
+      // when it gets there, at EOF, or on a read that fails.
       const run: Array<{ data: Uint8Array; pts: number; key: boolean }> = [
         { data: packetData, pts: timestamp, key: true },
       ];
       if (this.precisePreviews && timestamp < time - 0.02) {
-        const deadline = performance.now() + MoviPlayer.PRECISE_BUDGET_MS;
-        while (
-          run.length <= MoviPlayer.PRECISE_MAX_FRAMES &&
-          performance.now() < deadline
-        ) {
+        for (;;) {
           const size = await this.thumbnailBindings.readNextPacket();
           if (size <= 0) break; // EOF, or a read that went wrong
           const pts = this.thumbnailBindings.getPacketPts();
