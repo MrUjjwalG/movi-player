@@ -179,6 +179,10 @@ export class AudioRenderer {
 
   // Stable audio: gain ramp duration for smooth transitions (prevents clicks/pops)
   private static readonly GAIN_RAMP_TIME = 0.015; // 15ms ramp
+  /** …and how slowly a level nobody asked for is walked back, which wants to
+   *  be gentle rather than quick: it is a correction to a mistake, not a
+   *  response to the viewer, and it must not read as a jump. */
+  private static readonly GAIN_RESTORE_TIME = 0.25;
   private static readonly FADE_OUT_TIME = 0.03; // 30ms fade-out before seek/reset
 
   // Stable audio: AudioContext state monitoring & auto-recovery
@@ -517,6 +521,20 @@ export class AudioRenderer {
    */
   /** Decoded source sample rate, from configure(). 0 until the decoder reports. */
   private _sourceSampleRate = 0;
+  /**
+   * Until when a ramp we asked for owns the master gain (performance.now()).
+   *
+   * The drift check must not police a gain that is deliberately on its way
+   * somewhere: a seek fades to zero and back, and a check landing inside that
+   * window sees "far from target", cancels the fade and hauls the level up
+   * mid-flight — which is the pumping a seek started doing the moment the
+   * check was added.
+   */
+  private _gainHoldUntil = 0;
+  /** Consecutive health ticks that have seen the gain wrong. Restoring takes
+   *  two, so nothing transient is ever touched. */
+  private _gainDriftStrikes = 0;
+
   /** Channels in the last buffer actually scheduled. A track that starts
    *  arriving as mono, or downmixed, is one of the ways "it went quiet" is
    *  true — see the health line. */
@@ -1003,35 +1021,7 @@ export class AudioRenderer {
         outputLatency?: number;
         baseLatency?: number;
       };
-      // While playing, unmuted and unducked, the master gain IS
-      // perceptualGain(volume). Every ramp that touches it is 30ms or shorter,
-      // so a second later there is nothing legitimately in flight and any
-      // other value is a fade that lost its way back — the reported "it went
-      // quiet after a seek", caught in the wild at 0.001 against a target of
-      // 0.436 and still there twelve seconds later.
-      //
-      // The cause is still open: ninety seeks, slow and in bursts, have not
-      // reproduced it here. But the invariant does not depend on knowing the
-      // cause, and a viewer left at a fiftieth of the volume they asked for
-      // has no way back except reloading. Put it back, and say so — this line
-      // is the evidence trail for whatever is doing it.
-      if (
-        this.gainNode &&
-        this.isPlaying &&
-        !this._muted &&
-        !this._ducked &&
-        this.audioContext.state === "running"
-      ) {
-        const want = this.perceptualGain(this.volume);
-        const have = this.gainNode.gain.value;
-        if (Math.abs(have - want) > Math.max(0.01, want * 0.05)) {
-          Logger.warn(
-            TAG,
-            `Master gain drifted to ${have.toFixed(4)} with ${want.toFixed(4)} asked for — restoring`,
-          );
-          this.rampGain(want);
-        }
-      }
+      this.policeMasterGain();
 
       Logger.debug(
         TAG,
@@ -1764,6 +1754,9 @@ export class AudioRenderer {
         // for free; everyone else got the tail and the click. The fade is
         // longer there because that path is also covering compressor release.
         const fade = this._stableAudio ? AudioRenderer.FADE_OUT_TIME : 0.008;
+        // The fade down and the restore at the end of reset() are one
+        // movement; hold the drift check off for the whole of it.
+        this._gainHoldUntil = performance.now() + 1000;
         this.gainNode.gain.cancelScheduledValues(now);
         this.gainNode.gain.setValueAtTime(this.gainNode.gain.value, now);
         this.gainNode.gain.linearRampToValueAtTime(0, now + fade);
@@ -1845,6 +1838,7 @@ export class AudioRenderer {
       try {
         const fade = this._stableAudio ? AudioRenderer.FADE_OUT_TIME : 0.008;
         const restoreTime = this.audioContext.currentTime + fade + 0.005;
+        this._gainHoldUntil = performance.now() + 1000;
         this.gainNode.gain.linearRampToValueAtTime(
           this._muted ? 0 : this.perceptualGain(this.volume),
           restoreTime
@@ -2476,12 +2470,79 @@ export class AudioRenderer {
     return (Math.exp(k * v) - 1) / (Math.exp(k) - 1);
   }
 
+  /**
+   * Put the master gain back if it has been wrong for long enough that
+   * nothing legitimate can explain it.
+   *
+   * While playing, unmuted and unducked, the gain IS perceptualGain(volume).
+   * It was found parked at 0.001 against a target of 0.436 and still there
+   * twelve seconds later — the "it went quiet after a seek" report — with no
+   * way back for the viewer except reloading. The cause of that is still
+   * open; this does not need it.
+   *
+   * What it does need is to never fight. Every deliberate move of this param
+   * — a seek's fade down and back, a volume change, a mute — is short, and
+   * while one is in flight the level is MEANT to be somewhere other than the
+   * target. Correcting it there is the fault this net was supposed to prevent,
+   * turned upside down: the first version of it hauled the gain up mid-fade
+   * and made a seek pump audibly. So it stands down for the length of any ramp
+   * we asked for, forgets what it saw while standing down, waits for three
+   * consecutive seconds of a wrong level, and then moves slowly enough that
+   * being wrong about it is inaudible.
+   */
+  private policeMasterGain(): void {
+    if (
+      !this.gainNode ||
+      !this.audioContext ||
+      !this.isPlaying ||
+      this._muted ||
+      this._ducked ||
+      this.audioContext.state !== "running"
+    ) {
+      return;
+    }
+    // A ramp of ours owns the gain — and a strike counted before it started
+    // describes a level that no longer exists, so that goes too.
+    if (performance.now() < this._gainHoldUntil) {
+      this._gainDriftStrikes = 0;
+      return;
+    }
+    const want = this.perceptualGain(this.volume);
+    const have = this.gainNode.gain.value;
+    if (Math.abs(have - want) <= Math.max(0.01, want * 0.05)) {
+      this._gainDriftStrikes = 0;
+      return;
+    }
+    // This net is for a level that is STUCK, and stuck levels stay stuck.
+    if (++this._gainDriftStrikes < 3) return;
+    this._gainDriftStrikes = 0;
+    Logger.warn(
+      TAG,
+      `Master gain stuck at ${have.toFixed(4)} with ${want.toFixed(4)} asked for — restoring`,
+    );
+    try {
+      const now = this.audioContext.currentTime;
+      this._gainHoldUntil =
+        performance.now() + AudioRenderer.GAIN_RESTORE_TIME * 1000 + 100;
+      this.gainNode.gain.cancelScheduledValues(now);
+      this.gainNode.gain.setValueAtTime(have, now);
+      this.gainNode.gain.linearRampToValueAtTime(
+        want,
+        now + AudioRenderer.GAIN_RESTORE_TIME,
+      );
+    } catch {
+      this.gainNode.gain.value = want;
+    }
+  }
+
   private rampGain(targetValue: number): void {
     if (!this.gainNode || !this.audioContext) {
       return;
     }
     try {
       const now = this.audioContext.currentTime;
+      this._gainHoldUntil =
+        performance.now() + AudioRenderer.GAIN_RAMP_TIME * 1000 + 50;
       this.gainNode.gain.cancelScheduledValues(now);
       this.gainNode.gain.setValueAtTime(this.gainNode.gain.value, now);
       this.gainNode.gain.linearRampToValueAtTime(
