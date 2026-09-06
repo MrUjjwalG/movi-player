@@ -1747,7 +1747,7 @@ export class AudioRenderer {
     // not yet rendered, which is most of that stretch. Over a few
     // milliseconds rather than instantly, because a hard cut to zero is its
     // own click.
-    if (this.audioContext && this.gainNode && this.activeSources.length > 0) {
+    if (this.audioContext && this.inputNode && this.activeSources.length > 0) {
       try {
         const now = this.audioContext.currentTime;
         // Stable audio was already doing this and getting the quiet handover
@@ -1755,11 +1755,11 @@ export class AudioRenderer {
         // longer there because that path is also covering compressor release.
         const fade = this._stableAudio ? AudioRenderer.FADE_OUT_TIME : 0.008;
         // The fade down and the restore at the end of reset() are one
-        // movement; hold the drift check off for the whole of it.
+        // movement; keep the drift check off the input for the whole of it.
         this._gainHoldUntil = performance.now() + 1000;
-        this.gainNode.gain.cancelScheduledValues(now);
-        this.gainNode.gain.setValueAtTime(this.gainNode.gain.value, now);
-        this.gainNode.gain.linearRampToValueAtTime(0, now + fade);
+        this.inputNode.gain.cancelScheduledValues(now);
+        this.inputNode.gain.setValueAtTime(this.inputNode.gain.value, now);
+        this.inputNode.gain.linearRampToValueAtTime(0, now + fade);
       } catch {
         // Ignore ramp errors
       }
@@ -1804,18 +1804,12 @@ export class AudioRenderer {
     // Drop the underrun duck. A seek/flush retires the stretch that caused it,
     // and unduckIfClean() only runs from the scheduling path — so leaving this
     // set would keep a freshly-seeked, perfectly healthy player silent.
+    // The flag only. Putting the gain back to 1 HERE used to be the whole of
+    // it, and that now lands between the fade-out above and the restore below
+    // — cancelling the fade a seek needs. The restore at the end of this
+    // function is the one place the input comes back, ducked or not.
     this._ducked = false;
     this._lastUnderrunAt = 0;
-    if (this.inputNode && this.audioContext) {
-      try {
-        const param = this.inputNode.gain;
-        const now = this.audioContext.currentTime;
-        param.cancelScheduledValues(now);
-        param.setValueAtTime(1, now);
-      } catch {
-        // Ignore ramp errors
-      }
-    }
 
     // Reset clock tracking
     this.hasFirstBuffer = false;
@@ -1831,21 +1825,18 @@ export class AudioRenderer {
     // Clear stretcher state
     if (this.signalsmith) this.signalsmith.clear();
 
-    // Bring the gain back, on the same terms the fade went out on. Guarding
+    // Bring the input back, on the same terms the fade went out on. Guarding
     // this on stable audio while the fade above is unconditional would leave
     // every other setup silent from the first seek onwards.
-    if (this.gainNode && this.audioContext) {
+    if (this.inputNode && this.audioContext) {
       try {
         const fade = this._stableAudio ? AudioRenderer.FADE_OUT_TIME : 0.008;
         const restoreTime = this.audioContext.currentTime + fade + 0.005;
         this._gainHoldUntil = performance.now() + 1000;
-        this.gainNode.gain.linearRampToValueAtTime(
-          this._muted ? 0 : this.perceptualGain(this.volume),
-          restoreTime
-        );
+        this.inputNode.gain.linearRampToValueAtTime(1, restoreTime);
       } catch {
         // Fallback: set directly
-        this.gainNode.gain.value = this._muted ? 0 : this.perceptualGain(this.volume);
+        this.inputNode.gain.value = 1;
       }
     }
   }
@@ -2507,9 +2498,18 @@ export class AudioRenderer {
       this._gainDriftStrikes = 0;
       return;
     }
+    // Two params can silence the output and only one of them is the viewer's.
+    // The volume node is written by setVolume and setMuted and nothing else
+    // now; the input node carries the transients — the duck, and the fade a
+    // seek makes. Either being wrong for long enough is the same fault.
     const want = this.perceptualGain(this.volume);
     const have = this.gainNode.gain.value;
-    if (Math.abs(have - want) <= Math.max(0.01, want * 0.05)) {
+    const inputWrong =
+      !!this.inputNode && Math.abs(this.inputNode.gain.value - 1) > 0.05;
+    if (
+      Math.abs(have - want) <= Math.max(0.01, want * 0.05) &&
+      !inputWrong
+    ) {
       this._gainDriftStrikes = 0;
       return;
     }
@@ -2518,12 +2518,22 @@ export class AudioRenderer {
     this._gainDriftStrikes = 0;
     Logger.warn(
       TAG,
-      `Master gain stuck at ${have.toFixed(4)} with ${want.toFixed(4)} asked for — restoring`,
+      `Audio stuck quiet — volume ${have.toFixed(4)} of ${want.toFixed(4)}` +
+        (inputWrong ? `, input ${this.inputNode!.gain.value.toFixed(4)} of 1` : "") +
+        " — restoring",
     );
     try {
       const now = this.audioContext.currentTime;
       this._gainHoldUntil =
         performance.now() + AudioRenderer.GAIN_RESTORE_TIME * 1000 + 100;
+      if (inputWrong && this.inputNode) {
+        this.inputNode.gain.cancelScheduledValues(now);
+        this.inputNode.gain.setValueAtTime(this.inputNode.gain.value, now);
+        this.inputNode.gain.linearRampToValueAtTime(
+          1,
+          now + AudioRenderer.GAIN_RESTORE_TIME,
+        );
+      }
       this.gainNode.gain.cancelScheduledValues(now);
       this.gainNode.gain.setValueAtTime(have, now);
       this.gainNode.gain.linearRampToValueAtTime(
@@ -2532,6 +2542,7 @@ export class AudioRenderer {
       );
     } catch {
       this.gainNode.gain.value = want;
+      if (this.inputNode) this.inputNode.gain.value = 1;
     }
   }
 
