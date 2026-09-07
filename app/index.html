@@ -3423,19 +3423,33 @@
          it first — the chip drops its label to the padlock, Play tightens its
          padding, and the field keeps a floor it cannot be pushed below. */
       @media (max-width: 560px) {
-        .url-bar input {
+        /* Thinner, and quieter. At desktop proportions this is a 54px slab
+           with 16px text across a 360px screen — furniture, not a field.
+           The selectors match the ones above rather than .url-bar, which
+           loses to `.url-bar.hero-url-bar input` on specificity and is why
+           an earlier pass at this changed nothing at all.
+
+           The input's OWN font stays at 16px: below that, iOS Safari zooms
+           the page when the field takes focus — on exactly the phones this
+           is for. Only the placeholder shrinks, which is the text actually
+           being looked at, and ::placeholder is not what iOS measures. */
+        .url-bar.hero-url-bar input {
           min-width: 7ch;
-          padding-left: 0.85rem;
-          padding-right: 0.4rem;
+          padding: 0.5rem 0.4rem 0.5rem 0.8rem;
+        }
+        .url-bar.hero-url-bar input::placeholder {
+          font-size: 0.85rem;
         }
         .url-bar-toggle {
           margin: 0 0.2rem 0 0.1rem;
-          padding: 0.35rem 0.45rem;
+          padding: 0.3rem 0.4rem;
         }
         .url-bar-toggle span {
           display: none;
         }
         .url-bar-paste {
+          width: 30px;
+          height: 30px;
           margin-right: 0.15rem;
         }
         /* Icon only. The triangle already says "play", and the word was
@@ -3443,8 +3457,14 @@
         .url-bar-btn-label {
           display: none;
         }
-        .url-bar-btn {
-          padding: 0 0.95rem;
+        .url-bar.hero-url-bar .url-bar-btn {
+          min-height: 38px;
+          padding: 0 0.8rem;
+          font-size: 0.85rem;
+        }
+        .url-bar.hero-url-bar .url-bar-btn svg {
+          width: 15px;
+          height: 15px;
         }
       }
 
@@ -4124,7 +4144,7 @@
               if (!el) return;
               var narrow = matchMedia("(max-width: 560px)");
               var LONG = el.getAttribute("placeholder");
-              var SHORT = "Paste a link";
+              var SHORT = "Paste a video link";
               var fit = function () {
                 el.setAttribute("placeholder", narrow.matches ? SHORT : LONG);
               };
