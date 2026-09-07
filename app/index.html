@@ -3459,7 +3459,11 @@
         }
         .url-bar.hero-url-bar .url-bar-btn {
           min-height: 38px;
-          padding: 0 0.8rem;
+          /* Wide enough to read as a button rather than a bubble the icon
+             happened to land in. Held by min-width so the shape does not
+             follow the icon's metrics. */
+          min-width: 56px;
+          padding: 0 1.1rem;
           font-size: 0.85rem;
         }
         .url-bar.hero-url-bar .url-bar-btn svg {
