@@ -3412,6 +3412,42 @@
         }
       }
 
+      /* The link bar on a phone.
+         It is a single flex row — input, paste, the dev-only Protected chip,
+         Play — and the input was the one item with nothing holding it open
+         (flex: 1 1 0 with min-width: 0). So the others took the width they
+         wanted and the field they exist to serve was squeezed to nothing:
+         with the Protected chip showing there was literally no input left,
+         just a clipboard icon, a chip and a button.
+         The input is the point of this bar, so everything else gives way to
+         it first — the chip drops its label to the padlock, Play tightens its
+         padding, and the field keeps a floor it cannot be pushed below. */
+      @media (max-width: 560px) {
+        .url-bar input {
+          min-width: 7ch;
+          padding-left: 0.85rem;
+          padding-right: 0.4rem;
+        }
+        .url-bar-toggle {
+          margin: 0 0.2rem 0 0.1rem;
+          padding: 0.35rem 0.45rem;
+        }
+        .url-bar-toggle span {
+          display: none;
+        }
+        .url-bar-paste {
+          margin-right: 0.15rem;
+        }
+        /* Icon only. The triangle already says "play", and the word was
+           costing the field ~45px it could not spare. */
+        .url-bar-btn-label {
+          display: none;
+        }
+        .url-bar-btn {
+          padding: 0 0.95rem;
+        }
+      }
+
       @media (max-width: 480px) {
         .hero {
           padding-bottom: 1.5rem;
@@ -4063,13 +4099,39 @@
               </svg>
               <span>Protected</span>
             </label>
-            <button class="url-bar-btn" id="load-btn">
+            <button class="url-bar-btn" id="load-btn" aria-label="Play this link">
               <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
                 <polygon points="5 3 19 12 5 21 5 3"></polygon>
               </svg>
-              Play
+              <!-- In a span so a phone can drop the word and keep the mark —
+                   the label is ~45px the input needs more than this button
+                   does. aria-label above keeps the button named either way. -->
+              <span class="url-bar-btn-label">Play</span>
             </button>
           </div>
+          <script>
+            // The full placeholder does not fit a phone — it was being cut
+            // mid-word ("https://…  pa"), which reads as a broken field
+            // rather than a hint. CSS cannot shorten placeholder text, so
+            // swap it on the same breakpoint the bar's layout uses, and
+            // follow rotation.
+            //
+            // Deliberately NOT in the module below: that one imports the
+            // player bundle first, so a hint about how to type a link would
+            // wait on a WASM-carrying download to arrive.
+            (function () {
+              var el = document.getElementById("url-input");
+              if (!el) return;
+              var narrow = matchMedia("(max-width: 560px)");
+              var LONG = el.getAttribute("placeholder");
+              var SHORT = "Paste a link";
+              var fit = function () {
+                el.setAttribute("placeholder", narrow.matches ? SHORT : LONG);
+              };
+              narrow.addEventListener("change", fit);
+              fit();
+            })();
+          </script>
 
           <!-- "or pick a file" divider -->
           <div class="hero-or" aria-hidden="true"><span>or pick a video file</span></div>
@@ -4712,6 +4774,7 @@
 
       const urlInput = document.getElementById("url-input");
       const loadBtn = document.getElementById("load-btn");
+
       const playerLoading = document.getElementById("player-loading");
       const encryptToggle = document.getElementById("encrypt-toggle");
 
