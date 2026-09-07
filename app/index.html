@@ -3474,6 +3474,13 @@
         .url-bar.hero-url-bar .url-bar-btn svg {
           width: 15px;
           height: 15px;
+          /* Optically centred, not geometrically. A play triangle carries its
+             weight on the flat left edge and tapers to a point, so its
+             centroid sits 2.33 of 24 viewBox units left of its bounding box's
+             middle — which is why the mark still read as leaning left once the
+             box itself was centred. That distance is 1.46px at this size.
+             A transform, so the button's own centring is left alone. */
+          transform: translateX(1.5px);
         }
       }
 
