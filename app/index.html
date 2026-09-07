@@ -3465,6 +3465,11 @@
           min-width: 56px;
           padding: 0 1.1rem;
           font-size: 0.85rem;
+          /* …and the mark goes in the middle of it. The button is laid out as
+             an icon-then-label row, so it packs to the start; with the label
+             gone that leaves the slack min-width just added sitting entirely
+             on the right, and the triangle 2.9px left of centre. */
+          justify-content: center;
         }
         .url-bar.hero-url-bar .url-bar-btn svg {
           width: 15px;
