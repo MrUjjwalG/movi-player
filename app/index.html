@@ -3440,9 +3440,18 @@
         .url-bar.hero-url-bar input::placeholder {
           font-size: 0.85rem;
         }
+        /* Icon only, so it should be a disc — not the pill it inherits.
+           With the word hidden the chip was 14px of padlock inside padding
+           that is wider than it is tall (6.4 / 4.8), which came out 27x24:
+           an oval, and one crowded right up against Play. Square it off at
+           the paste button's size so the two icons either side of the field
+           match, and give it room before the button. */
         .url-bar-toggle {
-          margin: 0 0.2rem 0 0.1rem;
-          padding: 0.3rem 0.4rem;
+          width: 30px;
+          height: 30px;
+          padding: 0;
+          justify-content: center;
+          margin: 0 0.45rem 0 0.15rem;
         }
         .url-bar-toggle span {
           display: none;
