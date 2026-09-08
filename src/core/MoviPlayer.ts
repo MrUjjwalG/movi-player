@@ -989,6 +989,23 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
   private previewCache = new Map<number, Blob>();
 
   /**
+   * The same frames again, filed under the keyframe they actually came from.
+   *
+   * Outside precise mode a preview IS the keyframe at or before the hovered
+   * time, so every position inside one GOP is the same picture — and on a
+   * long-GOP source that is seconds of timeline. The time-keyed cache above
+   * cannot know that: it files by where the pointer was, so a scrub across a
+   * single GOP missed on every step of it and paid a full decode and JPEG
+   * encode (~11ms of the ~16ms a preview costs) to arrive at pixels it already
+   * had.
+   *
+   * This map is consulted AFTER the seek, because the seek is what says which
+   * keyframe the time belongs to — 4ms rather than 16, with no guess about
+   * where the GOP boundaries are and so no risk of showing the wrong frame.
+   */
+  private previewByKeyframe = new Map<number, Blob>();
+
+  /**
    * How finely the preview cache tells one moment from another.
    *
    * It was a whole second — Math.round(time) — and a whole second is also how
@@ -1021,9 +1038,29 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
     }
   }
 
+  /** The keyframe map's key for a decoded packet's pts, or null if unusable. */
+  private keyframeKey(pts: number): number | null {
+    if (!Number.isFinite(pts)) return null;
+    // Milliseconds: fine enough that two different keyframes never collide,
+    // coarse enough that the same one always hashes the same way.
+    return Math.round(pts * 1000);
+  }
+
+  private rememberKeyframePreview(pts: number, blob: Blob): void {
+    const kfKey = this.keyframeKey(pts);
+    if (kfKey === null) return;
+    this.previewByKeyframe.set(kfKey, blob);
+    while (this.previewByKeyframe.size > MoviPlayer.PREVIEW_CACHE_MAX) {
+      const oldest = this.previewByKeyframe.keys().next();
+      if (oldest.done) break;
+      this.previewByKeyframe.delete(oldest.value);
+    }
+  }
+
   /** Drop remembered frames — the pictures behind them are no longer the file. */
   private clearPreviewCache(): void {
     this.previewCache.clear();
+    this.previewByKeyframe.clear();
   }
 
   /**
@@ -9284,6 +9321,23 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
       }
 
       const timestamp = this.thumbnailBindings.getPacketPts();
+
+      // The seek has just named the keyframe this position belongs to. If that
+      // keyframe has already been decoded, this hover's picture is that
+      // picture — no decode, no encode, and no guess about GOP length.
+      //
+      // Only outside precise mode and outside 360: both of those make the
+      // frame depend on more than which keyframe it is (the walk forward to
+      // the hovered moment, and the angle it is reprojected to).
+      if (!this.precisePreviews && !view) {
+        const kfKey = this.keyframeKey(timestamp);
+        const seen = kfKey === null ? null : this.previewByKeyframe.get(kfKey);
+        if (seen) {
+          if (key !== null) this.rememberPreview(key, seen);
+          return seen;
+        }
+      }
+
       const dataPtr = this.thumbnailBindings.getPacketData();
 
       Logger.debug(
@@ -9667,7 +9721,15 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
             | OffscreenCanvas
             | HTMLCanvasElement,
         );
-        if (blob && key !== null) this.rememberPreview(key, blob);
+        if (blob) {
+          if (key !== null) this.rememberPreview(key, blob);
+          // File it under its keyframe too, so the rest of this GOP is free.
+          // Precise mode's frames are NOT their keyframe, and a 360 preview is
+          // one angle of it, so neither may be reused this way.
+          if (!this.precisePreviews && !view) {
+            this.rememberKeyframePreview(timestamp, blob);
+          }
+        }
         return blob;
       }
 

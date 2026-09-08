@@ -3474,7 +3474,11 @@ export class MoviElement extends HTMLElement {
       ".movi-thumbnail-img",
     ) as HTMLImageElement;
 
-    let previewDebounce: number | null = null;
+    let previewFrameRaf: number | null = null;
+    // The hover card's measured width, and the shape it was measured at. See
+    // the read in updateScrubbingUI — this is what keeps a pointer move off
+    // the forced-layout path.
+    const previewCardWidth = { sig: "", w: 0 };
     let lastPreviewUrl: string | null = null;
     let hoverIntentTimer: number | null = null;
     let lastHoverEvent: MouseEvent | null = null;
@@ -3616,9 +3620,6 @@ export class MoviElement extends HTMLElement {
         ".movi-thumbnail-placeholder",
       ) as HTMLElement;
 
-      // Cancel pending timer
-      if (previewDebounce) clearTimeout(previewDebounce);
-
       // Keep the picture that is up while the next one is made.
       //
       // Blanking to the placeholder on every pointer move meant a scrub was a
@@ -3651,15 +3652,31 @@ export class MoviElement extends HTMLElement {
       // Schedule this time
       previewLoopState.nextTime = time;
 
-      // Short debounce: hover previews far from the playhead need a fresh
-      // network fetch, so the debounce is pure added latency. 150ms made a
-      // far-position hover feel ~4s vs <2s for a real seek. The serialized
-      // single-flight queue (processPreviewQueue) already coalesces rapid
-      // moves — it drops to the latest pending time when a fetch finishes —
-      // so a tight debounce won't flood the network.
-      previewDebounce = window.setTimeout(() => {
-        processPreviewQueue();
-      }, 40);
+      // Dispatch on the next frame, NOT after a quiet period.
+      //
+      // This used to be a 40ms trailing debounce, re-armed by every call —
+      // and a scrub calls this on every pointer move, which the browser
+      // delivers about every 8-16ms. The timer was therefore cleared before it
+      // could ever fire, so for the whole length of a drag NOTHING was
+      // requested: measured at ONE decoded frame across 60 moves spanning
+      // 2.2s, and that one only after the pointer came to rest. The card sat
+      // on a stale picture the entire time the pointer was moving, which is
+      // exactly the "it only turns up a moment later" the debounce was
+      // supposed to be protecting against.
+      //
+      // A frame is the right unit instead: the screen cannot show two pictures
+      // in one, so coalescing to rAF caps the request rate at the refresh rate
+      // and never starves. Beyond that the serialized single-flight queue
+      // (processPreviewQueue) is the real throttle — it returns at once while
+      // a fetch is in flight and picks up the latest pending time when that
+      // one lands, so the pipeline paces itself and a slow source simply
+      // answers fewer positions rather than queueing stale ones.
+      if (previewFrameRaf === null) {
+        previewFrameRaf = requestAnimationFrame(() => {
+          previewFrameRaf = null;
+          processPreviewQueue();
+        });
+      }
     };
 
     // Helper to show/update thumbnail AND progress visuals during dragging/hovering
@@ -3670,6 +3687,13 @@ export class MoviElement extends HTMLElement {
       if (!progressBar || !thumbnail || !thumbnailTime) return;
 
       const rect = progressBar.getBoundingClientRect();
+      // Read beside the track's rect, before anything below writes a style.
+      // Its use is at the bottom, clamping the card against the player — but
+      // taken there it came after the progress fill, the chapter paint and the
+      // card's own display flip, so every pointer move forced a second layout
+      // to answer a box that had not moved. Two reads back to back settle in
+      // the one layout the first was going to cost anyway.
+      const hostRect = this.getBoundingClientRect();
       const offsetX = clientX - rect.left;
       const percent = Math.max(0, Math.min(1, offsetX / rect.width));
       const duration = this.duration;
@@ -3760,8 +3784,33 @@ export class MoviElement extends HTMLElement {
       // The pre-measurement guess has to match what will actually be in the
       // card: a stream with no thumbnail track shows the time alone, so guessing
       // the 180px frame width would clamp it as if it were four times wider.
+      //
+      // Measured only when the card's shape can have changed. Reading
+      // offsetWidth right after the style writes above forces a synchronous
+      // layout of the player subtree, and this runs on EVERY pointer move: 5.7
+      // ms a move on a 960px desktop player, which is most of a frame's budget
+      // spent re-learning a number that only moves when the frame box, the
+      // chapter title or the length of the time text changes. Those three are
+      // the signature; anything else leaves the card exactly as wide as it was.
+      const widthSig =
+        `${this._previewBoxKey}|` +
+        `${chapterTitleEl?.style.display !== "none" ? chapterTitleEl?.textContent ?? "" : ""}|` +
+        `${thumbnailTime.textContent?.length ?? 0}|` +
+        `${this.canPreviewFrames() ? 1 : 0}`;
+      if (widthSig !== previewCardWidth.sig) {
+        const measured = thumbnail.offsetWidth;
+        // A card that has not been laid out yet measures 0; keep guessing
+        // until it has a real width rather than caching the guess forever.
+        if (measured > 0) {
+          previewCardWidth.sig = widthSig;
+          previewCardWidth.w = measured;
+        } else {
+          previewCardWidth.sig = "";
+          previewCardWidth.w = 0;
+        }
+      }
       const tooltipWidth =
-        thumbnail.offsetWidth || (this.canPreviewFrames() ? 180 : 60);
+        previewCardWidth.w || (this.canPreviewFrames() ? 180 : 60);
       const half = tooltipWidth / 2;
       // Clamped against the PLAYER, not against the track. The track is inset
       // from the frame by the chrome padding, so clamping to the track pinned
@@ -3769,7 +3818,6 @@ export class MoviElement extends HTMLElement {
       // FRAME that clips, so a card kept inside the track can still be cut by
       // the frame if the two disagree. Measured in viewport coordinates and
       // converted back, which is the only way to compare them.
-      const hostRect = this.getBoundingClientRect();
       const EDGE = 6; // never let it touch the frame
       const minCentre = hostRect.left + half + EDGE;
       const maxCentre = hostRect.right - half - EDGE;
@@ -3816,7 +3864,10 @@ export class MoviElement extends HTMLElement {
 
       const doHide = () => {
         thumbnail.classList.remove("visible");
-        if (previewDebounce) clearTimeout(previewDebounce);
+        if (previewFrameRaf !== null) {
+          cancelAnimationFrame(previewFrameRaf);
+          previewFrameRaf = null;
+        }
 
         // If immediate (delay 0), hide immediately. Otherwise wait for transition.
         const transitionDelay = delay === 0 ? 0 : 150;
@@ -24434,6 +24485,7 @@ export class MoviElement extends HTMLElement {
     // Listen for resize events
     if (typeof ResizeObserver !== "undefined") {
       const resizeObserver = new ResizeObserver(() => {
+        this._previewCapsCache = null; // the hover card's box is sized off the player
         publishPlayerWidth();
         this.syncTinyLayout();
         this.updateCanvasSize();
@@ -24443,6 +24495,7 @@ export class MoviElement extends HTMLElement {
     } else {
       // Fallback for browsers without ResizeObserver
       window.addEventListener("resize", () => {
+        this._previewCapsCache = null;
         publishPlayerWidth();
         this.syncTinyLayout();
         this.updateCanvasSize();
@@ -35630,6 +35683,20 @@ export class MoviElement extends HTMLElement {
   private _previewBoxKey = "";
 
   /**
+   * The last caps measured, held until the player changes size.
+   *
+   * clientWidth/clientHeight are layout reads, and previewCaps is called from
+   * updatePreviewBox on every pointer move — after the progress fill and the
+   * chapter paint have already written styles, so each move forced a fresh
+   * layout of the whole player to re-derive a box that only depends on how big
+   * the player is. Measured at 2.6ms a move on a 960px desktop frame, which is
+   * most of what a pointer move cost. The ResizeObserver on the host (and the
+   * window-resize fallback beside it) is what actually changes the answer, so
+   * let that clear this instead.
+   */
+  private _previewCapsCache: { w: number; h: number } | null = null;
+
+  /**
    * How big the preview frame may be, measured against the PLAYER.
    *
    * 168px is a readable thumbnail on a 700px embed and a postage stamp on a
@@ -35649,8 +35716,11 @@ export class MoviElement extends HTMLElement {
    * 300px. The share is right at the size it was measured on and keeps growing
    * past it; on a 1700px frame a fifth is a 360px slab that stops reading as a
    * preview of the picture and starts reading as a second picture.
+   *
+   * Answered from _previewCapsCache once measured — see there.
    */
   private previewCaps(): { w: number; h: number } {
+    if (this._previewCapsCache) return this._previewCapsCache;
     const w = Math.round(
       Math.min(300, Math.max(MoviElement.PREVIEW_MAX_W, this.clientWidth * 0.21)),
     );
@@ -35665,7 +35735,8 @@ export class MoviElement extends HTMLElement {
     // of the HEIGHT as well, with a floor so a very short player still gets
     // something worth looking at rather than a sliver.
     const byHeight = Math.max(56, Math.round(this.clientHeight * 0.3));
-    return { w, h: Math.min(byWidth, byHeight) };
+    this._previewCapsCache = { w, h: Math.min(byWidth, byHeight) };
+    return this._previewCapsCache;
   }
 
   /**
