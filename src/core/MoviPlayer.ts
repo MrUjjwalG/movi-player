@@ -1561,6 +1561,16 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
    */
   private static readonly SEEK_STALE_PICTURE_MS = 3000;
   private static readonly SEEK_STALE_PICTURE_GAP_S = 3;
+
+  /**
+   * How far the picture may outrun the sound and still count as a tail rather
+   * than as content. A container writes the two tracks to slightly different
+   * lengths all the time — a frame or two — and that tail can never come due
+   * against a clock the audio pins. Beyond this it is not a rounding artefact,
+   * it is film, and it gets played. See the EOF block.
+   */
+  private static readonly AUDIO_TAIL_GRACE_S = 1.0;
+
   /** When an in-place rendition swap actually LANDED, and when a picture
    *  catch-up started. Both leave the video pipeline re-priming while the sound
    *  plays on, so a stall in the moments after is ours, not the link's. */
@@ -6720,8 +6730,16 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
       const inForegroundGrace =
         this._foregroundRecoveryAt > 0 &&
         performance.now() - this._foregroundRecoveryAt < 3000;
+      // A soundtrack that has ENDED is not underrunning. Nothing is coming to
+      // refill it, so every check below would read it as starving for as long
+      // as the picture ran on — which on a file whose audio stops early is a
+      // spinner over the rest of the film. See AudioRenderer._streamEnded.
+      const soundIsOver = this.audioRenderer.isStreamEnded();
       const audioUnderrunning =
-        hasAudio && !inForegroundGrace && this.audioRenderer.isUnderrunning();
+        hasAudio &&
+        !soundIsOver &&
+        !inForegroundGrace &&
+        this.audioRenderer.isUnderrunning();
       // Whichever side runs out, when the two are bound (see _bindAV).
       //
       // Unbound, a side running dry only counts if the OTHER one did too: a
@@ -6734,7 +6752,9 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
       // all it is permanently true, so a silent video would read as starved in
       // every frame. It has to be audio that EXISTS and has run out.
       const audioStarved =
-        hasAudio && this.audioRenderer.getBufferedDuration() < 0.05;
+        hasAudio &&
+        !soundIsOver &&
+        this.audioRenderer.getBufferedDuration() < 0.05;
       // …but an empty queue past the end of the video track is not a shortfall
       // at all — there are no more frames in the file to wait for. Stalling
       // there stops the sound too (bound, which is the default) and hands the
@@ -7179,12 +7199,48 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
         // done if its queue is empty OR only holds this unpresentable tail
         // (head frame at/after the audio playout head).
         const headFrameTime = this.videoRenderer?.getHeadFrameTime() ?? -1;
+        // The picture can simply run LONGER than the sound.
+        //
+        // The tail clause below exists for a video that overruns the audio by
+        // a frame or two — one that the clock, clamped to the audio playout
+        // head, can never come due for. It had no upper bound, so it read a
+        // picture that outlives the sound by MINUTES as the same thing.
+        // Measured on a 4K AV1 MKV whose Opus track ends at 193.4s against a
+        // picture running to 243.8s: at 3:13 the head frame was past the audio
+        // head, this declared the video finished, and fifty seconds of film
+        // were dropped on the floor. The viewer sees the timer jump to the
+        // duration and the video end early.
+        //
+        // A real overrun is a frame or two. Anything beyond that is content,
+        // and the answer is to play it: tell the audio renderer its stream is
+        // over so its clock stops holding the picture back, and let the
+        // ordinary drain end things when the queue is actually empty.
+        // Asked of the CONTENT, not of the queue's head. The head frame is
+        // only ever the next one after the sound stops — milliseconds past it,
+        // whether one frame follows or fifty seconds do. What says which is
+        // where the film ends against where the sound ends.
+        const pictureOutlivesSound =
+          decodersDone &&
+          maxScheduled > 0 &&
+          duration > 0 &&
+          !!this.trackManager.getActiveVideoTrack() &&
+          duration + this.startTime >
+            maxScheduled + MoviPlayer.AUDIO_TAIL_GRACE_S;
+        if (pictureOutlivesSound && !this.audioRenderer.isStreamEnded()) {
+          Logger.info(
+            TAG,
+            `Sound ends at ${maxScheduled.toFixed(2)}s but the picture runs to ` +
+              `${(this.mediaInfo?.duration ?? 0).toFixed(2)}s — playing the rest out without it`,
+          );
+          this.audioRenderer.endOfStream();
+        }
         const videoDone =
           !this.videoRenderer ||
           this.videoRenderer.getQueueSize() === 0 ||
           (decodersDone &&
             maxScheduled > 0 &&
-            headFrameTime >= maxScheduled - 0.05);
+            headFrameTime >= maxScheduled - 0.05 &&
+            !pictureOutlivesSound);
         if ((decodersDone && videoDone && audioPlayedOut) || duration === 0) {
           this.handleEnded();
           return;
@@ -7197,7 +7253,12 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
         if (
           audioPlayedOut &&
           this.eofSince > 0 &&
-          performance.now() - this.eofSince > 750
+          performance.now() - this.eofSince > 750 &&
+          // Not while there is still picture to play. This watchdog is for a
+          // float mismatch leaving one frame unpresentable; a soundtrack that
+          // simply ends early would otherwise trip it 750ms later and end the
+          // film anyway, whatever the tail clause above decided.
+          !pictureOutlivesSound
         ) {
           Logger.warn(
             TAG,

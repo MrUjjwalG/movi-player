@@ -140,6 +140,40 @@ export class AudioRenderer {
   private currentMediaTime: number = 0;
   private maxScheduledMediaTime: number = 0; // Track the furthest media time we've scheduled
 
+  /**
+   * The sound is over, and no more of it is coming.
+   *
+   * getAudioClock() clamps to maxScheduledMediaTime so a runaway clock cannot
+   * outrun what has been scheduled. That is right while more audio is on its
+   * way and wrong once there is none: an audio track SHORTER than the picture
+   * leaves the clock parked at the last sample for good, and everything that
+   * follows it — the master clock and the renderer's own presentation timing
+   * both read this — stops with it. Measured on a 4K AV1 MKV whose Opus track
+   * ends at 193.4s against a picture running to 243.8s: playback stopped dead
+   * at 3:13 with fifty seconds of video left.
+   *
+   * Once the player says the stream has ended AND the head has reached it,
+   * report no clock at all. Both readers already treat a negative time as
+   * "time this yourself", which is exactly right: there is no sound left to
+   * sync to, and the picture should play out on its own.
+   */
+  private _streamEnded: boolean = false;
+
+  /** Called by the player when the demuxer has no more audio to give. */
+  endOfStream(): void {
+    this._streamEnded = true;
+  }
+
+  /** Has the sound already been let go for this run? */
+  isStreamEnded(): boolean {
+    return this._streamEnded;
+  }
+
+  /** Fresh audio is coming (a seek, a new source): the sound is not over. */
+  clearEndOfStream(): void {
+    this._streamEnded = false;
+  }
+
   // Buffer health monitoring
   private lastDecodeTime: number = 0;
   private scheduledCount: number = 0;
@@ -1734,6 +1768,9 @@ export class AudioRenderer {
    * Reset timing and stop all scheduled audio with smooth fade-out
    */
   reset(): void {
+    // A seek or a new source means fresh audio is on its way, so the sound is
+    // no longer over — see _streamEnded.
+    this._streamEnded = false;
     // Silence first, always — not only under stable audio.
     //
     // Stopping a source ends it mid-waveform, which is a click, and it does
@@ -2028,6 +2065,15 @@ export class AudioRenderer {
 
       // Clamp to the maximum scheduled media time to prevent clock runaway
       if (this.maxScheduledMediaTime > 0) {
+        // …unless there is no more sound coming and the head has reached the
+        // end of it. Then the clamp is not holding back a runaway, it is
+        // holding back the picture — see _streamEnded.
+        if (
+          this._streamEnded &&
+          computedTime >= this.maxScheduledMediaTime - 0.01
+        ) {
+          return -1;
+        }
         return Math.min(computedTime, this.maxScheduledMediaTime);
       }
       return computedTime;
