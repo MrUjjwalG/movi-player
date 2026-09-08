@@ -5226,16 +5226,20 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
   // hasPictureToCarryARewind(). Not 1.0: the queue drains between decodes, so
   // it sits a few frames under the cap in normal steady playback.
   private static readonly REWIND_QUEUE_AT_CAP_FRACTION = 0.7;
+  // How far past its own target the audio buffer may be pushed by the demux
+  // loop's carve-outs before the plain cap applies again. See the ceiling in
+  // processLoop.
+  private static readonly AUDIO_CARVEOUT_MAX_MULT = 3;
   private _rewindVideoUntilDts = -1;
   private _rewindAudioFrom = -1;
-  private static readonly DEMUX_TIMEOUT = 35000; // 35 seconds timeout (slightly more than HTTP timeout of 30s)
-  private eofReached = false;
-  // Wall-clock time (performance.now) when eofReached first flipped true.
-  // Used as a watchdog: if the normal drained-and-played-out conditions
   // The rewind's audio floor is only PROVISIONAL until the first audio packet
   // comes back: see the gate in the demux loop for why it has to be re-read
   // there rather than trusted from where it was armed.
   private _rewindAudioFloorPending = false;
+  private static readonly DEMUX_TIMEOUT = 35000; // 35 seconds timeout (slightly more than HTTP timeout of 30s)
+  private eofReached = false;
+  // Wall-clock time (performance.now) when eofReached first flipped true.
+  // Used as a watchdog: if the normal drained-and-played-out conditions
   // never all line up (e.g. a marginal float mismatch between the audio
   // playout head and the last video frame), force the ended transition
   // rather than freezing one frame short of the end forever.
@@ -7409,16 +7413,65 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
     // one this is for has nothing anywhere: no frames, no work queued, and a
     // demuxer sitting idle because of a cushion. Asking both questions
     // separates them exactly.
+    //
+    // …and picture sitting in the read-ahead stash is picture, so it is not
+    // "run out" either. Without that clause this exemption is unbounded in the
+    // one state where it cannot clear itself: after a seek the renderer is
+    // empty and the decoder is dry, and if what the loop reads goes to the
+    // STASH rather than the decoder, both stay that way however much is read.
+    // Measured on the 163.766s 8K file, a seek to 75.06s: 4912 stashed packets
+    // and 73.5s of decoded audio inside 500ms, and `eofReached` set at 75s of a
+    // 164s film — the flag that later ended the film 77 seconds early. The
+    // stash's own drain (stashCanFeedThePicture) still runs, so the picture is
+    // handed over rather than waited for; this only stops the demuxer racing
+    // off through the file to fetch more of what it is already holding.
     const pictureHasRunOut =
       this.hasPicture &&
       videoBuffered <= pictureFloorFrames &&
       videoBuffered < maxVideoBuffered &&
-      this.videoDecoder.queueSize <= pictureFloorFrames;
+      this.videoDecoder.queueSize <= pictureFloorFrames &&
+      this._videoAheadStash.length === 0;
     // …and this tick is running ONLY on that exemption when the audio cap is
     // the one thing it stepped over. The burst below must then stop the moment
     // the stash is empty: the exemption was granted to hand over picture
     // already in memory, not to read further bytes past a cushion that is
     // already full.
+    // A ceiling none of the four carve-outs above may step over.
+    //
+    // Each of them lifts the audio cap for a good reason and each says the same
+    // thing in its comment — "the audio DECODER's queue gate still applies, so
+    // this cannot flood it". That gate does not hold. Decoded audio leaves the
+    // decoder queue immediately for the renderer's pending list, which has no
+    // bound at all, so the decoder queue reads near zero however long the loop
+    // runs and nothing ever closes the gate again.
+    //
+    // Measured, from a session on the 163.766s 8K file: a thumbnail-hover seek
+    // to 75.06s forced its completion with no frame yet decoded, which put the
+    // player in "buffering" and armed bufferingForVideo. The loop then read the
+    // whole REST OF THE FILE in about a second — `queued=71230ms`, seventy-one
+    // seconds of decoded audio against a 2s target — and set eofReached at 75s
+    // of a 164s film. Playback carried on to 85s with that flag stuck true, and
+    // the next pause/resume was enough for the ended test (decoders drained,
+    // clock past the furthest scheduled audio) to declare the film over and
+    // jump the clock to 163.766s. "Achanak se end ho gaya", 77 seconds early.
+    //
+    // The carve-outs need a second or two of reading to do their job; none of
+    // them needs three times the target, let alone thirty-five. Past the
+    // ceiling the two that read NEW bytes — the background-tab catch-up and the
+    // wait for a first frame — stop excusing the cushion.
+    //
+    // The other two are deliberately left alone, and a first attempt that
+    // applied the ceiling to all four deadlocked on this very file: with 57s of
+    // audio banked the gate shut for good, the 3490-packet read-ahead stash
+    // could then never be handed over, so no frame ever arrived, so the state
+    // stayed "buffering" forever with the picture black. stashCanFeedThePicture
+    // hands over packets already in memory (stashOnlyPass stops the burst the
+    // moment the stash is empty, so it reads no further bytes) and
+    // pictureHasRunOut fires only when there is no picture and no decoder work
+    // anywhere — reading is the only way out of both. A cushion is never a
+    // reason to refuse either.
+    const audioCarveOutCeilingHit =
+      audioBuffered > maxAudioBuffered * MoviPlayer.AUDIO_CARVEOUT_MAX_MULT;
     const stashOnlyPass =
       stashCanFeedThePicture &&
       gateOnAudio &&
@@ -7439,8 +7492,8 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
         this.videoDecoder.queueSize > maxVideoQueue) ||
       (gateOnAudio && this.audioDecoder.queueSize > maxAudioQueue) ||
       (gateOnAudio &&
-        !catchingUpVideo &&
-        !bufferingForVideo &&
+        !(catchingUpVideo && !audioCarveOutCeilingHit) &&
+        !(bufferingForVideo && !audioCarveOutCeilingHit) &&
         !stashCanFeedThePicture &&
         !pictureHasRunOut &&
         audioBuffered > maxAudioBuffered) ||
@@ -8111,6 +8164,39 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
               // heard. The renderer was just reset; playing it would be that
               // fraction played twice.
               if (this._rewindAudioFrom >= 0) {
+                // …and the mark it was armed with is already stale. It was
+                // read before the demuxer seek, and that seek is the whole
+                // wait: a backwards reposition on a cursor that had read far
+                // ahead (further still when the speed change was HELD while
+                // the pipeline filled for it) is I/O plus, on MKV, a cue
+                // parse. The picture never stopped through any of it and the
+                // clock ran on at the NEW rate, so resuming the sound at the
+                // armed mark hands the renderer audio from behind the
+                // playhead — and because setPlaybackRate's clock.seek() has
+                // just cleared syncedToAudio, the FIRST healthy buffer is a
+                // hard re-sync (Clock.getTime) that drags the whole clock
+                // back onto it. That is the "plays, steps back, plays it
+                // again" on the prepare path; the faster the machine, the
+                // smaller the gap, which is why it never showed here.
+                //
+                // So resolve the floor where the playhead actually is now,
+                // plus the lead before this sound can be heard at all —
+                // during that lead the output is silent whatever we do, so
+                // the media it covers would only ever be heard late. Capped:
+                // an over-predicted lead skips content, and unlike a repeat
+                // that cannot be taken back.
+                if (this._rewindAudioFloorPending) {
+                  this._rewindAudioFloorPending = false;
+                  const live = this.getCurrentTime() + this.startTime;
+                  const lead = Math.min(
+                    0.25,
+                    this.audioRenderer?.expectedStartLead?.() ?? 0,
+                  );
+                  const floor = live + lead * this.clock.getPlaybackRate();
+                  if (Number.isFinite(floor) && floor > this._rewindAudioFrom) {
+                    this._rewindAudioFrom = floor;
+                  }
+                }
                 if (packet.timestamp < this._rewindAudioFrom) continue;
                 this._rewindAudioFrom = -1;
               }
@@ -8164,39 +8250,6 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
                     TAG,
                     `Audio reached seek target: ${packet.timestamp.toFixed(3)}s (target: ${this.seekTargetTime.toFixed(3)}s)`,
                   );
-                // …and the mark it was armed with is already stale. It was
-                // read before the demuxer seek, and that seek is the whole
-                // wait: a backwards reposition on a cursor that had read far
-                // ahead (further still when the speed change was HELD while
-                // the pipeline filled for it) is I/O plus, on MKV, a cue
-                // parse. The picture never stopped through any of it and the
-                // clock ran on at the NEW rate, so resuming the sound at the
-                // armed mark hands the renderer audio from behind the
-                // playhead — and because setPlaybackRate's clock.seek() has
-                // just cleared syncedToAudio, the FIRST healthy buffer is a
-                // hard re-sync (Clock.getTime) that drags the whole clock
-                // back onto it. That is the "plays, steps back, plays it
-                // again" on the prepare path; the faster the machine, the
-                // smaller the gap, which is why it never showed here.
-                //
-                // So resolve the floor where the playhead actually is now,
-                // plus the lead before this sound can be heard at all —
-                // during that lead the output is silent whatever we do, so
-                // the media it covers would only ever be heard late. Capped:
-                // an over-predicted lead skips content, and unlike a repeat
-                // that cannot be taken back.
-                if (this._rewindAudioFloorPending) {
-                  this._rewindAudioFloorPending = false;
-                  const live = this.getCurrentTime() + this.startTime;
-                  const lead = Math.min(
-                    0.25,
-                    this.audioRenderer?.expectedStartLead?.() ?? 0,
-                  );
-                  const floor = live + lead * this.clock.getPlaybackRate();
-                  if (Number.isFinite(floor) && floor > this._rewindAudioFrom) {
-                    this._rewindAudioFrom = floor;
-                  }
-                }
                 }
                 if (
                   !this.trackManager.getActiveVideoTrack() ||
@@ -8531,6 +8584,7 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
       try {
         // Seek in the audio source's own PTS baseline (may differ from video's).
         this._splitAudioSkipBefore = -1;
+        this._splitAudioFloorPending = false;
         await this.audioDemuxer.seek(t + this._splitAudioStartTime);
       } catch (e) {
         Logger.warn(TAG, `Split audio-only seek failed: ${(e as any)?.message ?? e}`);
@@ -8584,7 +8638,6 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
 
     // A genuine user seek (no opt) clears any leftover suppression so its
     // spinner shows; play()-initiated seeks pass suppressSpinner to hide it.
-        this._splitAudioFloorPending = false;
     this.suppressSeekSpinner = opts?.suppressSpinner ?? false;
     // preservePlaying: a corrective seek (e.g. rate change) that must NOT flip
     // the play/pause state. If we were playing — including mid-flight from a
@@ -8651,6 +8704,7 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
     // rewind's marks describe a cursor that no longer exists.
     this._rewindVideoUntilDts = -1;
     this._rewindAudioFrom = -1;
+    this._rewindAudioFloorPending = false;
 
     const mySessionId = ++this.seekSessionId;
     // Claim the session: from here until this seek finishes or is superseded,
@@ -8704,7 +8758,6 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
             this.demuxInFlight = false;
             return this.abandonSupersededSeek(mySessionId);
           }
-    this._rewindAudioFloorPending = false;
           await new Promise((r) => setTimeout(r, 10));
           retries++;
         }
@@ -8774,6 +8827,7 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
           // own on completion, and a stale cutoff would silently eat the head of
           // the new position's audio.
           this._splitAudioSkipBefore = -1;
+          this._splitAudioFloorPending = false;
           await this.audioDemuxer.seek(seconds + this._splitAudioStartTime);
         } catch (e) {
           Logger.warn(TAG, `Split audio seek failed: ${(e as any)?.message ?? e}`);
@@ -8827,7 +8881,6 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
       // the completion below resumes on audio instead of holding for a picture
       // this position has already proved it can't produce. Any frame from here
       // on is the picture rejoining.
-          this._splitAudioFloorPending = false;
       this._carrySoundThroughNextSeek = false;
       this._videoResumeTarget = seconds + this.startTime;
     } else {
@@ -11051,9 +11104,14 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
     // exactly that way: "1x pe wapas aane pe ekdam ruk ja rha hai". A slower
     // rate wants a SMALLER cushion, so this resolves quickly there — but it has
     // to be allowed to resolve at all.
+    //
+    // None of which applies when the sound can carry the change on its own
+    // (see hasHealthyAudioAnchor): there is no rewind to carry then, nothing
+    // to fill for, and holding the rate back would be a wait for its own sake.
     if (
       !this._applyingPendingRate &&
       playingNow &&
+      !audioAnchored &&
       !this.streamWrapper &&
       !this.audioDemuxer &&
       !this.hasPictureToCarryARewind(rate)
@@ -11104,14 +11162,9 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
     // guard keeps rapid rate changes from a superseded completion landing
     // paused. Only when actually playing — see playingNow above.
     // Linear (non-seekable) playback can't do the corrective seek — the
-    //
-    // None of which applies when the sound can carry the change on its own
-    // (see hasHealthyAudioAnchor): there is no rewind to carry then, nothing
-    // to fill for, and holding the rate back would be a wait for its own sake.
     // keyframe before savedTime is usually behind the sliding window and the
     // read would fail (seek timeout → buffering). Skip it; the worst case is a
     // brief read-ahead pivot on rate change, far better than a stalled seek.
-      !audioAnchored &&
     //
     // Also skip it when a healthy audio clock is already anchoring playback:
     // AudioRenderer.setPlaybackRate() re-anchors in place (stops the stale
@@ -11155,6 +11208,11 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
       } else {
         fullSeek();
       }
+    } else if (playingNow && audioAnchored) {
+      Logger.info(
+        TAG,
+        `Speed ${rate}x carried on the audio already scheduled — no rewind`,
+      );
     }
   }
 
@@ -11208,11 +11266,6 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
     //
     // The playhead is the whole target of this rewind — the point is to undo
     // the demuxer's read-ahead, not to undo playback — so read it here, after
-    } else if (playingNow && audioAnchored) {
-      Logger.info(
-        TAG,
-        `Speed ${rate}x carried on the audio already scheduled — no rewind`,
-      );
     // the wait, where it is true. `time` remains the floor: a clock that has
     // somehow gone backwards must not push the rewind forwards.
     const live = this.getCurrentTime();
@@ -11228,6 +11281,9 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
     this.audioRenderer.reset();
     this._rewindVideoUntilDts = this._lastFedVideoDts;
     this._rewindAudioFrom = target;
+    // Provisional: the seek below is the part that takes the time, so the
+    // audio floor is re-read at the first packet back — see the gate.
+    this._rewindAudioFloorPending = true;
     // The cursor is moving backwards; whatever the loop decided about the end
     // of the file no longer holds.
     this.eofReached = false;
@@ -11242,6 +11298,7 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
       );
       this._rewindVideoUntilDts = -1;
       this._rewindAudioFrom = -1;
+      this._rewindAudioFloorPending = false;
     }
     if (this._destroyed || this.demuxer !== dm) return true;
     if (
@@ -11281,9 +11338,6 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
       await new Promise((r) => setTimeout(r, 5));
     }
     // The wait can outlive the pipeline it was waiting for.
-    // Provisional: the seek below is the part that takes the time, so the
-    // audio floor is re-read at the first packet back — see the gate.
-    this._rewindAudioFloorPending = true;
     if (this._destroyed || this.audioDemuxer !== dm) return;
     this.audioDecoder.flush();
     this.audioRenderer.reset();
@@ -11292,15 +11346,16 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
       // anything earlier would be a fraction of a second played twice. In the
       // video PTS scale, which is what the split pump compares against.
       this._splitAudioSkipBefore = t + this.startTime;
+      this._splitAudioFloorPending = true;
       // …and seek in the audio source's own baseline, which may differ.
       await dm.seek(t + this._splitAudioStartTime);
     } catch (e) {
       Logger.warn(
         TAG,
         `Rate-change audio rewind to ${t.toFixed(2)}s failed: ${(e as { message?: string })?.message ?? e}`,
-      this._rewindAudioFloorPending = false;
       );
       this._splitAudioSkipBefore = -1;
+      this._splitAudioFloorPending = false;
     }
     this._splitAudioEof = false;
     this._lastSplitAudioPts = t;
@@ -11346,7 +11401,6 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
     const isMobile = MoviPlayer._isMobileDevice;
     let baseHwQueue: number;
     if (is8KPlus) {
-      this._splitAudioFloorPending = true;
       // 8K+ desktop: 16 frames is a VRAM-bound sweet spot (8K HDR frames are
       // ~50MB each; deeper queues stall the compositor and 100 × 50MB ≈ 5GB
       // VRAM was the original starvation cause). Mobile shifts to software
@@ -11355,7 +11409,6 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
       else baseHwQueue = isPostSeek ? 12 : 16;
     } else if (isHighRes) {
       // 4K (not 8K) desktop: 4K HDR RGBA8 frames are ~33MB so 48 × 33MB ≈
-      this._splitAudioFloorPending = false;
       // 1.6GB VRAM — bounded but deep enough to absorb 250-500ms GC/decode
       // hiccups without draining the renderer queue. The previous uniform
       // 16-frame cap (267ms @60fps) was too shallow for 4K60 HEVC HDR: any
@@ -11786,6 +11839,24 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
         // resumed (see _splitAudioSkipBefore). Cleared by the first packet that
         // reaches it, so it costs one comparison per packet afterwards.
         if (this._splitAudioSkipBefore >= 0) {
+          // A rate-change rewind armed this before its demuxer seek, and the
+          // picture ran on at the new rate all through that wait — resuming
+          // the sound at the armed mark hands back audio from behind the
+          // playhead, which the cleared syncedToAudio then hard-syncs the
+          // whole clock onto. Resolve it where the playhead is now (plus the
+          // silent lead before this sound can be heard). See the muxed twin.
+          if (this._splitAudioFloorPending) {
+            this._splitAudioFloorPending = false;
+            const live = this.getCurrentTime() + this.startTime;
+            const lead = Math.min(
+              0.25,
+              this.audioRenderer?.expectedStartLead?.() ?? 0,
+            );
+            const floor = live + lead * this.clock.getPlaybackRate();
+            if (Number.isFinite(floor) && floor > this._splitAudioSkipBefore) {
+              this._splitAudioSkipBefore = floor;
+            }
+          }
           if (pts < this._splitAudioSkipBefore) continue;
           this._splitAudioSkipBefore = -1;
         }
@@ -11839,24 +11910,6 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
   private maybeEndSplitAudio(): boolean {
     const mainLoopParked =
       this._audioOnly || (this.isBackgrounded && !this.isPiPActive);
-          // A rate-change rewind armed this before its demuxer seek, and the
-          // picture ran on at the new rate all through that wait — resuming
-          // the sound at the armed mark hands back audio from behind the
-          // playhead, which the cleared syncedToAudio then hard-syncs the
-          // whole clock onto. Resolve it where the playhead is now (plus the
-          // silent lead before this sound can be heard). See the muxed twin.
-          if (this._splitAudioFloorPending) {
-            this._splitAudioFloorPending = false;
-            const live = this.getCurrentTime() + this.startTime;
-            const lead = Math.min(
-              0.25,
-              this.audioRenderer?.expectedStartLead?.() ?? 0,
-            );
-            const floor = live + lead * this.clock.getPlaybackRate();
-            if (Number.isFinite(floor) && floor > this._splitAudioSkipBefore) {
-              this._splitAudioSkipBefore = floor;
-            }
-          }
     if (
       mainLoopParked &&
       this._splitAudioEof &&
