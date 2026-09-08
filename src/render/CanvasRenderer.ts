@@ -1594,6 +1594,40 @@ export class CanvasRenderer {
   }
 
   /**
+   * Drop every perf window on the floor.
+   *
+   * All three of them measure a RATE across wall-clock time, so a window that
+   * spans a stretch where the loop wasn't running measures nothing — it divides
+   * the ticks and frames of a fraction of a second by however long the player
+   * sat there. samplePerformance() has a `!isPlaying` branch for exactly this,
+   * and it can never run: startPresentationLoop() sets isPlaying BEFORE its
+   * first (synchronous) tick, so the first sample after a stop is already
+   * "playing" and reads the stale window as live.
+   *
+   * Measured on a 5.76s clip played, left on the ended screen for 31 seconds,
+   * and replayed: the replay's very first tick closed a 31-SECOND cadence
+   * window holding the last partial second of ticks from the previous run, and
+   * logged "Main thread contended by the host page: rAF fired ~1/s against a
+   * 50fps target ... 0% of the window" before a single frame of the replay had
+   * been presented. That verdict is sticky until a full window overwrites it,
+   * and while it stands samplePerformance zeroes the deficit/stuck streaks and
+   * returns — so the adaptive-FPS and decode-bound detectors were switched off
+   * across the start of the replay by a window that measured an idle player.
+   * The stuck detector's own window spans the same gap and reads ~0fps with
+   * audio flowing, which is a decode-bound downshift waiting to happen; it was
+   * only ever saved by the contention verdict returning first.
+   *
+   * So reset where the stop actually happens, and let each restart begin its
+   * windows from the moment it is genuinely running again.
+   */
+  private resetPerfWindows(): void {
+    this._perfWindowStart = 0;
+    this._stuckWindowStart = 0;
+    this._perfStuckWindows = 0;
+    this.resetRafCadence();
+  }
+
+  /**
    * Roll the rAF-cadence window and decide whether the one that just closed was
    * the host page's doing rather than the pipeline's.
    *
@@ -1656,10 +1690,7 @@ export class CanvasRenderer {
   private samplePerformance(): void {
     if (this._perfDegradeChecked) return;
     if (!this.isPlaying) {
-      this._perfWindowStart = 0;
-      this._stuckWindowStart = 0;
-      this._perfStuckWindows = 0;
-      this.resetRafCadence();
+      this.resetPerfWindows();
       return;
     }
     // Skip while backgrounded (and not in PiP): the throttled rAF stalls
@@ -2776,6 +2807,9 @@ export class CanvasRenderer {
    */
   stopPresentationLoop(): void {
     this.isPlaying = false;
+    // The perf windows are rates measured across wall-clock time, and nothing
+    // is going to tick them while the loop is stopped. See resetPerfWindows().
+    this.resetPerfWindows();
 
     if (this.rafId !== null) {
       cancelAnimationFrame(this.rafId);

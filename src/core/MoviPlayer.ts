@@ -1966,6 +1966,15 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
   private _videoAheadStash: Packet[] = [];
   private _videoAheadStashBytes: number = 0;
   private _videoAheadActive: boolean = false;
+  // The seek session whose stash has already been thrown away. Emptying the
+  // stash breaks the reference chain, so it must happen ONCE per seek and not
+  // once per packet — see the wait-for-sync branch of trimOvertakenReadAhead.
+  private _readAheadDroppedForSeek: number = -1;
+  // Edge latch for processLoop's point-of-use guard: true while the condition
+  // that invalidates the stash (decoder waiting for a keyframe, or a prebuffer
+  // stash draining) is still standing, so the drop happens once as it begins
+  // rather than on every iteration of the burst underneath it.
+  private _readAheadInvalidated: boolean = false;
 
   /**
    * The ONE way the read-ahead stash is emptied. Every caller goes through here
@@ -1997,8 +2006,32 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
     // Nothing in the stash belongs to where playback is going, so drop it
     // rather than trim it. dropVideoReadAhead is the only sanctioned way to
     // empty it (it latches the reference-chain break the drop causes).
+    //
+    // ONCE, though. This runs on every iteration of the demux burst, and
+    // waitingForVideoSync stays true across the whole post-seek fill — so an
+    // unconditional drop here re-breaks the reference chain for every packet
+    // the burst stashes, and the stash it is emptying is no longer the old
+    // position's picture: the seek emptied that itself, and everything landing
+    // here now was read AFTER it, for where playback is going.
+    //
+    // Traced on a 5.76s 1080p50 H.264 High 4:2:2 camera original: on play() the
+    // seek dropped 77 stashed packets (correct, once), and then this branch
+    // fired twenty more times in 25ms — stash of 1, dropped, chain broken;
+    // keyframe, chain cleared; stash of 1, dropped, chain broken — and the
+    // sequence happened to END on a break. From there every delta was skipped
+    // waiting for a keyframe that the same starvation kept from arriving, so
+    // 73 of the file's 288 frames were ever handed to the decoder: the picture
+    // ran clean for ~1.2s and then advanced once per GOP (0.48s) for the rest
+    // of the file. The decoder was never the problem — it was fed 73 chunks,
+    // returned 76 frames and reported no error.
+    //
+    // Keyed on the seek session, so a genuinely stale stash is still dropped
+    // the first time this seek looks at it (dropVideoReadAhead stamps the
+    // session, so the seek's own drop counts), and never again for that seek.
     if (this.waitingForVideoSync) {
-      this.dropVideoReadAhead();
+      if (this._readAheadDroppedForSeek !== this.seekSessionId) {
+        this.dropVideoReadAhead();
+      }
       return;
     }
     const onScreen = this.videoRenderer?.getCurrentTime?.() ?? -1;
@@ -2035,6 +2068,9 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
   }
 
   private dropVideoReadAhead(): void {
+    // Stamped whether or not there was anything to drop: what the stamp records
+    // is "this seek's stash has been dealt with", and an empty stash has been.
+    this._readAheadDroppedForSeek = this.seekSessionId;
     if (this._videoAheadStash.length === 0) return;
     this._videoAheadStash = [];
     this._videoAheadStashBytes = 0;
@@ -7354,17 +7390,68 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
         // only ever the next one after the sound stops — milliseconds past it,
         // whether one frame follows or fifty seconds do. What says which is
         // where the film ends against where the sound ends.
+        //
+        // …and `maxScheduled` is not where the sound ends. It is the SCHEDULING
+        // HORIZON: AudioRenderer holds decoded audio as data and only makes
+        // source nodes as their turn approaches (see scheduleAudioBuffer), so it
+        // sits about one cushion ahead of the clock and no further, however many
+        // seconds are decoded behind it. Read as the end of the soundtrack it
+        // declares every file short — it just usually goes unnoticed, because on
+        // a normal file the demuxer is still reading and EOF is minutes away.
+        //
+        // Measured on a 5.76s 1080p50 H.264 High 4:2:2 camera original (~93
+        // Mbps, no hardware decoder): the whole file demuxed 1.16s into
+        // playback, so EOF landed with the clock at 1.14s. maxScheduled read
+        // 2.25s — the clock plus its 1133ms cushion — with 3030ms of decoded
+        // audio still pending behind it, and this declared a full-length
+        // soundtrack over at 2.25s of 5.76s. endOfStream() then made
+        // getAudioClock() return -1 every time the playout head touched the
+        // horizon, so the master clock and the renderer's presentation timing
+        // spent the remaining 4.5s dropping and re-acquiring audio sync — the
+        // picture juddering the whole way, and the clock finishing at 5.52s.
+        //
+        // Two things do say where the sound ends, and either one alone would
+        // have stopped that:
+        //
+        //  - The last audio PACKET the demuxer saw. At EOF the read pass has
+        //    covered the rest of the file, so it is exact — it is the same
+        //    evidence the tail-learning block above runs on, and that block had
+        //    already concluded there was no tail here while this one decided
+        //    there was. Only ours to read when the audio comes through THIS
+        //    loop; split audio has its own demuxer and never sets it, hence the
+        //    same `!audioDemuxer` guard the block above carries.
+        //  - Audio still sitting in the renderer. Sound that is buffered is
+        //    sound that is coming, whether or not a source node exists for it
+        //    yet, and getBufferedDuration counts both halves.
+        //
+        // On a genuinely short soundtrack neither guard delays anything by more
+        // than the grace: the packet evidence says short from the first EOF pass,
+        // and the buffer drains in real time to meet it.
+        const soundStillBuffered =
+          this.audioRenderer.getBufferedDuration() >
+          MoviPlayer.AUDIO_TAIL_GRACE_S;
+        const lastSoundPts =
+          !this.audioDemuxer && this._lastAudioPacketPts >= 0
+            ? this._lastAudioPacketPts
+            : -1;
+        const packetsSaySoundIsShort =
+          lastSoundPts < 0 ||
+          duration + this.startTime >
+            lastSoundPts + MoviPlayer.AUDIO_TAIL_GRACE_S;
         const pictureOutlivesSound =
           decodersDone &&
           maxScheduled > 0 &&
           duration > 0 &&
           !!this.trackManager.getActiveVideoTrack() &&
+          !soundStillBuffered &&
+          packetsSaySoundIsShort &&
           duration + this.startTime >
             maxScheduled + MoviPlayer.AUDIO_TAIL_GRACE_S;
         if (pictureOutlivesSound && !this.audioRenderer.isStreamEnded()) {
           Logger.info(
             TAG,
-            `Sound ends at ${maxScheduled.toFixed(2)}s but the picture runs to ` +
+            `Sound ends at ${(lastSoundPts >= 0 ? lastSoundPts : maxScheduled).toFixed(2)}s ` +
+              `but the picture runs to ` +
               `${(this.mediaInfo?.duration ?? 0).toFixed(2)}s — playing the rest out without it`,
           );
           this.audioRenderer.endOfStream();
@@ -7627,7 +7714,23 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
     // as permanently — a video-only file (movi-tube serves exactly these,
     // paired with a separate audio URL) was dropping deltas throughout.
     const hasAudioToStarve = this.trackManager.getActiveAudioTrack() !== null;
-    const audioStarving = gateOnAudio && hasAudioToStarve && audioBuffered < 0.1;
+    // …and only once the sound has actually started. Before the first buffer is
+    // scheduled the audio buffer reads 0 because nothing has been asked of it
+    // yet, not because it is about to underrun — and a starve verdict there
+    // costs picture for a problem that does not exist. Read-ahead, the gentle
+    // half of this protection, already stands down outside "playing"; its
+    // last-resort sibling did not, so during the startup buffering pass the
+    // stash sat over its 180-packet cap with nothing draining it and the drop
+    // path took reference deltas instead.
+    //
+    // Traced on a 5.76s 1080p50 H.264 High 4:2:2 file: three chain breaks
+    // inside 8ms at ~140ms in, state "buffering", audio buffer 0 because audio
+    // had not begun — a 1.2-second hole in the middle of a six-second clip,
+    // with 112 decoded frames sitting in the renderer queue for film that had
+    // already been thrown away.
+    const audioHasStarted = this.audioRenderer.getMaxScheduledMediaTime() > 0;
+    const audioStarving =
+      gateOnAudio && hasAudioToStarve && audioHasStarted && audioBuffered < 0.1;
     const videoDecoderFull = this.videoDecoder.queueSize > maxVideoQueue;
     const videoBufferFull = !skipVideoBackpressure && videoBuffered > maxVideoBuffered;
     // Muted is not the same as audio-less. The clock is mastered by audio in
@@ -8154,11 +8257,34 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
         // stashes holding at once therefore feeds newer packets and then older
         // ones — which is the out-of-order garbage that errored on every
         // resume. They must never coexist, and the newer stash wins.
-        if (
+        //
+        // On the EDGE of that, not for as long as it lasts. Both conditions
+        // hold across many iterations of this burst — a keyframe wait runs to
+        // the end of a GOP, a prebuffer drain to the end of the stash — and an
+        // unconditional drop inside the loop therefore bins whatever landed in
+        // the read-ahead stash since the previous iteration, one packet at a
+        // time, re-breaking the reference chain on each. What the rule is
+        // actually about is the packets that were in the stash when the
+        // condition BEGAN: those are the ones read against the old reference
+        // chain, or older than the stash that now outranks them. Everything
+        // arriving afterwards was read against the state we are already in, and
+        // is exactly what the decoder needs the moment a keyframe lands.
+        //
+        // Traced on a 5.76s 1080p50 H.264 High 4:2:2 file: three of these fired
+        // within 2ms of each other during the post-seek fill, each costing the
+        // deltas of a GOP, and the picture stood still for 1.2s in the middle
+        // of the clip with 112 frames sitting decoded in the renderer queue —
+        // frames for a stretch of film that had already been thrown away.
+        const readAheadInvalidated =
           this.videoDecoder.isWaitingForKeyframe ||
-          this.pendingPrebufferPackets.length > 0
-        ) {
-          this.dropVideoReadAhead();
+          this.pendingPrebufferPackets.length > 0;
+        if (readAheadInvalidated) {
+          if (!this._readAheadInvalidated) {
+            this._readAheadInvalidated = true;
+            this.dropVideoReadAhead();
+          }
+        } else {
+          this._readAheadInvalidated = false;
         }
 
         // Ground the picture has already passed. The stash is a queue of video
