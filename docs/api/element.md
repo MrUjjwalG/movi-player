@@ -2309,8 +2309,9 @@ player.addControl({
 | `title` | Tooltip override; `null` for none. Drawn by the player over the bar, like every built-in's, with the `hotkey` beside it — not the browser's native tooltip |
 | `side` | `"left"` / `"right"` (default) end of the bar |
 | `before` / `after` | Position against a built-in — `"play"`, `"cc"`, `"settings"`, `"pip"`, `"fullscreen"`, `"dots"` (the corner's three-dots), … — or against another of your controls by its id |
-| `placement` | `"bar"` (default), `"top"`, `"menu"`, `"both"` — or a list, e.g. `["top", "menu"]`. See below |
+| `placement` | `"bar"` (default), `"center"`, `"top"`, `"menu"`, `"both"` — or a list, e.g. `["top", "menu"]`. See below |
 | `media` | `"video"`, `"audio"`, or `"both"` (default) — see below |
+| `screen` | `"fullscreen"`, `"windowed"`, or `"both"` (default) — see below |
 | `toggle` / `active` | Carries state: pressed styling, On/Off on the menu row, and the boolean handed to `onSelect` |
 | `hotkey` | e.g. `"shift+a"`. Checked after the player's own shortcuts, so it can't take over Space or the arrows; appears on the menu row and in the shortcuts panel |
 | `shortcutHint` | Right-hand text on the menu row for a non-toggle |
@@ -2326,6 +2327,46 @@ opens the context menu on touch — which is where a player puts what is about
 the *session* rather than about playback: cast, share, close. It is shown on
 every device, not only touch: the three-dots is a touch affordance (a mouse has
 right-click), the corner is not.
+
+`"center"` is the **middle of the bar** — the free width between the left run
+and the settings run, which the player itself never puts anything in. It is its
+own surface rather than a side of `"bar"`, because it is not one: `side`,
+`group` and every built-in anchor describe the two runs. A control there is
+ordered only against your *own* other centre controls, by id:
+
+```js
+player.addControl({ id: "a", label: "A", placement: "center" });
+player.addControl({ id: "b", label: "B", placement: "center", after: "a" });
+```
+
+The middle is also the first thing to go when the bar runs out of room: the two
+clusters grow towards each other as the player narrows, and a control drawn
+across the clock is worse than one that stepped aside. So it suits a control
+that is an *offer* rather than a duty — which is what it is usually paired with
+`screen: "fullscreen"` for:
+
+```js
+player.addControl({
+  id: "suggestions",
+  label: "Suggestions",
+  icon: '<svg viewBox="0 0 24 24">…</svg>',
+  placement: "center",       // the middle of the bar
+  screen: "fullscreen",      // …and only once there is a screen to fill
+  toggle: true,
+  onSelect: (on) =>
+    on
+      ? player.showOverlay({
+          id: "suggestions",
+          content: suggestionsPanel,   // your own markup or Element
+          placement: "center",
+          dismissOn: ["play", "escape"],
+        })
+      : player.hideOverlay("suggestions"),
+});
+```
+
+That is the whole "up next / suggestions" affordance: a button the viewer only
+meets in fullscreen, and an overlay of your own over the picture behind it.
 
 A list puts one control on several surfaces at once:
 
@@ -2380,6 +2421,24 @@ A scoped-out control leaves the bar, the context menu **and** the shortcuts
 panel, and its hotkey stops firing — an invisible control with a live key is
 worse than no control. Enforced against the player's own audio class, so it
 follows a source swap from video to audio with no work from the host.
+
+**`screen` — fullscreen-only or windowed-only.** The same words
+[`titlemode`](#titlemode) uses, and for the same reason: fullscreen is a
+different amount of room and a different amount of attention. A control that
+would crowd a 360px embed has a whole screen to sit in once the viewer has
+committed to watching, and a control that only makes sense beside the page it
+came from should not follow them out of it.
+
+```typescript
+player.addControl({ id: "suggestions", label: "Suggestions", screen: "fullscreen", … });
+player.addControl({ id: "open-page",   label: "Open page",  screen: "windowed",   … });
+```
+
+Every fullscreen route counts — native, a host-driven one (see
+[`setHostFullscreen`](#sethostfullscreen)) and the iOS pseudo-fullscreen
+fallback — so the control appears and disappears on its own with no work from
+you. It scopes like `media` does, on every surface: the bar, the middle, the
+corner, the context menu and the shortcuts panel, and the hotkey with them.
 
 #### `updateControl(id, patch)` · `removeControl(id)`
 

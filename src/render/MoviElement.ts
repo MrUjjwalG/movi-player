@@ -232,6 +232,7 @@ export interface MoviControlSpec {
     bar?: { before?: string | string[]; after?: string | string[] };
     menu?: { before?: string | string[]; after?: string | string[] };
     top?: { before?: string | string[]; after?: string | string[] };
+    center?: { before?: string | string[]; after?: string | string[] };
   };
   /** WHICH capsule it sits in — the bar draws one behind each group of
    *  controls, and this says which group this one belongs to.
@@ -254,6 +255,21 @@ export interface MoviControlSpec {
   /** Which surface (or surfaces) it appears on. Default "bar".
    *
    *    "bar"   the control bar along the bottom
+   *    "center" the MIDDLE of that bar — the free width between the left run
+   *            and the settings run, which the player itself never puts
+   *            anything in. Its own surface and not a side of "bar", because
+   *            it is not one: `side`, `group` and every built-in anchor
+   *            describe the two runs, and the middle is neither of them. A
+   *            control here is ordered only against the host's OWN other
+   *            centre controls, by id.
+   *
+   *            The middle is also the first thing to go when the bar runs out
+   *            of room — the clusters grow towards each other and a control
+   *            drawn across the clock is worse than one that stepped aside —
+   *            so it suits a control that is an offer rather than a duty.
+   *            Paired with `screen: "fullscreen"` it is the "Suggestions" /
+   *            "Up next" affordance a full-screen player has the width for
+   *            and a 320px embed does not.
    *    "top"   the top-right corner, beside the three-dots button that opens
    *            the context menu on touch — the corner a player puts the things
    *            that are ABOUT the session rather than about playback: cast,
@@ -283,10 +299,11 @@ export interface MoviControlSpec {
    * the bar and points at it. */
   placement?:
     | "bar"
+    | "center"
     | "menu"
     | "top"
     | "both"
-    | Array<"bar" | "menu" | "top">;
+    | Array<"bar" | "center" | "menu" | "top">;
   /** WHICH kind of media it belongs to. Default "both".
    *
    *  The player collapses to an audio presentation when the media has no
@@ -303,6 +320,25 @@ export interface MoviControlSpec {
    *  Enforced in CSS against the host's audio class, so it follows a source
    *  swap from video to audio with no work from the host. */
   media?: "video" | "audio" | "both";
+  /** WHERE the player has to be for this control to exist. Default "both".
+   *
+   *    "fullscreen"  only while the player is fullscreen
+   *    "windowed"    only while it is not
+   *    "both"        always (the default)
+   *
+   *  The same words `titlemode` uses, and for the same reason: fullscreen is a
+   *  different amount of room and a different amount of attention. A control
+   *  that would crowd a 360px embed has a whole screen to sit in once the
+   *  viewer has committed to watching, and a control that only makes sense
+   *  beside the page it came from should not follow them out of it.
+   *
+   *  Every fullscreen route counts — native, a host-driven one (see
+   *  `setHostFullscreen`) and the iOS pseudo-fullscreen fallback — so the
+   *  control appears and disappears on its own with no work from the host.
+   *  Like `media`, a scoped-out control leaves the bar, the corner, the
+   *  context menu AND the shortcuts panel, and its hotkey stops firing: an
+   *  invisible control with a live key is worse than no control. */
+  screen?: "fullscreen" | "windowed" | "both";
   /** A toggle carries state: pressed styling, On/Off in the menu, and the
    *  boolean handed to onSelect. Without it, a plain button. */
   toggle?: boolean;
@@ -2361,6 +2397,15 @@ export class MoviElement extends HTMLElement {
               </svg>
             </button>
           </div>
+
+          <!-- The middle of the bar. Empty, and empty is the ordinary case:
+               the player puts nothing here — its own bar is a left run and a
+               settings run, and everything between them is free width. A host
+               control asking for placement "center" is what lands in it, and
+               with nothing in it the cluster draws nothing and measures
+               nothing. See .movi-controls-center in the styles for why it is
+               out of flow rather than a third child of the row. -->
+          <div class="movi-controls-center"></div>
 
           <div class="movi-controls-right">
             <div class="movi-mobile-expandable">
@@ -8601,6 +8646,12 @@ export class MoviElement extends HTMLElement {
   }
 
   private applyFullscreenUiState(isFullscreen: boolean): void {
+    // The one class every fullscreen-scoped rule reads. Off isFullscreenActive
+    // rather than off the argument: three routes lead here (native, host-driven
+    // and the iOS fallback) and each sets its own flag before calling, so a
+    // player leaving pseudo-fullscreen while a host still holds its own must
+    // not be told it left fullscreen altogether.
+    this.classList.toggle("movi-fullscreen-active", this.isFullscreenActive());
     this.updateFullscreenIcon(isFullscreen);
     this.updateFullscreenContextMenu(isFullscreen);
     // Every fullscreen route lands here — native, host-driven and the iOS
@@ -8610,6 +8661,12 @@ export class MoviElement extends HTMLElement {
     // And the one place the fullscreen button's exemption from the disabled
     // chrome flips: it stays live only while there is a fullscreen to leave.
     this.updateControlsState();
+    // A screen-scoped host control just appeared or left (see markCustomScopes),
+    // and the row is a different width besides. Re-decide what fits in it —
+    // waiting for the resize is enough for native fullscreen and is not for a
+    // host-driven one, where the element may already be the size it will be.
+    this.fitControlsRow();
+    this.syncEmptyCapsules();
   }
 
   /**
@@ -17229,6 +17286,7 @@ export class MoviElement extends HTMLElement {
       .movi-controls-right,
       .movi-control-group,
       .movi-controls-left > .movi-custom-btn,
+      .movi-controls-center > .movi-custom-btn,
       .movi-controls-left > .movi-seek-group,
       .movi-controls-left > .movi-volume-container,
       .movi-controls-left > .movi-chapter-pill,
@@ -17303,12 +17361,55 @@ export class MoviElement extends HTMLElement {
         gap: 6px;
       }
 
+      /* The middle of the bar — a place a host can put a control, and nothing
+         of the player's own.
+
+         Out of flow on purpose. The row is space-between with two children of
+         very different widths, so a third flex child would land in the middle
+         of the FREE SPACE between them and not in the middle of the bar —
+         which is the one thing "center" has to mean. Absolutely centred, it is
+         the middle of the bar at every width, and while it is empty it costs
+         the two clusters nothing at all.
+
+         Same 6px as the left cluster: each control here wears its own capsule
+         (see the capsule rule above), and 2px between two capsules reads as
+         one shape with a seam in it. */
+      .movi-controls-center {
+        position: absolute;
+        left: 50%;
+        top: 50%;
+        transform: translate(-50%, -50%);
+        display: flex;
+        align-items: center;
+        gap: 6px;
+        /* It floats OVER the row, and the row is still a row: the gap between
+           two of the host's buttons must not swallow a click meant for the bar
+           underneath. Only the controls themselves take the pointer. */
+        pointer-events: none;
+      }
+      .movi-controls-center > * {
+        pointer-events: auto;
+      }
+      /* Nothing in it — no mark in the middle of the bar. (A cluster whose
+         children are all HIDDEN is caught by .movi-capsule-empty instead; see
+         syncEmptyCapsules.) */
+      .movi-controls-center:empty {
+        display: none !important;
+      }
+      /* No ROOM for it. The middle is the first thing to go when the two
+         clusters grow towards each other — a control drawn across the clock is
+         worse than a control that stepped aside. Set by fitControlsRow. */
+      .movi-controls-center.movi-center-crowded {
+        display: none !important;
+      }
+
       /* Play is a capsule made of one button, so the button has to carry the
          ring the container groups get from their padding — without it, it sits
          2px shorter than everything beside it and the row's baseline breaks.
          A host's button on this side is the same shape of thing: its own
          capsule, so its own ring. */
-      :host .movi-controls-left > .movi-custom-btn {
+      :host .movi-controls-left > .movi-custom-btn,
+      :host .movi-controls-center > .movi-custom-btn {
         --movi-btn-size: 42px;
         width: var(--movi-btn-size);
         height: var(--movi-btn-size);
@@ -17363,6 +17464,7 @@ export class MoviElement extends HTMLElement {
          the smaller box instead of turning into an ellipse around it. */
       .movi-controls-left .movi-btn,
       .movi-controls-right .movi-btn,
+      .movi-controls-center .movi-btn,
       /* A group that stepped OUT of the clusters — see group: "none" — is
          still a control in this row and has to be the size the rest are. Named
          here rather than left to the base .movi-btn, which is the 44px box the
@@ -17401,6 +17503,7 @@ export class MoviElement extends HTMLElement {
          square it was never drawn for. */
       :host .movi-controls-left > .movi-custom-btn,
       :host .movi-controls-right .movi-custom-btn,
+      :host .movi-controls-center > .movi-custom-btn,
       :host .movi-buttons-row > .movi-control-group .movi-custom-btn {
         width: auto;
         min-width: var(--movi-btn-size);
@@ -17425,6 +17528,7 @@ export class MoviElement extends HTMLElement {
          the gap between them is unchanged: the box grew with the glyph. */
       .movi-controls-left .movi-btn svg,
       .movi-controls-right .movi-btn svg,
+      .movi-controls-center .movi-btn svg,
       .movi-buttons-row > .movi-control-group .movi-btn svg {
         width: 24px;
         height: 24px;
@@ -17435,7 +17539,8 @@ export class MoviElement extends HTMLElement {
          place is that they are targets before they are icons. */
       @media (pointer: coarse) {
         .movi-controls-left .movi-btn,
-        .movi-controls-right .movi-btn {
+        .movi-controls-right .movi-btn,
+        .movi-controls-center .movi-btn {
           --movi-btn-size: 40px;
           width: var(--movi-btn-size);
           height: var(--movi-btn-size);
@@ -20466,6 +20571,7 @@ export class MoviElement extends HTMLElement {
         .movi-controls-right,
         .movi-controls-left > .movi-play-pause,
         .movi-controls-left > .movi-custom-btn,
+        .movi-controls-center > .movi-custom-btn,
         .movi-controls-left > .movi-volume-container,
         .movi-controls-left > .movi-chapter-pill,
         .movi-controls-left > .movi-time,
@@ -20484,7 +20590,8 @@ export class MoviElement extends HTMLElement {
            every other button again. Specificity, not order: the narrow-viewport
            block further down sizes buttons with !important. */
         :host .movi-controls-left > .movi-play-pause,
-        :host .movi-controls-left > .movi-custom-btn {
+        :host .movi-controls-left > .movi-custom-btn,
+        :host .movi-controls-center > .movi-custom-btn {
           width: var(--movi-btn-size) !important;
           height: var(--movi-btn-size) !important;
         }
@@ -20493,7 +20600,8 @@ export class MoviElement extends HTMLElement {
            it. Height stays pinned — it is the row's own rhythm — and the width
            follows the content with the square as its floor. See the base rule
            for the same override. */
-        :host .movi-controls-left > .movi-custom-btn {
+        :host .movi-controls-left > .movi-custom-btn,
+        :host .movi-controls-center > .movi-custom-btn {
           width: auto !important;
           min-width: var(--movi-btn-size);
         }
@@ -20701,7 +20809,11 @@ export class MoviElement extends HTMLElement {
         }
 
         /* If right is expanded, hide the left group to make space */
-        .movi-buttons-row:has(.movi-controls-right.expanded) .movi-controls-left {
+        .movi-buttons-row:has(.movi-controls-right.expanded) .movi-controls-left,
+        /* …and the middle with it. The tray takes the row's whole width, and
+           the centre cluster floats over it — a host control would have been
+           drawn straight across the icons the viewer just opened. */
+        .movi-buttons-row:has(.movi-controls-right.expanded) .movi-controls-center {
            display: none !important;
         }
 
@@ -23792,6 +23904,13 @@ export class MoviElement extends HTMLElement {
       :host(.movi-audio-strip) .movi-buttons-row {
         display: contents !important;
       }
+      /* With the row out of layout there is no middle to be in the middle of:
+         the centre cluster would centre itself on the BAR, which in strip mode
+         is the scrubber. A host control that asked for the middle of a control
+         bar is asking for something this presentation does not have. */
+      :host(.movi-audio-strip) .movi-controls-center {
+        display: none !important;
+      }
       :host(.movi-audio-strip) .movi-controls-left {
         order: 0 !important;
         flex: 0 0 auto !important;
@@ -23893,6 +24012,20 @@ export class MoviElement extends HTMLElement {
       :host(:not(.movi-audio-mode)) .movi-context-menu-item[data-audio-only] {
         display: none !important;
       }
+      /* And the same for screen:"fullscreen" / "windowed". Fullscreen is a
+         different amount of room and a different amount of attention: a
+         "Suggestions" button has a screen to sit in there and would crowd a
+         360px embed, and a control that only makes sense beside the page it
+         came from should not follow the viewer out of it. The class is set on
+         every fullscreen route — see applyFullscreenUiState. */
+      :host(:not(.movi-fullscreen-active)) .movi-custom-btn[data-fullscreen-only],
+      :host(:not(.movi-fullscreen-active)) .movi-context-menu-item[data-fullscreen-only] {
+        display: none !important;
+      }
+      :host(.movi-fullscreen-active) .movi-custom-btn[data-windowed-only],
+      :host(.movi-fullscreen-active) .movi-context-menu-item[data-windowed-only] {
+        display: none !important;
+      }
       /* In audio mode the album art is painted by the cover-art canvas (which
          persists through playback, unlike the pre-play poster overlay) — hide
          the raw poster <img> so it doesn't double up over the canvas. The
@@ -23932,6 +24065,12 @@ export class MoviElement extends HTMLElement {
         display: none !important;
       }
       :host(:not(.movi-audio-mode)) .movi-shortcut-row[data-audio-only] {
+        display: none !important;
+      }
+      :host(:not(.movi-fullscreen-active)) .movi-shortcut-row[data-fullscreen-only] {
+        display: none !important;
+      }
+      :host(.movi-fullscreen-active) .movi-shortcut-row[data-windowed-only] {
         display: none !important;
       }
       /* Same treatment for the Stats-for-Nerds panel — its default
@@ -25526,7 +25665,7 @@ export class MoviElement extends HTMLElement {
     if (!sr) return;
     const capsules = Array.from(
       sr.querySelectorAll<HTMLElement>(
-        ".movi-controls-right, .movi-seek-group, .movi-control-group",
+        ".movi-controls-right, .movi-seek-group, .movi-control-group, .movi-controls-center",
       ),
     );
     const was = capsules.map((c) => c.classList.contains("movi-capsule-empty"));
@@ -25567,6 +25706,9 @@ export class MoviElement extends HTMLElement {
     const left = sr.querySelector(".movi-controls-left") as HTMLElement | null;
     const right = sr.querySelector(".movi-controls-right") as HTMLElement | null;
     if (!left || !right) return;
+    const centre = sr.querySelector(
+      ".movi-controls-center",
+    ) as HTMLElement | null;
     // Two ways the row runs out of room, and the second one is the common one.
     //
     //  1. The left cluster reaches the settings run. 6px so the two never
@@ -25594,11 +25736,34 @@ export class MoviElement extends HTMLElement {
       }
       return contentRight > l.right + 1;
     };
+    // The middle is out of flow, so nothing in the row gives way for it and
+    // the check above cannot see it: a centre control simply gets drawn across
+    // whichever cluster reaches it first. Measured separately, and measured
+    // from the shown state — a cluster hidden for being crowded has a zero-width
+    // rect that agrees with every later reading, which is how a latch like this
+    // one gets stuck on.
+    const centreCrowded = () => {
+      if (!centre || centre.getClientRects().length === 0) return false;
+      const c = centre.getBoundingClientRect();
+      if (c.width === 0) return false;
+      const l = left.getBoundingClientRect();
+      const r = right.getBoundingClientRect();
+      return (
+        (l.width > 0 && l.right > c.left - 8) ||
+        (r.width > 0 && r.left < c.right + 8)
+      );
+    };
     this.classList.remove("movi-clock-compact", "movi-clock-hidden");
-    if (!collides()) return;
-    this.classList.add("movi-clock-compact");
-    if (!collides()) return;
-    this.classList.add("movi-clock-hidden");
+    centre?.classList.remove("movi-center-crowded");
+    if (collides()) {
+      this.classList.add("movi-clock-compact");
+      if (collides()) this.classList.add("movi-clock-hidden");
+    }
+    // Measured last, after the row has settled into whichever of those states
+    // it needed. The row gives nothing up for the middle — the clock is the
+    // player's own and the control in the middle is an offer — so when the two
+    // meet, the middle is what steps aside.
+    if (centreCrowded()) centre?.classList.add("movi-center-crowded");
   }
 
   private updateCanvasSize() {
@@ -34276,7 +34441,7 @@ export class MoviElement extends HTMLElement {
       row.className = "movi-shortcut-row movi-custom-shortcut";
       // The panel promises what the keyboard does, and a scoped-out control's
       // key does nothing — see customHotkeyFor.
-      this.markCustomMediaScope(row, entry.spec);
+      this.markCustomScopes(row, entry.spec);
       const kbd = document.createElement("kbd");
       kbd.textContent = key;
       const label = document.createElement("span");
@@ -34632,6 +34797,7 @@ export class MoviElement extends HTMLElement {
       .filter(Boolean)
       .join("+");
     const audio = this.classList.contains("movi-audio-mode");
+    const fs = this.isFullscreenActive();
     for (const [id, entry] of this._customControls) {
       const want = entry.spec.hotkey;
       if (!want) continue;
@@ -34640,6 +34806,11 @@ export class MoviElement extends HTMLElement {
       // still fires on a podcast, invisibly.
       const scope = entry.spec.media ?? "both";
       if ((scope === "video" && audio) || (scope === "audio" && !audio)) continue;
+      // Same for a control that only exists on one side of fullscreen.
+      const screen = entry.spec.screen ?? "both";
+      if ((screen === "fullscreen" && !fs) || (screen === "windowed" && fs)) {
+        continue;
+      }
       if (this.normaliseHotkey(want) === pressed) return id;
     }
     return null;
@@ -34731,7 +34902,7 @@ export class MoviElement extends HTMLElement {
     btn.className = "movi-btn movi-custom-btn";
     btn.type = "button";
     btn.dataset.customControl = id;
-    this.markCustomMediaScope(btn, spec);
+    this.markCustomScopes(btn, spec);
     btn.setAttribute("aria-label", spec.label);
     // Through the player's own tooltip rather than the browser's, so a host
     // control is named the same way, in the same style, at the same moment
@@ -34798,6 +34969,7 @@ export class MoviElement extends HTMLElement {
     const wantsBar = on.has("bar");
     const wantsMenu = on.has("menu");
     const wantsTop = on.has("top");
+    const wantsCenter = on.has("center");
 
     if (wantsTop) {
       const corner = sr.querySelector(".movi-top-controls");
@@ -34838,6 +35010,23 @@ export class MoviElement extends HTMLElement {
       }
     }
 
+    if (wantsCenter) {
+      const centre = sr.querySelector(".movi-controls-center");
+      if (centre) {
+        const btn = this.buildCustomButton(id, entry, false);
+        // Ordered against the host's OWN other centre controls only: no
+        // built-in is in this cluster to anchor against, and insertAtAnchor
+        // searches the parent it is given, so a `before: "cc"` here simply
+        // finds nothing and the control goes to the end of the middle. That is
+        // the right answer rather than a silent jump to the settings run.
+        this.insertAtAnchor(centre, btn, spec, false, undefined, "center");
+        // The middle stands down when the two clusters need the room, and it
+        // has just gained something to measure.
+        this.fitControlsRow();
+        this.syncEmptyCapsules();
+      }
+    }
+
     if (wantsMenu) {
       // The menu's CURRENT root, not the shadow one it usually lives in.
       //
@@ -34856,7 +35045,7 @@ export class MoviElement extends HTMLElement {
         item.className = "movi-context-menu-item";
         item.dataset.action = `custom:${id}`;
         item.dataset.customControl = id;
-        this.markCustomMediaScope(item, spec);
+        this.markCustomScopes(item, spec);
         const icon = this.buildCustomIcon(spec.icon);
         if (icon) {
           // An SVG gets the menu's icon class, which sizes it to the column the
@@ -34922,13 +35111,22 @@ export class MoviElement extends HTMLElement {
     }
   }
 
-  /** Stamp a control's media scope onto the node the CSS reads. Reuses
-   *  `data-video-only`, which the shortcuts panel already marks its rows with,
-   *  and adds its mirror for audio. Both are inert until the host class says
-   *  which presentation is on screen — see the rules by the audio-mode block. */
-  private markCustomMediaScope(node: HTMLElement, spec: MoviControlSpec): void {
+  /** Stamp a control's scopes onto the node the CSS reads.
+   *
+   *  Media reuses `data-video-only`, which the shortcuts panel already marks
+   *  its rows with, and adds its mirror for audio. Screen is the same idea for
+   *  fullscreen, against the host class applyFullscreenUiState keeps.
+   *
+   *  All four are inert until the host class says which presentation, and
+   *  which screen, is on — see the rules by the audio-mode block. Done in CSS
+   *  rather than by adding and removing nodes so a control follows a source
+   *  swap, or a viewer pressing F, with no work from the host and no render
+   *  pass here. */
+  private markCustomScopes(node: HTMLElement, spec: MoviControlSpec): void {
     if (spec.media === "video") node.setAttribute("data-video-only", "");
     else if (spec.media === "audio") node.setAttribute("data-audio-only", "");
+    if (spec.screen === "fullscreen") node.setAttribute("data-fullscreen-only", "");
+    else if (spec.screen === "windowed") node.setAttribute("data-windowed-only", "");
   }
 
   /** Place a node before/after a named built-in, or at the end of the row. */
@@ -35030,6 +35228,8 @@ export class MoviElement extends HTMLElement {
      *  with none of them is placed against (the three-dots, so the corner ends
      *  with it unless a host asks otherwise). */
     corner?: { defaultBefore: Element | null },
+    /** The middle of the bar, which reads `anchors.center`. */
+    surface?: "center",
   ): void {
     const one = (name: string): Element | null => {
       if (isMenu) {
@@ -35069,18 +35269,20 @@ export class MoviElement extends HTMLElement {
       return null;
     };
     // Whatever this surface was given, falling back to the shared pair.
-    const surface =
+    const anchors =
       (isMenu
         ? spec.anchors?.menu
         : corner
           ? spec.anchors?.top
-          : spec.anchors?.bar) ?? {};
-    const before = find(surface.before ?? spec.before);
+          : surface === "center"
+            ? spec.anchors?.center
+            : spec.anchors?.bar) ?? {};
+    const before = find(anchors.before ?? spec.before);
     if (before?.parentElement) {
       before.parentElement.insertBefore(node, before);
       return;
     }
-    const after = find(surface.after ?? spec.after);
+    const after = find(anchors.after ?? spec.after);
     if (after?.parentElement) {
       after.parentElement.insertBefore(node, after.nextSibling);
       return;

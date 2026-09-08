@@ -492,7 +492,7 @@ Settings: `loop`, `muted`, `volume`, `speed`, `ambient`, `stablevolume`, `hdr`, 
 
 ### Custom Controls and Overlays
 
-`addControl()` puts a control of your own in the player's chrome — the bottom bar, the top-right corner, the right-click menu, or any combination — so it sits with the built-ins instead of beside them. Described once; the player builds the button and the menu row, keeps them in sync, and removes them together.
+`addControl()` puts a control of your own in the player's chrome — the bottom bar (either end, or the middle), the top-right corner, the right-click menu, or any combination — so it sits with the built-ins instead of beside them. Described once; the player builds the button and the menu row, keeps them in sync, and removes them together.
 
 ```js
 player.addControl({
@@ -509,7 +509,26 @@ player.addControl({
 
 `placement: "top"` puts the control in the top-right corner instead, beside the three-dots that opens the context menu on touch — the corner for what is about the session rather than about playback (cast, share, close), and shown on every device. A list takes several surfaces at once: `placement: ["top", "menu"]`. The corner is ordered with `before` / `after` like the bar is, and the three-dots is one member of it named `"dots"` — so `after: "dots"` is how a control sits further right than it, and the arrangement is the same on touch and on desktop.
 
-Controls can open nested submenus (`items` / `onPick`, any depth), persist their toggle state (`persist: true`), group into a bar capsule of their own (`group`), anchor differently per surface (`anchors: { bar, menu }` — an anchor can be a list for a neighbour that only sometimes exists), and declare `media: "video" | "audio" | "both"` to hide themselves for content they don't apply to. `updateControl(id, patch)` and `removeControl(id)` manage them afterwards.
+`placement: "center"` is the middle of the bar — the free width between the left run and the settings run, which the player itself never fills. Paired with `screen: "fullscreen"`, that is the "Suggestions" / "Up next" affordance a full-screen player has the room for and a small embed does not:
+
+```js
+player.addControl({
+  id: "suggestions",
+  label: "Suggestions",
+  icon: '<svg viewBox="0 0 24 24">…</svg>',
+  placement: "center",     // the middle of the bar
+  screen: "fullscreen",    // …and only once there is a screen to fill
+  toggle: true,
+  onSelect: (on) =>
+    on
+      ? player.showOverlay({ id: "suggestions", content: panel, placement: "center", dismissOn: ["play", "escape"] })
+      : player.hideOverlay("suggestions"),
+});
+```
+
+The middle is the first thing to go when the bar runs out of room — the clusters grow towards each other as the player narrows and it steps aside rather than being drawn across the clock.
+
+Controls can open nested submenus (`items` / `onPick`, any depth), persist their toggle state (`persist: true`), group into a bar capsule of their own (`group`), anchor differently per surface (`anchors: { bar, center, menu, top }` — an anchor can be a list for a neighbour that only sometimes exists), and declare `media: "video" | "audio" | "both"` or `screen: "fullscreen" | "windowed" | "both"` to hide themselves where they don't apply — a scoped-out control leaves every surface *and* its hotkey stops firing. `updateControl(id, patch)` and `removeControl(id)` manage them afterwards.
 
 Host overlays put your own panel over the picture — including in fullscreen:
 
