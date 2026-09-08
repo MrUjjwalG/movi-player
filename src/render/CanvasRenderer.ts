@@ -172,6 +172,10 @@ export class CanvasRenderer {
   // decoder to skip non-reference frames to cut CPU as well. One-way per
   // source, mirroring adaptive DPR — no oscillation.
   private _presentFpsCap: number = 0; // 0 = uncapped
+  // Consecutive windows that held the cap comfortably, and how many of them the
+  // next probe needs. See the lift in samplePerformance().
+  private _capHealthyWindows: number = 0;
+  private _capProbeAfterWindows: number = 10; // = PERF_CAP_PROBE_WINDOWS (declared below)
   private _perfDegradeChecked: boolean = false;
   // Latched once the decode-bound catastrophe fires: this device cannot decode
   // the current rung at all. Read by the element's frozen-video watchdog, whose
@@ -247,6 +251,17 @@ export class CanvasRenderer {
   // rAF cadence below this share of the rate we are trying to present at means
   // the callbacks themselves are the ceiling — no decoder can beat it, so
   // nothing the adaptive-FPS or ABR levers do would gain a single frame.
+  // A window that comes within this share of the CAPPED rate is holding the cap
+  // comfortably — the only evidence available, from inside a cap, that the
+  // device might manage more.
+  private static readonly PERF_CAP_HOLD_RATIO = 0.95;
+  // How many such windows before the cap is lifted to re-judge, and the ceiling
+  // that backoff climbs to. Ten seconds is short enough that a passing squeeze
+  // does not cost the rest of the film, and the doubling below means a device
+  // that genuinely cannot hold the full rate is probed ever more rarely instead
+  // of flapping.
+  private static readonly PERF_CAP_PROBE_WINDOWS = 10;
+  private static readonly PERF_CAP_PROBE_MAX_WINDOWS = 160;
   private static readonly PERF_CONTENTION_RAF_RATIO = 0.7;
   // …and if our own ticks account for less than this share of the window's wall
   // time, the thread is being held by the host page rather than by us. A
@@ -545,6 +560,8 @@ export class CanvasRenderer {
     // Fresh source / rendition switch: re-arm the adaptive-FPS + decode-bound
     // detectors and clear any prior cap so the new rung gets a fresh judgment.
     this._presentFpsCap = 0;
+    this._capHealthyWindows = 0;
+    this._capProbeAfterWindows = CanvasRenderer.PERF_CAP_PROBE_WINDOWS;
     this._perfDegradeChecked = false;
     this._decodeBound = false;
     this._backlogSeenStuck = false;
@@ -1799,6 +1816,50 @@ export class CanvasRenderer {
       }
     } else {
       this._perfDeficitWindows = 0;
+      // A cap has to be able to come off again.
+      //
+      // engagePresentCap() halves the presentation rate on four bad seconds,
+      // and until now the ONLY thing that ever cleared it was configure() — a
+      // new source or a rendition switch. Not a seek, not minutes of healthy
+      // playback. So one passing squeeze (a heavy stretch at 2x on an 8K60
+      // source is the one this was found on) left the picture at 30fps for the
+      // whole of the rest of the file, with nothing in the pipeline reporting a
+      // fault: audio healthy, rAF firing a full 60Hz, frames sitting queued.
+      // That is a ratchet, not an adaptation.
+      //
+      // The evidence for lifting is the only kind available from inside a cap:
+      // windows that hold the capped rate comfortably. Being wrong is cheap and
+      // self-correcting — the deficit test above re-judges against the full
+      // rate and re-engages after its usual four windows — so the cost of a bad
+      // probe is bounded at four seconds, while the cost of never probing is
+      // the rest of the film. The probe interval doubles on each lift so a
+      // device that genuinely cannot hold the full rate is asked ever less
+      // often rather than flapping between the two.
+      if (
+        this._presentFpsCap > 0 &&
+        !inGrace &&
+        audioHealthy &&
+        producing &&
+        expected > 0 &&
+        achieved >= expected * CanvasRenderer.PERF_CAP_HOLD_RATIO
+      ) {
+        if (++this._capHealthyWindows >= this._capProbeAfterWindows) {
+          Logger.info(
+            TAG,
+            `Adaptive FPS: held ${targetFps}fps for ${this._capHealthyWindows}s — ` +
+              `lifting the cap to re-judge at ${this.videoFrameRate}fps`,
+          );
+          this._presentFpsCap = 0;
+          this._capHealthyWindows = 0;
+          this._capProbeAfterWindows = Math.min(
+            CanvasRenderer.PERF_CAP_PROBE_MAX_WINDOWS,
+            this._capProbeAfterWindows * 2,
+          );
+        }
+      } else if (this._presentFpsCap > 0) {
+        // Short of the cap it is holding nothing, so it is not evidence.
+        this._capHealthyWindows = 0;
+      }
     }
     this._perfWindowStart = now;
     this._perfWindowBaseCount = this.framesPresented;
@@ -1841,6 +1902,7 @@ export class CanvasRenderer {
       // 30 but not 60 keeps its resolution instead of stepping down (which is
       // what made it flap: it never got to try the current rung at half rate).
       this._presentFpsCap = cap;
+      this._capHealthyWindows = 0;
       this._perfDeficitWindows = 0;
       this._perfWindowStart = 0;
       Logger.info(
