@@ -5049,6 +5049,13 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
     // 2.5s later. See _demuxerAheadOfClock.
     if ((this._playStartTime === 0 || this._demuxerAheadOfClock) && this.demuxer) {
       const targetTime = this.clock.getTime();
+      // Said out loud, because its absence is invisible: when this does NOT run
+      // the only symptom is a picture that holds still for as long as the gap,
+      // with nothing else in the log to explain it.
+      Logger.info(
+        TAG,
+        `Realigning the demuxer to the clock at ${targetTime.toFixed(3)}s before first play`,
+      );
       this._demuxerAheadOfClock = false;
 
       // Flush the decode pipeline before re-seeking the demuxer. The
@@ -5894,6 +5901,31 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
         this.stateManager.setState("buffering");
         this.clock.pause();
         if (this.videoRenderer) this.videoRenderer.stopPresentationLoop();
+        // This branch RETURNS, so it reaches neither place that decides whether
+        // the demuxer is ahead of the clock: the resume below clears the flag,
+        // the paused branch sets it, and this one did neither — leaving
+        // whatever the last seek happened to leave.
+        //
+        // It IS ahead. The seek hunted for its target frame and read past it,
+        // exactly as the paused branch says. The difference is only that this
+        // branch expects to carry straight on into playback, and while that
+        // holds, play() picks up close enough that the gap never shows.
+        //
+        // When it does not hold, it shows badly. A blocked autoplay sits here
+        // for over a second while the muted-fallback grace runs, and play() is
+        // then reached with BOTH of its realignment triggers already disarmed:
+        // `_playStartTime` was stamped on the way into this same seek
+        // completion, above, before play() was ever called. Measured in Safari
+        // on that path — paused with the queue at 0.00–0.28s, playing a second
+        // later with the queue at 2.60–5.36s and nothing in between ever
+        // decoded. The picture held one frame for 2.3s while the clock ran up
+        // to meet it, then resumed at full rate. No drops, no refusals, no
+        // state change, and not one line logged.
+        //
+        // So say what is true and let play() decide. Where the resume really is
+        // immediate, the realignment it triggers seeks the demuxer to a
+        // position it has barely left, off bytes the source still holds.
+        this._demuxerAheadOfClock = true;
         Logger.debug(TAG, "Post-seek: buffering until the frame queue fills");
         announceSeeked();
         return;
