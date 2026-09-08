@@ -5593,6 +5593,68 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
   }
 
   /**
+   * Is there no sound left to wait for here?
+   *
+   * `isInVideoOnlyTail()` answers from `_audioTailStart`, and that is LEARNED —
+   * at EOF, or from a container that declares per-track durations, which the
+   * MKV this was measured on does not. On a source that has just loaded,
+   * nothing has been learned yet, so a seek straight into a stretch with no
+   * audio reads as "sound is on its way" and anything waiting for a cushion
+   * waits for good. Measured on the 243.8s file whose Opus ends at 193.4s:
+   * load it and seek to 194, 200, 220 or 240 and it sat in `buffering` with the
+   * spinner up and the clock frozen — indefinitely, with 130 frames decoded and
+   * queued behind it. Play the same file THROUGH the handover first and the
+   * same seeks are fine, because by then the tail is known.
+   *
+   * So ask the demuxer's own read as well. A long run of video packets with no
+   * audio between them means the sound has stopped in the file: audio packets
+   * outnumber video ones on any ordinary interleave, and the bar is the
+   * read-ahead bound, which is the deepest a healthy pipeline ever runs video
+   * ahead of the audio buried in it.
+   *
+   * NOT for the starve verdict in processLoop. Standing that down early was
+   * tried twice and breaks the tail handover outright — see `soundIsOver`
+   * there, which stays on the settled-at-EOF signals on purpose.
+   */
+  private noSoundLeftToWaitFor(): boolean {
+    if (this.isInVideoOnlyTail()) return true;
+    if (this.audioRenderer.isStreamEnded()) return true;
+    // Split audio is decoded by its own loop and never touches these cursors,
+    // so they read "no audio" on every split source, permanently.
+    if (this.audioDemuxer) return false;
+    // The count alone, deliberately — NOT "and we have seen an audio packet".
+    // Both cursors reset on a seek, and a seek INTO the tail is precisely the
+    // case where none will ever arrive, so requiring one first is requiring the
+    // thing whose absence is the answer. The bar is the read-ahead bound
+    // because that is the deepest a healthy pipeline ever runs video ahead of
+    // the audio buried in it; below that a long run of video is ordinary.
+    if (this._videoPacketsSinceAudio >= MoviPlayer.VIDEO_AHEAD_MAX_PACKETS) {
+      return true;
+    }
+    // …or the loop has read everything it is allowed to and still found none.
+    // Backpressure parks the demuxer once the picture is buffered to its cap,
+    // so on a seek into a stretch with no sound the run above STOPS GROWING —
+    // measured at 141 packets against a 180 bar, waiting on a count that the
+    // very thing it is waiting for prevents from arriving. A picture buffered
+    // to its cap with no audio anywhere in the pipeline and none read since the
+    // seek is the same answer reached from the other side, and it is the only
+    // one available while the loop is parked.
+    const cap = this.videoQueueCapFrames(
+      false,
+      this.videoDecoder?.isSoftware ?? false,
+      1,
+    );
+    return (
+      this._lastAudioPacketPts < 0 &&
+      this._videoPacketsSinceAudio > 0 &&
+      this.audioDecoder.queueSize === 0 &&
+      !(this.audioRenderer.getBufferedDuration() > 0) &&
+      cap > 0 &&
+      (this.videoRenderer?.getQueueSize() ?? 0) >= cap
+    );
+  }
+
+  /**
    * True when the picture is the whole of playback — there is no sound that
    * could carry it on its own. A file with no audio track, audio switched off,
    * or sound the browser refuses to start.
@@ -6454,9 +6516,13 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
       // nothing can leave: seeking anywhere past the end of the sound sat on
       // the spinner for good, with the picture already decoded and queued
       // behind it. See _audioTailStart.
+      // …and the learned tail is not the only way that is true. It is learned
+      // at EOF, so on a freshly-loaded source it is not known yet and a seek
+      // straight into the tail hit exactly the buffering state this clause was
+      // written to prevent. See noSoundLeftToWaitFor().
       const hasAudioTrack =
         (!!this.trackManager.getActiveAudioTrack() || !!this.audioDemuxer) &&
-        !this.isInVideoOnlyTail();
+        !this.noSoundLeftToWaitFor();
       // The first-play cold prime needs a REAL cushion before it starts: the
       // software decode is still sub-realtime (and gets even slower once video
       // decode/render competes for CPU), so resuming on a thin 0.1s buffer just
