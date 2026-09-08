@@ -1553,6 +1553,14 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
    *  not to the link, and the ABR must not read it as the rung failing. */
   private _lastAudioSwitchAt: number = 0;
   private _lastSeekResumeAt: number = 0;
+  /**
+   * How long after a seek resumes the picture on screen may still be one from
+   * BEFORE it, and how far apart the two have to be to say so. See the audio
+   * desync guard — a gap of seconds this soon after a seek is a leftover
+   * frame, not drift, and chasing it undoes the seek.
+   */
+  private static readonly SEEK_STALE_PICTURE_MS = 3000;
+  private static readonly SEEK_STALE_PICTURE_GAP_S = 3;
   /** When an in-place rendition swap actually LANDED, and when a picture
    *  catch-up started. Both leave the video pipeline re-priming while the sound
    *  plays on, so a stall in the moments after is ours, not the link's. */
@@ -1931,6 +1939,25 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
   private trimOvertakenReadAhead(): void {
     const stash = this._videoAheadStash;
     if (stash.length === 0) return;
+    // A seek that has not yet produced a frame of its own makes BOTH halves of
+    // the comparison below lie. The on-screen time still reports the picture
+    // that was up before the seek, and anything left in the stash was read for
+    // the position being left — so "has the picture passed this packet?" is
+    // asked about two different places in the film.
+    //
+    // Measured on an 8K source: a seek back to 91.29s trimmed the stash "up to
+    // IDR 153.000s" against a screen still reading 149.800s. The trim did its
+    // job perfectly and kept exactly the wrong packet — that leftover IDR was
+    // decoded and presented as the seek's first frame, and the desync corrector
+    // then pulled the whole player back to 153s.
+    //
+    // Nothing in the stash belongs to where playback is going, so drop it
+    // rather than trim it. dropVideoReadAhead is the only sanctioned way to
+    // empty it (it latches the reference-chain break the drop causes).
+    if (this.waitingForVideoSync) {
+      this.dropVideoReadAhead();
+      return;
+    }
     const onScreen = this.videoRenderer?.getCurrentTime?.() ?? -1;
     if (!(onScreen > 0)) return;
     if (stash[0].timestamp >= onScreen) return; // head is still ahead — nothing stale
@@ -6906,7 +6933,36 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
         // at least 5s between desync-driven seeks — better to tolerate a
         // sustained ~500ms offset than to pause every second.
         const sinceLastResync = performance.now() - this._lastDesyncSeekTime;
-        if (audioBehind > 0.5 && sinceLastResync > 5000) {
+        // A picture from BEFORE the seek is not drift, and must never be
+        // chased.
+        //
+        // The resync below pulls the sound FORWARD to the picture, which is
+        // right while the picture is genuinely where the viewer is. It is
+        // exactly wrong when the picture is a leftover. Measured on an 8K
+        // source: a seek back to 91.29s ran past its 1500ms budget and
+        // force-completed with no frame of its own, the renderer put up a
+        // stashed frame from 153.00s, and half a second later this read
+        // video=153.10 against audio=91.78 and pulled the sound to 153.10 —
+        // silently undoing the seek the viewer had just asked for and landing
+        // them back where they started.
+        //
+        // Right after a seek the SOUND is the authority: it is at the target by
+        // construction, and it is the picture that has yet to catch up. Sixty
+        // seconds is not a drift any decode lag can produce; it is a frame from
+        // the position being left. Leave it alone and the picture corrects
+        // itself as the seek's own frames arrive.
+        const sinceSeekResume = performance.now() - this._lastSeekResumeAt;
+        const pictureMayBePreSeek =
+          sinceSeekResume < MoviPlayer.SEEK_STALE_PICTURE_MS &&
+          audioBehind > MoviPlayer.SEEK_STALE_PICTURE_GAP_S;
+        if (pictureMayBePreSeek) {
+          Logger.debug(
+            TAG,
+            `Ignoring a ${audioBehind.toFixed(1)}s A/V gap ${sinceSeekResume.toFixed(0)}ms after a seek — ` +
+              `video=${videoTime.toFixed(2)}s is a frame from before it, not drift`,
+          );
+        }
+        if (audioBehind > 0.5 && sinceLastResync > 5000 && !pictureMayBePreSeek) {
           // Suppress the seek when the audio renderer already has samples
           // scheduled past the presented video frame. The gap is just the
           // buffer runway — audio playback will catch up on its own. Forcing
