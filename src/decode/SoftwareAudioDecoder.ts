@@ -70,6 +70,8 @@ export class SoftwareAudioDecoder {
   // codec reaches the renderer at AC-3-like granularity. Dropped on flush/seek
   // (stale post-seek), so at most ~30ms is lost at a seek/EOF.
   private coalesceTarget = 0; // samples; derived from the frame sample rate
+  // …and the ceiling in the other direction. See the split in enqueueFrame().
+  private splitTarget = 0; // samples; derived from the frame sample rate
   private pending: PCMFrame[] = [];
   private pendingSamples = 0;
 
@@ -323,6 +325,54 @@ export class SoftwareAudioDecoder {
   private enqueueFrame(frame: PCMFrame): void {
     if (this.coalesceTarget === 0) {
       this.coalesceTarget = Math.max(1024, Math.round(frame.sampleRate * 0.03));
+      this.splitTarget = Math.max(2048, Math.round(frame.sampleRate * 0.15));
+    }
+
+    // Blocks that are far too BIG have to come apart, which the coalescer
+    // never did — it only ever merges upwards.
+    //
+    // decodeBatch() decodes a whole demux burst in ONE WASM round-trip and
+    // hands the PCM back as one contiguous block, so what reaches the renderer
+    // here is not a 20ms Opus packet, it is the burst: measured on the 8K60
+    // AV1 file, buffers of 2900ms, ONE live source node covering the entire
+    // scheduling lookahead.
+    //
+    // A speed change is where that is felt. AudioRenderer.setPlaybackRate takes
+    // back everything it has not started yet and re-stretches it at the new
+    // tempo, but the source already PLAYING is deliberately left to finish at
+    // the OLD one — "a chunk, tens of milliseconds", as the bridge across the
+    // change rather than a cut to be faded over. At 2.9s a chunk that is not a
+    // bridge: it is up to three seconds of the old speed still coming out of
+    // the speakers after the picture has already turned, averaging 1.45s in
+    // measurement. Reported exactly that way — "video jaldi change ho jaata
+    // hai, audio ka effect baad mein padta hai".
+    //
+    // Splitting costs nothing audible: the pieces carry their own media times
+    // and the renderer schedules them back to back on that timeline, the same
+    // way consecutive decoded frames already are. The graph stays narrow —
+    // 150ms pieces are ~7 nodes inside the renderer's 1s lookahead, against the
+    // ~215 that once made a phone's audio thread miss its deadline. Only
+    // blocks well past the target are cut, so a codec that naturally emits a
+    // 200ms frame is left whole.
+    if (this.onData && frame.numberOfFrames > this.splitTarget * 1.5) {
+      const emit = this.onData;
+      this.flushPending();
+      const total = frame.numberOfFrames;
+      for (let off = 0; off < total; off += this.splitTarget) {
+        const n = Math.min(this.splitTarget, total - off);
+        const planes: Float32Array[] = new Array(frame.numberOfChannels);
+        for (let c = 0; c < frame.numberOfChannels; c++) {
+          planes[c] = frame.planes[c].subarray(off, off + n);
+        }
+        emit({
+          planes,
+          numberOfFrames: n,
+          numberOfChannels: frame.numberOfChannels,
+          sampleRate: frame.sampleRate,
+          timestamp: frame.timestamp + (off / frame.sampleRate) * 1_000_000,
+        });
+      }
+      return;
     }
 
     // Big enough on its own — flush anything buffered, then emit as-is.
