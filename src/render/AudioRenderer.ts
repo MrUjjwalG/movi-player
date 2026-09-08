@@ -1972,6 +1972,29 @@ export class AudioRenderer {
   }
 
   /**
+   * Can a speed change be carried on the audio this renderer already holds?
+   *
+   * setPlaybackRate() does not throw the scheduled audio away any more — it
+   * stops the sources that have not begun and pushes their ORIGINAL buffers
+   * back onto the pending queue to be re-stretched at the new tempo and
+   * rescheduled behind whatever is playing. Nothing is skipped and no hole is
+   * opened, so the media from the playhead forward is still in hand and the
+   * source does not have to be re-read to get it back.
+   *
+   * This reports whether that reclaim is actually available: the branch's own
+   * preconditions (a running context past its first buffer) plus a material
+   * amount of audio to reclaim. Read it BEFORE setPlaybackRate() — afterwards
+   * the sources have already been taken back into the queue.
+   */
+  canCarryRateChange(minSeconds = 0.3): boolean {
+    if (!this.audioContext || this.audioContext.state !== "running") {
+      return false;
+    }
+    if (!this.isPlaying || !this.hasFirstBuffer) return false;
+    return this.getBufferedDuration() >= minSeconds;
+  }
+
+  /**
    * Get the audio clock - THE MASTER TIME SOURCE FOR A/V SYNC
    * Returns accurate time based on when audio actually started playing
    * Returns -1 if audio hasn't started yet
