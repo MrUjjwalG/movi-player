@@ -7424,33 +7424,48 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
         //    sound that is coming, whether or not a source node exists for it
         //    yet, and getBufferedDuration counts both halves.
         //
-        // On a genuinely short soundtrack neither guard delays anything by more
-        // than the grace: the packet evidence says short from the first EOF pass,
-        // and the buffer drains in real time to meet it.
-        const soundStillBuffered =
-          this.audioRenderer.getBufferedDuration() >
-          MoviPlayer.AUDIO_TAIL_GRACE_S;
+        // Only the first of those belongs in the verdict. This flag is read by
+        // two more things below — videoDone and the EOF watchdog — and BOTH
+        // take `false` to mean "the sound is not short, so the audio playout
+        // head is the end of the film" and end playback there. A guard that
+        // makes it read false while the true answer is "yes, but not yet"
+        // therefore does not postpone the handover, it ends the film at the
+        // audio head: exactly the fifty-seconds-dropped bug described above,
+        // and how the 4K AV1 / Opus file stopped dead at 3:13 again. So the
+        // verdict is asked of the CONTENT alone, and the readiness test moves
+        // onto the ACTION, which is the only part that has to wait.
         const lastSoundPts =
           !this.audioDemuxer && this._lastAudioPacketPts >= 0
             ? this._lastAudioPacketPts
             : -1;
-        const packetsSaySoundIsShort =
-          lastSoundPts < 0 ||
-          duration + this.startTime >
-            lastSoundPts + MoviPlayer.AUDIO_TAIL_GRACE_S;
+        const soundEndsAt = lastSoundPts >= 0 ? lastSoundPts : maxScheduled;
         const pictureOutlivesSound =
           decodersDone &&
           maxScheduled > 0 &&
           duration > 0 &&
           !!this.trackManager.getActiveVideoTrack() &&
-          !soundStillBuffered &&
-          packetsSaySoundIsShort &&
           duration + this.startTime >
-            maxScheduled + MoviPlayer.AUDIO_TAIL_GRACE_S;
-        if (pictureOutlivesSound && !this.audioRenderer.isStreamEnded()) {
+            soundEndsAt + MoviPlayer.AUDIO_TAIL_GRACE_S;
+        // Letting the sound go is what waits. endOfStream() stops the audio
+        // clock clamping at maxScheduledMediaTime, and calling it while the
+        // renderer still holds decoded audio hands the picture the clock at the
+        // SCHEDULING HORIZON instead of at the end of the sound — which on the
+        // 4:2:2 file above meant the clock dropping and re-acquiring audio sync
+        // for the rest of the run. Sound that is buffered is sound that is
+        // coming; wait until there is none. It drains in real time and the
+        // clock is clamped to it, so on a genuinely short soundtrack this comes
+        // due exactly as the last samples are heard — nothing is held up.
+        const soundHasRunOut =
+          this.audioRenderer.getBufferedDuration() <=
+          MoviPlayer.AUDIO_TAIL_GRACE_S;
+        if (
+          pictureOutlivesSound &&
+          soundHasRunOut &&
+          !this.audioRenderer.isStreamEnded()
+        ) {
           Logger.info(
             TAG,
-            `Sound ends at ${(lastSoundPts >= 0 ? lastSoundPts : maxScheduled).toFixed(2)}s ` +
+            `Sound ends at ${soundEndsAt.toFixed(2)}s ` +
               `but the picture runs to ` +
               `${(this.mediaInfo?.duration ?? 0).toFixed(2)}s — playing the rest out without it`,
           );
