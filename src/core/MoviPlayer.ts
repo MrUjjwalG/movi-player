@@ -9265,6 +9265,24 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
       // Seek relative to start time (time 0 in UI = startTime in media)
       Logger.info(TAG, `seek: demuxer.seek(${(seconds + this.startTime).toFixed(2)}) starting...`);
       await this.demuxer.seek(seconds + this.startTime);
+      // …and, where the keyframe behind the target is a long way behind, look
+      // at the one just AFTER it instead.
+      //
+      // A seek lands on the keyframe before its target and decodes forward to
+      // it. That walk is the whole cost of a seek on a source with sparse
+      // keyframes: measured on an 8K60 AV1 file whose gaps run to 7 seconds,
+      // a seek landing straight after a keyframe took 189ms and one 6.4s
+      // behind its target took 654ms — the difference being ~380 frames of 8K
+      // decoded only to be dropped by the pre-target filter.
+      //
+      // The keyframe on the other side is usually a fraction of a second away
+      // — 22.0s sits 6.4s after one keyframe and 0.13s before the next — so
+      // landing there is both cheaper AND closer to what was asked for. What
+      // it costs is content: playback starts a moment late rather than a
+      // moment early, so it is only taken when the gain is real and the loss
+      // is small.
+      const seekAdjusted = await this.pickNearerKeyframe(seconds + this.startTime);
+      if (seekAdjusted !== null) seconds = seekAdjusted - this.startTime;
       // Seek the split (separate-URL) audio demuxer to the same target. Stop the
       // audio loop and let any in-flight read settle first — a concurrent
       // readFrame + seek on the (separate) audio WASM module would corrupt it.
@@ -9558,6 +9576,86 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
    * Check if seek target time falls within the already-buffered byte range.
    * Uses linear byte→time estimation (same as getBufferedTime).
    */
+  /**
+   * How far behind the target a keyframe has to be before the one after it is
+   * worth considering, and how far ahead that one may be to be taken.
+   *
+   * The walk back is paid in decoded-and-discarded frames; the jump forward is
+   * paid in content the viewer does not see. A third of a second of the latter
+   * buys several hundred frames of the former on a sparse-keyframe source, and
+   * on an ordinary one (keyframes every second or two) neither test passes and
+   * nothing changes.
+   */
+  private static readonly LONG_WALK_S = 1.5;
+  private static readonly FORWARD_KEYFRAME_S = 0.5;
+
+  /**
+   * With the demuxer already seeked to `target`, decide whether the keyframe
+   * just after it is the better place to start, and leave the demuxer parked
+   * wherever the answer is. Returns the adjusted target, or null to keep the
+   * one asked for.
+   *
+   * Both probes are ordinary backward seeks — the C side forces
+   * AVSEEK_FLAG_BACKWARD, so "the keyframe at or after T" is asked for as "the
+   * keyframe at or before T + window". They cost a demuxer seek each, which is
+   * a cursor move (measured at 0ms), plus a packet read to see where it landed.
+   * No decoding happens either way, which is the entire point.
+   */
+  private async pickNearerKeyframe(target: number): Promise<number | null> {
+    if (!this.demuxer) return null;
+    // Only where the walk is the cost. A source with keyframes a second or two
+    // apart has nothing to gain and would only lose content.
+    const back = await this.probeLandedKeyframe();
+    if (back === null) {
+      // Could not tell — leave the demuxer where the caller put it.
+      await this.demuxer.seek(target);
+      return null;
+    }
+    if (target - back <= MoviPlayer.LONG_WALK_S) {
+      await this.demuxer.seek(target);
+      return null;
+    }
+    await this.demuxer.seek(target + MoviPlayer.FORWARD_KEYFRAME_S);
+    const forward = await this.probeLandedKeyframe();
+    // Strictly past the target, or it is the same keyframe we already have.
+    if (forward !== null && forward > target) {
+      Logger.info(
+        TAG,
+        `Seek to ${target.toFixed(2)}s: the keyframe behind it is ${(target - back).toFixed(2)}s back, ` +
+          `the one ahead only ${(forward - target).toFixed(2)}s — starting there instead`,
+      );
+      await this.demuxer.seek(forward);
+      return forward;
+    }
+    await this.demuxer.seek(target);
+    return null;
+  }
+
+  /**
+   * Read forward just far enough to see which keyframe the demuxer landed on,
+   * without decoding anything. Returns its pts, or null if the first video
+   * packet is not a keyframe (which a seek should never produce, but a
+   * malformed index can) or nothing comes back.
+   */
+  private async probeLandedKeyframe(): Promise<number | null> {
+    const video = this.trackManager.getActiveVideoTrack();
+    if (!video || !this.demuxer) return null;
+    // A handful of reads: the video packet is the first or nearly the first
+    // thing a seek hands back, behind at most a little interleaved audio.
+    for (let i = 0; i < 8; i++) {
+      let packet;
+      try {
+        packet = await this.demuxer.readPacket();
+      } catch {
+        return null;
+      }
+      if (!packet) return null;
+      if (packet.streamIndex !== video.id) continue;
+      return packet.keyframe ? packet.timestamp : null;
+    }
+    return null;
+  }
+
   private isSeekTargetBuffered(seekSeconds: number): boolean {
     if (!this.mediaInfo || !this.source || this.fileSize <= 0) return false;
     const duration = this.mediaInfo.duration;
