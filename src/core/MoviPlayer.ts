@@ -7728,7 +7728,41 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
     // A source with no audio at all reads 0 here for the same reason and just
     // as permanently — a video-only file (movi-tube serves exactly these,
     // paired with a separate audio URL) was dropping deltas throughout.
-    const hasAudioToStarve = this.trackManager.getActiveAudioTrack() !== null;
+    // A track that has ENDED is not a track that is starving, and this is the
+    // third way the same mistake has been made here — after split audio and
+    // after a source with no audio at all. A file whose sound stops before its
+    // picture does leaves an active audio track behind and an audio buffer
+    // that reads 0 for the rest of the film, so this stayed true for the whole
+    // video-only tail; with the queue at its cap (which it always is once the
+    // sound stops gating the demuxer) the delta-drop then ran for the entire
+    // tail. isInVideoOnlyTail exists to be asked exactly this question — its
+    // own note says "callers ask this before treating an empty audio buffer as
+    // a shortfall" — and this caller was not asking it.
+    //
+    // Measured on a 243.8s 4K AV1 MKV whose Opus track ends at 193.4s: from
+    // 193.4s the renderer queue held ~120 frames scattered across 199s to the
+    // last frame at 242.3s — one picture every couple of seconds instead of a
+    // contiguous five-second window — and the film advanced by a frame every
+    // 1.5s of wall clock for its last fifty seconds while the clock ran on.
+    // The stream-ended flag is the same fact from the renderer's side, for the
+    // sources where the tail was never learned.
+    //
+    // Both of those are settled at EOF, which leaves a few seconds of picture
+    // decided in the last moments of the soundtrack — the buffer drains under
+    // 100ms there because there is no more audio, not because of a shortfall,
+    // and with read-ahead that decides several seconds ahead of the playhead.
+    // An earlier signal is available in principle: the demuxer reading video
+    // from well past the newest audio packet it has seen. Tried, and it made
+    // things worse, not better — the tail handover stopped happening at all
+    // (neither tail log fired) and the clip stalled dead at the audio end in
+    // `buffering`, which is the original bug. Standing the starve protection
+    // down that early evidently keeps the loop from reaching EOF, and EOF is
+    // what settles the tail. Left alone deliberately; the residual is a few
+    // seconds of sparse picture at the handover against fifty before.
+    const soundIsOver =
+      this.isInVideoOnlyTail() || this.audioRenderer.isStreamEnded();
+    const hasAudioToStarve =
+      this.trackManager.getActiveAudioTrack() !== null && !soundIsOver;
     // …and only once the sound has actually started. Before the first buffer is
     // scheduled the audio buffer reads 0 because nothing has been asked of it
     // yet, not because it is about to underrun — and a starve verdict there
