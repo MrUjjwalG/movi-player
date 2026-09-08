@@ -1320,6 +1320,40 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
     this.precisePreviews = enabled;
   }
 
+  /**
+   * Can a preview still cost a network read, or is every frame it will be
+   * asked for already in hand?
+   *
+   * The seek bar asks before it decides how hard to push: a preview made from
+   * bytes the machine already holds can be asked for as fast as the pointer
+   * moves, but one that has to fetch cannot. The thumbnail reader pulls a 2MB
+   * window per position, and a scrub is a run of positions — so asking for
+   * every one of them puts the fetch for the frame the viewer actually stopped
+   * on at the BACK of a queue of fetches for frames they only passed over. The
+   * bar answers that by waiting for the pointer to settle first; this is how it
+   * knows to.
+   *
+   * False for a local file (nothing to fetch, ever) and for an HTTP source
+   * whose bytes are all in memory — a small file that has finished downloading
+   * scrubs like a local one and must not be slowed down to match a link it is
+   * no longer using. True for an adaptive stream, whose thumbnail tiles are
+   * fetched per position by the wrapper.
+   *
+   * A source adapter from outside this file answers neither test and so counts
+   * as fetching, which is the right way round to be wrong: a custom adapter is
+   * a remote one until shown otherwise, and the cost of pacing one that turns
+   * out to be local is a fraction of a second of settle, against a queue of
+   * whole fetches the other way.
+   */
+  previewsMayFetch(): boolean {
+    if (this.streamWrapper) return true;
+    if (!this.source) return false;
+    if (this.source instanceof FileSource) return false;
+    return !(
+      this.source as { isFullyCached?: () => boolean }
+    ).isFullyCached?.();
+  }
+
   private previewsAllowed(): boolean {
     if (!this.config.enablePreviews) return false;
     // Non-range sources keep previews ON: the thumbnail source borrows frames

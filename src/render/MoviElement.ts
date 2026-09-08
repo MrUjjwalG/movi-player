@@ -3540,6 +3540,52 @@ export class MoviElement extends HTMLElement {
     // one being made. Under it, nothing on screen changes; over it, the card
     // admits it is working.
     const STALE_PREVIEW_GRACE_MS = 220;
+
+    /**
+     * Above this, the last preview was not made from bytes already in hand.
+     *
+     * A frame decoded out of memory lands in ~16ms, and one cropped from a
+     * storyboard in ~0. A frame whose keyframe had to be fetched takes as long
+     * as the link takes — hundreds of ms upwards. The gap between the two is
+     * wide enough that one number tells them apart without knowing anything
+     * about the source.
+     */
+    const PREVIEW_SLOW_MS = 120;
+    /**
+     * How still the pointer must be before a fetching source is asked again.
+     *
+     * Long enough that a pointer travelling across the bar asks for nothing on
+     * the way — every one of those would be a 2MB window the viewer never sees,
+     * ahead in the queue of the one they stop on — and short enough to read as
+     * a response to stopping rather than a wait.
+     */
+    const PREVIEW_SETTLE_MS = 180;
+    /**
+     * …but never leave a moving pointer with no new picture for longer than
+     * this. A slow drag right across a long film would otherwise show nothing
+     * at all until it ended, which is worse than a picture every so often.
+     *
+     * Measured from the last picture SHOWN, and never shorter than half again
+     * what a preview is costing. Measured from the last request instead, it
+     * cancelled the settle rule outright on exactly the links the rule is for:
+     * a fetch taking about this long means the guard has already expired by the
+     * time that fetch lands, so the next one goes out immediately and the
+     * pointer's stopping place queues behind it — the very thing being fixed.
+     */
+    const PREVIEW_SLOW_MAX_WAIT_MS = 1500;
+    /**
+     * What the last preview cost, when the pointer last moved, and when one
+     * last reached the card. Together these decide whether the next request
+     * goes on the next frame or waits for the pointer to settle.
+     */
+    const previewPace = { lastMs: 0, lastMoveAt: 0, lastShownAt: 0 };
+    let previewSettleTimer: number | null = null;
+    const cancelSettleTimer = () => {
+      if (previewSettleTimer !== null) {
+        clearTimeout(previewSettleTimer);
+        previewSettleTimer = null;
+      }
+    };
     let stalePreviewTimer: number | null = null;
     const cancelStaleTimer = () => {
       if (stalePreviewTimer !== null) {
@@ -3603,10 +3649,15 @@ export class MoviElement extends HTMLElement {
         const vrView = this._vr360
           ? (this.player as any).getVR360View?.()
           : undefined;
+        // Timed, because how long the last one took is what decides how hard
+        // the next one may be pushed for — see PREVIEW_SLOW_MS.
+        const startedAt = performance.now();
         const blob = await (this.player as any).getPreviewFrame?.(
           timeToFetch,
           vrView,
         );
+        previewPace.lastMs = performance.now() - startedAt;
+        if (blob) previewPace.lastShownAt = performance.now();
 
         // Update UI if we got a blob
         if (blob && thumbnailImg) {
@@ -3651,11 +3702,71 @@ export class MoviElement extends HTMLElement {
         // Ignore aborts
       } finally {
         previewLoopState.isFetching = false;
-        // If another time was requested while we were busy, loop again immediately
+        // A time was requested while we were busy. Go through the pacer rather
+        // than straight back into the fetch: on a source that has to fetch,
+        // looping immediately is the whole problem — the moment one 2MB window
+        // lands, the next one starts for wherever the pointer happens to be
+        // mid-travel, and the position the viewer actually stops on waits
+        // behind it.
         if (previewLoopState.nextTime !== null) {
-          processPreviewQueue();
+          schedulePreviewDispatch();
         }
       }
+    };
+
+    /**
+     * Ask for the pending position — on the next frame, or once the pointer
+     * has held still, depending on what the last preview cost.
+     *
+     * Everything the pipeline can answer out of memory goes on the next frame:
+     * that is the scrub the seek bar is meant to have, and the single-flight
+     * queue below it is throttle enough. A source that is still fetching gets
+     * the opposite treatment, because there the cost is not ours to pace — each
+     * position is a 2MB window off the link, and asking for the ones the
+     * pointer merely crossed delays the one it lands on by a whole fetch each.
+     */
+    const schedulePreviewDispatch = () => {
+      if (previewLoopState.nextTime === null) return;
+      const fetching =
+        previewPace.lastMs > PREVIEW_SLOW_MS &&
+        ((this.player as any)?.previewsMayFetch?.() ?? false);
+
+      if (!fetching) {
+        cancelSettleTimer();
+        // The screen cannot show two pictures in one frame, so rAF caps the
+        // rate at the refresh rate and never starves.
+        if (previewFrameRaf === null) {
+          previewFrameRaf = requestAnimationFrame(() => {
+            previewFrameRaf = null;
+            processPreviewQueue();
+          });
+        }
+        return;
+      }
+
+      // Wait out whichever comes first: the pointer settling, or the longest
+      // the card may go without showing anything new.
+      const now = performance.now();
+      const settleLeft = Math.max(
+        0,
+        PREVIEW_SETTLE_MS - (now - previewPace.lastMoveAt),
+      );
+      const maxWait = Math.max(
+        PREVIEW_SLOW_MAX_WAIT_MS,
+        previewPace.lastMs * 1.5,
+      );
+      const maxLeft = Math.max(
+        0,
+        maxWait - (now - previewPace.lastShownAt),
+      );
+      cancelSettleTimer();
+      previewSettleTimer = window.setTimeout(
+        () => {
+          previewSettleTimer = null;
+          processPreviewQueue();
+        },
+        Math.min(settleLeft, maxLeft),
+      );
     };
 
     const requestPreview = (time: number) => {
@@ -3696,32 +3807,21 @@ export class MoviElement extends HTMLElement {
 
       // Schedule this time
       previewLoopState.nextTime = time;
+      previewPace.lastMoveAt = performance.now();
 
-      // Dispatch on the next frame, NOT after a quiet period.
+      // Paced by what the source costs, NOT by a fixed quiet period.
       //
-      // This used to be a 40ms trailing debounce, re-armed by every call —
+      // This was once a flat 40ms trailing debounce, re-armed by every call —
       // and a scrub calls this on every pointer move, which the browser
       // delivers about every 8-16ms. The timer was therefore cleared before it
       // could ever fire, so for the whole length of a drag NOTHING was
       // requested: measured at ONE decoded frame across 60 moves spanning
-      // 2.2s, and that one only after the pointer came to rest. The card sat
-      // on a stale picture the entire time the pointer was moving, which is
-      // exactly the "it only turns up a moment later" the debounce was
-      // supposed to be protecting against.
+      // 2.2s, and that one only after the pointer came to rest.
       //
-      // A frame is the right unit instead: the screen cannot show two pictures
-      // in one, so coalescing to rAF caps the request rate at the refresh rate
-      // and never starves. Beyond that the serialized single-flight queue
-      // (processPreviewQueue) is the real throttle — it returns at once while
-      // a fetch is in flight and picks up the latest pending time when that
-      // one lands, so the pipeline paces itself and a slow source simply
-      // answers fewer positions rather than queueing stale ones.
-      if (previewFrameRaf === null) {
-        previewFrameRaf = requestAnimationFrame(() => {
-          previewFrameRaf = null;
-          processPreviewQueue();
-        });
-      }
+      // The mistake was not the waiting; it was waiting the same amount
+      // whatever the wait bought. schedulePreviewDispatch splits the two cases
+      // that a single number could never serve at once — see there.
+      schedulePreviewDispatch();
     };
 
     // Helper to show/update thumbnail AND progress visuals during dragging/hovering
@@ -3913,6 +4013,7 @@ export class MoviElement extends HTMLElement {
           cancelAnimationFrame(previewFrameRaf);
           previewFrameRaf = null;
         }
+        cancelSettleTimer();
 
         // If immediate (delay 0), hide immediately. Otherwise wait for transition.
         const transitionDelay = delay === 0 ? 0 : 150;
