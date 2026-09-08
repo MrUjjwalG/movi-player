@@ -953,6 +953,14 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
    *  declares none: both tracks report undefined, so the up-front read can
    *  never fire and only the cursors can tell. */
   private _lastAudioPacketPts: number = -1;
+  // Video packets read since the last audio one. The pts gap alone is too
+  // coarse to catch a soundtrack ending: read-ahead makes a few seconds of
+  // video-ahead-of-audio normal, so the gap bar has to be wide, and by the
+  // time it trips the damage is done. A COUNT does not have that problem —
+  // audio packets are more frequent than video ones on any ordinary
+  // interleave, so a long run of video with no audio between it means the
+  // audio has stopped in the file, whatever the timestamps say.
+  private _videoPacketsSinceAudio: number = 0;
   /** Media time the current continuous read pass began at — a load, or the
    *  last seek. Tells the EOF check whether "no audio packet was seen" means
    *  the sound has ended or merely that we started reading past it. */
@@ -2907,6 +2915,7 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
       this._videoTailStart = Number.POSITIVE_INFINITY;
       this._lastVideoPacketPts = -1;
       this._lastAudioPacketPts = -1;
+      this._videoPacketsSinceAudio = 0;
       this._soundCarryingAlone = false;
       const tailVideoTrack = this.trackManager.getActiveVideoTrack();
       const tailVideoDuration = tailVideoTrack?.duration ?? 0;
@@ -8484,6 +8493,7 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
             // container under-declared its video duration, or this is a gap in
             // the middle of the file rather than the end of the picture.
             this._lastVideoPacketPts = packet.timestamp;
+            this._videoPacketsSinceAudio++;
             if (packet.timestamp > this._videoTailStart) {
               Logger.info(
                 TAG,
@@ -8632,12 +8642,42 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
               // reading, let the renderer drain into the room the stash needs,
               // and keep the picture whole. Nothing deadlocks behind it — the
               // stash's own drain feeds the decoder as the queue empties.
+              //
+              // Asked two ways, because the pts gap alone answers too late.
+              // Read-ahead makes several seconds of video-ahead-of-audio
+              // ordinary, so that bar has to be wide — and the demuxer covers
+              // the width of it in half a second once the sound stops gating
+              // it, breaking the chain on the way past. Measured: the break
+              // landed with the demuxer 4.6s past the last audio packet,
+              // under the 6s bar, and surfaced as a 1.9s hole five seconds
+              // later because the stash it had already filled was ~1000
+              // packets deep. The COUNT trips first and does not depend on
+              // how far read-ahead runs: audio packets outnumber video ones
+              // on any ordinary interleave, so a run this long with none
+              // between means the track has ended.
               const soundStillComing =
                 !!this.audioDemuxer ||
                 this._lastAudioPacketPts < 0 ||
-                this._lastVideoPacketPts <=
-                  this._lastAudioPacketPts + MoviPlayer.AUDIO_TAIL_GAP_S;
+                (this._videoPacketsSinceAudio <
+                  MoviPlayer.VIDEO_AHEAD_MAX_PACKETS &&
+                  this._lastVideoPacketPts <=
+                    this._lastAudioPacketPts + MoviPlayer.AUDIO_TAIL_GAP_S);
               if (!soundStillComing) {
+                // Holding the packet, so keep it. Breaking with it in hand
+                // discards it as silently as the drop this branch exists to
+                // avoid — and once per burst, which is once per packet:
+                // measured as 37 consecutive reference deltas gone, a 1.9s
+                // hole in the picture with the chain intact, nothing logged,
+                // and the renderer sitting on a full queue whose head was two
+                // seconds ahead of the clock. Same ordering rule as the stash
+                // push above: one that came OUT of the stash goes back to the
+                // front, a freshly-read one to the back.
+                if (fromAheadStash) {
+                  this._videoAheadStash.unshift(packet);
+                } else {
+                  this._videoAheadStash.push(packet);
+                }
+                this._videoAheadStashBytes += packet.data.length;
                 break;
               }
               // A delta was skipped, so every following delta is now orphaned
@@ -8788,6 +8828,7 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
             // the file, not the end of the sound — and gives the clock back to
             // the audio.
             this._lastAudioPacketPts = packet.timestamp;
+          this._videoPacketsSinceAudio = 0;
             if (packet.timestamp > this._audioTailStart) {
               Logger.info(
                 TAG,
@@ -9555,6 +9596,7 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
       // fails to) is what the EOF check reads — see _audioReadPassStart.
       this._audioReadPassStart = seconds + this.startTime;
       this._lastAudioPacketPts = -1;
+      this._videoPacketsSinceAudio = 0;
     if (this._carrySoundThroughNextSeek) {
       // The hand-over's own seek: re-prime decode where the playhead already is
       // so the sound starts again from exactly there — not from wherever the
