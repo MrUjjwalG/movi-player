@@ -1513,8 +1513,8 @@ Also settable at runtime — see [`setAudioOutput()`](#setaudiooutput-deviceid-s
 The player version, baked in at build time. Readable off the class, off any instance, or as an import — all three are the same string.
 
 ```typescript
-MoviElement.version;                              // "0.4.0"
-document.querySelector("movi-player").version;    // "0.4.0"
+MoviElement.version;                              // "0.4.1"
+document.querySelector("movi-player").version;    // "0.4.1"
 
 import { VERSION } from "movi-player/element";
 ```
@@ -1532,7 +1532,7 @@ document.querySelector("movi-player").build;    // "full"
 import { BUILD } from "movi-player/element";
 ```
 
-Deliberately separate from `version` — both bundles ship the same release, so folding it in (`0.4.0+slim`) would break any consumer comparing versions for equality. It's the axis worth capturing in a bug report: the two differ in how the engine loads, and in what happens when it can't (the slim build degrades to native `<video>` on its own). The stats panel shows both as `Player: 0.4.0 (slim)`.
+Deliberately separate from `version` — both bundles ship the same release, so folding it in (`0.4.1+slim`) would break any consumer comparing versions for equality. It's the axis worth capturing in a bug report: the two differ in how the engine loads, and in what happens when it can't (the slim build degrades to native `<video>` on its own). The stats panel shows both as `Player: 0.4.1 (slim)`.
 
 ---
 

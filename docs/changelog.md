@@ -5,6 +5,45 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.4.1] - 2026-09-08
+
+### Added
+- **Playlist / queue**: `playlist` + `autoadvance` — Next/Previous, `Shift+N`/`Shift+P`, and lock-screen/headset skip, all wired up for free. A `src`-less item hands loading back to the host while the element keeps the transport controls.
+- **Take over the `<video>` elements a page already has**: `upgradeVideoElements()` (or a zero-JS `data-upgrade` script tag) drops a `<movi-player>` in place of an existing `<video>` or video.js instance, carrying over its attributes and children and keeping the old element as a live proxy so existing page scripts keep working.
+- **`thumb="precise"`**: walks from the keyframe to the exact hovered frame instead of showing the keyframe before it — the fix that matters on long-GOP downloads. On by default in the extensions and the web app now.
+- **Thumbnail tracks read the video.js/JW Player way** (`<track kind="metadata" label="thumbnails">`), replacing the old bespoke `storyboard` attribute; a `storyboard` property still covers a board worked out at runtime.
+- **A top-right corner control placement** (`placement: "top"`) for session-level controls (cast, share, close), a **centred bar control** (`placement: "center"`), and **fullscreen-only controls** (`screen:`).
+- **External subtitle files from a picker**: `addSubtitleTrack()` / `addSubtitleFile()` and a `subtitlepicker` menu row load an SRT/VTT/TTML file sitting next to the video, no reload required.
+- **DRM-protected content says so**: shows "Protected Video" with a plain explanation instead of a generic error, and plays through a packager's clear lead instead of stalling and retrying forever.
+- **Google Drive picker** no longer scrolls the page away when it opens, and resumes playback automatically when closed.
+- **ChromeOS Files app integration and lock-screen skip** for the Chrome extension.
+- **Firefox extension and Chrome's toolbar icon** open the full player page directly instead of a popup, and both work from an incognito/private window.
+- **In-player debug console** gets a level filter and search.
+
+### Changed
+- **The WASM module compiles once and is instantiated many times** — a second player, the preview pipeline, and a post-quality-switch rebuild no longer each pay for their own fetch and compile.
+- **Adaptive load-shedding can lift again**: the frame-rate cap for underpowered devices used to engage and never release; it now retests and lifts itself on a sustained healthy stretch.
+- **A speed change no longer costs a stall**: already-scheduled audio is re-stretched in place instead of thrown away for a fresh demuxer seek.
+- **Auto (adaptive) quality**: fixed a unit bug that read the link estimate 8x too small, a bottom-rung confirm pass that never ran, an ignored persisted link measurement, and a climb into 8K priced off a different stream's throughput.
+- **`/embed` runs inside the embedding page's own origin** now (a `srcdoc` iframe) instead of a cross-origin frame that needed CORS headers a host may never send; an old embed explains what happened and offers a one-copy replacement.
+- Built against **FFmpeg 9.0.1**.
+
+### Fixed
+- **A file whose audio ends before its picture now plays to the real end** instead of stopping dead where the sound ran out; also fixed a finished soundtrack read as "starving", a hang seeking into that tail, and a leftover pre-seek frame dragging playback backward.
+- **Faster seeking on long-GOP sources**: a seek can land on the keyframe ahead of its target instead of always decoding forward from the one behind it, cutting a 1.2s seek to under 200ms on an 8K60 file.
+- A **paused seek that's then played** no longer jumps the picture forward and never heals; a **seek-bar click** no longer restarts playback twice; a seek held open by a **blocked autoplay** no longer freezes the picture with nothing to explain it.
+- **Audio-gain glitches after a seek**: a fade/duck race that could park the volume near zero with no way back except reload, now caught by a watchdog that restores the master gain without fighting a fade already in progress.
+- **Software-decoded audio** (TrueHD/DTS, etc.) now hands off PCM in ~150ms blocks instead of multi-second ones, so a speed change no longer leaves old-speed audio playing under an already-changed picture.
+- **Context-menu submenus** could fail to open on click, flash a stray panel, or reappear after their menu had closed — all from the same portal bookkeeping, fixed together.
+- **Seek-bar and thumbnail previews**: scrubbing no longer waits for the pointer to stop, a far hover reuses a Matroska's own index instead of re-bisecting the file, the first HTTP hover reuses bytes already downloaded, and `thumb="precise"` no longer gives up part-way through a long GOP.
+- **Auto quality** no longer collapses the whole ladder over a stall the player caused itself, and drops a rung before blaming a link that's still delivering.
+- A **missing container duration** now gets a second, unhurried scan after load instead of settling for "0:00" with a dead seek bar.
+- **Mobile paste-a-link flow**: more room for the field, a properly sized/centred Play button, and a bar thinned to phone proportions.
+- **Native-`<video>`/HLS-DASH-fallback**: event parity with a real `<video>` (`play`/`pause`/`seeking`/`seeked`/`paused`), no volume control on a source with no audio, and a message when the browser silently drops audio it can't decode.
+- **Open-GOP (CRA/BLA) streams and transport-stream seeks**: a string of decoder-queue, reference-chain and reorder-tail fixes.
+- A control capsule could get permanently marked "empty" by a measurement taken while the bar was hidden.
+- **DASH sources**: an audio track no longer lists once per bitrate rendition, dash.js's own thumbnail track is read, and a preview is no longer promised on a source that can't produce one.
+
 ## [0.4.0] - 2026-08-15
 
 ### Added

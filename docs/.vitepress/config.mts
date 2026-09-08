@@ -64,12 +64,13 @@ export default defineConfig({
       { text: "🔌 API", link: "/api/player" },
       { text: "🎮 Examples", link: "https://movi-player-examples.vercel.app/" },
       {
-        text: "v0.4.0",
+        text: "v0.4.1",
         items: [
           {
             text: "Versions",
             items: [
-              { text: "v0.4.0 (Latest)", link: "/changelog#0-4-0" },
+              { text: "v0.4.1 (Latest)", link: "/changelog#0-4-1" },
+              { text: "v0.4.0", link: "/changelog#0-4-0" },
               { text: "v0.3.5", link: "/changelog#0-3-5" },
               { text: "v0.3.4", link: "/changelog#0-3-4" },
               { text: "v0.3.1", link: "/changelog#0-3-1" },
