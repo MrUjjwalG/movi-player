@@ -1685,6 +1685,26 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
    *  unnoticed; short enough that a catch-up going nowhere cannot run away. */
   private static readonly RESYNC_HOLD_MS = 1200;
   private _playStartTime: number = 0; // When play() was called — grace period for stall detection
+
+  /**
+   * A seek settled while paused, so the demuxer cursor is past the picture.
+   *
+   * A seek's processLoop bursts packets while it hunts for the frame the
+   * target lands on, and a seek that ends paused stops there: the one frame is
+   * painted, the decoded read-ahead behind it is dropped (see the paused branch
+   * of notifySeekCompletion), and the cursor is left wherever the hunt reached
+   * — measured 2.5s past the target on a 1080p source. Nothing rewinds it,
+   * because resuming from a pause is otherwise just a matter of restarting the
+   * clock. So playback picked up from the cursor: the viewer scrubbed to 260s,
+   * saw 260s on the card and on the picture, pressed play, and the film jumped
+   * to 262.5s.
+   *
+   * play() answers this with the realignment the first-play path already does
+   * for the identical reason (the poster seek reads ahead the same way). This
+   * flag is what tells the two apart from an ordinary pause → play, which must
+   * stay instant and must NOT re-seek.
+   */
+  private _demuxerAheadOfClock: boolean = false;
   /** performance.now() of the last buffering→playing resume (0 = never). */
   private _stallResumeAt: number = 0;
   private _primingAudio = false; // true while the first-play buffer is filling its startup cushion
@@ -4982,8 +5002,20 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
       return;
     }
 
-    if (this._playStartTime === 0 && this.demuxer) {
+    // Two ways into the same realignment, for one reason: the demuxer cursor
+    // is ahead of the picture on screen.
+    //
+    // The first play after the poster seek is the long-standing one. A seek
+    // that settled while PAUSED leaves it in exactly the same state — the hunt
+    // for the target frame reads ahead, the frames behind it are dropped, and
+    // resuming from pause used to pick up wherever the cursor stopped. That is
+    // the picture jumping forward the instant play is pressed after scrubbing
+    // paused: measured at 2.5s on a 1080p source, and it never healed, because
+    // the clock carried on from the target while the frames arriving were from
+    // 2.5s later. See _demuxerAheadOfClock.
+    if ((this._playStartTime === 0 || this._demuxerAheadOfClock) && this.demuxer) {
       const targetTime = this.clock.getTime();
+      this._demuxerAheadOfClock = false;
 
       // Flush the decode pipeline before re-seeking the demuxer. The
       // poster seek's processLoop bursts ~40 packets per rAF, racing the
@@ -5014,7 +5046,7 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
       try {
         await this.demuxer.seek(targetTime);
       } catch (error) {
-        Logger.error(TAG, "Demuxer seek on first play failed", error);
+        Logger.error(TAG, "Demuxer realignment seek on play failed", error);
         this.wasPlayingBeforeSeek = false;
         this.suppressSeekSpinner = false;
         this.stateManager.setState("error");
@@ -5834,6 +5866,9 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
       }
 
       Logger.info(TAG, "Resuming playback after seek");
+      // This seek carries straight on into playback with its own decoded
+      // frames, so nothing is left ahead for play() to rewind.
+      this._demuxerAheadOfClock = false;
       // Playback is starting; if the tab is hidden this is the only thing that
       // will feed the renderer.
       this.ensureBackgroundPump();
@@ -5873,12 +5908,18 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
       Logger.info(TAG, "Seek completed in paused state");
       this.wasPlayingBeforeSeek = false;
       this.stateManager.setState("paused");
+      // The hunt for this frame left the demuxer past it, and the frames
+      // between the two are about to be thrown away below. Playback cannot
+      // just restart the clock from here — see _demuxerAheadOfClock.
+      this._demuxerAheadOfClock = true;
 
       // Don't decode audio now (AudioRenderer not playing — would drop all data).
-      // Discard stashed audio and prebuffer packets — play() will re-seek the
-      // demuxer to startTime so all packets will be re-read fresh from 0.
-      // Keeping stale packets causes A/V desync (prebuffer audio at 0.4s+
-      // would be processed before fresh audio at 0s).
+      // Discard stashed audio and prebuffer packets — play() re-seeks the
+      // demuxer back to this position (see _demuxerAheadOfClock, set just
+      // above) and re-reads them fresh. Keeping them causes A/V desync: they
+      // were read AHEAD of the target while the seek hunted for its frame, so
+      // feeding them back would start playback from later than the picture on
+      // screen.
       this.pendingAudioPackets = [];
       this.pendingPrebufferPackets = [];
       this.dropVideoReadAhead();
@@ -10691,6 +10732,9 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
     this._soundCarryingAlone = false;
     this.waitingForVideoSync = false; // no stale seek-completion armed
     this._playStartTime = 0; // keep first-play branch eligible
+    // …which realigns the demuxer anyway, so a paused-seek flag left over from
+    // the last source has nothing to add.
+    this._demuxerAheadOfClock = false;
     this._primingAudio = false;
     this.pendingAudioPackets = []; // poster-era audio is stale; play() re-seeks
     this.pendingPrebufferPackets = [];
