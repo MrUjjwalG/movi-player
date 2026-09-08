@@ -8609,6 +8609,37 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
                 this._videoAheadStashBytes += packet.data.length;
                 continue;
               }
+              // …and only while breaking the chain can still buy something.
+              //
+              // What it buys is AUDIO: the loop reads on and finds the sound
+              // buried between the video packets. When the demuxer has read
+              // video well past the newest audio packet it has ever seen there
+              // is no such sound — the track has ended in the file — and this
+              // spends a GOP of picture on nothing. That is the last few
+              // seconds of a soundtrack that stops before the picture does: the
+              // buffer drains under the starve line because the track is over,
+              // the queue is at its cap, and within a second and a half the
+              // stash is five times its bound and this has broken the chain.
+              // Measured on the 243.8s file whose Opus ends at 193.4s — one
+              // GOP lost there is the four seconds of frozen picture and the
+              // spinner at 3:21, seconds after the sound stops.
+              //
+              // Asked HERE rather than of the starve verdict itself. Standing
+              // the whole protection down on this signal was tried and broke
+              // the tail handover outright (see soundIsOver); this changes
+              // nothing but the last resort, in the one case where the last
+              // resort has nothing to gain. Backpressure is what is left: stop
+              // reading, let the renderer drain into the room the stash needs,
+              // and keep the picture whole. Nothing deadlocks behind it — the
+              // stash's own drain feeds the decoder as the queue empties.
+              const soundStillComing =
+                !!this.audioDemuxer ||
+                this._lastAudioPacketPts < 0 ||
+                this._lastVideoPacketPts <=
+                  this._lastAudioPacketPts + MoviPlayer.AUDIO_TAIL_GAP_S;
+              if (!soundStillComing) {
+                break;
+              }
               // A delta was skipped, so every following delta is now orphaned
               // until the next keyframe rebuilds the reference chain. Latch this
               // so that even after the starve clears we keep skipping deltas
