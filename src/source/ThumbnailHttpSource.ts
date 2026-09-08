@@ -60,6 +60,54 @@ export class ThumbnailHttpSource implements SourceAdapter {
   private bufferStart: number = 0;
   private bufferEnd: number = 0;
 
+  /**
+   * The end of the window currently STREAMING IN, and the machinery to wait on
+   * it. `bufferEnd` is how far the bytes have actually got; `fillEnd` is where
+   * they are going. While the two differ, a fetch is still arriving.
+   *
+   * A read used to wait for the whole 2MB window before it saw a single byte,
+   * and the demuxer asks for 32KB. Measured on a 404MB AV1 MKV over R2: one
+   * hover = one 32KB read, served by a 2048KB download the preview blocked on
+   * for 7.0s, of which the first byte arrived after 0.33s. The window is the
+   * right size — it is what keeps a hover to ONE request — but nothing about
+   * it requires the answer to wait for its tail.
+   */
+  private fillEnd: number = 0;
+  private fillToken: number = 0;
+  private fillWaiters: Array<() => void> = [];
+
+  /** Wake everything waiting on the stream to reach further. */
+  private notifyFill(): void {
+    const waiters = this.fillWaiters;
+    this.fillWaiters = [];
+    for (const wake of waiters) wake();
+  }
+
+  /**
+   * Abandon whatever is streaming in: the bytes it is carrying are no longer
+   * wanted, or the buffer they were going into has gone.
+   */
+  private invalidateFill(): void {
+    this.fillToken++;
+    this.fillEnd = 0;
+    this.notifyFill();
+  }
+
+  /**
+   * Wait until the in-flight window has reached `target`, or has stopped
+   * short of it. True when the bytes are there.
+   */
+  private async awaitFilled(target: number, token: number): Promise<boolean> {
+    while (
+      this.fillToken === token &&
+      this.bufferEnd < target &&
+      this.fillEnd > this.bufferEnd
+    ) {
+      await new Promise<void>((resolve) => this.fillWaiters.push(resolve));
+    }
+    return this.fillToken === token && this.bufferEnd >= target;
+  }
+
   // Optional main source to borrow already-buffered bytes from.
   // Used to avoid re-fetching data the main playback stream has cached
   // — particularly hot for seekbar hover previews near current playback.
@@ -180,6 +228,31 @@ export class ThumbnailHttpSource implements SourceAdapter {
       this.position = offset + length;
       Logger.debug(TAG, `Read from buffer: offset=${offset}, length=${length}`);
       return result.buffer;
+    }
+
+    // Not here yet, but on its way: a window is streaming in and these bytes
+    // are inside it. Wait for the stream to reach them rather than opening a
+    // second request for bytes the first one is already carrying — which is
+    // what the demuxer's follow-up reads would otherwise do, each of them
+    // throwing away the download still in progress.
+    if (
+      this.buffer !== null &&
+      this.fillEnd > this.bufferEnd &&
+      offset >= this.bufferStart &&
+      offset + length <= this.fillEnd
+    ) {
+      const token = this.fillToken;
+      if (await this.awaitFilled(offset + length, token)) {
+        const localOffset = offset - this.bufferStart;
+        const result = new Uint8Array(length);
+        result.set(this.buffer!.subarray(localOffset, localOffset + length));
+        this.position = offset + length;
+        Logger.debug(
+          TAG,
+          `Read from the window still arriving: offset=${offset}, length=${length}`,
+        );
+        return result.buffer;
+      }
     }
 
     // Try borrowing from main source's buffers before paying for a new fetch.
@@ -306,20 +379,117 @@ export class ThumbnailHttpSource implements SourceAdapter {
           }
         }
 
-        const arrayBuffer = await response.arrayBuffer();
+        // Take the window as a stream and answer THIS read the moment its own
+        // bytes have landed; the rest of the window keeps filling behind it.
+        //
+        // The window is 2MB because that is what keeps a hover to one request
+        // (see BUFFER_SIZE). The read that triggered it is 32KB. Waiting for
+        // the whole window meant the picture appeared after the last byte
+        // rather than the 32,768th: 7.0s instead of 0.4s on a 404MB AV1 MKV
+        // over a link whose first byte came back in 0.33s. Both goals are
+        // available at once — one request, and an answer as soon as it is
+        // answerable — because nothing about a big window requires waiting for
+        // its tail.
+        const body = response.body;
+        const windowLength = fetchEnd - fetchStart + 1;
 
-        // Store in buffer
-        this.buffer = new Uint8Array(arrayBuffer);
+        if (!body) {
+          // No streaming body (an old browser, or a mocked response): the
+          // whole-block read is still correct, just slower.
+          const arrayBuffer = await response.arrayBuffer();
+          this.invalidateFill();
+          this.buffer = new Uint8Array(arrayBuffer);
+          this.bufferStart = fetchStart;
+          this.bufferEnd = fetchStart + arrayBuffer.byteLength;
+          const wholeLength = Math.min(length, arrayBuffer.byteLength);
+          const whole = new Uint8Array(wholeLength);
+          whole.set(this.buffer.subarray(0, wholeLength));
+          this.position = offset + wholeLength;
+          return whole.buffer;
+        }
+
+        // Anything already streaming is superseded by this window.
+        this.invalidateFill();
+        const token = ++this.fillToken;
+        this.buffer = new Uint8Array(windowLength);
         this.bufferStart = fetchStart;
-        this.bufferEnd = fetchStart + arrayBuffer.byteLength;
+        this.bufferEnd = fetchStart;
+        this.fillEnd = fetchStart + windowLength;
+
+        // What this read needs before it can return.
+        const needed = fetchStart + Math.min(length, windowLength);
+        const reader = body.getReader();
+        let filled = 0;
+        let streamError: unknown = null;
+        // Held in an object: a bare `let` assigned inside the executor gets
+        // narrowed to null by the compiler, which then refuses the call below.
+        const needGate: { release: (() => void) | null } = { release: null };
+        const needMet = new Promise<void>((resolve) => {
+          needGate.release = resolve;
+        });
+
+        // Deliberately not awaited: it outlives this read, filling the rest of
+        // the window so the demuxer's next reads are already served.
+        void (async () => {
+          try {
+            for (;;) {
+              const { done, value } = await reader.read();
+              // Superseded (a new window, clearBuffer(), close()). Stop, and
+              // let the connection go with it.
+              if (this.fillToken !== token) {
+                try {
+                  await reader.cancel();
+                } catch {
+                  /* already gone */
+                }
+                return;
+              }
+              if (done) break;
+              const take = Math.min(windowLength - filled, value.length);
+              if (take > 0) {
+                this.buffer!.set(value.subarray(0, take), filled);
+                filled += take;
+                this.bufferEnd = fetchStart + filled;
+                this.notifyFill();
+                if (needGate.release && this.bufferEnd >= needed) {
+                  needGate.release();
+                  needGate.release = null;
+                }
+              }
+              if (filled >= windowLength) break;
+            }
+          } catch (e) {
+            streamError = e;
+          } finally {
+            if (this.fillToken === token) {
+              // Nothing more is coming — unblock anyone waiting for bytes past
+              // where the stream actually stopped.
+              this.fillEnd = this.bufferEnd;
+              this.notifyFill();
+            }
+            needGate.release?.();
+            needGate.release = null;
+          }
+        })();
+
+        await needMet;
+
+        // A stream that died before delivering anything is a failed read, and
+        // the retry loop below is where that belongs.
+        if (streamError && this.bufferEnd <= fetchStart) throw streamError;
 
         Logger.debug(
           TAG,
-          `Buffered: ${this.bufferStart}-${this.bufferEnd} (${(arrayBuffer.byteLength / 1024).toFixed(1)} KB)`,
+          `Window ${this.bufferStart}-${this.fillEnd} streaming; served ${(
+            (this.bufferEnd - fetchStart) / 1024
+          ).toFixed(1)} KB of it`,
         );
 
-        // Return requested portion
-        const resultLength = Math.min(length, arrayBuffer.byteLength);
+        // fetchStart === offset, so the read starts at the window's head.
+        const resultLength = Math.max(
+          0,
+          Math.min(length, this.bufferEnd - offset),
+        );
         const result = new Uint8Array(resultLength);
         result.set(this.buffer.subarray(0, resultLength));
         this.position = offset + resultLength;
@@ -390,6 +560,9 @@ export class ThumbnailHttpSource implements SourceAdapter {
    * Call this after thumbnail generation is complete
    */
   clearBuffer(): void {
+    // Before the buffer goes: a window may still be streaming into it, and it
+    // must not write into an array nobody is reading any more.
+    this.invalidateFill();
     this.buffer = null;
     this.bufferStart = 0;
     this.bufferEnd = 0;
@@ -403,6 +576,7 @@ export class ThumbnailHttpSource implements SourceAdapter {
     }
     // …and everything else in flight: the size probes and any ranged read.
     this.lifetimeAbort.abort();
+    this.invalidateFill();
     this.buffer = null;
     Logger.debug(TAG, "Source closed");
   }
