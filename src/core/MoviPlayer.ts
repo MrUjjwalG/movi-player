@@ -1739,6 +1739,36 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
    * stay instant and must NOT re-seek.
    */
   private _demuxerAheadOfClock: boolean = false;
+
+  /**
+   * Can the picture simply carry on from where the clock is, with what has
+   * already been decoded?
+   *
+   * The flag above says the demuxer's cursor is past the clock. That is true
+   * the moment ANY seek settles paused — including the one a click on the seek
+   * bar issues, because the bar pauses for the drag. But a click is followed by
+   * play() within a few tens of milliseconds, while the frames that seek just
+   * decoded are still queued: playback runs straight out of them and the cursor
+   * being ahead never costs anything. Rewinding there is pure harm — it throws
+   * away those frames, leaves the PREVIOUS position's picture on screen while
+   * it re-seeks and re-decodes, and restarts the audio a second time. Measured:
+   * a click seeking to 162.45s showed the old frame at 286.28s for ~240ms
+   * before snapping, against a clean -0.04s landing without the rewind.
+   *
+   * What made the paused-scrub-then-play case different is that by the time
+   * play arrived those frames were gone — the queue measured empty — so
+   * decoding resumed from the cursor and skipped everything between. So the
+   * question is not whether the cursor is ahead; it is whether the frames that
+   * cover the gap still exist. This asks that directly.
+   */
+  private pictureCanResumeFromClock(): boolean {
+    const queued = this.videoRenderer?.queuedPtsRange;
+    if (!queued) return false; // nothing decoded is waiting — the gap is real
+    // The queue has to START at or before where playback is about to begin,
+    // give or take a couple of frames. A queue that begins well after the
+    // clock IS the hole this guards against.
+    return queued.first <= this.clock.getTime() + 0.25;
+  }
   /** performance.now() of the last buffering→playing resume (0 = never). */
   private _stallResumeAt: number = 0;
   private _primingAudio = false; // true while the first-play buffer is filling its startup cushion
@@ -5047,7 +5077,15 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
     // paused: measured at 2.5s on a 1080p source, and it never healed, because
     // the clock carried on from the target while the frames arriving were from
     // 2.5s later. See _demuxerAheadOfClock.
-    if ((this._playStartTime === 0 || this._demuxerAheadOfClock) && this.demuxer) {
+    // …but only when the frames that cover the gap are actually gone. A click
+    // on the seek bar pauses for the drag, so its seek settles paused and sets
+    // the flag too — and play() follows it within a few tens of milliseconds,
+    // while that seek's own frames are still queued. Rewinding there threw them
+    // away and left the PREVIOUS position on screen for ~240ms before snapping.
+    // See pictureCanResumeFromClock.
+    const rewindForPausedSeek =
+      this._demuxerAheadOfClock && !this.pictureCanResumeFromClock();
+    if ((this._playStartTime === 0 || rewindForPausedSeek) && this.demuxer) {
       const targetTime = this.clock.getTime();
       // Said out loud, because its absence is invisible: when this does NOT run
       // the only symptom is a picture that holds still for as long as the gap,
@@ -5121,6 +5159,12 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
       this.eofSince = 0;
     } else {
       // Resume from pause — just resume AudioContext
+      //
+      // Reached with the flag still set when the queued frames cover the gap,
+      // and playback is about to run straight out of them. Clear it: the
+      // cursor being ahead has now been paid for, and leaving it armed would
+      // make the NEXT plain pause → play rewind for a seek long since resumed.
+      this._demuxerAheadOfClock = false;
       if (!this.disableAudio) {
         await this.audioRenderer.play();
       } else {
