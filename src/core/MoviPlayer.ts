@@ -953,6 +953,10 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
    *  declares none: both tracks report undefined, so the up-front read can
    *  never fire and only the cursors can tell. */
   private _lastAudioPacketPts: number = -1;
+  /** Media time the current continuous read pass began at — a load, or the
+   *  last seek. Tells the EOF check whether "no audio packet was seen" means
+   *  the sound has ended or merely that we started reading past it. */
+  private _audioReadPassStart: number = 0;
   /** How far the picture may run past the newest audio packet before the
    *  runtime detector calls it a tail. Same reasoning and same value as
    *  VIDEO_TAIL_GAP_S: interleave is the container's business, deciding late
@@ -6400,8 +6404,14 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
       // separate video and audio URLs — `bindav` held the way IN to a stall and
       // then let go the way OUT on audio alone. That is the drift the binding
       // exists to prevent.
+      // …but not once the playhead is past the end of that track. Waiting for a
+      // cushion of audio that the file does not contain is a buffering state
+      // nothing can leave: seeking anywhere past the end of the sound sat on
+      // the spinner for good, with the picture already decoded and queued
+      // behind it. See _audioTailStart.
       const hasAudioTrack =
-        !!this.trackManager.getActiveAudioTrack() || !!this.audioDemuxer;
+        (!!this.trackManager.getActiveAudioTrack() || !!this.audioDemuxer) &&
+        !this.isInVideoOnlyTail();
       // The first-play cold prime needs a REAL cushion before it starts: the
       // software decode is still sub-realtime (and gets even slower once video
       // decode/render competes for CPU), so resuming on a thin 0.1s buffer just
@@ -7231,13 +7241,53 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
       const timeDone =
         currentTime >= duration + this.startTime - 0.5 || duration === 0;
 
-      // …but NOT once the playhead is past the end of that track. Everything in
-      // the audio branch below is about the sound playing out — where it has
-      // stopped and the picture is carrying playback alone, there is no playout
-      // head to wait for and the branch ends the file the moment the clock
-      // reaches the last sample. The video-only branch is written for exactly
-      // this: the clock arms the ending and the picture running out finishes
-      // it, which is what the tail needs. See _audioTailStart.
+      // Does the sound stop before the file does? Asked HERE, once the demuxer
+      // has run out, because only then are the cursors final.
+      //
+      // It cannot be asked from the packet stream the way the audio-side tail
+      // is. Nothing reads audio ahead, so an audio packet running past the
+      // newest video one really does mean the picture stopped; but the video
+      // read-ahead stash exists precisely to read the picture ahead, so the
+      // same test the other way round fires on ordinary files. Measured: a
+      // startup burst put video 6s past the newest audio packet and declared
+      // the sound finished at 4.894s of a four-minute song.
+      //
+      // At EOF the read pass has covered everything from where it began to the
+      // end of the file, so: audio seen in it means the newest one is where the
+      // sound ends, and no audio at all means the sound ended before the pass
+      // started — which is all we may claim, so the tail begins there.
+      if (
+        !this.audioDemuxer &&
+        !!this.trackManager.getActiveAudioTrack() &&
+        !!this.trackManager.getActiveVideoTrack() &&
+        duration > 0
+      ) {
+        // Audio seen in this pass is exact evidence: that is where the sound
+        // ends. None at all is weaker — it only says the sound ended somewhere
+        // before the pass began — so it may narrow an earlier guess but never
+        // widen one, and exact evidence replaces a guess outright.
+        const sawAudio = this._lastAudioPacketPts >= 0;
+        const learned = sawAudio
+          ? this._lastAudioPacketPts
+          : Math.min(this._audioTailStart, this._audioReadPassStart);
+        if (
+          duration + this.startTime - learned > MoviPlayer.AUDIO_TAIL_GAP_S &&
+          (sawAudio ? learned !== this._audioTailStart : learned < this._audioTailStart)
+        ) {
+          // A guess made from a seek that started past the sound is only ever
+          // an upper bound: seeking to 200 with no audio in the file after
+          // 193.4 taught "no sound from 200", which then left a seek to 197
+          // waiting for audio that does not exist. Later passes sharpen it.
+          this._audioTailStart = learned;
+          Logger.info(
+            TAG,
+            sawAudio
+              ? `Sound ends at ${learned.toFixed(2)}s of a ${duration.toFixed(2)}s file — the picture carries playback from there`
+              : `No sound anywhere from ${learned.toFixed(2)}s to the end of a ${duration.toFixed(2)}s file — the picture carries playback from there`,
+          );
+        }
+      }
+
       const hasAudioTrack =
         !!this.trackManager?.getActiveAudioTrack() &&
         !this.disableAudio &&
@@ -8259,24 +8309,6 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
             // container under-declared its video duration, or this is a gap in
             // the middle of the file rather than the end of the picture.
             this._lastVideoPacketPts = packet.timestamp;
-            // …and the mirror: the picture running this far past the newest
-            // audio packet means the sound has stopped. Same exclusions as the
-            // audio-side detector below — split audio comes from a different
-            // file, so the two cursors have no relationship to measure.
-            if (
-              !this.audioDemuxer &&
-              activeAudio &&
-              !Number.isFinite(this._audioTailStart) &&
-              this._lastAudioPacketPts >= 0 &&
-              packet.timestamp - this._lastAudioPacketPts >
-                MoviPlayer.AUDIO_TAIL_GAP_S
-            ) {
-              this._audioTailStart = this._lastAudioPacketPts;
-              Logger.info(
-                TAG,
-                `No audio packet since ${this._lastAudioPacketPts.toFixed(2)}s while the picture reached ${packet.timestamp.toFixed(2)}s — the picture carries playback from here`,
-              );
-            }
             if (packet.timestamp > this._videoTailStart) {
               Logger.info(
                 TAG,
@@ -9295,6 +9327,10 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
       // We need to skip audio packets before target and decode (but not display) video frames.
       // Normalize target time against startTime offset
       this.seekTargetTime = seconds + this.startTime;
+      // A new continuous read pass starts here. What audio it turns up (or
+      // fails to) is what the EOF check reads — see _audioReadPassStart.
+      this._audioReadPassStart = seconds + this.startTime;
+      this._lastAudioPacketPts = -1;
     if (this._carrySoundThroughNextSeek) {
       // The hand-over's own seek: re-prime decode where the playhead already is
       // so the sound starts again from exactly there — not from wherever the
