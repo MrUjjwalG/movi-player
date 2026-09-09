@@ -1113,9 +1113,16 @@ How long an interruption has to last, in **seconds**, before the viewer is shown
 ```html
 <!-- anything under 400ms passes without a spinner -->
 <movi-player src="video.mp4" spinnerdelay="0.4"></movi-player>
+
+<!-- a stall is reported after 250ms; an opening is given a full second -->
+<movi-player src="video.mp4" spinnerdelay="0.25 1"></movi-player>
 ```
 
 **Value:** Seconds. `0` — the default — shows the spinner the moment the player says it is loading, which is how the player has always behaved.
+
+A second number, separated by a space or a comma, is the wait the **opening** gets — the stretch before this source has put a frame up. One number keeps its old meaning and holds every interruption, opening included, to the same wait.
+
+The two are different waits and one number is often wrong for both. A video that has not started has its poster up and is doing exactly what a starting video does; a video that stops mid-picture has frozen, and the viewer is looking at a still that was moving a moment ago. Measured on a page that hit this: an ordinary cold open put the ring up for 925ms of a 1205ms startup — a second of "something is wrong" over a video that was merely beginning — while a real mid-play stall on the same page wanted reporting inside a quarter of a second. Raising the single number far enough to cover the first would have bought that silence by going quiet on the second.
 
 Playback interrupts itself constantly and briefly: an opening seek, a scrub landing, a rendition switch, a queue refilling after a flush. Most of those are over in a tenth of a second, and a ring that appears and vanishes faster than it can be read is not information — it reads as a player in trouble. `spinnerdelay` is the wait before the player admits to one.
 
@@ -1795,6 +1802,8 @@ Gets/sets the loading-spinner delay in **seconds**. See the [`spinnerdelay` attr
 player.spinnerDelay = 0.4; // Interruptions under 400ms pass in silence
 player.spinnerDelay = 0;   // Show the spinner as soon as loading starts
 ```
+
+One number, which is what this property is: setting it holds the opening to the same wait as everything else. To give the opening its own, set the attribute — `player.setAttribute("spinnerdelay", "0.25 1")`.
 
 ---
 

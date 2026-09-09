@@ -770,7 +770,7 @@ Every attribute can also be read and set as a JS property (`el.rotate = 90`). Gr
 | `showtitle` | `showtitle` | Show the title bar overlay at the top |
 | `subtitlepicker` | `subtitlepicker` | Add an "Add subtitle file…" row to the subtitle menu — picks a local SRT/VTT/TTML and shows it straight away. The file is read in the page (a `blob:` URL), never uploaded. Also exposed as `player.addSubtitleFile(file)` for a host with its own button |
 | `titlemode` | `titlemode="fullscreen back"` | Where the title bar may show: `both` (default) \| `fullscreen` \| `windowed`; add `back` (or `back-mobile`, `back-fullscreen`, `back-windowed`, `back-mobile-fullscreen`) for a back arrow that fires a cancelable `back` event. The placement tokens gate the whole bar; the `back-*` scopes gate only the arrow, so `back-windowed` keeps the title in fullscreen and drops just the arrow |
-| `spinnerdelay` | `spinnerdelay="0.4"` | Seconds an interruption must last before the loading spinner appears. `0` (default) shows it at once; anything higher lets brief stalls pass in silence |
+| `spinnerdelay` | `spinnerdelay="0.4"`, `spinnerdelay="0.25 1"` | Seconds an interruption must last before the loading spinner appears. `0` (default) shows it at once; anything higher lets brief stalls pass in silence. A second number is the wait the *opening* gets, which is usually worth more patience than a mid-play stall |
 
 </details>
 

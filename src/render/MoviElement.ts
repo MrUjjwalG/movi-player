@@ -863,6 +863,10 @@ export class MoviElement extends HTMLElement {
   // in seconds. Not persisted and not a viewer setting: it describes what this
   // page is serving, not what this viewer prefers. See spinnerDelayMs.
   private _spinnerDelay: number = 0;
+  // The same, for the stretch before this source has ever put a frame up.
+  // `null` — the default, and what one number means — holds the opening to
+  // whatever the rest of playback is held to. See spinnerDelayMs.
+  private _spinnerDelayOpening: number | null = null;
   // Host-supplied pluggable subtitle renderer (e.g. jassub/libass). Stored so it
   // survives a source change: re-applied to each fresh player instance.
   private _subtitleRenderer: SubtitleRenderer | null = null;
@@ -24570,8 +24574,9 @@ export class MoviElement extends HTMLElement {
     }
     const spinnerDelayAttr = this.getAttribute("spinnerdelay");
     if (spinnerDelayAttr) {
-      const parsed = parseFloat(spinnerDelayAttr);
-      if (Number.isFinite(parsed)) this._spinnerDelay = Math.max(0, parsed);
+      const spin = MoviElement.parseSpinnerDelay(spinnerDelayAttr);
+      this._spinnerDelay = spin.stall;
+      this._spinnerDelayOpening = spin.opening;
     }
     this._ambientMode = this.hasAttribute("ambientmode");
     this._ambientWrapper = this.getAttribute("ambientwrapper");
@@ -25551,14 +25556,30 @@ export class MoviElement extends HTMLElement {
         }
         break;
       case "spinnerdelay": {
-        const parsed = newValue === null ? 0 : parseFloat(newValue);
-        this._spinnerDelay = Number.isFinite(parsed) ? Math.max(0, parsed) : 0;
+        const spin = MoviElement.parseSpinnerDelay(newValue);
+        this._spinnerDelay = spin.stall;
+        this._spinnerDelayOpening = spin.opening;
         // A wait already running was measured against the old number and means
         // nothing now. Drop it and let the next tick ask again — which it will,
         // within a frame or two, if whatever asked for it is still loading.
         if (this._spinnerDelayTimer !== null) {
           clearTimeout(this._spinnerDelayTimer);
           this._spinnerDelayTimer = null;
+        }
+        // And a spinner already SHOWN was earned against that same old number,
+        // so it means nothing now either. This is not a corner case: a React or
+        // Vue wrapper reflects its props in a post-mount effect, so the value
+        // arrives a frame AFTER the element connected and began loading — by
+        // which point the opening had already put the ring up under the default
+        // of 0 and latched `_spinnerEarned`, and the number the page went to
+        // the trouble of setting could not take effect until the next
+        // interruption. Measured on a React host asking for a one-second
+        // opening: mount, ring up 22ms later, attribute landing on that same
+        // frame, ring then sitting there for 441ms. Ending the run here lets
+        // the next tick re-ask under the number the page actually set.
+        if (this._spinnerEarned) {
+          this._spinnerEarned = false;
+          this.applySpinnerVisible(false);
         }
         break;
       }
@@ -30621,7 +30642,50 @@ export class MoviElement extends HTMLElement {
    * this particular page wants to be. Both have to pass.
    */
   private spinnerDelayMs(): number {
-    return Math.max(0, this._spinnerDelay) * 1000;
+    // Before this source has put a frame up, `_hasEverPlayed` is false — the
+    // same flag the poster and the controls read to know the opening is not
+    // over. A host that gave the opening its own number is asking to be held
+    // to it here and nowhere else.
+    const opening = this._spinnerDelayOpening;
+    const seconds =
+      opening !== null && !this._hasEverPlayed ? opening : this._spinnerDelay;
+    return Math.max(0, seconds) * 1000;
+  }
+
+  /**
+   * `spinnerdelay`, parsed. One number, which is the form this attribute has
+   * always taken, still means what it meant: the whole policy. Two split it —
+   * how long a mid-play stall has to last before it is reported, then how long
+   * an OPENING has.
+   *
+   * They are different waits, and a single number cannot be right for both. A
+   * video that has not started yet has its poster up and is doing exactly what
+   * a video that is starting does; a video that stops mid-picture has frozen,
+   * and the viewer is looking at a still that was moving a moment ago. The
+   * first can be left alone for a while, the second wants reporting quickly.
+   *
+   * Measured on a page that hit this: an ordinary cold open put the ring on
+   * screen for 925ms of a 1205ms startup — a whole second of "something is
+   * wrong" over a video that was merely beginning. Raising the single number
+   * far enough to cover that would have bought the silence by going quiet on
+   * real stalls too, so that host gave up on this attribute and re-implemented
+   * the spinner itself. Two numbers are what it actually needed.
+   */
+  private static parseSpinnerDelay(value: string | null): {
+    stall: number;
+    opening: number | null;
+  } {
+    if (value === null) return { stall: 0, opening: null };
+    const parts = value
+      .trim()
+      .split(/[\s,]+/)
+      .map((n) => parseFloat(n))
+      .filter((n) => Number.isFinite(n));
+    if (parts.length === 0) return { stall: 0, opening: null };
+    return {
+      stall: Math.max(0, parts[0]),
+      opening: parts.length > 1 ? Math.max(0, parts[1]) : null,
+    };
   }
 
   /** Pending "show the spinner if this is still true when it fires". */
