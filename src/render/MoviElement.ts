@@ -21582,7 +21582,16 @@ export class MoviElement extends HTMLElement {
 
          Not display:none — the button transitions, and cutting it out
          mid-fade is the flicker this file has fought before. */
-      :host(.is-buffering) .movi-center-play-pause {
+      /* …and for a spinner that is deliberately being held back.
+         spinnerdelay withholds the RING, not the fact that the player is
+         loading, and this button is the one thing that must not be read as an
+         invitation while it is. Without the second selector a delayed opening
+         showed the play triangle for the length of the wait — on a video that
+         was about to start on its own. is-buffering cannot carry this on its
+         own: strip mode pulses its progress bar off that same class, and a
+         withheld ring must stay withheld there too. */
+      :host(.is-buffering) .movi-center-play-pause,
+      :host(.is-spinner-pending) .movi-center-play-pause {
         opacity: 0 !important;
         visibility: hidden !important;
         pointer-events: none !important;
@@ -25579,7 +25588,16 @@ export class MoviElement extends HTMLElement {
         // the next tick re-ask under the number the page actually set.
         if (this._spinnerEarned) {
           this._spinnerEarned = false;
+          // Down, then asked again under the new number. The hide is the full
+          // one — is-buffering means the ring is UP, and leaving it behind had
+          // strip mode pulsing its progress bar and the PiP window showing its
+          // spinner through a wait that was deliberately keeping quiet. What
+          // covers the gap is the re-ask: it arms the new wait, and a pending
+          // wait is still a player that is loading, so the centre play button
+          // stays off. Without that the button came through for a frame on a
+          // video that was already autoplaying.
           this.applySpinnerVisible(false);
+          this.setSpinnerVisible(true);
         }
         break;
       }
@@ -30716,6 +30734,7 @@ export class MoviElement extends HTMLElement {
         this._spinnerDelayTimer = null;
       }
       this._spinnerEarned = false;
+      this.applySpinnerPending(false);
       this.applySpinnerVisible(false);
       return;
     }
@@ -30735,6 +30754,8 @@ export class MoviElement extends HTMLElement {
       this.applySpinnerVisible(true);
       return;
     }
+    // The player is loading from this moment; only the ring is waiting.
+    this.applySpinnerPending(true);
     this._spinnerDelayTimer = window.setTimeout(() => {
       this._spinnerDelayTimer = null;
       this._spinnerEarned = true;
@@ -30781,7 +30802,25 @@ export class MoviElement extends HTMLElement {
       ".movi-loading-indicator",
     ) as HTMLElement | null;
     if (loadingIndicator) loadingIndicator.style.display = on ? "flex" : "none";
+    // A shown ring is no longer pending, and a hidden one is not either — the
+    // wait is over both ways.
+    this.applySpinnerPending(false);
     this.classList.toggle("is-buffering", on);
+  }
+
+  /**
+   * "Loading, ring withheld" — the state a `spinnerdelay` wait puts the player
+   * in, and the one thing the stylesheet needs to know about it: keep the
+   * centre play button off. It cannot be said with `is-buffering`, which means
+   * the ring is UP and which strip mode reads to pulse its progress bar; a wait
+   * that is holding the ring back has to hold that back too.
+   */
+  private applySpinnerPending(on: boolean): void {
+    // Never over a centre flash, for the same reason applySpinnerVisible defers
+    // there: the rule above is !important and erases the flash mid-frame, and
+    // the flash is the receipt for something the viewer just did.
+    if (on && this._centerFlashAnim) return;
+    this.classList.toggle("is-spinner-pending", on);
   }
 
   /** A spinner that wanted to come up while a centre flash was still running. */
