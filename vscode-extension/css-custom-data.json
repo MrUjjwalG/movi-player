@@ -382,7 +382,7 @@
       "name": "--movi-controls-group-bg",
       "description": {
         "kind": "markdown",
-        "value": "Movi Player theme variable.\n\nDefault: `rgba(255, 255, 255, 0.065)`"
+        "value": "Movi Player theme variable.\n\nDefault: `rgba(255, 255, 255, 0.025)`"
       },
       "references": [
         {

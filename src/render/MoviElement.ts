@@ -63,25 +63,25 @@ type EngineName = (typeof ENGINE_NAMES)[number];
 
 // OSD icon constants — shared across keyboard, button, and context menu handlers
 const OSD = {
-  loop: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M17 2l4 4-4 4"/><path d="M3 11v-1a4 4 0 0 1 4-4h14"/><path d="M7 22l-4-4 4-4"/><path d="M21 13v1a4 4 0 0 1-4 4H3"/></svg>`,
-  stableAudio: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="2" y="4" width="20" height="16" rx="2"/><path d="M6 15v-2M9 15v-4M12 15v-6M15 15v-4M18 15v-2"/></svg>`,
+  loop: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><path d="M17 2l4 4-4 4"/><path d="M3 11v-1a4 4 0 0 1 4-4h14"/><path d="M7 22l-4-4 4-4"/><path d="M21 13v1a4 4 0 0 1-4 4H3"/></svg>`,
+  stableAudio: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75"><rect x="2" y="4" width="20" height="16" rx="2"/><path d="M6 15v-2M9 15v-4M12 15v-6M15 15v-4M18 15v-2"/></svg>`,
   hdr: `<span style="font-weight:700;font-size:14px;letter-spacing:1px;padding:4px 10px;border:2px solid currentColor;border-radius:var(--movi-radius-tile,6px);">HDR</span>`,
-  speed: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M5.64 18.36a9 9 0 1 1 12.72 0"/><path d="m12 12 4-4"/></svg>`,
-  audio: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M9 18V5l12-2v13"/><circle cx="6" cy="18" r="3"/><circle cx="18" cy="16" r="3"/></svg>`,
-  subOn: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect width="18" height="14" x="3" y="5" rx="2"/><path d="M7 15h4M13 15h4"/></svg>`,
-  subOff: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect width="18" height="14" x="3" y="5" rx="2"/><path d="M7 15h4M13 15h4"/><line x1="3" y1="5" x2="21" y2="19" stroke-width="2.5"/></svg>`,
-  snapshot: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M23 19a2 2 0 0 1-2 2H3a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h4l2-3h6l2 3h4a2 2 0 0 1 2 2z"></path><circle cx="12" cy="13" r="4"></circle></svg>`,
-  rotate: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 12a9 9 0 0 0-9-9 9.75 9.75 0 0 0-6.74 2.74L3 8"/><path d="M3 3v5h5"/></svg>`,
-  muted: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5"/><line x1="23" y1="9" x2="17" y2="15"/><line x1="17" y1="9" x2="23" y2="15"/></svg>`,
-  unmuted: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5"/><path d="M19.07 4.93a10 10 0 0 1 0 14.14"/><path d="M15.54 8.46a5 5 0 0 1 0 7.07"/></svg>`,
-  crop: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M6 2v14a2 2 0 0 0 2 2h14"/><path d="M18 22V8a2 2 0 0 0-2-2H2"/></svg>`,
-  ambient: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="5"/><path d="M12 1v2M12 21v2M4.22 4.22l1.42 1.42M18.36 18.36l1.42 1.42M1 12h2M21 12h2M4.22 19.78l1.42-1.42M18.36 5.64l1.42-1.42"/></svg>`,
-  seekBackward: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8" /><path d="M3 3v5h5" /><text x="50%" y="54%" font-size="7" font-family="sans-serif" font-weight="bold" fill="currentColor" text-anchor="middle" dominant-baseline="middle" stroke="none">10</text></svg>`,
+  speed: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><path d="M5.64 18.36a9 9 0 1 1 12.72 0"/><path d="m12 12 4-4"/></svg>`,
+  audio: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75"><path d="M9 18V5l12-2v13"/><circle cx="6" cy="18" r="3"/><circle cx="18" cy="16" r="3"/></svg>`,
+  subOn: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75"><rect width="18" height="14" x="3" y="5" rx="2"/><path d="M7 15h4M13 15h4"/></svg>`,
+  subOff: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75"><rect width="18" height="14" x="3" y="5" rx="2"/><path d="M7 15h4M13 15h4"/><line x1="3" y1="5" x2="21" y2="19" stroke-width="2.2"/></svg>`,
+  snapshot: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><path d="M23 19a2 2 0 0 1-2 2H3a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h4l2-3h6l2 3h4a2 2 0 0 1 2 2z"></path><circle cx="12" cy="13" r="4"></circle></svg>`,
+  rotate: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75"><path d="M21 12a9 9 0 0 0-9-9 9.75 9.75 0 0 0-6.74 2.74L3 8"/><path d="M3 3v5h5"/></svg>`,
+  muted: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75"><polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5"/><line x1="23" y1="9" x2="17" y2="15"/><line x1="17" y1="9" x2="23" y2="15"/></svg>`,
+  unmuted: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75"><polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5"/><path d="M19.07 4.93a10 10 0 0 1 0 14.14"/><path d="M15.54 8.46a5 5 0 0 1 0 7.07"/></svg>`,
+  crop: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><path d="M6 2v14a2 2 0 0 0 2 2h14"/><path d="M18 22V8a2 2 0 0 0-2-2H2"/></svg>`,
+  ambient: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="5"/><path d="M12 1v2M12 21v2M4.22 4.22l1.42 1.42M18.36 18.36l1.42 1.42M1 12h2M21 12h2M4.22 19.78l1.42-1.42M18.36 5.64l1.42-1.42"/></svg>`,
+  seekBackward: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><path d="M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8" /><path d="M3 3v5h5" /><text x="50%" y="54%" font-size="7" font-family="sans-serif" font-weight="bold" fill="currentColor" text-anchor="middle" dominant-baseline="middle" stroke="none">10</text></svg>`,
   // Plain monitor: the picture's quality changed, without claiming a direction.
-  quality: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="4" width="20" height="13" rx="2"/><path d="M8 21h8"/><path d="M12 17v4"/></svg>`,
+  quality: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="4" width="20" height="13" rx="2"/><path d="M8 21h8"/><path d="M12 17v4"/></svg>`,
   // The same monitor with the arrow reversed: the picture, stepped back up.
-  qualityUp: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="4" width="20" height="13" rx="2"/><path d="M8 21h8"/><path d="M12 13V7"/><path d="m9.5 9.5 2.5-2.5 2.5 2.5"/></svg>`,
-  seekForward: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12a9 9 0 1 1-9-9 9.75 9.75 0 0 1 6.74 2.74L21 8" /><path d="M21 3v5h-5" /><text x="50%" y="54%" font-size="7" font-family="sans-serif" font-weight="bold" fill="currentColor" text-anchor="middle" dominant-baseline="middle" stroke="none">10</text></svg>`,
+  qualityUp: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="4" width="20" height="13" rx="2"/><path d="M8 21h8"/><path d="M12 13V7"/><path d="m9.5 9.5 2.5-2.5 2.5 2.5"/></svg>`,
+  seekForward: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12a9 9 0 1 1-9-9 9.75 9.75 0 0 1 6.74 2.74L21 8" /><path d="M21 3v5h-5" /><text x="50%" y="54%" font-size="7" font-family="sans-serif" font-weight="bold" fill="currentColor" text-anchor="middle" dominant-baseline="middle" stroke="none">10</text></svg>`,
 } as const;
 
 /**
@@ -1794,7 +1794,7 @@ export class MoviElement extends HTMLElement {
            three corners, and it costs nothing next to hand-authoring the arcs.
            The triangle is drawn inset by half the stroke so the painted shape
            lands where the sharp one did instead of growing by 1.3px a side. -->
-      <svg class="movi-center-icon-play" viewBox="0 0 24 24" fill="currentColor" stroke="currentColor" stroke-width="2.6" stroke-linejoin="round">
+      <svg class="movi-center-icon-play" viewBox="0 0 24 24" fill="currentColor" stroke="currentColor" stroke-width="2.3" stroke-linejoin="round">
         <path d="M6.4 5.6L17.6 12L6.4 18.4Z"></path>
       </svg>
       <svg class="movi-center-icon-pause" viewBox="0 0 24 24" fill="currentColor" style="display: none;">
@@ -1817,7 +1817,7 @@ export class MoviElement extends HTMLElement {
       <div class="movi-broken-stage">
       <div class="movi-broken-container" part="error-container">
         <div class="movi-broken-icon-wrapper" part="error-icon">
-          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.35" stroke-linecap="round" stroke-linejoin="round">
             <path d="M10.75 3H13.25C17.5 3 21 6.5 21 10.75V13.25C21 17.5 17.5 21 13.25 21H10.75C6.5 21 3 17.5 3 13.25V10.75C3 6.5 6.5 3 10.75 3Z" fill="rgba(255, 68, 68, 0.05)"/>
             <path d="M12 8V12" stroke="#ff4444"/>
             <path d="M12 16H12.01" stroke="#ff4444"/>
@@ -1828,7 +1828,7 @@ export class MoviElement extends HTMLElement {
           <h3 class="movi-broken-title" part="error-title">Format Unsupported</h3>
           <p class="movi-broken-message" part="error-message">This video codec is not supported by your browser's hardware acceleration.</p>
           <button class="movi-sw-fallback-btn" part="error-button error-software-button" style="display: none;">
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" width="16" height="16">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" width="16" height="16">
               <path d="M21 12a9 9 0 0 0-9-9 9.75 9.75 0 0 0-6.74 2.74L3 8"/>
               <path d="M3 3v5h5"/>
               <path d="M3 12a9 9 0 0 0 9 9 9.75 9.75 0 0 0 6.74-2.74L21 16"/>
@@ -1837,7 +1837,7 @@ export class MoviElement extends HTMLElement {
             Try Software Decoding
           </button>
           <button class="movi-retry-btn" part="error-button error-retry-button" style="display: none;">
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" width="16" height="16">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" width="16" height="16">
               <path d="M21 12a9 9 0 0 0-9-9 9.75 9.75 0 0 0-6.74 2.74L3 8"/>
               <path d="M3 3v5h5"/>
               <path d="M3 12a9 9 0 0 0 9 9 9.75 9.75 0 0 0 6.74-2.74L21 16"/>
@@ -1937,7 +1937,7 @@ export class MoviElement extends HTMLElement {
     // eslint-disable-next-line no-unsanitized/property -- static template, no user data
     this.pipPlaceholder.innerHTML = `
       <div class="movi-pip-placeholder-inner">
-        <svg class="movi-pip-placeholder-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+        <svg class="movi-pip-placeholder-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
           <rect x="2" y="4" width="20" height="16" rx="2"></rect>
           <rect x="12" y="12" width="8" height="6" rx="1" fill="currentColor" stroke="none"></rect>
         </svg>
@@ -1993,10 +1993,10 @@ export class MoviElement extends HTMLElement {
     shadowRoot.appendChild(backdrop);
     contextMenu.innerHTML = `
       <div class="movi-context-menu-item" data-action="play-pause">
-        <svg class="movi-context-menu-icon movi-context-menu-play-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+        <svg class="movi-context-menu-icon movi-context-menu-play-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round">
           <polygon points="5 3 19 12 5 21 5 3"></polygon>
         </svg>
-        <svg class="movi-context-menu-icon movi-context-menu-pause-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="display: none;">
+        <svg class="movi-context-menu-icon movi-context-menu-pause-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" style="display: none;">
           <rect x="6" y="4" width="4" height="16"></rect>
           <rect x="14" y="4" width="4" height="16"></rect>
         </svg>
@@ -2004,7 +2004,7 @@ export class MoviElement extends HTMLElement {
         <span class="movi-context-menu-shortcut" data-shortcut-action="playpause">Space</span>
       </div>
       <div class="movi-context-menu-item" data-action="speed">
-        <svg class="movi-context-menu-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+        <svg class="movi-context-menu-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round">
           <path d="M5.64 18.36a9 9 0 1 1 12.72 0"></path>
           <path d="m12 12 4-4"></path>
         </svg>
@@ -2014,7 +2014,7 @@ export class MoviElement extends HTMLElement {
       </div>
       <div class="movi-context-menu-submenu" data-submenu="speed">
         <div class="movi-context-menu-item movi-context-menu-back" data-action="back">
-          <svg class="movi-context-menu-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+          <svg class="movi-context-menu-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round">
             <path d="M15 18l-6-6 6-6"/>
           </svg>
           <span class="movi-context-menu-label">Back</span>
@@ -2029,7 +2029,7 @@ export class MoviElement extends HTMLElement {
         <div class="movi-context-menu-item" data-speed="2">2x</div>
       </div>
       <div class="movi-context-menu-item" data-action="fit">
-        <svg class="movi-context-menu-icon movi-icon-aspect-ratio-ctx" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+        <svg class="movi-context-menu-icon movi-icon-aspect-ratio-ctx" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round">
           <rect x="3" y="3" width="18" height="18" rx="2"/><rect x="6" y="8" width="12" height="8" rx="1"/>
         </svg>
         <span class="movi-context-menu-label">Aspect Ratio</span>
@@ -2038,31 +2038,31 @@ export class MoviElement extends HTMLElement {
       </div>
       <div class="movi-context-menu-submenu" data-submenu="fit">
         <div class="movi-context-menu-item movi-context-menu-back" data-action="back">
-          <svg class="movi-context-menu-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+          <svg class="movi-context-menu-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round">
             <path d="M15 18l-6-6 6-6"/>
           </svg>
           <span class="movi-context-menu-label">Back</span>
         </div>
         <div class="movi-context-menu-item" data-fit="contain">
-          <svg class="movi-context-menu-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="18" height="18" rx="2"/><rect x="6" y="8" width="12" height="8" rx="1"/></svg>
+          <svg class="movi-context-menu-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="18" height="18" rx="2"/><rect x="6" y="8" width="12" height="8" rx="1"/></svg>
           <span class="movi-context-menu-label">Contain</span>
         </div>
         <div class="movi-context-menu-item" data-fit="cover">
-          <svg class="movi-context-menu-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="18" height="18" rx="2"/><rect x="1" y="7" width="22" height="10" rx="1"/></svg>
+          <svg class="movi-context-menu-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="18" height="18" rx="2"/><rect x="1" y="7" width="22" height="10" rx="1"/></svg>
           <span class="movi-context-menu-label">Cover</span>
         </div>
         <div class="movi-context-menu-item" data-fit="fill">
-          <svg class="movi-context-menu-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="18" height="18" rx="2"/><path d="M3 3h18v18H3z"/></svg>
+          <svg class="movi-context-menu-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="18" height="18" rx="2"/><path d="M3 3h18v18H3z"/></svg>
           <span class="movi-context-menu-label">Stretch</span>
         </div>
         <div class="movi-context-menu-item" data-fit="zoom">
-          <svg class="movi-context-menu-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="8"/><path d="M21 21l-4.35-4.35"/><path d="M11 8v6M8 11h6"/></svg>
+          <svg class="movi-context-menu-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="8"/><path d="M21 21l-4.35-4.35"/><path d="M11 8v6M8 11h6"/></svg>
           <span class="movi-context-menu-label">Zoom</span>
         </div>
       </div>
       <div class="movi-context-menu-divider movi-context-menu-divider-audio" style="display: none;"></div>
       <div class="movi-context-menu-item movi-context-menu-item-audio" data-action="audio-track" style="display: none;">
-        <svg class="movi-context-menu-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+        <svg class="movi-context-menu-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round">
           <path d="M9 18V5l12-2v13"></path>
           <circle cx="6" cy="18" r="3"></circle>
           <circle cx="18" cy="16" r="3"></circle>
@@ -2074,7 +2074,7 @@ export class MoviElement extends HTMLElement {
       <div class="movi-context-menu-submenu movi-context-menu-submenu-audio" data-submenu="audio-track" style="display: none;"></div>
       <div class="movi-context-menu-divider movi-context-menu-divider-audiodevice" style="display: none;"></div>
       <div class="movi-context-menu-item movi-context-menu-item-audiodevice" data-action="audio-output" style="display: none;">
-        <svg class="movi-context-menu-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+        <svg class="movi-context-menu-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round">
           <rect x="4" y="2" width="16" height="20" rx="2"></rect>
           <circle cx="12" cy="14" r="4"></circle>
           <line x1="12" y1="6" x2="12.01" y2="6"></line>
@@ -2085,7 +2085,7 @@ export class MoviElement extends HTMLElement {
       <div class="movi-context-menu-submenu movi-context-menu-submenu-audiodevice" data-submenu="audio-output" style="display: none;"></div>
       <div class="movi-context-menu-divider movi-context-menu-divider-subtitle" style="display: none;"></div>
       <div class="movi-context-menu-item movi-context-menu-item-subtitle" data-action="subtitle-track" style="display: none;">
-        <svg class="movi-context-menu-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+        <svg class="movi-context-menu-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round">
           <rect width="18" height="14" x="3" y="5" rx="2" ry="2"></rect>
           <path d="M11 9H9a2 2 0 0 0-2 2v2a2 2 0 0 0 2 2h2 M17 9h-2a2 2 0 0 0-2 2v2a2 2 0 0 0 2 2h2"></path>
         </svg>
@@ -2105,21 +2105,21 @@ export class MoviElement extends HTMLElement {
       </div>
       <div class="movi-context-menu-divider movi-hdr-divider" style="display: none;"></div>
       <div class="movi-context-menu-item movi-context-menu-pip" data-action="pip" style="display: none;">
-        <svg class="movi-context-menu-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+        <svg class="movi-context-menu-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round">
           <rect x="2" y="3" width="20" height="14" rx="2"/><rect x="12" y="9" width="8" height="6" rx="1"/>
         </svg>
         <span class="movi-context-menu-label">Picture in Picture</span>
         <span class="movi-context-menu-shortcut" data-shortcut-action="pip">P</span>
       </div>
       <div class="movi-context-menu-item" data-action="fullscreen">
-        <svg class="movi-context-menu-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+        <svg class="movi-context-menu-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round">
           <path d="M8 3H5a2 2 0 0 0-2 2v3m18 0V5a2 2 0 0 0-2-2h-3m0 18h3a2 2 0 0 0 2-2v-3M3 16v3a2 2 0 0 0 2 2h3"></path>
         </svg>
         <span class="movi-context-menu-label">Fullscreen</span>
         <span class="movi-context-menu-shortcut" data-shortcut-action="fullscreen">F</span>
       </div>
       <div class="movi-context-menu-item" data-action="rotate-video">
-        <svg class="movi-context-menu-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+        <svg class="movi-context-menu-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round">
           <path d="M21 12a9 9 0 1 1-9-9 9.75 9.75 0 0 1 6.74 2.74L21 8"></path>
           <path d="M21 3v5h-5"></path>
         </svg>
@@ -2128,13 +2128,13 @@ export class MoviElement extends HTMLElement {
         <span class="movi-context-menu-shortcut" data-shortcut-action="rotate">R</span>
       </div>
       <div class="movi-context-menu-item" data-action="loop-toggle">
-        <svg class="movi-context-menu-icon movi-context-menu-loop-outline" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+        <svg class="movi-context-menu-icon movi-context-menu-loop-outline" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round">
            <path d="M17 2l4 4-4 4"></path>
            <path d="M3 11v-1a4 4 0 0 1 4-4h14"></path>
            <path d="M7 22l-4-4 4-4"></path>
            <path d="M21 13v1a4 4 0 0 1-4 4H3"></path>
         </svg>
-        <svg class="movi-context-menu-icon movi-context-menu-loop-filled" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round" style="display: none;">
+        <svg class="movi-context-menu-icon movi-context-menu-loop-filled" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round" style="display: none;">
           <path d="M17 2l4 4-4 4"></path><path d="M3 11v-1a4 4 0 0 1 4-4h14"></path><path d="M7 22l-4-4 4-4"></path><path d="M21 13v1a4 4 0 0 1-4 4H3"></path>
         </svg>
         <span class="movi-context-menu-label">Loop</span>
@@ -2142,7 +2142,7 @@ export class MoviElement extends HTMLElement {
         <span class="movi-context-menu-shortcut" data-shortcut-action="loop">L</span>
       </div>
       <div class="movi-context-menu-item" data-action="stable-audio-toggle">
-        <svg class="movi-context-menu-icon movi-context-menu-stable-outline" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+        <svg class="movi-context-menu-icon movi-context-menu-stable-outline" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">
           <rect x="2" y="4" width="20" height="16" rx="2"></rect>
           <path d="M6 15v-2"></path>
           <path d="M9 15v-4"></path>
@@ -2158,7 +2158,7 @@ export class MoviElement extends HTMLElement {
         <span class="movi-context-menu-shortcut" data-shortcut-action="stableaudio">U</span>
       </div>
       <div class="movi-context-menu-item" data-action="crop-toggle">
-        <svg class="movi-context-menu-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+        <svg class="movi-context-menu-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round">
           <path d="M6 2v14a2 2 0 0 0 2 2h14"></path>
           <path d="M18 22V8a2 2 0 0 0-2-2H2"></path>
         </svg>
@@ -2167,7 +2167,7 @@ export class MoviElement extends HTMLElement {
         <span class="movi-context-menu-shortcut" data-shortcut-action="crop">C</span>
       </div>
       <div class="movi-context-menu-item" data-action="ambient-toggle">
-        <svg class="movi-context-menu-icon movi-context-menu-ambient-outline" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+        <svg class="movi-context-menu-icon movi-context-menu-ambient-outline" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round">
           <circle cx="12" cy="12" r="5"></circle>
           <path d="M12 1v2"></path><path d="M12 21v2"></path>
           <path d="M4.22 4.22l1.42 1.42"></path><path d="M18.36 18.36l1.42 1.42"></path>
@@ -2176,14 +2176,14 @@ export class MoviElement extends HTMLElement {
         </svg>
         <svg class="movi-context-menu-icon movi-context-menu-ambient-filled" viewBox="0 0 24 24" fill="currentColor" style="display: none;">
           <circle cx="12" cy="12" r="5"></circle>
-          <path d="M12 1v2" stroke="currentColor" stroke-width="2" stroke-linecap="round"></path>
-          <path d="M12 21v2" stroke="currentColor" stroke-width="2" stroke-linecap="round"></path>
-          <path d="M4.22 4.22l1.42 1.42" stroke="currentColor" stroke-width="2" stroke-linecap="round"></path>
-          <path d="M18.36 18.36l1.42 1.42" stroke="currentColor" stroke-width="2" stroke-linecap="round"></path>
-          <path d="M1 12h2" stroke="currentColor" stroke-width="2" stroke-linecap="round"></path>
-          <path d="M21 12h2" stroke="currentColor" stroke-width="2" stroke-linecap="round"></path>
-          <path d="M4.22 19.78l1.42-1.42" stroke="currentColor" stroke-width="2" stroke-linecap="round"></path>
-          <path d="M18.36 5.64l1.42-1.42" stroke="currentColor" stroke-width="2" stroke-linecap="round"></path>
+          <path d="M12 1v2" stroke="currentColor" stroke-width="1.75" stroke-linecap="round"></path>
+          <path d="M12 21v2" stroke="currentColor" stroke-width="1.75" stroke-linecap="round"></path>
+          <path d="M4.22 4.22l1.42 1.42" stroke="currentColor" stroke-width="1.75" stroke-linecap="round"></path>
+          <path d="M18.36 18.36l1.42 1.42" stroke="currentColor" stroke-width="1.75" stroke-linecap="round"></path>
+          <path d="M1 12h2" stroke="currentColor" stroke-width="1.75" stroke-linecap="round"></path>
+          <path d="M21 12h2" stroke="currentColor" stroke-width="1.75" stroke-linecap="round"></path>
+          <path d="M4.22 19.78l1.42-1.42" stroke="currentColor" stroke-width="1.75" stroke-linecap="round"></path>
+          <path d="M18.36 5.64l1.42-1.42" stroke="currentColor" stroke-width="1.75" stroke-linecap="round"></path>
         </svg>
         <span class="movi-context-menu-label">Ambient Mode</span>
         <span class="movi-context-menu-status movi-ambient-status">Off</span>
@@ -2191,7 +2191,7 @@ export class MoviElement extends HTMLElement {
       </div>
       <div class="movi-context-menu-divider"></div>
       <div class="movi-context-menu-item" data-action="snapshot">
-        <svg class="movi-context-menu-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+        <svg class="movi-context-menu-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round">
           <path d="M23 19a2 2 0 0 1-2 2H3a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h4l2-3h6l2 3h4a2 2 0 0 1 2 2z"></path>
           <circle cx="12" cy="13" r="4"></circle>
         </svg>
@@ -2199,7 +2199,7 @@ export class MoviElement extends HTMLElement {
         <span class="movi-context-menu-shortcut" data-shortcut-action="snapshot">S</span>
       </div>
       <div class="movi-context-menu-item" data-action="timeline">
-        <svg class="movi-context-menu-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+        <svg class="movi-context-menu-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round">
           <rect x="2" y="3" width="6" height="5" rx="1"></rect>
           <rect x="9" y="3" width="6" height="5" rx="1"></rect>
           <rect x="16" y="3" width="6" height="5" rx="1"></rect>
@@ -2213,7 +2213,7 @@ export class MoviElement extends HTMLElement {
         <span class="movi-context-menu-shortcut" data-shortcut-action="timeline">T</span>
       </div>
       <div class="movi-context-menu-item" data-action="nerd-stats">
-        <svg class="movi-context-menu-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+        <svg class="movi-context-menu-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round">
           <path d="M12 20V10"></path>
           <path d="M18 20V4"></path>
           <path d="M6 20v-4"></path>
@@ -2222,7 +2222,7 @@ export class MoviElement extends HTMLElement {
         <span class="movi-context-menu-shortcut" data-shortcut-action="stats">I</span>
       </div>
       <div class="movi-context-menu-item" data-action="keyboard-shortcuts">
-        <svg class="movi-context-menu-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+        <svg class="movi-context-menu-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round">
           <rect x="2" y="6" width="20" height="12" rx="2"></rect>
           <path d="M6 10h0M10 10h0M14 10h0M18 10h0M6 14h12"></path>
         </svg>
@@ -2327,7 +2327,7 @@ export class MoviElement extends HTMLElement {
 
             <button class="movi-btn movi-play-pause" aria-label="Play/Pause">
               <!-- Rounded the same way as the centre one — see there. -->
-              <svg class="movi-icon-play" viewBox="0 0 24 24" fill="currentColor" stroke="currentColor" stroke-width="2.6" stroke-linejoin="round">
+              <svg class="movi-icon-play" viewBox="0 0 24 24" fill="currentColor" stroke="currentColor" stroke-width="2.3" stroke-linejoin="round">
                 <path d="M6.4 5.6L17.6 12L6.4 18.4Z"></path>
               </svg>
               <svg class="movi-icon-pause" viewBox="0 0 24 24" fill="currentColor" style="display: none;">
@@ -2346,7 +2346,7 @@ export class MoviElement extends HTMLElement {
                  thing in opposite directions, and the bar groups them as one. -->
             <div class="movi-seek-group">
               <button class="movi-btn movi-seek-backward" aria-label="Skip Backward 10s">
-                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round">
                   <path d="M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8" />
                   <path d="M3 3v5h5" />
                   <text x="50%" y="54%" font-size="7" font-family="sans-serif" font-weight="bold" fill="currentColor" text-anchor="middle" dominant-baseline="middle" stroke="none">10</text>
@@ -2354,7 +2354,7 @@ export class MoviElement extends HTMLElement {
               </button>
 
               <button class="movi-btn movi-seek-forward" aria-label="Skip Forward 10s">
-                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round">
                   <path d="M21 12a9 9 0 1 1-9-9 9.75 9.75 0 0 1 6.74 2.74L21 8" />
                   <path d="M21 3v5h-5" />
                   <text x="50%" y="54%" font-size="7" font-family="sans-serif" font-weight="bold" fill="currentColor" text-anchor="middle" dominant-baseline="middle" stroke="none">10</text>
@@ -2364,15 +2364,15 @@ export class MoviElement extends HTMLElement {
 
             <div class="movi-volume-container">
               <button class="movi-btn movi-volume-btn" aria-label="Mute/Unmute">
-                <svg class="movi-icon-volume-high" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                <svg class="movi-icon-volume-high" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round">
                   <path d="M11 5L6 9H2v6h4l5 4V5z"></path>
                   <path d="M19.07 4.93a10 10 0 0 1 0 14.14M15.54 8.46a5 5 0 0 1 0 7.07"></path>
                 </svg>
-                <svg class="movi-icon-volume-low" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="display: none;">
+                <svg class="movi-icon-volume-low" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" style="display: none;">
                   <path d="M11 5L6 9H2v6h4l5 4V5z"></path>
                   <path d="M15.54 8.46a5 5 0 0 1 0 7.07"></path>
                 </svg>
-                <svg class="movi-icon-volume-mute" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="display: none;">
+                <svg class="movi-icon-volume-mute" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" style="display: none;">
                   <path d="M11 5L6 9H2v6h4l5 4V5z"></path>
                   <line x1="23" y1="9" x2="17" y2="15"></line>
                   <line x1="17" y1="9" x2="23" y2="15"></line>
@@ -2396,7 +2396,7 @@ export class MoviElement extends HTMLElement {
                  have chapters, which most do not. -->
             <button class="movi-chapter-pill" type="button" aria-label="Chapters" style="display: none;">
               <span class="movi-chapter-pill-text"></span>
-              <svg class="movi-chapter-pill-chevron" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+              <svg class="movi-chapter-pill-chevron" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
                 <path d="M9 18l6-6-6-6"/>
               </svg>
             </button>
@@ -2415,7 +2415,7 @@ export class MoviElement extends HTMLElement {
             <div class="movi-mobile-expandable">
               <div class="movi-audio-track-container">
                 <button class="movi-btn movi-audio-track-btn" aria-label="Audio Track">
-                  <svg class="movi-icon-audio-track" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                  <svg class="movi-icon-audio-track" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round">
                     <path d="M9 18V5l12-2v13"></path>
                     <circle cx="6" cy="18" r="3"></circle>
                     <circle cx="18" cy="16" r="3"></circle>
@@ -2431,7 +2431,7 @@ export class MoviElement extends HTMLElement {
               </div>
               <div class="movi-hdr-container">
                 <button class="movi-btn movi-hdr-btn" aria-label="Toggle HDR">
-                  <svg class="movi-icon-hdr" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                  <svg class="movi-icon-hdr" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round">
                     <path d="M5 7v10M5 12h5M10 7v10M14 7h6a3 3 0 0 1 0 6h-6M17 13l3 4"></path>
                   </svg>
                   <span class="movi-hdr-label">HDR</span>
@@ -2440,7 +2440,7 @@ export class MoviElement extends HTMLElement {
 
               <div class="movi-subtitle-track-container">
                 <button class="movi-btn movi-subtitle-track-btn" aria-label="Subtitles/Captions">
-                  <svg class="movi-icon-subtitle" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                  <svg class="movi-icon-subtitle" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round">
                     <rect width="20" height="16" x="2" y="4" rx="2" ry="2"></rect>
                     <path d="M10 8.5H8a2 2 0 0 0-2 2v3a2 2 0 0 0 2 2h2 M18 8.5h-2a2 2 0 0 0-2 2v3a2 2 0 0 0 2 2h2"></path>
                   </svg>
@@ -2455,7 +2455,7 @@ export class MoviElement extends HTMLElement {
                             class="movi-subtitle-browse-btn"
                             aria-label="Open transcript"
                             title="Transcript">
-                      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" width="16" height="16">
+                      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" width="16" height="16">
                         <line x1="8" y1="6" x2="21" y2="6"/>
                         <line x1="8" y1="12" x2="21" y2="12"/>
                         <line x1="8" y1="18" x2="21" y2="18"/>
@@ -2468,7 +2468,7 @@ export class MoviElement extends HTMLElement {
                             class="movi-subtitle-customize-btn"
                             aria-label="Customize captions"
                             title="Customize captions">
-                      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" width="16" height="16">
+                      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" width="16" height="16">
                         <circle cx="12" cy="12" r="3"></circle>
                         <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"></path>
                       </svg>
@@ -2481,7 +2481,7 @@ export class MoviElement extends HTMLElement {
 
               <div class="movi-quality-container" style="display: none;">
                 <button class="movi-btn movi-quality-btn" aria-label="Quality">
-                  <svg class="movi-icon-quality" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                  <svg class="movi-icon-quality" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round">
                     <path d="M12.22 2h-.44a2 2 0 0 0-2 2v.18a2 2 0 0 1-1 1.73l-.43.25a2 2 0 0 1-2 0l-.15-.08a2 2 0 0 0-2.73.73l-.22.38a2 2 0 0 0 .73 2.73l.15.1a2 2 0 0 1 1 1.72v.51a2 2 0 0 1-1 1.74l-.15.09a2 2 0 0 0-.73 2.73l.22.38a2 2 0 0 0 2.73.73l.15-.08a2 2 0 0 1 2 0l.43.25a2 2 0 0 1 1 1.73V20a2 2 0 0 0 2 2h.44a2 2 0 0 0 2-2v-.18a2 2 0 0 1 1-1.73l.43-.25a2 2 0 0 1 2 0l.15.08a2 2 0 0 0 2.73-.73l.22-.38a2 2 0 0 0-.73-2.73l-.15-.1a2 2 0 0 1-1-1.72v-.51a2 2 0 0 1 1-1.74l.15-.09a2 2 0 0 0 .73-2.73l-.22-.38a2 2 0 0 0-2.73-.73l-.15.08a2 2 0 0 1-2 0l-.43-.25a2 2 0 0 1-1-1.73V4a2 2 0 0 0-2-2z"></path>
                     <circle cx="12" cy="12" r="3"></circle>
                   </svg>
@@ -2494,7 +2494,7 @@ export class MoviElement extends HTMLElement {
 
               <div class="movi-speed-container">
                 <button class="movi-btn movi-speed-btn" aria-label="Playback Speed">
-                  <svg class="movi-icon-speed" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                  <svg class="movi-icon-speed" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round">
                     <path d="M5.64 18.36a9 9 0 1 1 12.72 0"></path>
                     <path d="m12 12 4-4"></path>
                   </svg>
@@ -2515,7 +2515,7 @@ export class MoviElement extends HTMLElement {
 
               <div class="movi-stable-audio-container">
                 <button class="movi-btn movi-stable-audio-btn" aria-label="Toggle Stable Audio">
-                  <svg class="movi-icon-stable-audio-outline" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+                  <svg class="movi-icon-stable-audio-outline" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">
                     <rect x="2" y="4" width="20" height="16" rx="2"></rect>
                     <path d="M6 15v-2"></path>
                     <path d="M9 15v-4"></path>
@@ -2530,13 +2530,13 @@ export class MoviElement extends HTMLElement {
               </div>
 
               <button class="movi-btn movi-loop-btn" aria-label="Toggle Loop">
-                <svg class="movi-icon-loop-outline" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                <svg class="movi-icon-loop-outline" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round">
                   <path d="M17 2l4 4-4 4"></path>
                   <path d="M3 11v-1a4 4 0 0 1 4-4h14"></path>
                   <path d="M7 22l-4-4 4-4"></path>
                   <path d="M21 13v1a4 4 0 0 1-4 4H3"></path>
                 </svg>
-                <svg class="movi-icon-loop-filled" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round" style="display: none;">
+                <svg class="movi-icon-loop-filled" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round" style="display: none;">
                   <path d="M17 2l4 4-4 4"></path><path d="M3 11v-1a4 4 0 0 1 4-4h14"></path><path d="M7 22l-4-4 4-4"></path><path d="M21 13v1a4 4 0 0 1-4 4H3"></path>
                 </svg>
               </button>
@@ -2549,7 +2549,7 @@ export class MoviElement extends HTMLElement {
                  time — but only this one is on the bar. -->
             <div class="movi-settings-container">
               <button class="movi-btn movi-settings-btn" aria-label="Settings">
-                <svg class="movi-icon-settings" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                <svg class="movi-icon-settings" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round">
                   <path d="M12.22 2h-.44a2 2 0 0 0-2 2v.18a2 2 0 0 1-1 1.73l-.43.25a2 2 0 0 1-2 0l-.15-.08a2 2 0 0 0-2.73.73l-.22.38a2 2 0 0 0 .73 2.73l.15.1a2 2 0 0 1 1 1.72v.51a2 2 0 0 1-1 1.74l-.15.09a2 2 0 0 0-.73 2.73l.22.38a2 2 0 0 0 2.73.73l.15-.08a2 2 0 0 1 2 0l.43.25a2 2 0 0 1 1 1.73V20a2 2 0 0 0 2 2h.44a2 2 0 0 0 2-2v-.18a2 2 0 0 1 1-1.73l.43-.25a2 2 0 0 1 2 0l.15.08a2 2 0 0 0 2.73-.73l.22-.38a2 2 0 0 0-.73-2.73l-.15-.1a2 2 0 0 1-1-1.72v-.51a2 2 0 0 1 1-1.74l.15-.09a2 2 0 0 0 .73-2.73l-.22-.38a2 2 0 0 0-2.73-.73l-.15.08a2 2 0 0 1-2 0l-.43-.25a2 2 0 0 1-1-1.73V4a2 2 0 0 0-2-2z"></path>
                   <circle cx="12" cy="12" r="3"></circle>
                 </svg>
@@ -2559,7 +2559,7 @@ export class MoviElement extends HTMLElement {
                 <div class="movi-settings-root"></div>
                 <div class="movi-settings-page" style="display: none;">
                   <button class="movi-settings-back" type="button">
-                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M15 18l-6-6 6-6"/></svg>
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><path d="M15 18l-6-6 6-6"/></svg>
                     <span class="movi-settings-page-title"></span>
                   </button>
                   <div class="movi-settings-page-body"></div>
@@ -2575,7 +2575,7 @@ export class MoviElement extends HTMLElement {
                  can only ever appear on the left); the narrow-width rules fold
                  it away with the tray instead. -->
             <button class="movi-btn movi-aspect-ratio-btn" aria-label="Aspect Ratio">
-              <svg class="movi-icon-aspect-ratio" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+              <svg class="movi-icon-aspect-ratio" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round">
                 <rect x="3" y="3" width="18" height="18" rx="2"/>
                 <rect class="movi-aspect-inner" x="6" y="8" width="12" height="8" rx="1"/>
               </svg>
@@ -2588,25 +2588,25 @@ export class MoviElement extends HTMLElement {
               <!-- Drawn to fill the 24x24 box like its neighbours. The old
                    20x14 frame sat inside the box with room to spare, so at the
                    same nominal size it read as a smaller button. -->
-              <svg class="movi-icon-pip" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+              <svg class="movi-icon-pip" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round">
                 <rect x="2" y="4" width="20" height="16" rx="2"/><rect x="12" y="11" width="8" height="6" rx="1" fill="currentColor" opacity="0.35"/>
               </svg>
             </button>
 
             <button class="movi-btn movi-more-btn" aria-label="More Settings">
-              <svg class="movi-icon-more" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+              <svg class="movi-icon-more" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round">
                 <polyline points="15 18 9 12 15 6"></polyline>
               </svg>
-              <svg class="movi-icon-close" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="display: none;">
+              <svg class="movi-icon-close" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" style="display: none;">
                 <polyline points="9 18 15 12 9 6"></polyline>
               </svg>
             </button>
 
             <button class="movi-btn movi-fullscreen-btn" aria-label="Fullscreen">
-              <svg class="movi-icon-fullscreen" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+              <svg class="movi-icon-fullscreen" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round">
                 <path d="M8 3H5a2 2 0 0 0-2 2v3m18 0V5a2 2 0 0 0-2-2h-3m0 18h3a2 2 0 0 0 2-2v-3M3 16v3a2 2 0 0 0 2 2h3"></path>
               </svg>
-              <svg class="movi-icon-fullscreen-exit" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="display: none;">
+              <svg class="movi-icon-fullscreen-exit" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" style="display: none;">
                 <path d="M4 14h6v6m10-6h-6v6M4 10h6V4m10 6h-6V4"></path>
               </svg>
             </button>
@@ -2701,7 +2701,7 @@ export class MoviElement extends HTMLElement {
     // The back arrow is always in the DOM and hidden by default — the bar is
     // rebuilt on nothing, so toggling a class beats re-writing markup whenever
     // `titlemode` changes.
-    titleBar.innerHTML = `<button class="movi-title-back" type="button" aria-label="Back" title="Back"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M22 12H3"/><path d="M10 19l-7-7 7-7"/></svg></button><span class="movi-title-text"></span>`;
+    titleBar.innerHTML = `<button class="movi-title-back" type="button" aria-label="Back" title="Back"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><path d="M22 12H3"/><path d="M10 19l-7-7 7-7"/></svg></button><span class="movi-title-text"></span>`;
     (
       titleBar.querySelector(".movi-title-back") as HTMLButtonElement
     ).addEventListener("click", (e) => {
@@ -2791,11 +2791,11 @@ export class MoviElement extends HTMLElement {
       </div>
       <div class="movi-timeline-scroller">
         <button class="movi-timeline-arrow movi-timeline-arrow-left" type="button" tabindex="-1" aria-label="Scroll timeline left">
-          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="15 18 9 12 15 6"/></svg>
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="15 18 9 12 15 6"/></svg>
         </button>
         <div class="movi-timeline-strip"></div>
         <button class="movi-timeline-arrow movi-timeline-arrow-right" type="button" tabindex="-1" aria-label="Scroll timeline right">
-          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="9 18 15 12 9 6"/></svg>
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="9 18 15 12 9 6"/></svg>
         </button>
       </div>
       <div class="movi-timeline-status"></div>
@@ -2992,7 +2992,7 @@ export class MoviElement extends HTMLElement {
       <div class="movi-cues-header">
         <span class="movi-cues-title">Transcript</span>
         <div class="movi-cues-search-wrap">
-          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" width="14" height="14">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" width="14" height="14">
             <circle cx="11" cy="11" r="7"/>
             <path d="m21 21-4.3-4.3"/>
           </svg>
@@ -5303,7 +5303,7 @@ export class MoviElement extends HTMLElement {
                   MoviElement.ASPECT_ICONS[next] ||
                   MoviElement.ASPECT_ICONS.contain;
                 this.showOSD(
-                  `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">${osdSvg}</svg>`,
+                  `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75">${osdSvg}</svg>`,
                   labels[next],
                 );
                 // Re-baseline so the opposite pinch can toggle straight back.
@@ -5424,8 +5424,8 @@ export class MoviElement extends HTMLElement {
               // Show OSD with seek information
               const icon =
                 deltaX >= 0
-                  ? `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M13 17l5-5-5-5M6 17l5-5-5-5"/></svg>`
-                  : `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M11 17l-5-5 5-5M18 17l-5-5 5-5"/></svg>`;
+                  ? `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><path d="M13 17l5-5-5-5M6 17l5-5-5-5"/></svg>`
+                  : `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><path d="M11 17l-5-5 5-5M18 17l-5-5 5-5"/></svg>`;
 
               const timeStr = this.formatTime(newTime);
               const durationStr = this.formatTime(this.duration);
@@ -6040,7 +6040,7 @@ export class MoviElement extends HTMLElement {
             const frameTime = 1 / fps;
             this.currentTime = Math.max(0, this.currentTime - frameTime);
             this.showOSD(
-              `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M11 17l-5-5 5-5M18 17l-5-5 5-5"/></svg>`,
+              `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><path d="M11 17l-5-5 5-5M18 17l-5-5 5-5"/></svg>`,
               `-1 Frame`,
             );
           } else {
@@ -6068,7 +6068,7 @@ export class MoviElement extends HTMLElement {
                 this.currentTime + frameTime,
               );
               this.showOSD(
-                `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M13 17l5-5-5-5M6 17l5-5-5-5"/></svg>`,
+                `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><path d="M13 17l5-5-5-5M6 17l5-5-5-5"/></svg>`,
                 `+1 Frame`,
               );
             } else {
@@ -6150,7 +6150,7 @@ export class MoviElement extends HTMLElement {
           if (this.player && !this._pipWindow && this.isControlAvailable("rotate")) {
             const deg = this.player.rotateVideo();
             this.showOSD(
-              `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12a9 9 0 1 1-9-9 9.75 9.75 0 0 1 6.74 2.74L21 8"/><path d="M21 3v5h-5"/></svg>`,
+              `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12a9 9 0 1 1-9-9 9.75 9.75 0 0 1 6.74 2.74L21 8"/><path d="M21 3v5h-5"/></svg>`,
               `${deg}°`,
             );
             const statusEl = this.contextMenuRoot().querySelector(".movi-rotate-status");
@@ -6175,7 +6175,7 @@ export class MoviElement extends HTMLElement {
             const labels: Record<string, string> = { contain: "Fit", cover: "Fill", fill: "Stretch", zoom: "Zoom" };
             const osdSvg = MoviElement.ASPECT_ICONS[next] || MoviElement.ASPECT_ICONS.contain;
             this.showOSD(
-              `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">${osdSvg}</svg>`,
+              `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75">${osdSvg}</svg>`,
               labels[next],
             );
           }
@@ -7394,7 +7394,7 @@ export class MoviElement extends HTMLElement {
         // Surface the same Fit/Fill/… OSD the aspect button and keyboard show —
         // changing the fit from the menu was silently skipping it.
         this.showOSD(
-          `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">${MoviElement.ASPECT_ICONS[fitMode] || MoviElement.ASPECT_ICONS.contain}</svg>`,
+          `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75">${MoviElement.ASPECT_ICONS[fitMode] || MoviElement.ASPECT_ICONS.contain}</svg>`,
           fitLabels[fitMode] || fitMode,
         );
         hideContextMenu();
@@ -7567,7 +7567,7 @@ export class MoviElement extends HTMLElement {
         window.matchMedia("(pointer: coarse)").matches
       ) {
         html += `<div class="movi-context-menu-item movi-context-menu-back" data-action="back">
-          <svg class="movi-context-menu-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+          <svg class="movi-context-menu-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round">
             <path d="M15 18l-6-6 6-6"/>
           </svg>
           <span class="movi-context-menu-label">Back</span>
@@ -7669,7 +7669,7 @@ export class MoviElement extends HTMLElement {
         window.matchMedia("(pointer: coarse)").matches
       ) {
         html += `<div class="movi-context-menu-item movi-context-menu-back" data-action="back">
-          <svg class="movi-context-menu-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+          <svg class="movi-context-menu-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round">
             <path d="M15 18l-6-6 6-6"/>
           </svg>
           <span class="movi-context-menu-label">Back</span>
@@ -8372,13 +8372,13 @@ export class MoviElement extends HTMLElement {
       const seekBackBtn = makeBtn("seek-back", `<svg viewBox="0 0 24 24" fill="currentColor"><path d="M12.5 3C7.81 3 4.01 6.54 3.58 11H1l3.5 4L8 11H5.59c.42-3.35 3.33-6 6.91-6 3.87 0 7 3.13 7 7s-3.13 7-7 7c-1.93 0-3.68-.79-4.94-2.06l-1.42 1.42A8.96 8.96 0 0012.5 21c4.97 0 9-4.03 9-9s-4.03-9-9-9z"/><text x="12.5" y="15.5" text-anchor="middle" font-size="7.5" font-weight="700" font-family="-apple-system,sans-serif">10</text></svg>`);
       const playPauseBtn = makeBtn("play-pause", this.player.getState() === "playing"
         ? `<svg viewBox="0 0 24 24" fill="currentColor"><rect x="6" y="4" width="4" height="16" rx="1"/><rect x="14" y="4" width="4" height="16" rx="1"/></svg>`
-        : `<svg viewBox="0 0 24 24" fill="currentColor" stroke="currentColor" stroke-width="2.4" stroke-linejoin="round"><path d="M9.3 6.6L17.7 12L9.3 17.4Z"/></svg>`);
+        : `<svg viewBox="0 0 24 24" fill="currentColor" stroke="currentColor" stroke-width="2.1" stroke-linejoin="round"><path d="M9.3 6.6L17.7 12L9.3 17.4Z"/></svg>`);
       const seekFwdBtn = makeBtn("seek-fwd", `<svg viewBox="0 0 24 24" fill="currentColor"><path d="M11.5 3c4.69 0 8.49 3.54 8.92 8H23l-3.5 4L16 11h2.41c-.42-3.35-3.33-6-6.91-6-3.87 0-7 3.13-7 7s3.13 7 7 7c1.93 0 3.68-.79 4.94-2.06l1.42 1.42A8.96 8.96 0 0111.5 21c-4.97 0-9-4.03-9-9s4.03-9 9-9z"/><text x="11.5" y="15.5" text-anchor="middle" font-size="7.5" font-weight="700" font-family="-apple-system,sans-serif">10</text></svg>`);
-      const backToTabBtn = makeBtn("back-to-tab", `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="15 3 21 3 21 9"/><polyline points="9 21 3 21 3 15"/><line x1="21" y1="3" x2="14" y2="10"/><line x1="3" y1="21" x2="10" y2="14"/></svg>`);
+      const backToTabBtn = makeBtn("back-to-tab", `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><polyline points="15 3 21 3 21 9"/><polyline points="9 21 3 21 3 15"/><line x1="21" y1="3" x2="14" y2="10"/><line x1="3" y1="21" x2="10" y2="14"/></svg>`);
       const isMuted = this._muted;
       const muteBtn = makeBtn("mute-toggle", isMuted
-        ? `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M11 5L6 9H2v6h4l5 4V5z"/><line x1="23" y1="9" x2="17" y2="15"/><line x1="17" y1="9" x2="23" y2="15"/></svg>`
-        : `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M11 5L6 9H2v6h4l5 4V5z"/><path d="M19.07 4.93a10 10 0 0 1 0 14.14"/><path d="M15.54 8.46a5 5 0 0 1 0 7.07"/></svg>`);
+        ? `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><path d="M11 5L6 9H2v6h4l5 4V5z"/><line x1="23" y1="9" x2="17" y2="15"/><line x1="17" y1="9" x2="23" y2="15"/></svg>`
+        : `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><path d="M11 5L6 9H2v6h4l5 4V5z"/><path d="M19.07 4.93a10 10 0 0 1 0 14.14"/><path d="M15.54 8.46a5 5 0 0 1 0 7.07"/></svg>`);
 
       btnRow.appendChild(muteBtn);
       btnRow.appendChild(seekBackBtn);
@@ -8396,7 +8396,7 @@ export class MoviElement extends HTMLElement {
         const isPlaying = this.player.getState() === "playing";
         playPauseBtn.innerHTML = isPlaying
           ? `<svg viewBox="0 0 24 24" fill="currentColor"><rect x="6" y="4" width="4" height="16" rx="1"/><rect x="14" y="4" width="4" height="16" rx="1"/></svg>`
-          : `<svg viewBox="0 0 24 24" fill="currentColor" stroke="currentColor" stroke-width="2.4" stroke-linejoin="round"><path d="M9.3 6.6L17.7 12L9.3 17.4Z"/></svg>`;
+          : `<svg viewBox="0 0 24 24" fill="currentColor" stroke="currentColor" stroke-width="2.1" stroke-linejoin="round"><path d="M9.3 6.6L17.7 12L9.3 17.4Z"/></svg>`;
       };
 
       playPauseBtn.addEventListener("click", () => {
@@ -8424,8 +8424,8 @@ export class MoviElement extends HTMLElement {
         this.muted = !this.muted;
         this.showOSD(
           this.muted
-            ? `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5"/><line x1="23" y1="9" x2="17" y2="15"/><line x1="17" y1="9" x2="23" y2="15"/></svg>`
-            : `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5"/><path d="M19.07 4.93a10 10 0 0 1 0 14.14"/><path d="M15.54 8.46a5 5 0 0 1 0 7.07"/></svg>`,
+            ? `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75"><polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5"/><line x1="23" y1="9" x2="17" y2="15"/><line x1="17" y1="9" x2="23" y2="15"/></svg>`
+            : `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75"><polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5"/><path d="M19.07 4.93a10 10 0 0 1 0 14.14"/><path d="M15.54 8.46a5 5 0 0 1 0 7.07"/></svg>`,
           this.muted ? "Muted" : "Unmuted",
         );
       });
@@ -8470,8 +8470,8 @@ export class MoviElement extends HTMLElement {
         updatePlayPauseIcon();
         const muted = this._muted;
         muteBtn.innerHTML = muted
-          ? `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M11 5L6 9H2v6h4l5 4V5z"/><line x1="23" y1="9" x2="17" y2="15"/><line x1="17" y1="9" x2="23" y2="15"/></svg>`
-          : `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M11 5L6 9H2v6h4l5 4V5z"/><path d="M19.07 4.93a10 10 0 0 1 0 14.14"/><path d="M15.54 8.46a5 5 0 0 1 0 7.07"/></svg>`;
+          ? `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><path d="M11 5L6 9H2v6h4l5 4V5z"/><line x1="23" y1="9" x2="17" y2="15"/><line x1="17" y1="9" x2="23" y2="15"/></svg>`
+          : `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><path d="M11 5L6 9H2v6h4l5 4V5z"/><path d="M19.07 4.93a10 10 0 0 1 0 14.14"/><path d="M15.54 8.46a5 5 0 0 1 0 7.07"/></svg>`;
       }, 250);
 
       // The spinner lives outside the controls, which fade out — a load that
@@ -8825,10 +8825,10 @@ export class MoviElement extends HTMLElement {
     this.refreshOpenSettingsSurfaces();
   }
 
-  private static readonly TRACK_ICON_AUDIO = `<svg class="movi-track-item-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M11 5L6 9H2v6h4l5 4V5z"/><path d="M15.54 8.46a5 5 0 0 1 0 7.07"/><path d="M19.07 4.93a10 10 0 0 1 0 14.14"/></svg>`;
-  private static readonly TRACK_ICON_SUBTITLE = `<svg class="movi-track-item-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect width="20" height="16" x="2" y="4" rx="2" ry="2"/><path d="M10 8.5H8a2 2 0 0 0-2 2v3a2 2 0 0 0 2 2h2 M18 8.5h-2a2 2 0 0 0-2 2v3a2 2 0 0 0 2 2h2"/></svg>`;
-  private static readonly TRACK_ICON_OFF = `<svg class="movi-track-item-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><line x1="6" y1="12" x2="18" y2="12"/></svg>`;
-  private static readonly TRACK_ICON_CHECK = `<svg class="movi-track-item-check" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg>`;
+  private static readonly TRACK_ICON_AUDIO = `<svg class="movi-track-item-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><path d="M11 5L6 9H2v6h4l5 4V5z"/><path d="M15.54 8.46a5 5 0 0 1 0 7.07"/><path d="M19.07 4.93a10 10 0 0 1 0 14.14"/></svg>`;
+  private static readonly TRACK_ICON_SUBTITLE = `<svg class="movi-track-item-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><rect width="20" height="16" x="2" y="4" rx="2" ry="2"/><path d="M10 8.5H8a2 2 0 0 0-2 2v3a2 2 0 0 0 2 2h2 M18 8.5h-2a2 2 0 0 0-2 2v3a2 2 0 0 0 2 2h2"/></svg>`;
+  private static readonly TRACK_ICON_OFF = `<svg class="movi-track-item-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><line x1="6" y1="12" x2="18" y2="12"/></svg>`;
+  private static readonly TRACK_ICON_CHECK = `<svg class="movi-track-item-check" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg>`;
 
   private formatAudioBadge(track: AudioTrack): string {
     const codec = (track.codec || "").toUpperCase();
@@ -9217,7 +9217,7 @@ export class MoviElement extends HTMLElement {
             ${
               isActive
                 ? `
-            <svg class="movi-quality-check" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round">
+            <svg class="movi-quality-check" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round">
               <polyline points="20 6 9 17 4 12"></polyline>
             </svg>`
                 : ""
@@ -10973,7 +10973,7 @@ export class MoviElement extends HTMLElement {
       activeQuality?.badge || this._rungBadge(activeQuality?.height || 0),
     );
 
-    const check = `<svg class="movi-quality-check" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"></polyline></svg>`;
+    const check = `<svg class="movi-quality-check" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"></polyline></svg>`;
     const rows: string[] = [];
     if (abrCapable) {
       // "Auto (1080p)" — show the rung Auto is currently serving (Shaka/YouTube).
@@ -11087,7 +11087,7 @@ export class MoviElement extends HTMLElement {
     const checkSvg = () =>
       document.importNode(
         new DOMParser().parseFromString(
-          '<svg xmlns="http://www.w3.org/2000/svg" class="movi-quality-check" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"></polyline></svg>',
+          '<svg xmlns="http://www.w3.org/2000/svg" class="movi-quality-check" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"></polyline></svg>',
           "image/svg+xml",
         ).documentElement,
         true,
@@ -11830,7 +11830,7 @@ export class MoviElement extends HTMLElement {
         }),
       );
       this.showOSD(
-        '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M11 5L6 9H2v6h4l5 4V5z"></path><line x1="23" y1="9" x2="17" y2="15"></line><line x1="17" y1="9" x2="23" y2="15"></line></svg>',
+        '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><path d="M11 5L6 9H2v6h4l5 4V5z"></path><line x1="23" y1="9" x2="17" y2="15"></line><line x1="17" y1="9" x2="23" y2="15"></line></svg>',
         "This audio format isn't supported by your browser",
       );
       this.setNoAudibleAudio(true);
@@ -12267,7 +12267,7 @@ export class MoviElement extends HTMLElement {
       return `
         <div class="movi-sub-cust-panel">
           <button type="button" class="movi-sub-cust-back" data-action="back" aria-label="Back to subtitles">
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" width="14" height="14">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" width="14" height="14">
               <path d="M15 18l-6-6 6-6"/>
             </svg>
             <span>Back</span>
@@ -12280,7 +12280,7 @@ export class MoviElement extends HTMLElement {
     return `
       <div class="movi-sub-cust-panel">
         <button type="button" class="movi-sub-cust-back" data-action="back" aria-label="Back to subtitles">
-          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" width="14" height="14">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" width="14" height="14">
             <path d="M15 18l-6-6 6-6"/>
           </svg>
           <span>Back</span>
@@ -13019,7 +13019,7 @@ export class MoviElement extends HTMLElement {
     if (this._subtitlePicker) {
       menuHTML += `
         <div class="movi-subtitle-track-item movi-subtitle-pick-item" data-subtitle-pick="1">
-          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" width="16" height="16">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" width="16" height="16">
             <path d="M12 5v14M5 12h14"/>
           </svg>
           <span class="movi-subtitle-track-label">Add subtitle file…</span>
@@ -14076,7 +14076,7 @@ export class MoviElement extends HTMLElement {
       window.matchMedia("(pointer: coarse)").matches
     ) {
       html += `<div class="movi-context-menu-item movi-context-menu-back" data-action="back">
-        <svg class="movi-context-menu-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M15 18l-6-6 6-6"/></svg>
+        <svg class="movi-context-menu-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><path d="M15 18l-6-6 6-6"/></svg>
         <span class="movi-context-menu-label">Back</span>
       </div>`;
     }
@@ -14102,7 +14102,7 @@ export class MoviElement extends HTMLElement {
     // opening the submenu does not).
     if (real.length < 1 && canUnlock) {
       html += `<div class="movi-context-menu-item movi-context-menu-audiodevice-unlock" data-audio-output-unlock="1">
-        <svg class="movi-context-menu-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><line x1="12" y1="16" x2="12" y2="12"/><line x1="12" y1="8" x2="12.01" y2="8"/></svg>
+        <svg class="movi-context-menu-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><line x1="12" y1="16" x2="12" y2="12"/><line x1="12" y1="8" x2="12.01" y2="8"/></svg>
         <span class="movi-context-menu-label">Show output devices…</span>
       </div>`;
     }
@@ -14158,19 +14158,19 @@ export class MoviElement extends HTMLElement {
    *  of bare words is slower to scan than a list with marks against it — and
    *  these are the same marks the context menu already trained people on. */
   private static readonly SETTINGS_ICONS: Record<string, string> = {
-    quality: `<svg class="movi-settings-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="4" width="20" height="14" rx="2"/><path d="M8 21h8M12 18v3"/></svg>`,
-    speed: `<svg class="movi-settings-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M5.64 18.36a9 9 0 1 1 12.72 0"/><path d="m12 12 4-4"/></svg>`,
-    audio: `<svg class="movi-settings-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 18V5l12-2v13"/><circle cx="6" cy="18" r="3"/><circle cx="18" cy="16" r="3"/></svg>`,
-    subtitles: `<svg class="movi-settings-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect width="18" height="14" x="3" y="5" rx="2"/><path d="M7 15h4M13 15h4"/></svg>`,
+    quality: `<svg class="movi-settings-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="4" width="20" height="14" rx="2"/><path d="M8 21h8M12 18v3"/></svg>`,
+    speed: `<svg class="movi-settings-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><path d="M5.64 18.36a9 9 0 1 1 12.72 0"/><path d="m12 12 4-4"/></svg>`,
+    audio: `<svg class="movi-settings-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><path d="M9 18V5l12-2v13"/><circle cx="6" cy="18" r="3"/><circle cx="18" cy="16" r="3"/></svg>`,
+    subtitles: `<svg class="movi-settings-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><rect width="18" height="14" x="3" y="5" rx="2"/><path d="M7 15h4M13 15h4"/></svg>`,
     hdr: `<span class="movi-settings-icon movi-settings-icon-text">HDR</span>`,
-    stable: `<svg class="movi-settings-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="4" width="20" height="16" rx="2"/><path d="M6 15v-2M9 15v-4M12 15v-6M15 15v-4M18 15v-2"/></svg>`,
-    loop: `<svg class="movi-settings-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M17 2l4 4-4 4"/><path d="M3 11v-1a4 4 0 0 1 4-4h14"/><path d="M7 22l-4-4 4-4"/><path d="M21 13v1a4 4 0 0 1-4 4H3"/></svg>`,
-    aspect: `<svg class="movi-settings-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="18" height="18" rx="2"/><rect x="6" y="8" width="12" height="8" rx="1"/></svg>`,
-    ambient: `<svg class="movi-settings-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="5"/><path d="M12 1v2M12 21v2M4.22 4.22l1.42 1.42M18.36 18.36l1.42 1.42M1 12h2M21 12h2M4.22 19.78l1.42-1.42M18.36 5.64l1.42-1.42"/></svg>`,
+    stable: `<svg class="movi-settings-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="4" width="20" height="16" rx="2"/><path d="M6 15v-2M9 15v-4M12 15v-6M15 15v-4M18 15v-2"/></svg>`,
+    loop: `<svg class="movi-settings-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><path d="M17 2l4 4-4 4"/><path d="M3 11v-1a4 4 0 0 1 4-4h14"/><path d="M7 22l-4-4 4-4"/><path d="M21 13v1a4 4 0 0 1-4 4H3"/></svg>`,
+    aspect: `<svg class="movi-settings-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="18" height="18" rx="2"/><rect x="6" y="8" width="12" height="8" rx="1"/></svg>`,
+    ambient: `<svg class="movi-settings-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="5"/><path d="M12 1v2M12 21v2M4.22 4.22l1.42 1.42M18.36 18.36l1.42 1.42M1 12h2M21 12h2M4.22 19.78l1.42-1.42M18.36 5.64l1.42-1.42"/></svg>`,
     // Crop marks — the two overhanging L's of the crop tool. A framed
     // rectangle was tried and it was indistinguishable from Aspect's, which is
     // half of why that row moved away from this one.
-    crop: `<svg class="movi-settings-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M6 2v14a2 2 0 0 0 2 2h14"/><path d="M18 22V8a2 2 0 0 0-2-2H2"/></svg>`,
+    crop: `<svg class="movi-settings-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><path d="M6 2v14a2 2 0 0 0 2 2h14"/><path d="M18 22V8a2 2 0 0 0-2-2H2"/></svg>`,
   };
 
   private static readonly ASPECT_CHOICES: ReadonlyArray<
@@ -14343,7 +14343,7 @@ export class MoviElement extends HTMLElement {
     const fit = this._objectFit === "control" ? this._currentFit : this._objectFit;
     const icon =
       MoviElement.ASPECT_ICONS[fit as string] || MoviElement.ASPECT_ICONS.contain;
-    return `<svg class="movi-settings-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">${icon}</svg>`;
+    return `<svg class="movi-settings-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round">${icon}</svg>`;
   }
 
   /**
@@ -14401,7 +14401,7 @@ export class MoviElement extends HTMLElement {
       ".movi-settings-root",
     ) as HTMLElement | null;
     if (!root) return;
-    const chevron = `<svg class="movi-settings-chevron" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 18l6-6-6-6"/></svg>`;
+    const chevron = `<svg class="movi-settings-chevron" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><path d="M9 18l6-6-6-6"/></svg>`;
     const rows: string[] = [];
     const page = (
       pageKey: string,
@@ -14649,13 +14649,13 @@ export class MoviElement extends HTMLElement {
     if (key !== "aspect") return "";
     const current =
       this._objectFit === "control" ? this._currentFit : this._objectFit;
-    const check = `<svg class="movi-settings-check" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg>`;
+    const check = `<svg class="movi-settings-check" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg>`;
     return MoviElement.ASPECT_CHOICES.map(([fit, label]) => {
       // Each fit already HAS a drawing — the bar button cycled through exactly
       // these to show which was active. Reuse them here: for a spatial setting,
       // the picture of the crop says more than the word for it.
       const icon = MoviElement.ASPECT_ICONS[fit] || MoviElement.ASPECT_ICONS.contain;
-      return `<button type="button" class="movi-settings-choice ${fit === current ? "is-active" : ""}" data-fit="${fit}"><span class="movi-settings-choice-main"><svg class="movi-settings-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">${icon}</svg><span>${label}</span></span>${fit === current ? check : ""}</button>`;
+      return `<button type="button" class="movi-settings-choice ${fit === current ? "is-active" : ""}" data-fit="${fit}"><span class="movi-settings-choice-main"><svg class="movi-settings-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round">${icon}</svg><span>${label}</span></span>${fit === current ? check : ""}</button>`;
     }).join("");
   }
 
@@ -14670,7 +14670,7 @@ export class MoviElement extends HTMLElement {
   private showAspectOsd(fit: string): void {
     const svg = MoviElement.ASPECT_ICONS[fit] || MoviElement.ASPECT_ICONS.contain;
     this.showOSD(
-      `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">${svg}</svg>`,
+      `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75">${svg}</svg>`,
       MoviElement.ASPECT_OSD_LABELS[fit] || "Fit",
     );
   }
@@ -16327,8 +16327,18 @@ export class MoviElement extends HTMLElement {
            not follow --movi-glass-bg when that flips to a light surface — white
            text on white is what that costs. Public hook all the same. */
         /* The capsule behind the right-hand icon cluster. Public hook: a host
-           that wants the old loose row sets it to transparent. */
-        --movi-controls-group-bg: rgba(255, 255, 255, 0.065);
+           that wants the old loose row sets it to transparent.
+
+           Faint on purpose. Its whole job is to say which controls belong
+           together — it is a grouping, not a surface — and the icons inside it
+           are what the eye should land on. At 0.065 the capsule was reading as
+           a raised panel of its own and competing with them for attention; the
+           grouping survives being barely there, because shape does that work
+           and the fill only has to hint at the edges. Kept above zero on
+           purpose: at nothing at all the bar goes back to a loose row of icons
+           with no telling which belong together, which is the thing the capsule
+           was added for. */
+        --movi-controls-group-bg: rgba(255, 255, 255, 0.025);
         --movi-chrome-bg: rgba(0, 0, 0, 0.92);
         --movi-chrome-border: rgba(255, 255, 255, 0.1);
         --movi-text-secondary: rgba(255, 255, 255, 0.7);
@@ -26506,11 +26516,11 @@ export class MoviElement extends HTMLElement {
       const volumePercent = Math.round(this._volume * 100);
       let icon = "";
       if (this._muted || this._volume === 0) {
-        icon = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M11 5L6 9H2v6h4l5 4V5z"></path><line x1="23" y1="9" x2="17" y2="15"></line><line x1="17" y1="9" x2="23" y2="15"></line></svg>`;
+        icon = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><path d="M11 5L6 9H2v6h4l5 4V5z"></path><line x1="23" y1="9" x2="17" y2="15"></line><line x1="17" y1="9" x2="23" y2="15"></line></svg>`;
       } else if (this._volume < 0.5) {
-        icon = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M11 5L6 9H2v6h4l5 4V5z"></path><path d="M15.54 8.46a5 5 0 0 1 0 7.07"></path></svg>`;
+        icon = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><path d="M11 5L6 9H2v6h4l5 4V5z"></path><path d="M15.54 8.46a5 5 0 0 1 0 7.07"></path></svg>`;
       } else {
-        icon = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M11 5L6 9H2v6h4l5 4V5z"></path><path d="M19.07 4.93a10 10 0 0 1 0 14.14M15.54 8.46a5 5 0 0 1 0 7.07"></path></svg>`;
+        icon = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><path d="M11 5L6 9H2v6h4l5 4V5z"></path><path d="M19.07 4.93a10 10 0 0 1 0 14.14M15.54 8.46a5 5 0 0 1 0 7.07"></path></svg>`;
       }
 
       // Only show if user interacting or specifically requested (simple logic: just check if player exists to avoid startup spam)
@@ -26567,7 +26577,7 @@ export class MoviElement extends HTMLElement {
       this.player
     ) {
       this.showOSD(
-        `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M5.64 18.36a9 9 0 1 1 12.72 0"></path><path d="m12 12 4-4"></path></svg>`,
+        `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><path d="M5.64 18.36a9 9 0 1 1 12.72 0"></path><path d="m12 12 4-4"></path></svg>`,
         `${this._playbackRate}x`,
       );
     }
