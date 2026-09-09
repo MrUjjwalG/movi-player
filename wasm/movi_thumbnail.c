@@ -266,6 +266,29 @@ void movi_thumbnail_read_keyframe(struct MoviThumbnailContext *ctx,
       seek_target += ctx->fmt_ctx->start_time;
   }
 
+  // The same offset again, in SECONDS, for the index helpers below.
+  //
+  // `timestamp` arrives as media time from zero — the hover — and the two
+  // targets above have each had start_time added because the demuxer's own
+  // timestamps carry it. The index helpers were the one caller left reading
+  // the bare hover: movi_index_misses and movi_ts_seek_to_rap both convert
+  // their `target_sec` straight to stream ticks with no offset, and search an
+  // index whose entries are absolute. On a stream starting at zero the two are
+  // the same number and it never showed.
+  //
+  // Measured on a 28.6s 4K120 DoVi P8 transport stream starting at 4200s: a
+  // hover at 5.73s searched the index for tick 515700 against entries around
+  // 378000000, found nothing at or before it, and movi_ts_seek_to_rap gave up
+  // — so every hover fell back to the generic seek, and the first keyframe
+  // read back was the one AFTER the hover (6.25s for 5.73s, 24.50s for
+  // 22.92s). Precise previews cannot walk backwards, so the walk never ran and
+  // the mode quietly did nothing. The bisection that stands in for a missing
+  // index was being pointed 4194 seconds before the content as well.
+  double start_sec = 0.0;
+  if (st->start_time != AV_NOPTS_VALUE)
+    start_sec = st->start_time * av_q2d(st->time_base);
+  const double index_sec = timestamp + start_sec;
+
   av_log(NULL, AV_LOG_DEBUG, "[THUMB] Seeking to ts=%lld (AV_TIME_BASE=%lld)\n", 
          (long long)target_ts, (long long)seek_target);
 
@@ -281,7 +304,7 @@ void movi_thumbnail_read_keyframe(struct MoviThumbnailContext *ctx,
   // their own AVFormatContext over the same file, so they have to ask for it
   // too (movi_mkv_index_near_fmt).
   if (movi_fmt_is_matroska(ctx->fmt_ctx) &&
-      movi_mkv_index_misses(st, timestamp)) {
+      movi_mkv_index_misses(st, index_sec)) {
     // …but ask the file for its OWN index before deciding it hasn't got one.
     //
     // Matroska parses its Cues lazily, inside the first matroska_read_seek —
@@ -304,9 +327,9 @@ void movi_thumbnail_read_keyframe(struct MoviThumbnailContext *ctx,
       avformat_seek_file(ctx->fmt_ctx, -1, INT64_MIN, 0, 0,
                          AVSEEK_FLAG_BACKWARD);
     }
-    if (movi_mkv_index_misses(st, timestamp)) {
+    if (movi_mkv_index_misses(st, index_sec)) {
       movi_mkv_index_near_fmt(ctx->fmt_ctx, ctx->file_size,
-                              ctx->video_stream_index, timestamp);
+                              ctx->video_stream_index, index_sec);
     }
   }
 
@@ -317,14 +340,14 @@ void movi_thumbnail_read_keyframe(struct MoviThumbnailContext *ctx,
   // helper (movi_ts_index_near_fmt).
   int ts_landed = -1;
   if (movi_fmt_is_mpegts(ctx->fmt_ctx)) {
-    if (movi_index_misses(st, timestamp, MOVI_TS_INDEX_TOLERANCE_S)) {
+    if (movi_index_misses(st, index_sec, MOVI_TS_INDEX_TOLERANCE_S)) {
       movi_ts_index_near_fmt(ctx->fmt_ctx, ctx->file_size,
-                             ctx->video_stream_index, timestamp);
+                             ctx->video_stream_index, index_sec);
     }
     // …and land ON the point rather than at the target, which for a preview is
     // the difference between decoding a few frames and decoding a whole GOP.
     ts_landed = movi_ts_seek_to_rap(ctx->fmt_ctx, ctx->video_stream_index,
-                                    timestamp);
+                                    index_sec);
   }
 
   // Use avformat_seek_file like the main player does - it's more robust
