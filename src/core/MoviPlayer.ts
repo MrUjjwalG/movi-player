@@ -1080,6 +1080,40 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
   }
 
   /** The keyframe map's key for a decoded packet's pts, or null if unusable. */
+  /**
+   * The thumbnail demuxer's current packet, in the same time base as everything
+   * that asks it questions.
+   *
+   * It reports the packet's RAW pts — `pkt->pts * time_base`, with no
+   * `start_time` taken off — while every hover, target and duration on this
+   * side of the WASM boundary is media time from zero. On a source whose
+   * stream starts at zero those are the same number and nothing shows; on one
+   * that does not, they are apart by exactly that offset, and three separate
+   * things quietly read the wrong answer.
+   *
+   * Measured on a 47.7s 4K HEVC MPEG-TS whose stream starts at 1.050044s
+   * (LG-Daylight-4K): a hover at 12.5s took the keyframe at raw 11.878 —
+   * 10.827 in media time, and the file's own keyframe list confirms 11.877522
+   * is a real raw pts, so the value is raw beyond doubt. The walk then stopped
+   * at raw 12.545 because it breaks on `pts >= time`, which is media 11.495:
+   * a preview one full second before the pointer, every time, sixty frames out
+   * at this file's 59.94fps. Where the keyframe happened to land within the
+   * offset of the hover, `timestamp < time` was false and the walk did not run
+   * at all — precise mode falling back to the plain keyframe with nothing said.
+   * And the renderer picks the frame nearest `targetSec`, which is media time,
+   * against chunk timestamps that were raw — the same offset a third time.
+   *
+   * The C seek does normalise (it adds `start_time` to its target), so the
+   * frame fetched was always the right one; only the arithmetic about it was
+   * wrong. Correcting it here rather than in the WASM keeps the fix on the
+   * side that owns the media-time convention, and needs no rebuild.
+   */
+  private previewPacketPts(): number {
+    const raw = this.thumbnailBindings?.getPacketPts() ?? 0;
+    if (!Number.isFinite(raw)) return raw;
+    return raw - this.startTime;
+  }
+
   private keyframeKey(pts: number): number | null {
     if (!Number.isFinite(pts)) return null;
     // Milliseconds: fine enough that two different keyframes never collide,
@@ -10152,7 +10186,7 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
         return null;
       }
 
-      const timestamp = this.thumbnailBindings.getPacketPts();
+      const timestamp = this.previewPacketPts();
 
       // The seek has just named the keyframe this position belongs to. If that
       // keyframe has already been decoded, this hover's picture is that
@@ -10211,7 +10245,7 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
         for (;;) {
           const size = await this.thumbnailBindings.readNextPacket();
           if (size <= 0) break; // EOF, or a read that went wrong
-          const pts = this.thumbnailBindings.getPacketPts();
+          const pts = this.previewPacketPts();
           const data = this.thumbnailBindings.getPacketDataCopy(size);
           if (!data) break;
           run.push({ data, pts, key: false });
