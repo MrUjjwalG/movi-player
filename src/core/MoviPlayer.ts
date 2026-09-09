@@ -1981,6 +1981,26 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
    * shared target would drop every one of them until the sound caught up to a
    * point it had only buffered, not played.
    */
+  /**
+   * The position a completed seek still owes the screen a picture for, or -1.
+   *
+   * A seek that finishes WITHOUT a frame — the forced completion, when the
+   * demuxer ran out or the deadline fired before the walk reached the target —
+   * leaves the player paused (or ended) with nothing new on the canvas. The
+   * frames it was waiting for usually arrive a moment later, out of a decoder
+   * that was still working, and the state gate below drops every one of them
+   * because by then the state is "paused" and waitingForVideoSync is false.
+   * Nothing else ever puts them up: the presentation loop is stopped while
+   * paused, so the picture that was asked for is simply lost.
+   *
+   * Reported on a 1.33s single-GOP transport-stream segment (seg.ts, 40 frames,
+   * one keyframe at 0). Every paused seek there decoded all 40 frames and
+   * presented none: the file is short enough that EOF arrives before the
+   * decoder has emitted the frames past the target, so the forced completion
+   * always won the race. Playing the same file works, because "playing" holds
+   * the gate open.
+   */
+  private _pictureOwedFrom: number = -1;
   private _videoResumeTarget: number = -1;
   /** When the catch-up above began, so the UI can tell a hitch nobody notices
    *  from a wait worth putting a spinner on. */
@@ -5900,6 +5920,13 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
     if (!forced) {
       this.cancelBlackFrameWatchdog();
       this._blackRecoverySeeks = 0;
+    } else {
+      // …and a forced one means the opposite: this seek is finishing with
+      // nothing on the canvas. Note what it still owes so the frames the
+      // decoder is about to hand over — the ones this gave up waiting for —
+      // are not dropped by the state gate the moment we leave "seeking".
+      // Settled by the first frame that reaches the renderer.
+      this._pictureOwedFrom = time;
     }
 
     // Forced completion (safety timeout) with no decoded video frame yet: the
@@ -9716,6 +9743,9 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
       this._soundCarryingAlone = false; // …and re-primes the picture from here
     }
       this.waitingForVideoSync = true;
+      // A new seek retires the previous one's debt: its picture is not wanted
+      // any more, and this seek arms its own.
+      this._pictureOwedFrom = -1;
       // Tag which seek session armed this completion. notifySeekCompletion
       // bails if a newer seek has since superseded this one, so a stale (e.g.
       // coalesced/rapid-seek) completion can't run the resume/paused branch and
@@ -15324,7 +15354,11 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
         this.videoRenderer &&
         (this.stateManager.getState() === "playing" ||
           this.stateManager.getState() === "buffering" ||
-          this.waitingForVideoSync)
+          this.waitingForVideoSync ||
+          // …and for the one frame a forced completion left owing. See
+          // _pictureOwedFrom: without this the frames a paused seek was
+          // waiting for arrive just after it gives up and are all dropped.
+          this._pictureOwedFrom !== -1)
       ) {
         // A frame arriving while a seek waits for sync is that seek WORKING —
         // the decoder walking from the keyframe towards the target. Stamped
@@ -15344,7 +15378,13 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
         // the audio schedule's end for the audio path's sake — see
         // _videoResumeTarget.
         const gate =
-          this._videoResumeTarget !== -1 ? this._videoResumeTarget : this.seekTargetTime;
+          this._videoResumeTarget !== -1
+            ? this._videoResumeTarget
+            : this.seekTargetTime !== -1
+              ? this.seekTargetTime
+              // Nothing else is filtering, but an owed picture still must not
+              // be paid with a frame from before the position asked for.
+              : this._pictureOwedFrom;
         // CRITICAL: Check seekTargetTime !== -1 instead of >= 0 to support negative start times
         // Some media files have negative PTS offsets (e.g., startTime = -0.105s)
         if (gate !== -1 && frameTime < gate) {
@@ -15368,6 +15408,7 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
             this._soundCarryingAlone = false;
             this._blackRecoverySeeks = 0;
           }
+          this._pictureOwedFrom = -1;
           this.videoRenderer.queueFrame(frame);
           return;
         }
@@ -15387,6 +15428,7 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
           }
         }
 
+        this._pictureOwedFrom = -1;
         this.videoRenderer.queueFrame(frame);
       } else {
         frame.close();
