@@ -2096,6 +2096,23 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
       }
       return;
     }
+    // Everything below rests on one assumption: a packet older than the screen
+    // has been SHOWN, so dropping it costs nothing. A flush revokes that. With
+    // the decoder waiting for a keyframe the packets behind the screen are not
+    // history, they are the only route back to it — the reference chain the
+    // screen's own frame has to be rebuilt from — and the first IDR at or past
+    // the screen is not a tidy cut, it is the START OF THE NEXT GOP.
+    //
+    // Read off a 4K AV1 file: play pressed after a paused seek to 43.23
+    // realigns the demuxer, which lands on the IDR at 40.40 and stashes the
+    // 2.8s run up to the target. Nothing had raised waitingForVideoSync — the
+    // realign deliberately re-arms only the pre-target filter — so this ran,
+    // found the head at 40.40 behind a screen of 43.233, and cut to "IDR
+    // 46.167s": 311 packets, the whole rest of the GOP the picture was about
+    // to play. The first frame out of the decoder was 46.167 against audio at
+    // 43.24, and the picture then stood still for the 2.9s the sound needed to
+    // reach it — twelve seconds of it at 0.25x.
+    if (this.videoDecoder?.isWaitingForKeyframe) return;
     const onScreen = this.videoRenderer?.getCurrentTime?.() ?? -1;
     if (!(onScreen > 0)) return;
     if (stash[0].timestamp >= onScreen) return; // head is still ahead — nothing stale
