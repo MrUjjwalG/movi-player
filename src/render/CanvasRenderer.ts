@@ -2796,6 +2796,18 @@ export class CanvasRenderer {
         this.presentationStartPts = this.frameQueue[0].timestamp / 1_000_000;
       }
       this.syncedToAudio = false;
+      // Anchored on the frame we paused on — no jump — but that frame is NOT
+      // where the sound resumes. pause() suspends the context, it does not
+      // flush what the device already holds, so the audio clock comes back a
+      // step away from the paused picture: measured at +254ms, +11ms and
+      // -31ms across three resumes of one file. Left to the soft-sync branch
+      // every one of those steps under 400ms is accepted and kept for the
+      // rest of the run. It is the same situation a rate change creates, and
+      // it has the same answer: this unsync was caused by us, so there is no
+      // old anchor worth protecting — re-anchor on the sound the moment it is
+      // actually running. Nothing happens while the context is still coming
+      // out of suspend; the audio clock reports -1 until then.
+      this.reanchorRequested = true;
     }
 
     this.presentationLoop();
@@ -3000,6 +3012,14 @@ export class CanvasRenderer {
       }
 
       if (audioTime >= 0 && isHealthy) {
+        // Every drift budget below is in MEDIA seconds, and what the eye
+        // judges is REAL ones. At 0.25x a 150ms media offset is 600ms of the
+        // sound arriving after the mouth — the same number that is fine at 1x
+        // is four times as wrong at quarter speed. Scale the budgets with the
+        // rate, and never past 1, so speeds above 1x keep exactly the
+        // tolerances they have today.
+        const rateScale = Math.min(this.playbackRate, 1);
+
         // First sync - initialize wall clock to match audio
         if (!this.syncedToAudio) {
           const drift = videoTime >= 0 ? Math.abs(videoTime - audioTime) : 0;
@@ -3020,8 +3040,8 @@ export class CanvasRenderer {
           if (
             this.reanchorRequested ||
             videoTime < 0 ||
-            (isVeryEarlyPlayback && drift > 0.03) ||
-            drift > 0.4
+            (isVeryEarlyPlayback && drift > 0.03 * rateScale) ||
+            drift > 0.4 * rateScale
           ) {
             this.reanchorRequested = false;
             this.presentationStartTime =
@@ -3060,7 +3080,18 @@ export class CanvasRenderer {
           this.audioStartLeadMs() <= 0
         ) {
           const drift = videoTime - audioTime;
-          const threshold = isSlowHighFps ? 0.05 : 0.15;
+          // Anything under this threshold is banked forever: the branch above
+          // marks us synced without moving the anchor, and this is the only
+          // thing that would have closed it. Read off a 25fps file watched at
+          // 0.25x — resume after a pause settled the picture 70ms off the
+          // sound and kept it there, because 70ms never reached the 150ms bar,
+          // and 70ms of media at quarter speed is 280ms of real lip-sync
+          // error. The deadband is wide on purpose (a tight one chases
+          // Bluetooth's own clock jitter and judders), so keep the width in
+          // REAL time and let the media-time figure follow the rate. Clamped
+          // rather than scaled so the tighter high-fps value still wins where
+          // it applies and 1x is bit-for-bit what it was.
+          const threshold = Math.min(isSlowHighFps ? 0.05 : 0.15, 0.15 * rateScale);
           const strength = isSlowHighFps ? 0.5 : 0.25;
 
           if (Math.abs(drift) > threshold) {

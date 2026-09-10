@@ -9596,9 +9596,23 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
       // Flush decoders
       Logger.info(TAG, `seek: flushing video decoder...`);
       await this.videoDecoder.flush();
+      // Let go the instant the await returns, not at the next check further
+      // down. A flush is not quick — one here gave up after 1860ms with 31
+      // packets still queued — and a second seek arriving inside that window
+      // runs its own flush, its own read-ahead drop, its own queue clear and
+      // its own audioRenderer.reset() while this one is still parked. The
+      // only session check was after ALL of that, so both seeks performed the
+      // whole teardown: the log shows every line of it twice, interleaved.
+      // That time the loser finished first and the winner's state survived by
+      // luck; the other order wipes the frames and the audio the winner has
+      // already rebuilt.
+      if (this.seekSessionId !== mySessionId)
+        return this.abandonSupersededSeek(mySessionId);
       this.dropVideoReadAhead();
       Logger.info(TAG, `seek: flushing audio decoder...`);
       await this.audioDecoder.flush();
+      if (this.seekSessionId !== mySessionId)
+        return this.abandonSupersededSeek(mySessionId);
       // Drop the host subtitle renderer's pending state — its cues are for the
       // position we're leaving; fresh packets stream in after the seek.
       if (this._customSubtitleRenderer) {
