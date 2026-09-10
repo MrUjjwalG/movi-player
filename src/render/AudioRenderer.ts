@@ -1602,9 +1602,23 @@ export class AudioRenderer {
     // playhead — so the audio clock does NOT leap to the demuxer's read-ahead
     // mediaTime, and the video does not hard-snap forward. That leap was the
     // "jumps 1–3s ahead on rate change" regression.
+    //
+    // None of this may be skipped while the context is SUSPENDED, which is
+    // what pause() leaves behind — and requiring "running" here skipped all of
+    // it, so a rate change made from a paused player re-anchored nothing.
+    // getAudioClock() maps the whole span since the anchor through the
+    // CURRENT rate, so on resume the entire pre-change history was re-scaled:
+    // anchored at media 108.716, played 6.82s at 1x to a pause at 115.532,
+    // then 1x → 0.25x gave 108.716 + 6.82 * 0.25 = 110.42 — the clock reported
+    // 110.427 and the picture, which may not go back over frames it has
+    // already shown, froze for the 5.1s hole. At 0.25x that is 20 seconds of
+    // still image. A suspended context is the ideal place to do this work:
+    // currentTime is frozen at the instant of the pause, so `now` IS the
+    // paused position and the same arithmetic that is right while running is
+    // right here. Only a closed context has nothing to re-anchor.
     if (
       this.audioContext &&
-      this.audioContext.state === "running" &&
+      this.audioContext.state !== "closed" &&
       this.hasFirstBuffer
     ) {
       const now = this.audioContext.currentTime;
