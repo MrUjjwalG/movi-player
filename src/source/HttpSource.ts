@@ -82,7 +82,27 @@ const METADATA_CACHE_MAX_ENTRIES = 128;
 // but total for anyone re-opening the file: the thumbnail demuxer's probe
 // read at offset 0 missed the borrow by 823 bytes and paid a 2MB range fetch
 // (1.6s of the ~2.1s a first hover took on a 1.5MB/s link).
-const HEAD_CACHE_BYTES = 1024 * 1024;
+//
+// One megabyte was sized for that probe read and nothing more, and it is not
+// what a demuxer needs to OPEN a file. A 3.9GB MKV shows the gap exactly: its
+// own open walked the head out to ~4.2MB (offsets 0, 31719, 556007, 1080295,
+// 1604583, 2128871, 2653159, 3177447, 3701735, half a megabyte at a time), and
+// the thumbnail demuxer has to walk the same ground when it opens its own
+// instance later.
+//
+// While playback starts at zero that costs nothing — the reads land in the
+// main sliding window and borrow for free. RESUMING is what exposes it: the
+// resume seek moves the window to the middle of the file, the head region goes
+// with it, and the only thing left covering the start is this cache. The
+// thumbnail open then borrowed contiguously up to offset 988949 — the last
+// 32KB read that fits under 1MB — and fell off the end at 1021717, paying two
+// 2MB range fetches to read on to ~3.95MB. That is 1.9s of the ~4s a first
+// hover took after a resume, and it is why it only ever happened after one.
+//
+// Sized to the opening fetch (see startStream) so it holds what the source has
+// ALREADY downloaded rather than asking for more: on a resume the first 4MB
+// still streams past before the seek moves the window, so this is free.
+const HEAD_CACHE_BYTES = 4 * 1024 * 1024;
 
 export class HttpSource implements SourceAdapter {
   private url: string;
