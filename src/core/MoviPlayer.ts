@@ -2097,22 +2097,31 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
       return;
     }
     // Everything below rests on one assumption: a packet older than the screen
-    // has been SHOWN, so dropping it costs nothing. A flush revokes that. With
-    // the decoder waiting for a keyframe the packets behind the screen are not
-    // history, they are the only route back to it — the reference chain the
-    // screen's own frame has to be rebuilt from — and the first IDR at or past
-    // the screen is not a tidy cut, it is the START OF THE NEXT GOP.
+    // has been SHOWN, so dropping it costs nothing. That is only true when the
+    // stash's own reference chain is already BROKEN — the starve-skip case this
+    // was written for, where the deltas ahead of the screen are being discarded
+    // anyway and the next IDR is the first thing that can be decoded at all.
     //
-    // Read off a 4K AV1 file: play pressed after a paused seek to 43.23
-    // realigns the demuxer, which lands on the IDR at 40.40 and stashes the
-    // 2.8s run up to the target. Nothing had raised waitingForVideoSync — the
-    // realign deliberately re-arms only the pre-target filter — so this ran,
-    // found the head at 40.40 behind a screen of 43.233, and cut to "IDR
-    // 46.167s": 311 packets, the whole rest of the GOP the picture was about
-    // to play. The first frame out of the decoder was 46.167 against audio at
-    // 43.24, and the picture then stood still for the 2.9s the sound needed to
-    // reach it — twelve seconds of it at 0.25x.
-    if (this.videoDecoder?.isWaitingForKeyframe) return;
+    // With the chain INTACT the stash is drained into the decoder in order, so
+    // its head is the next packet the picture needs, not the last one it
+    // showed. A head behind the screen then means one thing only: a re-seek
+    // landed on the keyframe BEHIND the target, which is what a seek is
+    // supposed to do. Those packets are the route to the screen's own frame,
+    // the ones after it are the picture's immediate future, and "the first IDR
+    // at or past the screen" is neither — it is the START OF THE NEXT GOP.
+    //
+    // Read off a 4K AV1 file, twice. Play pressed after a paused seek realigns
+    // the demuxer; nothing raises waitingForVideoSync, because the realign
+    // re-arms only the pre-target filter, so this ran with a head at the
+    // landing keyframe and cut forward to the next GOP: "dropped 311 packet(s)
+    // ... up to IDR 46.167s, screen 43.233s", first frame out 46.167 against
+    // audio at 43.24. Guarding on the DECODER's waiting-for-keyframe flag did
+    // not hold, and the second log says why: flush at 16:39:44.316, trim at
+    // 16:39:44.428, and in the 112ms between them the burst had already fed
+    // the landing IDR and cleared the flag. The decoder's flag is about the
+    // decoder's next input; this is about whether the stash still hangs
+    // together. Ask the latch that actually tracks that.
+    if (!this.videoChainBrokenUntilKeyframe) return;
     const onScreen = this.videoRenderer?.getCurrentTime?.() ?? -1;
     if (!(onScreen > 0)) return;
     if (stash[0].timestamp >= onScreen) return; // head is still ahead — nothing stale
