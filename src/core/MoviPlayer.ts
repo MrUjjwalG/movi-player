@@ -7633,9 +7633,28 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
           );
           this.audioRenderer.endOfStream();
         }
+        // An empty renderer queue says "the picture has all been shown" only
+        // while the picture is BEING shown. Backgrounding stops the
+        // presentation loop and clears the queue, so from the first tick in a
+        // hidden tab it reads empty for the opposite reason — nothing is
+        // presenting at all — and on a file whose picture outlives its sound
+        // that ends the film the instant the sound runs out.
+        //
+        // Measured on an 8K AV1 song, 163.77s of picture against 148.53s of
+        // Opus. Hidden tab: "Sound ends at 148.53s ... playing the rest out
+        // without it" fires correctly, and 0.9s later "Playback ended" with the
+        // clock paused at 148.4662 — fourteen milliseconds before
+        // isInVideoOnlyTail() (>= _audioTailStart - 0.05) would have flipped
+        // and handed the ending to the tail branch, which would have carried
+        // the wall clock the remaining 15.24s to the duration. In the
+        // foreground the queue holds frames, this clause is false, and the same
+        // file plays its tail out — which is exactly the difference reported.
+        //
+        // So the same guard the clause below already carries: a picture known
+        // to outlive its sound is not finished because the queue is empty.
         const videoDone =
           !this.videoRenderer ||
-          this.videoRenderer.getQueueSize() === 0 ||
+          (this.videoRenderer.getQueueSize() === 0 && !pictureOutlivesSound) ||
           (decodersDone &&
             maxScheduled > 0 &&
             headFrameTime >= maxScheduled - 0.05 &&
