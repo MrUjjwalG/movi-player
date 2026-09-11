@@ -3343,7 +3343,16 @@
           height: 56px;
         }
 
+        /* The nav collapses here, but Docs is the one link worth
+           reaching from a phone — the rest of the row is icons. Hide the
+           others rather than the list, so it survives the collapse. */
+        /* The brand and the lone Docs link do not need the desktop
+           gap between them; at 390px keeping it overflowed the bar by 7px. */
+        .nav-left { gap: 1rem; }
         .nav-links {
+          gap: 0;
+        }
+        .nav-links li:not(.nav-link-docs) {
           display: none;
         }
 
@@ -3759,6 +3768,18 @@
         color: var(--text-muted);
         font-style: italic;
       }
+    
+      /* This page carries the DEV switch, so its icon row is ~180px wide —
+         wider than compare/examples, which can show this link from 360px.
+         Measured here, clearance between the link and the icon row: 0px at
+         390 and 400, 11px at 412, 29px at 430. Fitting is not the bar —
+         "Docs" flush against the Chrome icon reads as a mistake — so the link
+         starts where there is room to sit, and the narrower phones keep the
+         bar they had (320px already overflowed by 28px before this link
+         existed, all of it the icon row, not something to make worse). */
+      @media (max-width: 411px) {
+        .nav-link-docs { display: none; }
+      }
     </style>
     <!-- Dev console capture: patch console.* and global error handlers
          as early as possible so logs emitted during module import (e.g.
@@ -3878,7 +3899,7 @@
           <li><a href="#" class="active">Player</a></li>
           <li><a href="/examples">Examples</a></li>
           <li><a href="/compare">Compare</a></li>
-          <li><a href="/docs" target="_blank" rel="noopener">Docs</a></li>
+          <li class="nav-link-docs"><a href="/docs" target="_blank" rel="noopener">Docs</a></li>
         </ul>
       </div>
       <div class="nav-right">

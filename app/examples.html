@@ -357,7 +357,21 @@
         .grid { grid-template-columns: 1fr; }
       }
       @media (max-width: 560px) {
-        .nav-links { display: none; }
+        /* The nav collapses here, but Docs is the one link worth
+           reaching from a phone — the rest of the row is icons. Hide the
+           others rather than the list, so it survives the collapse. */
+        /* The brand and the lone Docs link do not need the desktop
+           gap between them; at 390px keeping it overflowed the bar by 7px. */
+        .nav-left { gap: 1rem; }
+        .nav-links { gap: 0; }
+        .nav-links li:not(.nav-link-docs) { display: none; }
+      }
+    
+      /* Below 360px the bar was already tight before this link existed
+         (measured: 28px of overflow at 320px, all of it the icon row).
+         Do not make it worse — the smallest phones go back to icons only. */
+      @media (max-width: 359px) {
+        .nav-link-docs { display: none; }
       }
     </style>
     <!-- Inter for prose, JetBrains Mono for anything technical (codec names,
@@ -393,7 +407,7 @@
           <li><a href="/">Player</a></li>
           <li><a href="/examples" class="active">Examples</a></li>
           <li><a href="/compare">Compare</a></li>
-          <li><a href="/docs" target="_blank" rel="noopener">Docs</a></li>
+          <li class="nav-link-docs"><a href="/docs" target="_blank" rel="noopener">Docs</a></li>
         </ul>
       </div>
       <div class="nav-right">
