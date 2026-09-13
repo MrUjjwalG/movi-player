@@ -9517,6 +9517,15 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
     this.videoRenderer?.requestAudioReanchor();
     for (const f of frames) this.videoRenderer?.queueFrame(f);
 
+    // The seek bar's buffered range belongs to the pass that just ended. A
+    // normal seek re-anchors both of these and this turn is a seek in every
+    // way that matters to the bar — without it the buffered segment stays
+    // painted where the old pass finished while the progress bar grows from
+    // zero, which draws as a detached sliver at the right end with a gap in
+    // front of it. Same two lines, same reasons, as seek()'s own reset.
+    this.lastBufferedTime = 0;
+    this.bufferedRangeStart = this.startTime;
+
     this.clock.seek(this.startTime);
     this.emit("timeUpdate", 0);
     Logger.info(TAG, `Loop: wrapped with ${frames.length} frame(s) primed`);
