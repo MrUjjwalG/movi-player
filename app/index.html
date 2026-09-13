@@ -1953,7 +1953,14 @@
         font-variant-numeric: tabular-nums;
       }
 
-      .playlist-close {
+      .playlist-actions {
+        display: flex;
+        align-items: center;
+        gap: 0.1rem;
+      }
+
+      .playlist-close,
+      .playlist-hbtn {
         background: transparent;
         border: none;
         color: var(--text-muted);
@@ -1966,10 +1973,17 @@
         transition: all 0.2s;
       }
 
-      .playlist-close:hover {
+      .playlist-close:hover,
+      .playlist-hbtn:hover {
         background: var(--bg-surface);
         color: var(--text-primary);
         transform: scale(1.05);
+      }
+
+      /* On is the accent, the way every other toggle on this page reads. */
+      .playlist-hbtn[aria-pressed="true"] {
+        color: var(--accent);
+        background: var(--bg-surface);
       }
 
       .playlist-items {
@@ -4324,9 +4338,18 @@
               <span class="playlist-title" id="playlist-title">Playlist</span>
               <span class="playlist-count" id="playlist-count">0</span>
             </div>
-            <button class="playlist-close" id="playlist-close" type="button" title="Hide playlist" aria-label="Hide playlist">
-              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"></line><line x1="6" y1="6" x2="18" y2="18"></line></svg>
-            </button>
+            <div class="playlist-actions">
+              <button class="playlist-hbtn" id="playlist-shuffle" type="button" title="Shuffle" aria-label="Shuffle" aria-pressed="false">
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="16 3 21 3 21 8"></polyline><line x1="4" y1="20" x2="21" y2="3"></line><polyline points="21 16 21 21 16 21"></polyline><line x1="15" y1="15" x2="21" y2="21"></line><line x1="4" y1="4" x2="9" y2="9"></line></svg>
+              </button>
+              <button class="playlist-hbtn" id="playlist-repeat" type="button" title="Repeat off" aria-label="Repeat" aria-pressed="false" data-mode="off">
+                <svg class="icon-repeat-all" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="17 1 21 5 17 9"></polyline><path d="M3 11V9a4 4 0 0 1 4-4h14"></path><polyline points="7 23 3 19 7 15"></polyline><path d="M21 13v2a4 4 0 0 1-4 4H3"></path></svg>
+                <svg class="icon-repeat-one" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" hidden><polyline points="17 1 21 5 17 9"></polyline><path d="M3 11V9a4 4 0 0 1 4-4h14"></path><polyline points="7 23 3 19 7 15"></polyline><path d="M21 13v2a4 4 0 0 1-4 4H3"></path><path d="M11 10.5 12.5 9.5V15" stroke-width="2.2"></path></svg>
+              </button>
+              <button class="playlist-close" id="playlist-close" type="button" title="Hide playlist" aria-label="Hide playlist">
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"></line><line x1="6" y1="6" x2="18" y2="18"></line></svg>
+              </button>
+            </div>
           </div>
           <div class="playlist-search" id="playlist-search-wrap">
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
@@ -5175,6 +5198,8 @@
       const playlistCloseBtn = document.getElementById("playlist-close");
       const playlistShowBtn = document.getElementById("playlist-show-btn");
       const playlistAutoplayEl = document.getElementById("playlist-autoplay");
+      const playlistShuffleEl = document.getElementById("playlist-shuffle");
+      const playlistRepeatEl = document.getElementById("playlist-repeat");
       const playlistTitleEl = document.getElementById("playlist-title");
       const playlistSearchWrap = document.getElementById("playlist-search-wrap");
       const playlistSearch = document.getElementById("playlist-search");
@@ -5613,6 +5638,23 @@
       let metaProcessing = false;
       let thumbWasmPromise = null;
 
+      // Hand the queue to the element. The files stay here — the element's
+      // items are src-less placeholders and `itemchange` is cancelled below —
+      // but naming the list is what buys the bar's Next button, the OS media
+      // controls, and one owner for the play order that shuffle and
+      // repeat-all both step through.
+      const syncPlayerQueue = () => {
+        try {
+          player.playlist = playlist.map((f, i) => ({
+            id: String(i),
+            title: f.name,
+          }));
+          player.playlistIndex = playlistIndex;
+        } catch {
+          // An older element without the queue — the panel still works.
+        }
+      };
+
       const syncPlaylistShowBtn = () => {
         playlistShowBtn.hidden = !(playlist.length > 0 && playlistPanel.hidden);
       };
@@ -5648,6 +5690,7 @@
         // single file) doesn't inherit stale poster state from the playlist.
         player.removeAttribute("poster");
         player.removeAttribute("postertime");
+        syncPlayerQueue();
         syncPlaylistShowBtn();
       };
 
@@ -6221,6 +6264,13 @@
           player.src = file;
         }
         urlInput.value = "";
+        // AFTER the source. A src the element did not write itself resets the
+        // index to -1, which would undo this if it came first; writing the
+        // index says where the queue IS without announcing a move, so it
+        // cannot bounce back as an itemchange.
+        try {
+          player.playlistIndex = i;
+        } catch {}
         updateActiveItem(i);
 
         if (autoplay) {
@@ -6255,6 +6305,7 @@
           }
         }
         renderPlaylist();
+        syncPlayerQueue();
         playPlaylistItem(0);
         scrollToPlayer();
       };
@@ -6549,6 +6600,9 @@
       player.addEventListener("back", () => player.exitFullscreen());
 
       player.addEventListener("ended", () => {
+        // Repeat-one replays this item itself — it isn't finished with, so
+        // don't mark it watched.
+        if (player.loop) return;
         // Mark watched on completion
         if (playlistIndex >= 0) {
           const file = playlist[playlistIndex];
@@ -6560,11 +6614,88 @@
             }
           }
         }
-        if (!playlistAutoplayEl.checked) return;
-        if (playlistIndex >= 0 && playlistIndex < playlist.length - 1) {
-          playPlaylistItem(playlistIndex + 1, { autoplay: true });
+        // No advance here. The element owns it — `autoadvance` follows the
+        // checkbox below — so the shuffle order and the repeat-all wrap are
+        // decided in one place. The load lands back here as `itemchange`.
+      });
+
+      // The element resolved a move (its Next button, auto-advance, the OS
+      // media controls). Nothing is written by it; this page loads the item.
+      player.addEventListener("itemchange", (e) => {
+        e.preventDefault();
+        const index = e.detail?.index;
+        if (typeof index !== "number") return;
+        if (index >= 0 && index < playlist.length) {
+          playPlaylistItem(index, { autoplay: true });
         }
       });
+
+      // ─── Shuffle / repeat / autoplay ───
+      // All three are the element's settings, not this page's. It already
+      // steps the play order and wraps the queue, and its own context menu
+      // offers the same toggles — so the buttons write to it and its
+      // `shufflechange` / `loopchange` paint them back.
+      let playlistRepeatMode = "off"; // "off" | "all" | "one"
+
+      const paintShuffle = (on) => {
+        playlistShuffleEl.setAttribute("aria-pressed", on ? "true" : "false");
+        playlistShuffleEl.title = on ? "Shuffle on" : "Shuffle";
+      };
+      const paintRepeat = (mode) => {
+        playlistRepeatMode =
+          mode === "all" || mode === "one" ? mode : "off";
+        playlistRepeatEl.dataset.mode = playlistRepeatMode;
+        playlistRepeatEl.setAttribute(
+          "aria-pressed",
+          playlistRepeatMode === "off" ? "false" : "true",
+        );
+        playlistRepeatEl.title =
+          playlistRepeatMode === "all"
+            ? "Repeat playlist"
+            : playlistRepeatMode === "one"
+              ? "Repeat one"
+              : "Repeat off";
+        playlistRepeatEl.querySelector(".icon-repeat-all").hidden =
+          playlistRepeatMode === "one";
+        playlistRepeatEl.querySelector(".icon-repeat-one").hidden =
+          playlistRepeatMode !== "one";
+      };
+
+      playlistShuffleEl.addEventListener("click", () => {
+        const on = playlistShuffleEl.getAttribute("aria-pressed") !== "true";
+        paintShuffle(on);
+        try {
+          player.shuffle = on;
+        } catch {}
+      });
+      // Off → all → one → off, the order every player uses.
+      playlistRepeatEl.addEventListener("click", () => {
+        const next =
+          playlistRepeatMode === "off"
+            ? "all"
+            : playlistRepeatMode === "all"
+              ? "one"
+              : "off";
+        paintRepeat(next);
+        try {
+          player.loopMode = next;
+        } catch {}
+      });
+      player.addEventListener("shufflechange", (e) =>
+        paintShuffle(!!e.detail?.enabled),
+      );
+      player.addEventListener("loopchange", (e) =>
+        paintRepeat(e.detail?.mode || (e.detail?.enabled ? "one" : "off")),
+      );
+
+      // The checkbox is the element's auto-advance; without the attribute it
+      // plays the item it was given and stops.
+      const syncAutoAdvance = () => {
+        if (playlistAutoplayEl.checked) player.setAttribute("autoadvance", "");
+        else player.removeAttribute("autoadvance");
+      };
+      playlistAutoplayEl.addEventListener("change", syncAutoAdvance);
+      syncAutoAdvance();
 
       // Track watched-progress bar on the currently playing item.
       let lastProgressWrite = 0;

@@ -29,6 +29,7 @@ const addFilesBtn = document.getElementById("addFilesBtn");
 const addFolderBtn = document.getElementById("addFolderBtn");
 const nextBtn = document.getElementById("nextBtn");
 const shuffleBtn = document.getElementById("shuffleBtn");
+const repeatBtn = document.getElementById("repeatBtn");
 const autoplayBtn = document.getElementById("autoplayBtn");
 const playlistSearchWrap = document.getElementById("playlistSearchWrap");
 const playlistSearch = document.getElementById("playlistSearch");
@@ -92,10 +93,9 @@ customElements.whenDefined("movi-player").then(() => {
         if (playlistItemEls[playlistIndex]) applyItemProgress(playlistItemEls[playlistIndex], f);
       }
     }
-    if (autoplayEnabled && playlist.length && playlistIndex >= 0) {
-      const next = getNextIndex();
-      if (next >= 0) playPlaylistItem(next);
-    }
+    // No advance here. The element owns it — `autoadvance` follows the toggle
+    // above, and it resolves the next item through the same order and wrap the
+    // panel's Next uses. The load lands back here as `itemchange`.
   });
   playerEl.addEventListener("timeupdate", () => {
     if (playlistIndex < 0) return;
@@ -300,69 +300,89 @@ let playlistIndex = -1;
 let currentFile = null;
 const playlistItemEls = [];
 
-// Shuffle: when on, auto-advance follows a random permutation of indices
-// instead of sequential order. shuffleOrder holds the permutation; the
-// currently playing index's position in it determines what plays next.
+// Shuffle, repeat and auto-advance are the ELEMENT's, not this page's. The
+// queue is handed over in syncPlayerQueue(), which means the element already
+// knows the order, the wrap and what comes next — and its own context menu
+// offers the same two toggles. Keeping a second copy here is how the panel
+// button and the menu row end up disagreeing, so there is only one copy and
+// this is the view of it: writes go to the element, and the element's
+// `shufflechange` / `loopchange` paint the buttons back.
 let shuffleEnabled = false;
-let shuffleOrder = [];
+let repeatMode = "off"; // "off" | "all" | "one"
+let autoplayEnabled = true;
 
-function rebuildShuffleOrder() {
-  // Fisher–Yates over all indices, with the current item moved to the front
-  // so "next" starts from wherever we are rather than jumping immediately.
-  const order = playlist.map((_, i) => i);
-  for (let i = order.length - 1; i > 0; i--) {
-    const j = Math.floor(Math.random() * (i + 1));
-    [order[i], order[j]] = [order[j], order[i]];
-  }
-  if (playlistIndex >= 0) {
-    const at = order.indexOf(playlistIndex);
-    if (at > 0) [order[0], order[at]] = [order[at], order[0]];
-  }
-  shuffleOrder = order;
+function paintShuffle(on) {
+  shuffleEnabled = !!on;
+  shuffleBtn.setAttribute("aria-pressed", shuffleEnabled ? "true" : "false");
+  shuffleBtn.title = shuffleEnabled ? "Shuffle on" : "Shuffle";
 }
-
-// Index that auto-advance (ended) should play after the current one, or -1
-// when the playlist/shuffle run is exhausted.
-function getNextIndex() {
-  if (shuffleEnabled) {
-    if (!shuffleOrder.length) return -1;
-    const pos = shuffleOrder.indexOf(playlistIndex);
-    const next = pos + 1;
-    return next < shuffleOrder.length ? shuffleOrder[next] : -1;
-  }
-  return playlistIndex < playlist.length - 1 ? playlistIndex + 1 : -1;
-}
-
 function setShuffle(on) {
-  shuffleEnabled = on;
-  shuffleBtn.setAttribute("aria-pressed", on ? "true" : "false");
-  if (on) rebuildShuffleOrder();
-  try { localStorage.setItem("movi-shuffle", on ? "1" : "0"); } catch {}
+  paintShuffle(on);
+  try { playerEl.shuffle = shuffleEnabled; } catch {}
+  try { localStorage.setItem("movi-shuffle", shuffleEnabled ? "1" : "0"); } catch {}
 }
-// Next: explicit user action — plays the next item (shuffle-aware) even when
-// the autoplay toggle is off.
+
+function paintRepeat(mode) {
+  repeatMode = mode === "all" || mode === "one" ? mode : "off";
+  repeatBtn.dataset.mode = repeatMode;
+  repeatBtn.setAttribute("aria-pressed", repeatMode === "off" ? "false" : "true");
+  repeatBtn.title =
+    repeatMode === "all" ? "Repeat playlist" : repeatMode === "one" ? "Repeat one" : "Repeat off";
+  repeatBtn.querySelector(".icon-repeat-all").hidden = repeatMode === "one";
+  repeatBtn.querySelector(".icon-repeat-one").hidden = repeatMode !== "one";
+}
+function setRepeat(mode) {
+  paintRepeat(mode);
+  // "all" is what makes the queue join up: the element wraps past the last
+  // item, and its auto-advance turns on with it.
+  try { playerEl.loopMode = repeatMode; } catch {}
+  try { localStorage.setItem("movi-repeat", repeatMode); } catch {}
+}
+
+// Next: explicit user action — plays the next item even when the autoplay
+// toggle is off. The element resolves it, so it follows the shuffle run and
+// wraps when repeat-all is on; the load comes back through `itemchange`.
 nextBtn.addEventListener("click", () => {
   if (!playlist.length || playlistIndex < 0) return;
-  const next = getNextIndex();
-  if (next >= 0) playPlaylistItem(next, { forcePlay: true });
+  try { playerEl.next(); } catch {}
 });
 shuffleBtn.addEventListener("click", () => setShuffle(!shuffleEnabled));
-try { if (localStorage.getItem("movi-shuffle") === "1") setShuffle(true); } catch {}
+// Off → all → one → off, the order every player uses.
+repeatBtn.addEventListener("click", () => {
+  setRepeat(repeatMode === "off" ? "all" : repeatMode === "all" ? "one" : "off");
+});
+// The element's context menu can toggle both as well; follow it.
+playerEl.addEventListener("shufflechange", (e) => {
+  paintShuffle(!!e.detail?.enabled);
+  try { localStorage.setItem("movi-shuffle", shuffleEnabled ? "1" : "0"); } catch {}
+});
+playerEl.addEventListener("loopchange", (e) => {
+  paintRepeat(e.detail?.mode || (e.detail?.enabled ? "one" : "off"));
+  try { localStorage.setItem("movi-repeat", repeatMode); } catch {}
+});
 
 // Autoplay: when on, the next item plays automatically once the current one
-// ends. Defaults to on so existing auto-advance behaviour is preserved.
-let autoplayEnabled = true;
+// ends. Defaults to on so existing auto-advance behaviour is preserved. The
+// advance itself is the element's — `autoadvance` is the attribute for it —
+// so there is no second timer here racing its one.
 function setAutoplay(on) {
   autoplayEnabled = on;
   autoplayBtn.setAttribute("aria-checked", on ? "true" : "false");
   // Keep the element attribute in sync so its own autoplay path doesn't
   // start playback when the toggle is off.
-  if (on) playerEl.setAttribute("autoplay", "");
-  else playerEl.removeAttribute("autoplay");
+  if (on) {
+    playerEl.setAttribute("autoplay", "");
+    playerEl.setAttribute("autoadvance", "");
+  } else {
+    playerEl.removeAttribute("autoplay");
+    playerEl.removeAttribute("autoadvance");
+  }
   try { localStorage.setItem("movi-autoplay", on ? "1" : "0"); } catch {}
 }
 autoplayBtn.addEventListener("click", () => setAutoplay(!autoplayEnabled));
 try { setAutoplay(localStorage.getItem("movi-autoplay") !== "0"); } catch { setAutoplay(true); }
+try { if (localStorage.getItem("movi-shuffle") === "1") setShuffle(true); else paintShuffle(false); } catch { paintShuffle(false); }
+try { setRepeat(localStorage.getItem("movi-repeat") || "off"); } catch { paintRepeat("off"); }
 const fileMeta = new Map();
 const metaQueue = [];
 let metaProcessing = false;
@@ -530,15 +550,13 @@ function syncPlayerQueue() {
 playerEl.addEventListener("itemchange", (e) => {
   // Nothing is written by the element; this page loads the item.
   e.preventDefault();
-  const { index, previousIndex } = e.detail || {};
+  const { index } = e.detail || {};
   if (typeof index !== "number") return;
-  // Forward moves follow the shuffle run when it is on, so the bar's Next and
-  // the panel's Next never disagree. Backward is linear either way — the panel
-  // has no Previous of its own to match.
-  const forward = typeof previousIndex === "number" && index > previousIndex;
-  const target = forward && shuffleEnabled ? getNextIndex() : index;
-  if (target >= 0 && target < playlist.length) {
-    playPlaylistItem(target, { forcePlay: true });
+  // The index is already the answer: the element stepped through its own play
+  // order, so the shuffle run and the repeat-all wrap are baked in and the
+  // bar's Next, the panel's Next and auto-advance can't disagree.
+  if (index >= 0 && index < playlist.length) {
+    playPlaylistItem(index, { forcePlay: true });
   }
 });
 
@@ -562,7 +580,7 @@ function setPlaylist(files, { rootName } = {}) {
     playlistSearch.value = "";
     applySearchFilter();
   }
-  if (shuffleEnabled) rebuildShuffleOrder();
+  // A new queue draws a fresh order; setPlaylistItems does it inside.
   syncPlayerQueue();
   playPlaylistItem(0);
 }
@@ -583,7 +601,7 @@ function appendToPlaylist(files) {
     showPlaylist();
   }
   renderPlaylist();
-  if (shuffleEnabled) rebuildShuffleOrder();
+  // A new queue draws a fresh order; setPlaylistItems does it inside.
   syncPlayerQueue();
   if (wasEmpty) playPlaylistItem(0);
 }
