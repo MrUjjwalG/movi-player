@@ -9526,8 +9526,24 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
     this.lastBufferedTime = 0;
     this.bufferedRangeStart = this.startTime;
 
+    // Say it the way a looping media element says it.
+    //
+    // A native <video loop> does not fire `ended` — it reaches the last frame,
+    // seeks back and carries on, and what the page hears is seeking then
+    // seeked. The element already suppresses `ended` for exactly that reason
+    // and its comment promises the pair. Going through a real seek() used to
+    // provide them; turning the pass over here does not, and without this the
+    // turn was completely silent — measured across one, not a single event
+    // fired but the ordinary per-frame timeUpdate. A page had no way to know
+    // the file had started again short of watching currentTime go backwards.
+    //
+    // Safe to say from here: the spinner follows the player STATE, which this
+    // turn never moves out of "playing", so these are announcements and
+    // nothing more.
+    this.emit("seeking", 0);
     this.clock.seek(this.startTime);
     this.emit("timeUpdate", 0);
+    this.emit("seeked", 0);
     Logger.info(TAG, `Loop: wrapped with ${frames.length} frame(s) primed`);
     return true;
   }
