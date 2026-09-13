@@ -138,7 +138,20 @@ export interface MoviPlayerAttributes {
   postertime?: string;
   controls?: boolean | "";
   autoplay?: boolean | "";
-  loop?: boolean | "";
+  /**
+   * Repeat. A bare attribute repeats the ITEM, which is what it has always
+   * done; `loop="all"` repeats the QUEUE instead — the next item plays, and
+   * the last leads back to the first.
+   *
+   *   <movi-player loop>            this file, over and over
+   *   <movi-player loop="all">      the playlist, round and round
+   *
+   * Aliases for the queue: `playlist`, `queue`, `wrap`. `all` implies that the
+   * queue advances at all; an explicit `autoadvance` still owns the gap
+   * between items, so `autoadvance="5" loop="all"` is a five-second pause and
+   * a wrap.
+   */
+  loop?: boolean | "" | "all" | "one" | string;
   muted?: boolean | "";
   /** Play inline (don't auto-fullscreen on iOS). On any touch device, touch
    *  gestures (swipe-seek / volume) are suppressed while inline so they don't
@@ -218,8 +231,10 @@ export interface MoviPlayerAttributes {
   /**
    * Let the end of one item start the next. Off by default. A number is the
    * gap in seconds (`autoadvance="5"`), `loop` joins the ends of the queue
-   * (`autoadvance="loop"`, or `"5 loop"` for both). `loop` on the ELEMENT is a
-   * different thing and wins: it repeats the item, so nothing ever ends.
+   * (`autoadvance="loop"`, or `"5 loop"` for both) — though `loop="all"` on
+   * the element says the same thing more plainly, and is where to reach for
+   * it. A BARE `loop` on the element is a different thing and wins: it repeats
+   * the item, so nothing ever ends and the queue never moves.
    */
   autoadvance?: boolean | "" | number | string;
 

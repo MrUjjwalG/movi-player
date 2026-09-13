@@ -843,6 +843,11 @@ export class MoviElement extends HTMLElement {
   // poster (or flashing an old-source poster during a switch).
   private _posterGenId: number = 0;
   private _controls: boolean = false;
+  /** What `loop` was asked for. `_loop` is the ITEM half of it, kept as its
+   *  own boolean because everything that guards on "this never ends" — the
+   *  suppressed `ended`, the suppressed pause, the gapless turn — means the
+   *  item and not the queue. */
+  private _loopMode: "off" | "one" | "all" = "off";
   private _loop: boolean = false;
   private _muted: boolean = false;
   private _playsinline: boolean = false;
@@ -24575,8 +24580,7 @@ export class MoviElement extends HTMLElement {
     // the "No Video" placeholder) on a bare, controls-less player — done with a
     // class rather than :host(:not([controls])), which is flaky in Safari/FF.
     this.classList.toggle("movi-no-controls", !this._controls);
-    this._loop = this.hasAttribute("loop");
-    this.player?.setLoop(this._loop);
+    this.applyLoop(this.getAttribute("loop"));
     this._muted = this.hasAttribute("muted");
     this._playsinline = this.hasAttribute("playsinline");
     this._preload =
@@ -25448,8 +25452,7 @@ export class MoviElement extends HTMLElement {
         }
         break;
       case "loop":
-        this._loop = newValue !== null;
-    this.player?.setLoop(this._loop);
+        this.applyLoop(newValue);
         this.updateLoopUI();
         // Update loop handler if player exists
         if (this.player) {
@@ -33830,20 +33833,42 @@ export class MoviElement extends HTMLElement {
   }
 
   set loop(value: boolean) {
-    const enabled = !!value;
-    const changed = enabled !== this._loop;
-    this._loop = enabled;
-    if (this._loop) {
-      this.setAttribute("loop", "");
-    } else {
+    // Stays a boolean, and stays the ITEM. A page that has always written
+    // `el.loop = true` means the thing in front of it repeats, and that is
+    // what it keeps meaning; the queue is asked for by name, through loopMode
+    // or the attribute.
+    this.loopMode = value ? "one" : "off";
+  }
+
+  /**
+   * What `loop` is set to: "off", "one" (this item, over and over) or "all"
+   * (the queue — the next item plays, and the last leads back to the first).
+   *
+   * `loop` the boolean property is the "one" half of this, kept because that
+   * is what it has always meant.
+   */
+  get loopMode(): "off" | "one" | "all" {
+    return this._loopMode;
+  }
+
+  set loopMode(mode: "off" | "one" | "all") {
+    const next = mode === "all" ? "all" : mode === "one" ? "one" : "off";
+    const changed = next !== this._loopMode;
+    // Reflect it; the attribute is the single parser, so let it do the work.
+    if (next === "off") {
       this.removeAttribute("loop");
+    } else {
+      this.setAttribute("loop", next === "all" ? "all" : "");
     }
+    // An attribute that is already what we are setting fires no callback.
+    if (this._loopMode !== next) this.applyLoop(next === "off" ? null : next);
     this.updateLoopUI();
-    // The player primes the next pass itself when it knows a loop is coming —
-    // see setLoop / maybeStartLoopPreroll. Without this it would only ever
-    // learn at "ended", which is far too late to be seamless.
-    this.player?.setLoop(enabled);
-    if (changed) this.emitSettingChange("loopchange", { enabled });
+    if (changed) {
+      this.emitSettingChange("loopchange", {
+        enabled: next !== "off",
+        mode: next,
+      });
+    }
   }
 
   /**
@@ -38277,6 +38302,59 @@ export class MoviElement extends HTMLElement {
   /** Attribute form of auto-advance: presence, a delay in seconds, `loop`, or
    *  a delay and `loop` together. An explicit false/off/no is the attribute
    *  present and declining, which is how a framework writes it. */
+  /**
+   * Read the `loop` attribute, which is a token list rather than a flag.
+   *
+   *   loop                 the item, over and over — the original meaning, and
+   *                        what a bare attribute has always done
+   *   loop="all"           the QUEUE: this item ends, the next one plays, and
+   *                        the last leads back to the first
+   *
+   * `all` lives here rather than in `autoadvance` because a viewer asking for
+   * "loop" does not think of it as two features — they mean the thing in front
+   * of them repeats, and whether that thing is one file or a list is the only
+   * question. Aliases are taken generously for the same reason.
+   *
+   * `all` implies advancing: a queue that does not move cannot come round. An
+   * explicit `autoadvance` still owns the GAP between items, so
+   * `autoadvance="5"` with `loop="all"` is a five-second pause and a wrap.
+   */
+  private applyLoop(raw: string | null): void {
+    const tokens = (raw ?? "")
+      .toLowerCase()
+      .split(/[\s,]+/)
+      .filter(Boolean);
+    const declined = tokens.some(
+      (t) => t === "false" || t === "off" || t === "no" || t === "none",
+    );
+    if (raw === null || declined) {
+      this._loopMode = "off";
+    } else if (
+      tokens.some(
+        (t) => t === "all" || t === "playlist" || t === "queue" || t === "wrap",
+      )
+    ) {
+      this._loopMode = "all";
+    } else {
+      // Bare, or any of one/item/single/true.
+      this._loopMode = "one";
+    }
+    this._loop = this._loopMode === "one";
+    // Only the item repeat wants the pass primed ahead — the queue's turn is a
+    // different file and goes through a load.
+    this.player?.setLoop(this._loop);
+    if (this._loopMode === "all") {
+      this._playlistWraps = true;
+      this._autoAdvance = true;
+      this.refreshPlaylistUi();
+    } else if (!this.hasAttribute("autoadvance")) {
+      // Nothing else is asking for the queue to move or to join up.
+      this._playlistWraps = false;
+      this._autoAdvance = false;
+      this.refreshPlaylistUi();
+    }
+  }
+
   private applyAutoAdvance(raw: string | null): void {
     this.cancelAutoAdvance();
     const tokens = (raw ?? "")
@@ -38287,13 +38365,18 @@ export class MoviElement extends HTMLElement {
       (t) => t === "false" || t === "off" || t === "no" || t === "none",
     );
     if (raw === null || declined) {
-      this._autoAdvance = false;
+      // …unless loop="all" is the one asking for the queue to move.
+      this._autoAdvance = this._loopMode === "all";
       this._autoAdvanceDelay = 0;
-      this._playlistWraps = false;
+      this._playlistWraps = this._loopMode === "all";
       this.refreshPlaylistUi();
       return;
     }
-    this._playlistWraps = tokens.includes("loop") || tokens.includes("wrap");
+    // `loop="all"` asked for the join too; autoadvance only adds to it.
+    this._playlistWraps =
+      this._loopMode === "all" ||
+      tokens.includes("loop") ||
+      tokens.includes("wrap");
     const delay = tokens
       .map((t) => parseFloat(t))
       .find((n) => Number.isFinite(n));
