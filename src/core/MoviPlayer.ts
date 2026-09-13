@@ -7444,12 +7444,18 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
       return;
     }
 
-    // A primed pass needs its own backpressure. The renderer queue is what
-    // normally stops the demuxer running away, and primed frames deliberately
-    // do not go in it — so without this the loop reads the WHOLE file again
-    // behind the tail. Measured before it: 345 audio packets banked and the
-    // second turn arriving with the sound already a second into the new pass,
-    // which put the first frame 185ms adrift.
+    // Stop READING once enough is primed — not just stop keeping frames.
+    //
+    // This is what leaves the demuxer cursor where the new pass continues
+    // from. Capping the frames alone let the read run on to EOF behind the
+    // tail: every packet went through the decoder, every frame past the cap
+    // was closed, and the new pass then began with a demuxer that had nothing
+    // left to give — the picture stalled for three seconds about two seconds
+    // in, with the renderer queue pinned at 3.
+    //
+    // AFTER the wrap check above, never before it: a full preroll is exactly
+    // the state the turn happens in, so returning first means the turn is
+    // never looked for and the file simply stops looping.
     if (
       this._loopPrerolling &&
       this._loopPrerollFrames.length >= MoviPlayer.LOOP_PREROLL_MAX_FRAMES
@@ -7834,7 +7840,16 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
       : this.audioRenderer.getBufferedDuration();
 
     // Canvas/WebCodecs path
-    const videoBuffered = this.videoRenderer?.getQueueSize() ?? 0;
+    // Primed frames are decoded picture in hand, exactly like queued ones —
+    // they are simply waiting for the turn rather than for their presentation
+    // time. Counting them here is what puts a preroll under the SAME
+    // backpressure as ordinary playback: decoding throttles when there is
+    // enough picture, while the demuxer keeps reading into the read-ahead
+    // stash. Stopping the read as well (which a hard return did) left the
+    // pipeline cold at the turn, and playback hitched a second or two later
+    // when the primed frames ran out — 60 of them is exactly 2s at 30fps.
+    const videoBuffered =
+      (this.videoRenderer?.getQueueSize() ?? 0) + this._loopPrerollFrames.length;
 
     // Adaptive limits for software/hardware modes
     // During post-seek or while waiting for initial sync, we are more permissive with decoder queues
@@ -15606,13 +15621,15 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
       // cannot go in the queue — it is ordered by timestamp and would put them
       // in front of the tail. Hold them until the tail has played out.
       if (this._loopPrerolling) {
-        if (
-          this._loopPrerollFrames.length >= MoviPlayer.LOOP_PREROLL_MAX_FRAMES
-        ) {
-          frame.close();
-        } else {
-          this._loopPrerollFrames.push(frame);
-        }
+        // Keep every one. The cap belongs to the READ — it stops the demuxer
+        // once there is enough — and closing frames on top of it punched a
+        // hole in the new pass: the packets that made them had already moved
+        // the cursor past, so nothing after the turn ever covered that
+        // stretch. The picture held at the last primed frame for 137ms at
+        // exactly the two-second mark, which is where 60 frames run out at
+        // 30fps. What is kept beyond the cap here is only what was already in
+        // flight when the read stopped.
+        this._loopPrerollFrames.push(frame);
         return;
       }
 
