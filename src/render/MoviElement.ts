@@ -38444,7 +38444,12 @@ export class MoviElement extends HTMLElement {
       this._playlistWraps = true;
       this._autoAdvance = true;
       this.refreshPlaylistUi();
-    } else if (!this.hasAttribute("autoadvance")) {
+    } else if (this.hasAttribute("autoadvance")) {
+      // The queue still moves — but the wrap was the LOOP's, and the loop is
+      // off now. Re-read the attribute instead of leaving the ends joined;
+      // `autoadvance="loop"` is the one that keeps them joined on its own.
+      this.applyAutoAdvance(this.getAttribute("autoadvance"));
+    } else {
       // Nothing else is asking for the queue to move or to join up.
       this._playlistWraps = false;
       this._autoAdvance = false;
