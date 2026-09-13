@@ -1590,6 +1590,7 @@ export class MoviElement extends HTMLElement {
       "playlist",
       "playlistindex",
       "autoadvance",
+      "shuffle",
     ];
   }
 
@@ -14574,6 +14575,12 @@ export class MoviElement extends HTMLElement {
       rows.push(toggle("crop", "Crop black bars", this._cropBars));
     }
     rows.push(toggle("loop", "Loop", this._loop));
+    // One item is not a queue, and a Shuffle that can only draw the same card
+    // is a control that takes up room — the same reasoning the Next button is
+    // hidden by (see refreshPlaylistUi).
+    if (this._playlist.length > 1) {
+      rows.push(toggle("shuffle", "Shuffle", this._shuffle));
+    }
     root.innerHTML = rows.join("");
   }
 
@@ -14898,6 +14905,12 @@ export class MoviElement extends HTMLElement {
         } else if (row.dataset.toggle === "loop") {
           this.loop = !this._loop;
           this.showOSD(OSD.loop, this._loop ? "Loop On" : "Loop Off");
+        } else if (row.dataset.toggle === "shuffle") {
+          this.shuffle = !this._shuffle;
+          this.showOSD(
+            OSD.loop,
+            this._shuffle ? "Shuffle On" : "Shuffle Off",
+          );
         } else if (row.dataset.toggle === "ambient") {
           this.ambientMode = !this._ambientMode;
           this.updateAmbientUI();
@@ -24581,6 +24594,7 @@ export class MoviElement extends HTMLElement {
     // class rather than :host(:not([controls])), which is flaky in Safari/FF.
     this.classList.toggle("movi-no-controls", !this._controls);
     this.applyLoop(this.getAttribute("loop"));
+    this._shuffle = this.hasAttribute("shuffle");
     this._muted = this.hasAttribute("muted");
     this._playsinline = this.hasAttribute("playsinline");
     this._preload =
@@ -25203,6 +25217,15 @@ export class MoviElement extends HTMLElement {
       case "autoadvance":
         this.applyAutoAdvance(newValue);
         break;
+      case "shuffle": {
+        const on = newValue !== null && newValue !== "false" && newValue !== "off";
+        if (on !== this._shuffle) {
+          this._shuffle = on;
+          this.rebuildPlayOrder();
+          this.refreshPlaylistUi();
+        }
+        break;
+      }
       case "resume":
         this._resume = newValue !== null;
         break;
@@ -33826,6 +33849,42 @@ export class MoviElement extends HTMLElement {
     return this._loop;
   }
 
+  /**
+   * Play the queue in a random order. Off by default.
+   *
+   * Its own attribute rather than a `loop` token, because it is its own
+   * question: a queue can be shuffled and played through once, and it can be
+   * looped in the order it was given. They compose — `shuffle loop="all"` is
+   * the pair most people mean — but neither implies the other.
+   */
+  get shuffle(): boolean {
+    return this._shuffle;
+  }
+
+  set shuffle(value: boolean) {
+    const on = !!value;
+    if (on === this._shuffle) return;
+    this._shuffle = on;
+    if (on) {
+      this.setAttribute("shuffle", "");
+    } else {
+      this.removeAttribute("shuffle");
+    }
+    this.rebuildPlayOrder();
+    this.refreshPlaylistUi();
+    this.emitSettingChange("shufflechange", { enabled: on });
+  }
+
+  /**
+   * Draw a fresh order. No-op unless shuffle is on; the item playing now keeps
+   * its place, so this changes what comes next and nothing that is on screen.
+   */
+  reshuffle(): void {
+    if (!this._shuffle) return;
+    this.rebuildPlayOrder();
+    this.refreshPlaylistUi();
+  }
+
   /** How many times the current source has looped, from 0. Resets with the
    *  source. The `loop` event carries the same number as it happens. */
   get loopCount(): number {
@@ -38089,6 +38148,18 @@ export class MoviElement extends HTMLElement {
   private _playlist: MoviPlaylistItem[] = [];
   /** Where in the list we are; -1 means the current source is not from it. */
   private _playlistIndex: number = -1;
+  private _shuffle: boolean = false;
+  /**
+   * The order the queue plays in — a permutation of its indices, and the
+   * identity when shuffle is off, so every path below reads the same whether
+   * shuffle is on or not.
+   *
+   * Shuffling the ORDER rather than the queue itself is what keeps the list
+   * the host handed over intact: `playlist`, `playlistIndex` and the rows a
+   * page renders all still mean what they said, and turning shuffle off puts
+   * everything back without reloading anything.
+   */
+  private _playOrder: number[] = [];
   /** `playlistindex`, which is a request to start somewhere other than the top
    *  and can arrive either side of the list itself. */
   private _playlistStartIndex: number = 0;
@@ -38472,6 +38543,8 @@ export class MoviElement extends HTMLElement {
     this.cancelAutoAdvance();
     this._playlist = items;
     this._playlistIndex = -1;
+    // A new queue is a new order; the old permutation described other items.
+    this.rebuildPlayOrder();
     this.dispatchEvent(
       new CustomEvent("playlistchange", {
         detail: { items: [...items] },
@@ -38517,6 +38590,37 @@ export class MoviElement extends HTMLElement {
     this.loadPlaylistItem(start, false);
   }
 
+  /**
+   * Lay out the order the queue will play in.
+   *
+   * The item playing now keeps its place at the head, so turning shuffle on
+   * never restarts what is on screen — it decides what comes AFTER. Which
+   * also means the shuffled pass runs once: it is not re-drawn when the queue
+   * wraps, because the step that wraps is also the one the Next button's
+   * tooltip asks about, and an order that changed underneath that question
+   * would name one item and play another. `reshuffle()` is there for a host
+   * that wants a fresh draw, and turning shuffle off and on again is another.
+   */
+  private rebuildPlayOrder(): void {
+    const n = this._playlist.length;
+    const order = Array.from({ length: n }, (_, i) => i);
+    if (this._shuffle && n > 1) {
+      for (let i = n - 1; i > 0; i--) {
+        const j = Math.floor(Math.random() * (i + 1));
+        const t = order[i];
+        order[i] = order[j];
+        order[j] = t;
+      }
+      const at = order.indexOf(this._playlistIndex);
+      if (at > 0) {
+        const t = order[0];
+        order[0] = order[at];
+        order[at] = t;
+      }
+    }
+    this._playOrder = order;
+  }
+
   /** The index `dir` away, or -1 when there is nothing that way. */
   private resolvePlaylistStep(dir: 1 | -1): number {
     const n = this._playlist.length;
@@ -38524,11 +38628,17 @@ export class MoviElement extends HTMLElement {
     // Outside the queue — a host assigned its own `src`. Next starts the queue
     // rather than resuming it from an index that no longer describes anything;
     // Previous, with nothing behind it, is nothing.
-    if (this._playlistIndex < 0) return dir > 0 ? 0 : -1;
-    const target = this._playlistIndex + dir;
-    if (target >= 0 && target < n) return target;
+    if (this._playOrder.length !== n) this.rebuildPlayOrder();
+    const order = this._playOrder;
+    if (this._playlistIndex < 0) return dir > 0 ? order[0] : -1;
+    // Steps move along the ORDER, not the queue. Identical while shuffle is
+    // off, because the order is then the queue.
+    const pos = order.indexOf(this._playlistIndex);
+    if (pos < 0) return dir > 0 ? order[0] : -1;
+    const target = pos + dir;
+    if (target >= 0 && target < n) return order[target];
     if (!this._playlistWraps) return -1;
-    return dir > 0 ? 0 : n - 1;
+    return dir > 0 ? order[0] : order[n - 1];
   }
 
   /** What the button one step that way is about to play, for its tooltip. */

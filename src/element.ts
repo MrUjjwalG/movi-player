@@ -239,6 +239,22 @@ export interface MoviPlayerAttributes {
    * the item, so nothing ever ends and the queue never moves.
    */
   autoadvance?: boolean | "" | number | string;
+  /**
+   * Play the queue in a random order. Off by default.
+   *
+   * Its own attribute rather than a `loop` token, because it is its own
+   * question: a queue can be shuffled and played through once, and it can be
+   * looped in the order it was given. They compose — `shuffle loop="all"` is
+   * the pair most people mean — but neither implies the other.
+   *
+   * The ORDER is shuffled, not the queue: `playlist` and `playlistIndex` still
+   * describe the list the host handed over, so a page's own rows keep matching,
+   * and turning it off puts the order back without reloading anything. The item
+   * playing keeps its place, so switching shuffle on never restarts it. The
+   * draw stands until the queue is replaced, shuffle is switched off and on,
+   * or `reshuffle()` is called.
+   */
+  shuffle?: boolean | "";
 
   /** Enable ±10s fast-seek. Bare = every affordance; a token list narrows it to
    *  `buttons` (the bottom-bar pair), `keys` (arrow keys) and/or `gestures`
