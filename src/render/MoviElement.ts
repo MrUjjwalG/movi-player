@@ -24576,6 +24576,7 @@ export class MoviElement extends HTMLElement {
     // class rather than :host(:not([controls])), which is flaky in Safari/FF.
     this.classList.toggle("movi-no-controls", !this._controls);
     this._loop = this.hasAttribute("loop");
+    this.player?.setLoop(this._loop);
     this._muted = this.hasAttribute("muted");
     this._playsinline = this.hasAttribute("playsinline");
     this._preload =
@@ -25448,6 +25449,7 @@ export class MoviElement extends HTMLElement {
         break;
       case "loop":
         this._loop = newValue !== null;
+    this.player?.setLoop(this._loop);
         this.updateLoopUI();
         // Update loop handler if player exists
         if (this.player) {
@@ -27540,11 +27542,24 @@ export class MoviElement extends HTMLElement {
   private setupEventHandlers(): void {
     if (!this.player) return;
 
+    // The loop flag is usually set before there is a player to tell — it comes
+    // off the attribute at connect time, and the player is not built until a
+    // source loads. This runs on a fresh player, so it is where the setting
+    // catches up; without it the player never learns and every loop takes the
+    // restart path.
+    this.player.setLoop(this._loop);
+
     // Remove existing listeners
     this.eventHandlers.forEach((unsubscribe) => unsubscribe());
     this.eventHandlers.clear();
 
-    // Handle loop
+    // Handle loop.
+    //
+    // The player wraps a looping file without ending it (see its gapless-loop
+    // note), so on that path this never fires. It stays as the fallback for
+    // every case the priming cannot cover — no video track, a paused or
+    // seeking player at the turn, a preroll that failed — where "ended" still
+    // arrives and the file has to be started again the old way.
     if (this._loop) {
       const loopHandler = () => {
         this.play();
@@ -33807,6 +33822,10 @@ export class MoviElement extends HTMLElement {
       this.removeAttribute("loop");
     }
     this.updateLoopUI();
+    // The player primes the next pass itself when it knows a loop is coming —
+    // see setLoop / maybeStartLoopPreroll. Without this it would only ever
+    // learn at "ended", which is far too late to be seamless.
+    this.player?.setLoop(enabled);
     if (changed) this.emitSettingChange("loopchange", { enabled });
   }
 

@@ -5606,6 +5606,35 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
   // there rather than trusted from where it was armed.
   private _rewindAudioFloorPending = false;
   private static readonly DEMUX_TIMEOUT = 35000; // 35 seconds timeout (slightly more than HTTP timeout of 30s)
+  // ===== Gapless loop =====
+  //
+  // A loop used to be an ending followed by a beginning: handleEnded() stopped
+  // the clock and the presentation loop, the element heard "ended" and called
+  // play(), and play() ran the whole replay-from-ended seek — flush the
+  // decoders, clear the queue, seek the demuxer, wait for a keyframe, wait
+  // again for the queue to reach its cushion. Measured end to end on an 8s
+  // 1080p60 file: 71ms from the last frame of one pass to the first of the
+  // next, with the picture frozen for all of it. 20ms of that is the first
+  // frame decoding, 28ms is the cushion the seek path waits for, and both are
+  // buying something — there was nothing in it to simply delete.
+  //
+  // So do the work early instead. When the demuxer hits EOF the tail is
+  // already read, and once the decoder has emitted it the decoder is idle too
+  // — while the renderer still holds a second or more of picture to play. That
+  // window is free, and it is enough to seek back to the start and decode the
+  // opening of the file into a holding array. Nothing is flushed: frame 0 is
+  // an IDR, which a decoder accepts at any time.
+  //
+  // The pass turns over when the outgoing queue finally empties: the primed
+  // frames go in, the clock wraps, and the sound — which was never stopped —
+  // keeps being scheduled where the last pass left off (see beginLoopPass).
+  private _loopEnabled = false;
+  private _loopPrerolling = false;
+  private _loopPrerollFrames: VideoFrame[] = [];
+  /** Enough to cover the handover; a cap because these are DECODED frames and
+   *  an 8K one is tens of megabytes of VRAM apiece. */
+  private static readonly LOOP_PREROLL_MAX_FRAMES = 60;
+
   private eofReached = false;
   // Wall-clock time (performance.now) when eofReached first flipped true.
   // Used as a watchdog: if the normal drained-and-played-out conditions
@@ -7403,6 +7432,32 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
     // survives a rate change.
     this.maybeApplyPendingRate();
 
+    // The outgoing pass has run out and the next one is primed — turn over
+    // rather than end. Checked before the EOF branch because priming clears
+    // eofReached (reading restarts), so this is the only thing still watching.
+    if (this._loopPrerolling && this.maybeCompleteLoopWrap()) {
+      // processLoop schedules its own next pass; a bare return here stops the
+      // pipeline dead. Measured: the turn worked, and four seconds later
+      // "audio buffer empty and bound to video" because nothing had demuxed
+      // since.
+      this.animationFrameId = requestAnimationFrame(this.processLoop);
+      return;
+    }
+
+    // A primed pass needs its own backpressure. The renderer queue is what
+    // normally stops the demuxer running away, and primed frames deliberately
+    // do not go in it — so without this the loop reads the WHOLE file again
+    // behind the tail. Measured before it: 345 audio packets banked and the
+    // second turn arriving with the sound already a second into the new pass,
+    // which put the first frame 185ms adrift.
+    if (
+      this._loopPrerolling &&
+      this._loopPrerollFrames.length >= MoviPlayer.LOOP_PREROLL_MAX_FRAMES
+    ) {
+      this.animationFrameId = requestAnimationFrame(this.processLoop);
+      return;
+    }
+
     // Check if we've reached EOF and decoders are empty - transition to ended
     if (this.eofReached) {
       // Ask the decoder for its tail, once. WebCodecs holds reordered frames in
@@ -7434,6 +7489,11 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
           /* a decoder that cannot flush has nothing left to give */
         });
       }
+      // A looping file does not end here — it primes the next pass while the
+      // tail is still on screen. Only from EOF, and only once the tail is out
+      // of the decoder, which is what the flush above is for.
+      if (this.maybeStartLoopPreroll()) return;
+
       const currentTime = this.clock.getTime();
       const duration = this.mediaInfo?.duration ?? 0;
       const timeDone =
@@ -9302,6 +9362,152 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
   /**
    * Handle playback ended
    */
+  /**
+   * Turn the loop on or off. Off discards anything primed — the frames are
+   * decoded pictures and holding them for a loop that is no longer coming is
+   * VRAM nobody asked for.
+   */
+  setLoop(on: boolean): void {
+    if (this._loopEnabled === on) return;
+    this._loopEnabled = on;
+    if (!on) this.discardLoopPreroll();
+    Logger.debug(TAG, `Loop ${on ? "enabled" : "disabled"}`);
+  }
+
+  isLoopEnabled(): boolean {
+    return this._loopEnabled;
+  }
+
+  /** Let go of a primed pass: closing the frames, dropping the held packets,
+   *  and cancelling the seam the audio renderer was holding open. */
+  private discardLoopPreroll(): void {
+    if (!this._loopPrerolling && this._loopPrerollFrames.length === 0) {
+      return;
+    }
+    for (const f of this._loopPrerollFrames) {
+      try {
+        f.close();
+      } catch {
+        /* already closed */
+      }
+    }
+    this._loopPrerollFrames = [];
+    this._loopPrerolling = false;
+    if (!this.disableAudio) this.audioRenderer.cancelLoopPass();
+  }
+
+  /**
+   * Start decoding the next pass, if this is the moment for it.
+   *
+   * Every condition here is about having somewhere free to do the work. The
+   * demuxer is free because EOF means it has read everything. The decoder is
+   * free because the EOF flush has emitted its reorder tail and its queue has
+   * drained. And there is TIME to work in because the renderer still holds
+   * picture — without that the priming would be racing the very freeze it
+   * exists to remove, and we may as well take the old path.
+   */
+  private maybeStartLoopPreroll(): boolean {
+    if (!this._loopEnabled || this._loopPrerolling) return false;
+    if (!this.videoRenderer || !this.trackManager.getActiveVideoTrack()) {
+      return false;
+    }
+    // Only where the picture is the ONLY thing that has to turn over.
+    //
+    // With sound there are two seams, not one: the audio wraps when the
+    // outgoing samples run out, the picture when the outgoing queue empties,
+    // and those are not the same moment. The clock follows the audio, so the
+    // primed frames end up either behind it or well ahead — measured on a
+    // muxed 8s file, 2x went from 88ms to 225ms and 0.5x to over a second.
+    // Making that one boundary is the next piece of work; until then a file
+    // with a soundtrack keeps the restart it has always had.
+    if (this.trackManager.getActiveAudioTrack() && !this.disableAudio) {
+      return false;
+    }
+    if (this.audioDemuxer) return false;
+    if (!this.stateManager.is("playing")) return false;
+    // The tail has to be out of the decoder before the head goes in: the two
+    // passes share one decoder, and a picture still being reordered must not
+    // be interleaved with the opening IDR.
+    if (!this._eofFlushRequested) return false;
+    if (this.videoDecoder.queueSize > 0) return false;
+    // Nothing left on screen to cover the work.
+    if (this.videoRenderer.getQueueSize() === 0) return false;
+
+    this._loopPrerolling = true;
+    void this.startLoopPreroll();
+    return true;
+  }
+
+  private async startLoopPreroll(): Promise<void> {
+    try {
+      if (!this.demuxer) throw new Error("no demuxer");
+      // Arm the sound BEFORE a byte of the new pass is read.
+      //
+      // The audio is not held back the way the picture is, because it does not
+      // need to be: commitAudioBuffer places each buffer at `scheduledTime`
+      // and never honours a BACKWARD jump in the media timeline, so the
+      // opening samples of the new pass land exactly where the closing ones of
+      // the old pass end — contiguous, with nothing to hear. What did have to
+      // wait is the CLOCK, and beginLoopPass is what defers that to the seam.
+      //
+      // Holding the audio instead was measured and is worse: decoding it all
+      // at the turn put the first buffer 26ms late — "Gap filled: 26.1ms
+      // silence" — and the underrun that caused took the player into buffering
+      // 200ms later.
+      if (!this.disableAudio) this.audioRenderer.beginLoopPass(this.startTime);
+      await this.demuxer.seek(this.startTime);
+      // Reading stopped because of EOF; the file starts again from here.
+      this.eofReached = false;
+      this._eofFlushRequested = false;
+      Logger.info(
+        TAG,
+        "Loop: priming the next pass while the tail plays out",
+      );
+    } catch (e) {
+      Logger.warn(
+        TAG,
+        "Loop: priming seek failed — falling back to the restart path",
+        e,
+      );
+      this.discardLoopPreroll();
+      this.eofReached = true;
+    }
+  }
+
+  /**
+   * The seam. Called once the outgoing pass has no picture left to show.
+   *
+   * Order matters: the sound is armed BEFORE any of the new pass is decoded,
+   * so the first buffer of it is placed against a scheduler that already knows
+   * where the media time wraps — and placed at `scheduledTime`, which is where
+   * the outgoing pass's last sample ends. commitAudioBuffer never honours a
+   * backward jump in the media timeline, so it appends rather than re-anchors:
+   * no hole, no overlap, nothing to hear.
+   */
+  private maybeCompleteLoopWrap(): boolean {
+    if ((this.videoRenderer?.getQueueSize() ?? 0) > 0) return false;
+
+    const frames = this._loopPrerollFrames;
+    this._loopPrerollFrames = [];
+    this._loopPrerolling = false;
+
+    // The queue is empty by definition here, so this empties nothing — what it
+    // is for is the guards it resets alongside. lastPresentedPts above all:
+    // left at the end of the file it would refuse every frame of a pass that
+    // starts at zero, which is the same monotonic guard that keeps a stale
+    // pre-seek frame off the screen.
+    this.videoRenderer?.clearQueue();
+    // The sound is about to wrap under the picture; anchor on it rather than
+    // banking the difference (see reanchorRequested).
+    this.videoRenderer?.requestAudioReanchor();
+    for (const f of frames) this.videoRenderer?.queueFrame(f);
+
+    this.clock.seek(this.startTime);
+    this.emit("timeUpdate", 0);
+    Logger.info(TAG, `Loop: wrapped with ${frames.length} frame(s) primed`);
+    return true;
+  }
+
   private handleEnded(): void {
     Logger.info(TAG, "Playback ended");
 
@@ -9575,6 +9781,9 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
     // A seek repositions the cursor for its own reasons, so a rate-change
     // rewind's marks describe a cursor that no longer exists.
     this._rewindVideoUntilDts = -1;
+    // …and so does a primed loop pass. Its frames are the start of a file the
+    // viewer has just decided not to arrive at that way.
+    this.discardLoopPreroll();
     this._rewindAudioFrom = -1;
     this._rewindAudioFloorPending = false;
 
@@ -15389,6 +15598,21 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
       // But keep frames if PiP is active (canvas is visible in PiP window)
       if (document.hidden && !this.isPiPActive) {
         frame.close();
+        return;
+      }
+
+      // The next pass of a loop, decoded early. These belong to the START of
+      // the file while the renderer is still showing the END of it, so they
+      // cannot go in the queue — it is ordered by timestamp and would put them
+      // in front of the tail. Hold them until the tail has played out.
+      if (this._loopPrerolling) {
+        if (
+          this._loopPrerollFrames.length >= MoviPlayer.LOOP_PREROLL_MAX_FRAMES
+        ) {
+          frame.close();
+        } else {
+          this._loopPrerollFrames.push(frame);
+        }
         return;
       }
 

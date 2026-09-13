@@ -159,6 +159,24 @@ export class AudioRenderer {
    */
   private _streamEnded: boolean = false;
 
+  /**
+   * A media-time origin that takes effect at a CONTEXT time still in the
+   * future — how a gapless loop turns the corner.
+   *
+   * The audio clock is `firstBufferMediaTime + elapsed-since-the-anchor`, so
+   * moving the origin back to zero for the next pass cannot be done when that
+   * pass is SCHEDULED: its samples are queued a cushion ahead of the ones
+   * being heard, and re-anchoring then would drop the clock to zero while the
+   * end of the previous pass is still coming out of the speakers.
+   *
+   * So the new origin is armed with the context time its first sample begins
+   * at, and getAudioClock()/getCurrentTime() adopt it once the output has
+   * actually reached that point. Before the seam they read the old pass, after
+   * it the new one, and the samples themselves were never interrupted.
+   */
+  private _pendingAnchor: { atContextTime: number; mediaOrigin: number } | null =
+    null;
+
   /** Called by the player when the demuxer has no more audio to give. */
   endOfStream(): void {
     this._streamEnded = true;
@@ -1785,6 +1803,8 @@ export class AudioRenderer {
     // A seek or a new source means fresh audio is on its way, so the sound is
     // no longer over — see _streamEnded.
     this._streamEnded = false;
+    // Whatever loop seam was armed belonged to the run being thrown away.
+    this._pendingAnchor = null;
     // Silence first, always — not only under stable audio.
     //
     // Stopping a source ends it mid-waveform, which is a click, and it does
@@ -1920,6 +1940,7 @@ export class AudioRenderer {
       this.audioContext.state === "running" &&
       this.hasFirstBuffer
     ) {
+      this.adoptPendingAnchor();
       const elapsed =
         this.audioContext.currentTime - this.firstBufferScheduledAt;
       let computedTime =
@@ -2051,12 +2072,74 @@ export class AudioRenderer {
    * Returns -1 if audio hasn't started yet
    * Clamps to maxScheduledMediaTime when audio has ended
    */
+
+  /**
+   * Take up an armed origin once the output has actually reached it. Called
+   * from both clock readers rather than on a timer: the only moment that
+   * matters is the one being asked about.
+   */
+  private adoptPendingAnchor(): void {
+    const p = this._pendingAnchor;
+    if (!p || !this.audioContext) return;
+    if (this.audioContext.currentTime < p.atContextTime) return;
+    this.firstBufferScheduledAt = p.atContextTime;
+    this.firstBufferMediaTime = p.mediaOrigin;
+    this._pendingAnchor = null;
+    Logger.debug(
+      TAG,
+      `Loop seam reached — media clock now counts from ${p.mediaOrigin.toFixed(3)}s`,
+    );
+  }
+
+  /**
+   * The next pass of a looping file starts here.
+   *
+   * Everything about the sound carries on untouched — the scheduler keeps
+   * placing buffers at `scheduledTime`, so the first sample of the new pass
+   * abuts the last sample of the old one and there is no seam to hear. What
+   * changes is only the BOOKKEEPING: the media time those samples are labelled
+   * with wraps back to the start of the file, and the clock has to wrap with
+   * them, but not until they are heard.
+   *
+   * Returns the context time the new pass begins at, which is the point the
+   * armed anchor will be adopted at.
+   */
+  beginLoopPass(mediaOrigin: number): number {
+    const seam = Math.max(
+      this.scheduledTime,
+      this.audioContext?.currentTime ?? 0,
+    );
+    this._pendingAnchor = { atContextTime: seam, mediaOrigin };
+    // The clamp that keeps a runaway clock inside what has been scheduled is
+    // measured against the OLD pass's media times; left as it was it would
+    // pin the new pass to the end of the old one. The scheduler rebuilds it
+    // from the buffers that follow.
+    this.maxScheduledMediaTime = 0;
+    // Fresh audio is on its way, so the sound is not over — the same reason
+    // reset() clears this, without any of reset()'s teardown.
+    this._streamEnded = false;
+    Logger.debug(
+      TAG,
+      `Loop pass armed at context ${seam.toFixed(3)}s → media ${mediaOrigin.toFixed(3)}s`,
+    );
+    return seam;
+  }
+
+  /** Drop an armed loop seam that is not going to happen after all. */
+  cancelLoopPass(): void {
+    if (this._pendingAnchor) {
+      this._pendingAnchor = null;
+      Logger.debug(TAG, "Loop pass cancelled");
+    }
+  }
+
   getAudioClock(): number {
     if (
       this.audioContext &&
       this.audioContext.state === "running" &&
       this.hasFirstBuffer
     ) {
+      this.adoptPendingAnchor();
       const elapsed =
         this.audioContext.currentTime - this.firstBufferScheduledAt;
       let computedTime =
