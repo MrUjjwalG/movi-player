@@ -145,11 +145,13 @@ export interface MoviPlayerAttributes {
    *
    *   <movi-player loop>            this file, over and over
    *   <movi-player loop="all">      the playlist, round and round
+   *   <movi-player loop="all 5">    …with five seconds between items
+   *   <movi-player loop="5">        the same — a gap can only mean the queue
    *
    * Aliases for the queue: `playlist`, `queue`, `wrap`. `all` implies that the
-   * queue advances at all; an explicit `autoadvance` still owns the gap
-   * between items, so `autoadvance="5" loop="all"` is a five-second pause and
-   * a wrap.
+   * queue advances at all. The number is the gap between items, which saves
+   * reaching for a second attribute to say it; `autoadvance` still wins when
+   * it names one of its own.
    */
   loop?: boolean | "" | "all" | "one" | string;
   muted?: boolean | "";

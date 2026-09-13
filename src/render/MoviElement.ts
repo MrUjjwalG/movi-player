@@ -38100,6 +38100,10 @@ export class MoviElement extends HTMLElement {
   private _playlistOwnsStartAt: boolean = false;
   private _autoAdvance: boolean = false;
   /** Seconds of quiet between one item ending and the next starting. */
+  /** The gap either attribute asked for, kept apart so the order they are set
+   *  in cannot decide the answer. _autoAdvanceDelay is the settled value. */
+  private _loopGap: number = 0;
+  private _autoAdvanceGap: number = 0;
   private _autoAdvanceDelay: number = 0;
   /** Whether the ends of the list join up — for the buttons as much as for
    *  auto-advance, so Next on the last item and the key that does the same
@@ -38319,6 +38323,19 @@ export class MoviElement extends HTMLElement {
    * explicit `autoadvance` still owns the GAP between items, so
    * `autoadvance="5"` with `loop="all"` is a five-second pause and a wrap.
    */
+  /**
+   * Whose number is the gap between items.
+   *
+   * `autoadvance` wins when it names one — it is the attribute whose whole
+   * job is the timing — and `loop`'s own number covers the case where nobody
+   * wanted a second attribute just to say "five seconds". Settled in one place
+   * so that setting the two in either order lands the same way.
+   */
+  private settleAutoAdvanceGap(): void {
+    this._autoAdvanceDelay =
+      this._autoAdvanceGap > 0 ? this._autoAdvanceGap : this._loopGap;
+  }
+
   private applyLoop(raw: string | null): void {
     const tokens = (raw ?? "")
       .toLowerCase()
@@ -38327,18 +38344,27 @@ export class MoviElement extends HTMLElement {
     const declined = tokens.some(
       (t) => t === "false" || t === "off" || t === "no" || t === "none",
     );
+    // A number here is the gap between items — the thing autoadvance was the
+    // only way to say. `loop="all 5"`, or just `loop="5"`: asking a loop to
+    // space things out can only mean the queue, so the number implies it.
+    const gap = tokens.map((t) => parseFloat(t)).find((n) => Number.isFinite(n));
+    const saysItem = tokens.some(
+      (t) => t === "one" || t === "item" || t === "single",
+    );
+    const saysQueue = tokens.some(
+      (t) => t === "all" || t === "playlist" || t === "queue" || t === "wrap",
+    );
     if (raw === null || declined) {
       this._loopMode = "off";
-    } else if (
-      tokens.some(
-        (t) => t === "all" || t === "playlist" || t === "queue" || t === "wrap",
-      )
-    ) {
+    } else if (saysQueue || (gap !== undefined && !saysItem)) {
       this._loopMode = "all";
     } else {
       // Bare, or any of one/item/single/true.
       this._loopMode = "one";
     }
+    this._loopGap =
+      this._loopMode === "all" && gap !== undefined && gap > 0 ? gap : 0;
+    this.settleAutoAdvanceGap();
     this._loop = this._loopMode === "one";
     // Only the item repeat wants the pass primed ahead — the queue's turn is a
     // different file and goes through a load.
@@ -38367,7 +38393,8 @@ export class MoviElement extends HTMLElement {
     if (raw === null || declined) {
       // …unless loop="all" is the one asking for the queue to move.
       this._autoAdvance = this._loopMode === "all";
-      this._autoAdvanceDelay = 0;
+      this._autoAdvanceGap = 0;
+      this.settleAutoAdvanceGap();
       this._playlistWraps = this._loopMode === "all";
       this.refreshPlaylistUi();
       return;
@@ -38380,7 +38407,8 @@ export class MoviElement extends HTMLElement {
     const delay = tokens
       .map((t) => parseFloat(t))
       .find((n) => Number.isFinite(n));
-    this._autoAdvanceDelay = delay && delay > 0 ? delay : 0;
+    this._autoAdvanceGap = delay && delay > 0 ? delay : 0;
+    this.settleAutoAdvanceGap();
     this._autoAdvance = true;
     // The wrap moved, so the ends of the list did too.
     this.refreshPlaylistUi();
