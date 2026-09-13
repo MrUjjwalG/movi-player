@@ -2506,6 +2506,7 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
     this.emit("loadStart", undefined);
     this.lastBufferedTime = 0;
     this.bufferedRangeStart = 0;
+    this._loopCount = 0;
 
     // Drop the previous source's cover art so a soft-reload on the same
     // instance (no destroy) doesn't keep showing stale artwork when the
@@ -5199,6 +5200,9 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
     // seek completion transitions straight to "playing".
     if (wasEnded && this.demuxer) {
       Logger.debug(TAG, "Replaying from beginning after ended state");
+      // This branch serves a manual replay too — pressing play on a finished
+      // file. Only a looping one is a loop.
+      if (this._loopEnabled) this.noteLoopTurn();
       this.requestWakeLock();
       // Set the resume intent BEFORE awaiting seek(0). Replay data is always
       // already buffered, so notifySeekCompletion can fire synchronously
@@ -5629,6 +5633,8 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
   // frames go in, the clock wraps, and the sound — which was never stopped —
   // keeps being scheduled where the last pass left off (see beginLoopPass).
   private _loopEnabled = false;
+  /** Turns this source has come back round, from 1. Reset when the source is. */
+  private _loopCount = 0;
   private _loopPrerolling = false;
   private _loopPrerollFrames: VideoFrame[] = [];
   /** Enough to cover the handover; a cap because these are DECODED frames and
@@ -9393,6 +9399,23 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
     return this._loopEnabled;
   }
 
+  /** How many times this source has looped, from 0. */
+  getLoopCount(): number {
+    return this._loopCount;
+  }
+
+  /**
+   * The file has come back round. One place for it, because there are two
+   * routes to here — the gapless turn, and the restart a file with a
+   * soundtrack still takes through `ended` — and a page counting loops should
+   * not have to care which one it got.
+   */
+  private noteLoopTurn(): void {
+    this._loopCount++;
+    this.emit("loop", { count: this._loopCount });
+    Logger.debug(TAG, `Loop: pass ${this._loopCount}`);
+  }
+
   /** Let go of a primed pass: closing the frames, dropping the held packets,
    *  and cancelling the seam the audio renderer was holding open. */
   private discardLoopPreroll(): void {
@@ -9544,6 +9567,7 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
     this.clock.seek(this.startTime);
     this.emit("timeUpdate", 0);
     this.emit("seeked", 0);
+    this.noteLoopTurn();
     Logger.info(TAG, `Loop: wrapped with ${frames.length} frame(s) primed`);
     return true;
   }

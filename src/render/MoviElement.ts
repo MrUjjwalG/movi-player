@@ -28189,6 +28189,17 @@ export class MoviElement extends HTMLElement {
       this.player?.off("seeked", seekedHandler),
     );
 
+    // The file came back round. A native element has nothing to say here — a
+    // page has to infer the turn from a seek nobody asked for — so this is the
+    // one place the count is available directly. Fires on both routes: the
+    // gapless turn and the restart a file with a soundtrack still takes.
+    const loopTurnHandler = (detail: { count: number }) =>
+      this.dispatchEvent(new CustomEvent("loop", { detail }));
+    this.player.on("loop", loopTurnHandler);
+    this.eventHandlers.set("loop", () =>
+      this.player?.off("loop", loopTurnHandler),
+    );
+
     const durationChangeHandler = (duration: number) =>
       this.dispatchEvent(new CustomEvent("durationchange", { detail: duration }));
     this.player.on("durationChange", durationChangeHandler);
@@ -33810,6 +33821,12 @@ export class MoviElement extends HTMLElement {
 
   get loop(): boolean {
     return this._loop;
+  }
+
+  /** How many times the current source has looped, from 0. Resets with the
+   *  source. The `loop` event carries the same number as it happens. */
+  get loopCount(): number {
+    return this.player?.getLoopCount() ?? 0;
   }
 
   set loop(value: boolean) {

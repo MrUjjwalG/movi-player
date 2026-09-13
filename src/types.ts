@@ -403,6 +403,18 @@ export interface PlayerEventMap {
   seekcomplete: number;
   bufferUpdate: { start: number; end: number }[];
   ended: void;
+  /**
+   * A looping file started over.
+   *
+   * There is no such event on a native media element — a looping one reports
+   * only `seeking` and `seeked`, and a page that wants to COUNT the turns has
+   * to infer them from a seek nobody asked for. This says it outright.
+   *
+   * `count` is how many times this source has come back round, from 1, and
+   * resets when the source does. Fires on both routes: the gapless turn, and
+   * the restart a file with a soundtrack still takes.
+   */
+  loop: { count: number };
   preloadcomplete: void;
   /**
    * Embedded cover art extracted from the source (ID3v2 APIC, FLAC PICTURE,
