@@ -610,7 +610,10 @@ but neither implies the other.
 
 The order is drawn on load and redrawn whenever the queue changes or shuffle is
 switched back on, with the item playing **now** kept at the front, so turning it
-on changes what comes next and nothing that is on screen. Everything that steps
+on changes what comes next and nothing that is on screen. Each **pass** gets its
+own order too: coming round to the top under [`loop="all"`](#loop) draws a fresh
+one rather than replaying the last — and the item that just played is kept off
+the front of it, so the seam never repeats a track back to back. Everything that steps
 through the queue follows it: Next and Previous, the keys, auto-advance, and the
 wrap at the end. `playlistIndex` still means the item's place in the **queue**,
 not in the shuffled order.

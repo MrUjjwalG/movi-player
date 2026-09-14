@@ -38289,13 +38289,13 @@ export class MoviElement extends HTMLElement {
    * with no wrap, or no queue at all — and changes nothing in that case.
    */
   next(): boolean {
-    const target = this.resolvePlaylistStep(1);
+    const target = this.resolvePlaylistStep(1, true);
     return target < 0 ? false : this.loadPlaylistItem(target, true);
   }
 
   /** Play the previous item. False when there isn't one. */
   previous(): boolean {
-    const target = this.resolvePlaylistStep(-1);
+    const target = this.resolvePlaylistStep(-1, true);
     return target < 0 ? false : this.loadPlaylistItem(target, true);
   }
 
@@ -38626,8 +38626,38 @@ export class MoviElement extends HTMLElement {
     this._playOrder = order;
   }
 
-  /** The index `dir` away, or -1 when there is nothing that way. */
-  private resolvePlaylistStep(dir: 1 | -1): number {
+  /**
+   * A fresh order for a new pass through a shuffled queue. Unlike
+   * {@link rebuildPlayOrder} the item just played is kept OFF the front —
+   * coming round to the top should not replay it back to back.
+   */
+  private redrawPlayOrderForNewPass(): void {
+    const n = this._playlist.length;
+    const order = Array.from({ length: n }, (_, i) => i);
+    for (let i = n - 1; i > 0; i--) {
+      const j = Math.floor(Math.random() * (i + 1));
+      const t = order[i];
+      order[i] = order[j];
+      order[j] = t;
+    }
+    if (n > 1 && order[0] === this._playlistIndex) {
+      const j = 1 + Math.floor(Math.random() * (n - 1));
+      const t = order[0];
+      order[0] = order[j];
+      order[j] = t;
+    }
+    this._playOrder = order;
+  }
+
+  /**
+   * The index `dir` away, or -1 when there is nothing that way.
+   *
+   * `commit` says this is the move itself rather than a question about it. It
+   * only matters at the wrap: a shuffled queue coming round to the top draws a
+   * NEW order there, and `hasNext` and the button tooltips ask this same
+   * question constantly — they must not shuffle the deck to answer it.
+   */
+  private resolvePlaylistStep(dir: 1 | -1, commit = false): number {
     const n = this._playlist.length;
     if (n < 2) return -1;
     // Outside the queue — a host assigned its own `src`. Next starts the queue
@@ -38643,6 +38673,14 @@ export class MoviElement extends HTMLElement {
     const target = pos + dir;
     if (target >= 0 && target < n) return order[target];
     if (!this._playlistWraps) return -1;
+    // Round to the top. One permutation played over and over is not a shuffle
+    // — it is a reordered playlist — so the new pass gets a new order. Only
+    // forwards: stepping BACK off the front is a retrace, and a new order
+    // there would be a jump into a queue the listener has not heard yet.
+    if (commit && dir > 0 && this._shuffle) {
+      this.redrawPlayOrderForNewPass();
+      return this._playOrder[0];
+    }
     return dir > 0 ? order[0] : order[n - 1];
   }
 
@@ -38787,7 +38825,11 @@ export class MoviElement extends HTMLElement {
     this._autoAdvanceTimer = window.setTimeout(
       () => {
         this._autoAdvanceTimer = null;
-        this.loadPlaylistItem(target, true);
+        // Resolved again, as the move this time — the step above was the
+        // question of whether the list had run out.
+        const moving = this.resolvePlaylistStep(1, true);
+        if (moving < 0) return;
+        this.loadPlaylistItem(moving, true);
       },
       Math.max(0, this._autoAdvanceDelay * 1000),
     );
