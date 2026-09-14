@@ -1171,7 +1171,7 @@ How long an interruption has to last, in **seconds**, before the viewer is shown
 <movi-player src="video.mp4" spinnerdelay="0.25 1"></movi-player>
 ```
 
-**Value:** Seconds. `0` — the default — shows the spinner the moment the player says it is loading, which is how the player has always behaved.
+**Value:** Seconds. The default is **`"1 2"`** — a mid-play stall is reported after a second, an opening after two — so an interruption the player sorts out inside that is one the viewer never hears about. `0` shows the spinner the moment the player says it is loading, which is how this behaved before the default existed.
 
 A second number, separated by a space or a comma, is the wait the **opening** gets — the stretch before this source has put a frame up. One number keeps its old meaning and holds every interruption, opening included, to the same wait.
 
@@ -1185,7 +1185,7 @@ It reaches the other two surfaces that say the same thing: strip mode's pulsing 
 
 **Behavior:** The wait is in addition to the per-reason grace the player already applies (seeks and picture catch-up are held back briefly on their own, and a picture that is still moving never earns a spinner at all). Both have to pass, so a value of `0` does not switch those off.
 
-**Use Case:** A local file on a fast machine, or a well-provisioned CDN, where the honest answer to most interruptions is that nothing worth reporting happened. Leave it at `0` where stalls are real and long — on a thin mobile link, hiding the spinner for a second reads as a player that has died.
+**Use Case:** Lower it where stalls are real and long — on a thin mobile link, holding the ring back for a second reads as a player that has died, and `spinnerdelay="0.25"` or `0` reports them as they happen. Raise it where the source is local or a well-provisioned CDN and the honest answer to most interruptions is that nothing worth reporting happened.
 
 ---
 
@@ -1889,7 +1889,7 @@ player.spinnerDelay = 0.4; // Interruptions under 400ms pass in silence
 player.spinnerDelay = 0;   // Show the spinner as soon as loading starts
 ```
 
-One number, which is what this property is: setting it holds the opening to the same wait as everything else. To give the opening its own, set the attribute — `player.setAttribute("spinnerdelay", "0.25 1")`.
+One number, which is what this property is: setting it holds the opening to the same wait as everything else, replacing the split the default carries. To give the opening its own, set the attribute — `player.setAttribute("spinnerdelay", "0.25 1")`.
 
 ---
 

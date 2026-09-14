@@ -864,14 +864,36 @@ export class MoviElement extends HTMLElement {
   // SettingsStorage — sync drift is per-source, so a global value would
   // mis-shift unrelated videos.
   private _subtitleDelay: number = 0;
+  /**
+   * The wait a page gets without asking for one.
+   *
+   * A ring that comes and goes before it can be read is not information — it
+   * is a player reporting a fault over playback that is about to be fine, and
+   * opening a local file is the case where that happens every single time:
+   * the file is there, the open takes a few hundred milliseconds, and the
+   * viewer is shown a "something is wrong" for all of them. So the honest
+   * default is a wait, not an instant ring: anything the player sorts out
+   * inside it, the viewer never hears about.
+   *
+   * The opening gets longer than a mid-play stall, for the reason the two are
+   * separate at all — a video that has not started has its poster up and looks
+   * like it is starting, while one that stops mid-picture has frozen and wants
+   * reporting sooner.
+   *
+   * `spinnerdelay` overrides both, and `spinnerdelay="0"` is how a page asks
+   * for the ring the instant anything loads, which is what this did before.
+   */
+  private static readonly DEFAULT_SPINNER_DELAY_S = 1;
+  private static readonly DEFAULT_SPINNER_DELAY_OPENING_S = 2;
+
   // How long an interruption has to last before the viewer is shown a spinner,
   // in seconds. Not persisted and not a viewer setting: it describes what this
   // page is serving, not what this viewer prefers. See spinnerDelayMs.
-  private _spinnerDelay: number = 0;
+  private _spinnerDelay: number = MoviElement.DEFAULT_SPINNER_DELAY_S;
   // The same, for the stretch before this source has ever put a frame up.
-  // `null` — the default, and what one number means — holds the opening to
-  // whatever the rest of playback is held to. See spinnerDelayMs.
-  private _spinnerDelayOpening: number | null = null;
+  // One number sets both; `spinnerdelay="1 2"` splits them. See spinnerDelayMs.
+  private _spinnerDelayOpening: number | null =
+    MoviElement.DEFAULT_SPINNER_DELAY_OPENING_S;
   // Host-supplied pluggable subtitle renderer (e.g. jassub/libass). Stored so it
   // survives a source change: re-applied to each fresh player instance.
   private _subtitleRenderer: SubtitleRenderer | null = null;
@@ -30755,13 +30777,20 @@ export class MoviElement extends HTMLElement {
     stall: number;
     opening: number | null;
   } {
-    if (value === null) return { stall: 0, opening: null };
+    // Absent, or present and saying nothing — the defaults, not zero. An
+    // attribute that was never written must not be a stricter policy than the
+    // one a page gets for leaving it off.
+    const fallback = {
+      stall: MoviElement.DEFAULT_SPINNER_DELAY_S,
+      opening: MoviElement.DEFAULT_SPINNER_DELAY_OPENING_S,
+    };
+    if (value === null) return fallback;
     const parts = value
       .trim()
       .split(/[\s,]+/)
       .map((n) => parseFloat(n))
       .filter((n) => Number.isFinite(n));
-    if (parts.length === 0) return { stall: 0, opening: null };
+    if (parts.length === 0) return fallback;
     return {
       stall: Math.max(0, parts[0]),
       opening: parts.length > 1 ? Math.max(0, parts[1]) : null,
