@@ -30919,6 +30919,24 @@ export class MoviElement extends HTMLElement {
     // framesPresented restarts from zero on a seek, so a negative delta is a
     // new run rather than time going backwards — take the sample and wait.
     const drawn = frames - this._movingFrames;
+    // The clock going BACKWARDS is the same thing said the other way: a seek,
+    // or a loop coming round to the top. Both readings below are differences
+    // against the previous sample, and a restart makes both of them lie — the
+    // frame count falls to zero and the time falls to the new position, so a
+    // picture that never stopped reads as stopped, for the whole 600ms until
+    // the next sample. That is long enough to put a spinner up over playback
+    // that is running, which is exactly what this method exists to prevent:
+    // on a loop the turn is a seek back to 0, so every turn scored a "not
+    // moving" and the ring appeared with nothing behind it.
+    //
+    // So re-base and keep the verdict we had. A restart is not evidence of
+    // stopping; the next sample is a real measurement and decides.
+    if (!first && (drawn < 0 || time < this._movingTime)) {
+      this._movingAt = now;
+      this._movingFrames = frames;
+      this._movingTime = time;
+      return this._moving;
+    }
     const fps = (drawn * 1000) / Math.max(1, elapsed);
     // Past the end of the video track the frame reading is not a reading of
     // anything: the file has no more frames, so the clock alone is the whole
