@@ -107,6 +107,21 @@ export class AudioRenderer {
 
   // Audio clock tracking for A/V sync
   private firstBufferScheduledAt: number = 0;
+  /**
+   * The context time this RUN of sound starts at — the moment the picture has
+   * to wait out before the first of it reaches the speakers. See
+   * secondsUntilAudible().
+   *
+   * Not the same thing as firstBufferScheduledAt, which is the anchor the
+   * media clock's arithmetic hangs off and is RE-BASED whenever that
+   * arithmetic needs it to be — most importantly by a speed change, which
+   * moves it to "now" so the old rate's elapsed time is not read at the new
+   * one. Nothing about the sound restarts there; it is playing, and has been.
+   * Reading that re-based anchor as a run start answers "how long until it is
+   * audible" with the device's whole output latency, which on Bluetooth is a
+   * quarter of a second of picture parked at every speed change.
+   */
+  private soundRunStartedAt: number = 0;
   private firstBufferMediaTime: number = 0;
   private hasFirstBuffer: boolean = false;
   // performance.now() of the last buffer underrun (a hole we patched with
@@ -959,6 +974,8 @@ export class AudioRenderer {
         // Pivot global clock if we underrun (resync)
         this.firstBufferScheduledAt = minTime;
         this.firstBufferMediaTime = audioTime;
+        // The sound ran out and begins again here, so this one IS a run start.
+        this.soundRunStartedAt = minTime;
       }
     }
 
@@ -1026,6 +1043,8 @@ export class AudioRenderer {
     if (!this.hasFirstBuffer) {
       this.firstBufferScheduledAt = when;
       this.firstBufferMediaTime = audioTime;
+      // A genuine start: nothing is coming out of the speakers yet.
+      this.soundRunStartedAt = when;
       this.hasFirstBuffer = true;
       Logger.debug(
         TAG,
@@ -1885,6 +1904,7 @@ export class AudioRenderer {
     // Reset clock tracking
     this.hasFirstBuffer = false;
     this.firstBufferScheduledAt = 0;
+    this.soundRunStartedAt = 0;
     this.firstBufferMediaTime = 0;
     this.scheduledCount = 0;
     this.maxScheduledMediaTime = 0;
@@ -2039,7 +2059,7 @@ export class AudioRenderer {
     const latency = ctx.outputLatency || ctx.baseLatency || 0;
     return Math.max(
       0,
-      this.firstBufferScheduledAt + latency - ctx.currentTime,
+      this.soundRunStartedAt + latency - ctx.currentTime,
     );
   }
 
