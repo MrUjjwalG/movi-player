@@ -1587,6 +1587,22 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
     return !!this.videoRenderer && !!this.trackManager?.getActiveVideoTrack();
   }
   private wasPlayingBeforeRebuffer: boolean = false; // Track if we were playing before entering rebuffering state
+  /**
+   * Buffering is over and play() has been called, but the state is not
+   * "playing" yet.
+   *
+   * Leaving buffering sets "paused" and then calls play(), which is async — it
+   * resumes the AudioContext and re-anchors before it flips the state, ~60ms
+   * later. The decoder does not wait for any of that: it is mid-burst on the
+   * packets the prebuffer read, and onFrame bins every frame that arrives
+   * outside "playing"/"buffering". Measured on a 20s 1080p30 video-only file,
+   * first play: 33 frames closed between 0.300s and 1.400s, and the picture
+   * then froze for 1.1s at 0.300s while the clock ran through the hole they
+   * left. The frames were decoded, correct, and thrown away.
+   *
+   * So this says the resume is in flight, and the queue stays open across it.
+   */
+  private _resumeToPlayPending: boolean = false;
   private _stallStartTime: number = 0; // When stall was first detected
   /** performance.now() of the last frame decoded while a seek waited for sync —
    *  the signal that the seek is still working. See the seek deadline. */
@@ -5416,6 +5432,8 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
       stateForPlay === "paused" ||
       stateForPlay === "seeking"
     ) {
+      // Arrived — the state itself carries the queue open from here.
+      this._resumeToPlayPending = false;
       if (!this.stateManager.setState("playing")) {
         Logger.error(
           TAG,
@@ -5505,6 +5523,9 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
     // notifySeekCompletion). Left latched, a genuine stall much later would
     // show no spinner at all.
     this.suppressSeekSpinner = false;
+    // A pause lands on top of a resume that had not arrived yet — the viewer
+    // changed their mind mid-flight. Nothing is resuming any more.
+    this._resumeToPlayPending = false;
 
     if (!this.stateManager.canPause()) {
       Logger.warn(TAG, "Cannot pause in current state");
@@ -6858,6 +6879,9 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
         // pipeline picking back up — from a cold first play, and not hand it
         // the full three-second grace (see playGraceMs).
         this._stallResumeAt = performance.now();
+        // Before the state moves, not after: the decoder can hand over a frame
+        // between these two lines. See _resumeToPlayPending.
+        this._resumeToPlayPending = true;
         this.stateManager.setState("paused");
         this.wasPlayingBeforeRebuffer = false;
         // Resume AudioContext before play() so audio picks up from where it was
@@ -6870,6 +6894,7 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
         // and deserves its spinner.
         this.suppressSeekSpinner = false;
         this.play().catch((err) => {
+          this._resumeToPlayPending = false;
           Logger.error(TAG, "Failed to resume playback after rebuffering:", err);
         });
       }
@@ -15703,6 +15728,10 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
         this.videoRenderer &&
         (this.stateManager.getState() === "playing" ||
           this.stateManager.getState() === "buffering" ||
+          // Leaving buffering parks on "paused" for the length of an async
+          // play(), and the decoder keeps handing frames over throughout —
+          // see _resumeToPlayPending.
+          this._resumeToPlayPending ||
           this.waitingForVideoSync ||
           // …and for the one frame a forced completion left owing. See
           // _pictureOwedFrom: without this the frames a paused seek was
