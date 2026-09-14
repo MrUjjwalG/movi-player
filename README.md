@@ -187,7 +187,7 @@ The headline changes — see the [full changelog](CHANGELOG.md) for everything:
 - **Host-supplied error screen** — restyle via `::part()`, replace via `slot="error"`, observe via the `errordisplay` event.
 - **Pluggable `SubtitleRenderer`** — plug in a custom ASS/SSA renderer (e.g. jassub) for full styling.
 - **`registerSourceAdapter()`** — teach the player custom `src` schemes (`s3://`, `ipfs://`, `ws://`) globally.
-- **Settings-change events** — `aspectchange`, `loopchange`, `stablevolumechange`, `hdrchange`, `ambientchange`, `rotatechange`, `audioonlychange`.
+- **Settings-change events** — `aspectchange`, `loopchange`, `shufflechange`, `stablevolumechange`, `hdrchange`, `ambientchange`, `rotatechange`, `audioonlychange`.
 - **VS Code IntelliSense** — attribute/value completion with hover docs for `<movi-player>`, plus CSS completion for the `--movi-*` theme variables.
 
 ## Getting Started
@@ -737,7 +737,7 @@ Every attribute can also be read and set as a JS property (`el.rotate = 90`). Gr
 | `controls` | `controls` | Show the built-in UI controls |
 | `autoplay` | `autoplay` | Start playback automatically when loaded |
 | `muted` | `muted` | Start muted |
-| `loop` | `loop` | Restart playback when the video ends |
+| `loop` | `loop`, `loop="all"`, `loop="all 5"` | Repeat. Bare (or `one`) repeats the **item**, seamlessly — no black frame at the join; `all` repeats the **queue**, wrapping the last item back to the first, and turns `autoadvance` on with it. A number is the gap in seconds between items, which implies `all` |
 | `volume` | `volume="0.8"` | Initial volume 0..1 (a persisted user choice overrides it) |
 | `playbackrate` | `playbackrate="1.25"` | Initial playback speed |
 | `startat` | `startat="30"` | Start playback at this time, in seconds |
@@ -770,7 +770,7 @@ Every attribute can also be read and set as a JS property (`el.rotate = 90`). Gr
 | `showtitle` | `showtitle` | Show the title bar overlay at the top |
 | `subtitlepicker` | `subtitlepicker` | Add an "Add subtitle file…" row to the subtitle menu — picks a local SRT/VTT/TTML and shows it straight away. The file is read in the page (a `blob:` URL), never uploaded. Also exposed as `player.addSubtitleFile(file)` for a host with its own button |
 | `titlemode` | `titlemode="fullscreen back"` | Where the title bar may show: `both` (default) \| `fullscreen` \| `windowed`; add `back` (or `back-mobile`, `back-fullscreen`, `back-windowed`, `back-mobile-fullscreen`) for a back arrow that fires a cancelable `back` event. The placement tokens gate the whole bar; the `back-*` scopes gate only the arrow, so `back-windowed` keeps the title in fullscreen and drops just the arrow |
-| `spinnerdelay` | `spinnerdelay="0.4"`, `spinnerdelay="0.25 1"` | Seconds an interruption must last before the loading spinner appears. `0` (default) shows it at once; anything higher lets brief stalls pass in silence. A second number is the wait the *opening* gets, which is usually worth more patience than a mid-play stall |
+| `spinnerdelay` | `spinnerdelay="0.4"`, `spinnerdelay="0.25 1"` | Seconds an interruption must last before the loading spinner appears. Defaults to `"1 2"` — a mid-play stall after a second, an opening after two — so anything the player sorts out inside that passes in silence. A second number is the wait the *opening* gets, which is usually worth more patience than a mid-play stall; `0` shows the spinner at once |
 
 </details>
 
@@ -831,7 +831,8 @@ Every attribute can also be read and set as a JS property (`el.rotate = 90`). Gr
 | `chapters` | `chapters='[{"title":"Intro","start":0}]'` | Chapters from outside the media file — JSON array of `{title, start, end?, image?}` (seconds); `image` is artwork for the timeline tile, in place of a decoded frame. The property takes the array directly |
 | `playlist` | `playlist='[{"src":"ep1.mkv","title":"Pilot"}]'` | A queue — JSON array of `{src, title?, poster?, startAt?}`, of bare source strings, or a URL to fetch that array from. Adds Previous/Next to the bar, `Shift+P`/`Shift+N`, and the lock screen's skip pair. See [Playlists](#playlists) |
 | `playlistindex` | `playlistindex="2"` | Which item to open on. Default 0 |
-| `autoadvance` | `autoadvance="5 loop"` | Let the end of one item start the next. Off by default; a number is the gap in seconds, `loop` joins the ends of the queue. The element's own `loop` wins — it repeats the item, so nothing ends |
+| `autoadvance` | `autoadvance="5 loop"` | Let the end of one item start the next. Off by default; a number is the gap in seconds, `loop` joins the ends of the queue. `loop="all"` asks for the same thing and turns this on by itself; bare `loop` wins over it — it repeats the item, so nothing ends |
+| `shuffle` | `shuffle` | Play the queue in a random order. Off by default. Each pass draws its own order, with the item playing kept where it is; `reshuffle()` draws a new one |
 | `persist` | `persist="volume speed audiolang"` | Which settings to remember across loads — space-separated, opt-in per setting; see [Remembering Viewer Settings](#remembering-viewer-settings) |
 | `persistkey` | `persistkey="my-app"` | Namespace for everything `persist` stores |
 
@@ -900,7 +901,8 @@ The standard `HTMLMediaElement` events all fire (`loadedmetadata`, `canplay`, `p
 | `audiotrackchange` / `subtitletrackchange` | — | Active audio / subtitle track switched |
 | `qualitychange` | `{ trackId }` | Active video quality / track switched |
 | `subtitledelaychange` | `{ subtitleDelay }` | Subtitle offset changed |
-| `aspectchange`, `loopchange`, `stablevolumechange`, `hdrchange`, `ambientchange`, `rotatechange`, `audioonlychange` | setting-specific | A viewer changed a setting — persist it host-side if you want |
+| `loop` | `{ count }` | The item started over on a seamless [`loop`](#attributes) — `count` is which turn this is, from 1 |
+| `aspectchange`, `loopchange`, `shufflechange`, `stablevolumechange`, `hdrchange`, `ambientchange`, `rotatechange`, `audioonlychange` | setting-specific | A viewer changed a setting — persist it host-side if you want |
 | `fullscreenchange` | `{ fullscreen }` | Entered/exited fullscreen |
 | `movi-fullscreen-request` | cancelable | Before `requestFullscreen()` — `preventDefault()` to take over via `setHostFullscreen()` |
 | `back` | cancelable | The `titlemode` back arrow was pressed |
