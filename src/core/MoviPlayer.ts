@@ -2295,7 +2295,17 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
             // video that far ahead and re-anchors it backwards, and the
             // picture stops until the wall clock catches up — the hitch a beat
             // after every seek on Bluetooth.
-            () => this.audioRenderer.startLead(),
+            //
+            // …and there has to BE sound. With no audio track the lead is
+            // still predicted — no first buffer has ever been scheduled, so
+            // the honest answer to "how long until it is audible" is the
+            // cold-start guess, min(0.5, latency) + latency. Measured at
+            // 560ms, and the picture held for every one of them at each loop
+            // turn of a video-only file: anchored 560ms into the future,
+            // getVideoTime clamps the negative elapsed to zero, so media time
+            // sat at 0.033s with 63 decoded frames queued behind it. The
+            // picture then ran that far behind the clock for the whole pass.
+            () => (this.hasAudioThatCanPlay() ? this.audioRenderer.startLead() : 0),
           );
         } else {
           // When audio is disabled, video runs independently without A/V sync overhead
