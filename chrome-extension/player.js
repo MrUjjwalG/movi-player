@@ -328,8 +328,8 @@ function paintRepeat(mode) {
   repeatBtn.setAttribute("aria-pressed", repeatMode === "off" ? "false" : "true");
   repeatBtn.title =
     repeatMode === "all" ? "Repeat playlist" : repeatMode === "one" ? "Repeat one" : "Repeat off";
-  repeatBtn.querySelector(".icon-repeat-all").hidden = repeatMode === "one";
-  repeatBtn.querySelector(".icon-repeat-one").hidden = repeatMode !== "one";
+  // Which arrow shows is `data-mode`'s job in CSS — `hidden` on an <svg> is
+  // not honoured, the UA rule behind it only reaches HTML elements.
 }
 function setRepeat(mode) {
   paintRepeat(mode);

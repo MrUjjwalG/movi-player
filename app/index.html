@@ -1986,6 +1986,17 @@
         background: var(--bg-surface);
       }
 
+      /* Repeat carries both icons and shows one. NOT the `hidden` attribute:
+         the UA rule behind it is namespaced to HTML, so an SVG keeps drawing
+         with it set — both arrows show, side by side. */
+      #playlist-repeat .icon-repeat-one,
+      #playlist-repeat[data-mode="one"] .icon-repeat-all {
+        display: none;
+      }
+      #playlist-repeat[data-mode="one"] .icon-repeat-one {
+        display: block;
+      }
+
       .playlist-items {
         list-style: none;
         margin: 0;
@@ -4344,7 +4355,7 @@
               </button>
               <button class="playlist-hbtn" id="playlist-repeat" type="button" title="Repeat off" aria-label="Repeat" aria-pressed="false" data-mode="off">
                 <svg class="icon-repeat-all" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="17 1 21 5 17 9"></polyline><path d="M3 11V9a4 4 0 0 1 4-4h14"></path><polyline points="7 23 3 19 7 15"></polyline><path d="M21 13v2a4 4 0 0 1-4 4H3"></path></svg>
-                <svg class="icon-repeat-one" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" hidden><polyline points="17 1 21 5 17 9"></polyline><path d="M3 11V9a4 4 0 0 1 4-4h14"></path><polyline points="7 23 3 19 7 15"></polyline><path d="M21 13v2a4 4 0 0 1-4 4H3"></path><path d="M11 10.5 12.5 9.5V15" stroke-width="2.2"></path></svg>
+                <svg class="icon-repeat-one" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="17 1 21 5 17 9"></polyline><path d="M3 11V9a4 4 0 0 1 4-4h14"></path><polyline points="7 23 3 19 7 15"></polyline><path d="M21 13v2a4 4 0 0 1-4 4H3"></path><path d="M11 10.5 12.5 9.5V15" stroke-width="2.2"></path></svg>
               </button>
               <button class="playlist-close" id="playlist-close" type="button" title="Hide playlist" aria-label="Hide playlist">
                 <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"></line><line x1="6" y1="6" x2="18" y2="18"></line></svg>
@@ -6655,10 +6666,8 @@
             : playlistRepeatMode === "one"
               ? "Repeat one"
               : "Repeat off";
-        playlistRepeatEl.querySelector(".icon-repeat-all").hidden =
-          playlistRepeatMode === "one";
-        playlistRepeatEl.querySelector(".icon-repeat-one").hidden =
-          playlistRepeatMode !== "one";
+        // Which arrow shows is `data-mode`'s job in CSS — `hidden` on an
+        // <svg> is not honoured, the UA rule behind it only reaches HTML.
       };
 
       playlistShuffleEl.addEventListener("click", () => {

@@ -130,7 +130,7 @@
     .playlist-toolbar {
       padding: 10px 12px;
       display: flex;
-      gap: 6px;
+      gap: 5px;
       flex-shrink: 0;
       border-bottom: 1px solid var(--border-subtle);
     }
@@ -139,10 +139,13 @@
       background: transparent;
       border: 1px solid var(--border-subtle);
       color: var(--text-secondary);
-      padding: 7px 8px;
+      padding: 7px 6px;
       border-radius: 8px;
       font-size: 11px;
       font-weight: 500;
+      /* One line, always. A label that wraps makes the whole row taller than
+         the icon buttons beside it. */
+      white-space: nowrap;
       cursor: pointer;
       display: flex;
       align-items: center;
@@ -159,10 +162,16 @@
     .playlist-toolbar button svg { width: 13px; height: 13px; }
     .playlist-toolbar button.playlist-icon-btn {
       flex: 0 0 auto;
-      width: 34px;
+      width: 30px;
       padding: 7px 0;
     }
     .playlist-toolbar button.playlist-icon-btn svg { width: 15px; height: 15px; }
+    /* Repeat carries both icons and shows one. NOT the `hidden` attribute:
+       the UA rule behind it is namespaced to HTML, so an SVG keeps drawing
+       with it set — both arrows showed, and the button grew to fit them. */
+    #repeatBtn .icon-repeat-one,
+    #repeatBtn[data-mode="one"] .icon-repeat-all { display: none; }
+    #repeatBtn[data-mode="one"] .icon-repeat-one { display: block; }
     .playlist-toolbar button[aria-pressed="true"] {
       background: var(--accent);
       border-color: var(--accent);
@@ -1059,7 +1068,7 @@
             <polyline points="17 1 21 5 17 9"/><path d="M3 11V9a4 4 0 0 1 4-4h14"/>
             <polyline points="7 23 3 19 7 15"/><path d="M21 13v2a4 4 0 0 1-4 4H3"/>
           </svg>
-          <svg class="icon-repeat-one" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" hidden>
+          <svg class="icon-repeat-one" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
             <polyline points="17 1 21 5 17 9"/><path d="M3 11V9a4 4 0 0 1 4-4h14"/>
             <polyline points="7 23 3 19 7 15"/><path d="M21 13v2a4 4 0 0 1-4 4H3"/>
             <path d="M11 10.5 12.5 9.5V15" stroke-width="2.2"/>
