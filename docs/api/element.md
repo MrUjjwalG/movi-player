@@ -194,11 +194,31 @@ Starts playback automatically when loaded.
 
 #### `loop`
 
-Restarts playback when video ends.
+Restarts playback when the video ends — or, with a queue, asks for the queue
+instead.
 
 ```html
 <movi-player src="video.mp4" loop></movi-player>
+<movi-player playlist="/season-1.json" loop="all" controls></movi-player>
+<movi-player playlist="/season-1.json" loop="all 5" controls></movi-player>
+<movi-player playlist="/season-1.json" loop="5" controls></movi-player>
 ```
+
+**Value:** bare (or `one`, `item`, `single`, `true`) repeats the **item**, which
+is what `loop` has always meant and what `<video loop>` means. `all` (or
+`playlist`, `queue`, `wrap`) repeats the **queue**: the next item plays, and the
+last one leads back to the first. A number is the gap in seconds between items —
+asking a loop to space things out can only mean the queue, so it implies `all`
+on its own. Tokens combine in any order; `loop="false"` is the attribute present
+and declining.
+
+The item loop is seamless: the next pass is decoded and held while the current
+one finishes, so there is no black frame or freeze at the join. Each turn
+fires a `loop` event (see [Events](#events)), and `loopCount` counts them.
+
+`loop="all"` turns [`autoadvance`](#autoadvance) on by itself — a queue that
+repeats has to move to repeat. Add the attribute anyway when you want a gap
+that the loop's own number shouldn't set.
 
 ---
 
@@ -567,8 +587,38 @@ so Next on the last item wraps for all three of them or none. Tokens combine in
 any order. An explicit `autoadvance="false"` is the attribute present and
 declining, which is how a framework writes it off.
 
-`loop` on the **element** is a different thing and wins over this one: it
-repeats the item, so nothing ever ends and nothing ever advances.
+[`loop`](#loop) says the same things from the other side. `loop` bare repeats
+the **item**, so nothing ever ends and nothing ever advances — it wins over this
+one. `loop="all"` asks for the queue, which turns this attribute on by itself
+and joins the ends of the list; a gap given here still wins over the loop's own
+number, so the two can be written together in either order.
+
+---
+
+#### `shuffle`
+
+Play the queue in a random order. **Off by default.**
+
+```html
+<movi-player playlist="/mixtape.json" shuffle loop="all" controls></movi-player>
+```
+
+Its own attribute rather than a `loop` token, because it is its own question: a
+queue can be shuffled and played through once, and it can be looped in the order
+it was given. They compose — `shuffle loop="all"` is the pair most people mean —
+but neither implies the other.
+
+The order is drawn on load and redrawn whenever the queue changes or shuffle is
+switched back on, with the item playing **now** kept at the front, so turning it
+on changes what comes next and nothing that is on screen. Everything that steps
+through the queue follows it: Next and Previous, the keys, auto-advance, and the
+wrap at the end. `playlistIndex` still means the item's place in the **queue**,
+not in the shuffled order.
+
+`reshuffle()` draws a new order without changing what is playing. The gear menu
+carries a Shuffle row of its own whenever the queue holds more than one item, so
+a host mirroring the state should follow the `shufflechange` event rather than
+assume it is the only one writing it.
 
 ---
 
@@ -1668,10 +1718,43 @@ player.playbackRate = 0.5; // Half speed
 
 #### `loop: boolean`
 
-Gets/sets loop mode.
+Gets/sets whether the **item** repeats — the `<video loop>` meaning, kept
+because that is what a page writing `player.loop = true` has always meant.
 
 ```typescript
-player.loop = true; // Enable looping
+player.loop = true; // this video, over and over
+```
+
+---
+
+#### `loopMode: "off" | "one" | "all"`
+
+What [`loop`](#loop) is set to, by name. `"one"` is the item; `"all"` is the
+queue, which turns auto-advance on and joins the ends of the list. `loop` the
+boolean is the `"one"` half of this.
+
+```typescript
+player.loopMode = 'all'; // play the queue round and round
+```
+
+---
+
+#### `loopCount: number` (read-only)
+
+How many times the current source has looped, from `0`. Resets with the source;
+the `loop` event carries the same number as each turn happens.
+
+---
+
+#### `shuffle: boolean`
+
+Gets/sets whether the queue plays in a random order (see
+[`shuffle`](#shuffle)). Writing it reflects the attribute and fires
+`shufflechange`.
+
+```typescript
+player.shuffle = true;
+player.reshuffle();  // a new order, same item still playing
 ```
 
 ---
@@ -1966,16 +2049,18 @@ await player.loadEncrypted({
 
 ### Playlist
 
-All four are no-ops without a [`playlist`](#playlist), and each returns `false`
-rather than throwing, so a UI can call them without asking first. They return
-`true` for a move a host cancelled — the queue moved; only the load was taken
-back.
+All of these are no-ops without a [`playlist`](#playlist), and the ones that
+move the queue return `false` rather than throwing, so a UI can call them
+without asking first. They return `true` for a move a host cancelled — the queue
+moved; only the load was taken back.
 
 #### `next(): boolean`
 
-Plays the next item. `false` when there isn't one — the last item with no
-`loop` on [`autoadvance`](#autoadvance), or no queue at all — and nothing
-changes in that case.
+Plays the next item — the next in the **play order**, so it follows
+[`shuffle`](#shuffle) when that is on. `false` when there isn't one — the last
+item with neither [`loop="all"`](#loop) nor `loop` on
+[`autoadvance`](#autoadvance), or no queue at all — and nothing changes in that
+case.
 
 ```typescript
 if (!player.next()) showRecommendations();
@@ -2019,6 +2104,14 @@ player.addEventListener('itemchange', () => {
 
 The item playing right now, or `null` when the current source did not come from
 the queue.
+
+---
+
+#### `reshuffle(): void`
+
+Draws a fresh random order. A no-op unless [`shuffle`](#shuffle) is on. The item
+playing keeps its place at the front, so this changes what comes next and
+nothing that is on screen.
 
 ---
 
@@ -2597,7 +2690,9 @@ The element re-exposes player activity as DOM events so you can wire `addEventLi
 | `aspectchange`         | `{ fit, mode }`                      | Viewer picked an aspect from the gear menu (`fit` is `contain`/`cover`/`fill`/`zoom`; `mode` says whether it landed on `objectfit` or the `control` fit) |
 | `cropchange`           | `{ top, bottom, left, right }`       | The bars cropped from the picture changed (see [`cropbars`](#cropbars)); fractions of the coded frame taken off each edge |
 | `controlschange`       | `{ visible: boolean }`               | The control bar appeared or auto-hid. Fires on the change only, so a host drawing its own chrome over the player can follow it |
-| `loopchange`           | `{ enabled: boolean }`               | Loop toggled                                       |
+| `loopchange`           | `{ enabled: boolean, mode: "off" \| "one" \| "all" }` | Loop toggled or changed kind (see [`loop`](#loop)). `enabled` is `mode !== "off"` |
+| `loop`                 | `{ count: number }`                  | The item started over, from the seamless [`loop`](#loop). `count` is which turn this is, from 1; it resets with the source and `loopCount` reads it back |
+| `shufflechange`        | `{ enabled: boolean }`               | Shuffle toggled (see [`shuffle`](#shuffle)). A fresh order is already drawn when it fires |
 | `stablevolumechange`   | `{ enabled: boolean }`               | Stable volume toggled                              |
 | `hdrchange`            | `{ enabled: boolean }`               | HDR toggled                                        |
 | `ambientchange`        | `{ enabled: boolean }`               | Ambient glow toggled                               |

@@ -64,7 +64,7 @@
           "name": "loop",
           "description": {
             "kind": "markdown",
-            "value": "Restarts playback when video ends."
+            "value": "Restarts playback when the video ends — or, with a queue, asks for the queue"
           },
           "references": [
             {
@@ -1164,6 +1164,19 @@
             {
               "name": "Documentation",
               "url": "https://moviplayer.com/docs/api/element#autoadvance"
+            }
+          ]
+        },
+        {
+          "name": "shuffle",
+          "description": {
+            "kind": "markdown",
+            "value": "Play the queue in a random order. **Off by default.**"
+          },
+          "references": [
+            {
+              "name": "Documentation",
+              "url": "https://moviplayer.com/docs/api/element#shuffle"
             }
           ]
         }

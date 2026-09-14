@@ -31,7 +31,7 @@
             },
             {
               "name": "loop",
-              "description": "Restarts playback when video ends."
+              "description": "Restarts playback when the video ends — or, with a queue, asks for the queue"
             },
             {
               "name": "muted",
@@ -343,6 +343,10 @@
             {
               "name": "autoadvance",
               "description": "Let the end of one item start the next. **Off by default** — a queue a page"
+            },
+            {
+              "name": "shuffle",
+              "description": "Play the queue in a random order. **Off by default.**"
             }
           ],
           "events": [
