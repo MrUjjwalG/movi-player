@@ -560,6 +560,37 @@ Cover art is extracted from ID3v2 APIC (MP3), `covr` atom (MP4), FLAC PICTURE bl
 
 ---
 
+#### `appendSubtitleCues(lang: string, label: string, cues: SubtitleCue[]): void`
+
+Adds cues to a subtitle track that is generated rather than loaded — speech
+recognition writing captions as it goes. The first call for a `lang` creates the
+track (listed by `getSubtitleLangs()`, selectable with `selectSubtitleLang()`);
+later calls extend it in any order. Cues are kept sorted and a near-duplicate
+(same text, starting within 0.1s) is dropped. If the track is showing, a cue
+covering the current time appears straight away. The element's
+[`appendSubtitleCues`](./element.md#appendsubtitlecues-cues-lang-label-select-boolean)
+also updates the subtitle menu.
+
+---
+
+#### `MoviPlayer.decodeAudio(input, options?): AsyncGenerator<DecodedAudioChunk>` (static)
+
+The soundtrack of a URL, `File` or `Blob` as mono samples, resampled (default
+16 kHz), from `options.from` seconds, in `options.chunkSeconds` pieces (default
+30), on an isolated WASM instance — nothing plays and a running player is not
+touched. Each chunk is `{ start, end, sampleRate, samples }`. Stop it with
+`options.signal` or by breaking out of the loop. See
+[`decodeAudio`](./element.md#decodeaudio-options-asyncgenerator-decodedaudiochunk-movielement-decodeaudio-input-options)
+on the element.
+
+```typescript
+for await (const { start, samples } of MoviPlayer.decodeAudio(file, { from: 60 })) {
+  console.log(start, samples.length);   // 60 480000, 90 480000, …
+}
+```
+
+---
+
 #### `setSubtitleDelay(seconds: number): void` / `getSubtitleDelay(): number`
 
 Shifts subtitle timing relative to video. Sign matches VLC and mpv: **positive** values shift subtitles **later**, negative shifts them earlier. Applied at the renderer's active-cue check, so the same offset works for text and image (PGS/DVB) cues without re-decoding.

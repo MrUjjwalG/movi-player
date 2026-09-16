@@ -660,6 +660,15 @@ if (!a.smooth) console.log(a.reasons);   // e.g. no hardware decoder, over the s
 
 The same is `MoviElement.canPlaySmoothly()` and `element.canPlaySmoothly()` on the element.
 
+Read the soundtrack as samples without playing it, and write a subtitle track as you go — the two halves of in-browser auto captions:
+
+```typescript
+for await (const chunk of player.decodeAudio({ from: player.currentTime })) {
+  const cues = await whisper(chunk);   // 16 kHz mono Float32Array → [{ start, end, text }]
+  player.appendSubtitleCues(cues, { lang: "en-auto", label: "English (auto)", select: true });
+}
+```
+
 See the [Programmatic API guide](https://moviplayer.com/docs/guide/programmatic-api).
 
 ### Demuxer Only (50KB)

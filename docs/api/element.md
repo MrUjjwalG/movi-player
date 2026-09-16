@@ -2378,6 +2378,63 @@ await player.selectSubtitleLang(null);    // Turn off
 
 ---
 
+#### `appendSubtitleCues(cues, { lang, label, select? }): boolean`
+
+Adds cues to a subtitle track that is being **written as it plays** rather than
+loaded — captions from speech recognition, a live transcript, a translation
+arriving line by line. The first call for a `lang` puts the track in the
+subtitle menu under `label`; later calls extend it, and cues may arrive in any
+order (they are kept sorted, and a cue repeating the text of one starting within
+0.1s of it is dropped). `select: true` switches the track on without recording
+it as the viewer's own subtitle choice. Returns `false` when nothing is loaded.
+
+```typescript
+player.appendSubtitleCues(
+  [{ start: 12.4, end: 15.1, text: "Nothing is uploaded to any server." }],
+  { lang: "en-auto", label: "English (auto)", select: true },
+);
+```
+
+A cue showing now appears as soon as it is appended. A new source starts with no
+generated tracks.
+
+---
+
+#### `decodeAudio(options?): AsyncGenerator<DecodedAudioChunk>` / `MoviElement.decodeAudio(input, options?)`
+
+The soundtrack as plain samples — mono, resampled (16 kHz by default, what
+speech models expect) — from any point in the file, **without playing it** and
+without disturbing a player that is. The file is read on its own WASM instance.
+The instance method reads what the element has loaded; the static one takes a
+URL, `File` or `Blob`.
+
+```typescript
+for await (const chunk of player.decodeAudio({ from: player.currentTime, chunkSeconds: 30 })) {
+  // chunk: { start, end, sampleRate, samples: Float32Array }
+  const text = await recognise(chunk.samples);
+}
+```
+
+| Option | Default | |
+|---|---|---|
+| `from` | `0` | Media time to start at, in seconds; the first chunk starts exactly there |
+| `chunkSeconds` | `30` | Length of each chunk handed back (the last may be shorter) |
+| `sampleRate` | `16000` | Output rate |
+| `signal` | — | An `AbortSignal`; aborting stops decoding and releases the file |
+
+Breaking out of the loop releases the file too. Uses the first audio track;
+decoding runs well ahead of real time (a 20s clip in under 0.1s on a laptop) and
+yields between chunks, so playback alongside it is not disturbed. Encrypted
+playback is not readable this way.
+
+**Auto captions.** The web app at moviplayer.com pairs the two: Whisper (via
+transformers.js) runs in a worker on 30s windows from `decodeAudio`, and its
+lines go into an "English (auto)" track with `appendSubtitleCues` — work starts
+at the playhead, follows a seek, rests once far enough ahead, and fills in what
+was skipped. Nothing leaves the browser but the one-time model download.
+
+---
+
 #### `getAudioOutputs(): Promise<{ deviceId, label }[]>`
 
 Lists the available audio **output** devices. Labels are populated once the page holds audio-device permission (granted hosts list them directly; a bare web embed may need the viewer to allow access first).

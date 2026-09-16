@@ -7050,6 +7050,645 @@
       });
     </script>
 
+    <!-- ===== AUTO ENGLISH CAPTIONS ===== -->
+    <!-- Own module, like the feedback wall below: nothing here can take the
+         player down with it. Whisper runs in a worker on the file's own
+         soundtrack (decoded by the player, 16 kHz mono) and its lines are
+         appended as an "English (auto)" subtitle track as they're heard.
+         Off until the viewer turns it on from the right-click menu; the
+         model (~80 MB) downloads once and the browser keeps it. -->
+    <script type="module">
+      // Auto English captions for a <movi-player>: Whisper, in the browser.
+      //
+      // The player decodes the soundtrack (decodeAudio, 16 kHz mono, from anywhere
+      // in the file, without playing it); a worker runs Whisper on 30 s windows;
+      // what comes back is appended as an "English (auto)" subtitle track as it
+      // arrives. Nothing leaves the machine except the one-time model download,
+      // which the browser caches.
+
+      const TRANSFORMERS_URL = "https://cdn.jsdelivr.net/npm/@huggingface/transformers@4.3.0";
+
+      // The worker is built from a string so the page needs no second file.
+      const WORKER_SOURCE = `
+      import { pipeline, env } from "${TRANSFORMERS_URL}";
+      env.allowLocalModels = false;
+
+      let asr = null;
+      let device = "wasm";
+
+      async function pickDevice(wanted) {
+        if (wanted === "wasm") return "wasm";
+        try {
+          if (!self.navigator.gpu) return "wasm";
+          const adapter = await self.navigator.gpu.requestAdapter();
+          return adapter ? "webgpu" : "wasm";
+        } catch { return "wasm"; }
+      }
+
+      async function load(model, dtypes, wanted) {
+        device = await pickDevice(wanted);
+        const dtype = device === "webgpu" ? dtypes.webgpu : dtypes.wasm;
+        const progress = (p) => {
+          if (p.status === "progress") {
+            self.postMessage({ type: "progress", file: p.file, loaded: p.loaded, total: p.total });
+          }
+        };
+        try {
+          asr = await pipeline("automatic-speech-recognition", model, { device, dtype, progress_callback: progress });
+        } catch (err) {
+          if (device !== "webgpu") throw err;
+          device = "wasm";
+          asr = await pipeline("automatic-speech-recognition", model, {
+            device, dtype: dtypes.wasm, progress_callback: progress,
+          });
+        }
+      }
+
+      self.onmessage = async (e) => {
+        const msg = e.data;
+        try {
+          if (msg.type === "load") {
+            await load(msg.model, msg.dtypes, msg.device);
+            self.postMessage({ type: "ready", device });
+          } else if (msg.type === "run") {
+            const out = await asr(msg.samples, {
+              return_timestamps: true,
+              task: msg.task,
+              language: msg.language || null,
+            });
+            self.postMessage({ type: "result", id: msg.id, chunks: out.chunks || [], text: out.text || "" });
+          }
+        } catch (err) {
+          self.postMessage({ type: "error", id: msg.id, message: String(err && err.message || err) });
+        }
+      };
+      `;
+
+      const RATE = 16000;
+      const WINDOW_S = 30;
+      // A window's last sentence is usually cut by the window edge. It's dropped
+      // and its audio carried into the next window, unless it ends this early.
+      const TAIL_GUARD_S = 3;
+      // How far ahead of the playhead to work before resting.
+      const LEAD_S = 90;
+
+      // Whisper's well-known inventions on music, noise and silence.
+      const NOISE_ONLY = /^[\s\[\(♪♫*.,-]*(music|applause|laughter|silence|blank_audio|inaudible|noise|sound|foreign|no speech|speaking in foreign language)?[\s\]\)♪♫*.,-]*$/i;
+      const SIGNOFFS = /^(thank you\.?|thanks for watching[.!]?|please subscribe[.!]?|you)$/i;
+
+      function rms(samples) {
+        let sum = 0;
+        for (let i = 0; i < samples.length; i++) sum += samples[i] * samples[i];
+        return Math.sqrt(sum / Math.max(1, samples.length));
+      }
+
+      // Whisper's segments run to a sentence or three and their times include the
+      // pauses around them. Cut each into readable cues, and lay the pieces over the
+      // stretches that actually have voice in them, in proportion to their length.
+      const MAX_CUE_CHARS = 84;
+      const FRAME_S = 0.05;
+
+      function splitText(text) {
+        if (text.length <= MAX_CUE_CHARS) return [text];
+        const words = text.split(" ");
+        const pieces = [];
+        let cur = "";
+        for (const w of words) {
+          const next = cur ? cur + " " + w : w;
+          const breakHere = cur && (next.length > MAX_CUE_CHARS ||
+            (/[.!?]$/.test(cur) && cur.length > MAX_CUE_CHARS * 0.35));
+          if (breakHere) { pieces.push(cur); cur = w; } else cur = next;
+        }
+        if (cur) pieces.push(cur);
+        return pieces;
+      }
+
+      function voicedFrames(samples, from, to) {
+        const hop = Math.round(FRAME_S * RATE);
+        const levels = [];
+        for (let t = from; t < to; t += FRAME_S) {
+          const i = Math.floor(t * RATE);
+          levels.push(rms(samples.subarray(i, Math.min(samples.length, i + hop))));
+        }
+        const sorted = levels.slice().sort((a, b) => a - b);
+        const loud = sorted[Math.floor(sorted.length * 0.9)] || 0;
+        const floor = Math.max(0.004, loud * 0.12);
+        return levels.map((l) => l > floor);
+      }
+
+      // Whether the voice stops for most of a second anywhere in [from, to].
+      function hasPause(samples, from, to) {
+        from = Math.max(0, from);
+        to = Math.min(samples.length / RATE, to);
+        if (to - from < 1) return false;
+        let quiet = 0;
+        for (const v of voicedFrames(samples, from, to)) {
+          quiet = v ? 0 : quiet + 1;
+          if (quiet >= 0.8 / FRAME_S) return true;
+        }
+        return false;
+      }
+
+      function layCues(samples, start, end, text) {
+        const pieces = splitText(text);
+        const voiced = voicedFrames(samples, start, end);
+        const total = voiced.filter(Boolean).length;
+        if (!total) return [];
+        const totalChars = pieces.reduce((n, p) => n + p.length, 0);
+        const out = [];
+        let frame = 0;
+        let seen = 0;
+        let chars = 0;
+        for (const piece of pieces) {
+          chars += piece.length;
+          const target = Math.round((total * chars) / totalChars);
+          while (frame < voiced.length && !voiced[frame]) frame++;
+          const first = frame;
+          let last = frame;
+          while (frame < voiced.length && seen < target) {
+            if (voiced[frame]) { seen++; last = frame; }
+            frame++;
+          }
+          // A long pause near the end of a piece is where it really stopped; the
+          // voice after it is the next segment's first word, timed a little early.
+          let within = 0;
+          for (let f = first; f <= last; f++) if (voiced[f]) within++;
+          let tail = 0;
+          let quiet = 0;
+          for (let f = last; f > first; f--) {
+            if (voiced[f]) { tail++; quiet = 0; continue; }
+            if (++quiet < 1 / FRAME_S) continue;
+            if (tail < within * 0.2) {
+              last = f;
+              while (last > first && !voiced[last]) last--;
+            }
+            break;
+          }
+          const s = start + first * FRAME_S;
+          const e = Math.min(end, start + (last + 1) * FRAME_S + 0.25);
+          out.push({ start: s, end: Math.max(e, s + 0.8), text: piece });
+        }
+        return out;
+      }
+
+      // Small Whisper models fall into loops on music and noise — "I'm not a man,
+      // I'm not a man, …", or the same opening with a new ending each time. A run
+      // of four words said twice, or three said three times, within the last few
+      // lines is that, not speech.
+      function wordsOf(text) {
+        return text.toLowerCase().replace(/[^\p{L}\p{N}\s']/gu, " ").split(/\s+/).filter(Boolean);
+      }
+
+      function isLoop(text, recent) {
+        const words = recent.concat(wordsOf(text));
+        const own = words.length - recent.length;
+        const threes = new Map();
+        const fours = new Map();
+        for (let i = 0; i + 3 <= words.length; i++) {
+          const three = words[i] + " " + words[i + 1] + " " + words[i + 2];
+          const n = (threes.get(three) || 0) + 1;
+          threes.set(three, n);
+          const four = i + 4 <= words.length ? three + " " + words[i + 3] : null;
+          const m = four ? (fours.get(four) || 0) + 1 : 0;
+          if (four) fours.set(four, m);
+          // Only a repeat that lands inside this segment condemns it.
+          if (i + 3 > words.length - own && (n >= 3 || m >= 2)) return true;
+        }
+        return false;
+      }
+
+      function cleanText(text) {
+        return text.replace(/\s+/g, " ").replace(/\[[^\]]*\]|\([^)]*\)/g, "").trim();
+      }
+
+      /**
+       * @param {HTMLElement} el   a <movi-player>
+       * @param {object} [opts]
+       * @param {string} [opts.model]    Hugging Face id of an ONNX Whisper
+       * @param {string} [opts.task]     "translate" (anything → English) or "transcribe"
+       * @param {string} [opts.lang]     subtitle track code
+       * @param {string} [opts.label]    subtitle menu label
+       * @param {(s: object) => void} [opts.onStatus]
+       */
+      function createAutoCaptions(el, opts = {}) {
+        const model = opts.model || "onnx-community/whisper-base";
+        const task = opts.task || "translate";
+        const lang = opts.lang || "en-auto";
+        const label = opts.label || "English (auto)";
+        const onStatus = opts.onStatus || (() => {});
+        const dtypes = {
+          // q4 halves nothing that matters here and costs accuracy: on Whisper
+          // base its decoder is BIGGER than q8 (123 MB vs 54) and translates worse.
+          webgpu: { encoder_model: "q8", decoder_model_merged: "q8" },
+          wasm: { encoder_model: "q8", decoder_model_merged: "q8" },
+          ...opts.dtypes,
+        };
+
+        let worker = null;
+        let workerReady = null;
+        let nextId = 1;
+        const pending = new Map();
+
+        let enabled = false;
+        let src = null;          // the source this state belongs to
+        let covered = [];        // [start, end] media spans already transcribed
+        let run = null;          // { controller, from }
+        let selected = false;
+        let lastText = "";
+        let recentWords = [];
+
+        function status(s) { onStatus(s); }
+
+        function ensureWorker() {
+          if (workerReady) return workerReady;
+          const url = URL.createObjectURL(new Blob([WORKER_SOURCE], { type: "text/javascript" }));
+          worker = new Worker(url, { type: "module" });
+          URL.revokeObjectURL(url);
+          const files = new Map();
+          workerReady = new Promise((resolve, reject) => {
+            worker.onmessage = (e) => {
+              const m = e.data;
+              if (m.type === "progress") {
+                files.set(m.file, [m.loaded || 0, m.total || 0]);
+                let loaded = 0, total = 0;
+                for (const [l, t] of files.values()) { loaded += l; total += t; }
+                status({ state: "downloading", progress: total ? loaded / total : 0 });
+              } else if (m.type === "ready") {
+                status({ state: "ready", device: m.device });
+                resolve(m.device);
+              } else if (m.type === "result" || m.type === "error") {
+                const p = pending.get(m.id);
+                if (!p) {
+                  if (m.type === "error") reject(new Error(m.message));
+                  return;
+                }
+                pending.delete(m.id);
+                if (m.type === "result") p.resolve(m.chunks);
+                else p.reject(new Error(m.message));
+              }
+            };
+            worker.onerror = (e) => reject(new Error(e.message || "worker failed"));
+          });
+          workerReady.catch((err) => {
+            status({ state: "error", message: err.message });
+            worker?.terminate();
+            worker = null;
+            workerReady = null;
+          });
+          worker.postMessage({ type: "load", model, dtypes, device: opts.device || "auto" });
+          return workerReady;
+        }
+
+        function infer(samples) {
+          const id = nextId++;
+          return new Promise((resolve, reject) => {
+            pending.set(id, { resolve, reject });
+            // A copy: the decoder may reuse its buffer; transfer the copy.
+            const copy = samples.slice();
+            worker.postMessage({ type: "run", id, samples: copy, task }, [copy.buffer]);
+          });
+        }
+
+        function markCovered(start, end) {
+          if (end <= start) return;
+          covered.push([start, end]);
+          covered.sort((a, b) => a[0] - b[0]);
+          const merged = [];
+          for (const span of covered) {
+            const last = merged[merged.length - 1];
+            if (last && span[0] <= last[1] + 0.05) last[1] = Math.max(last[1], span[1]);
+            else merged.push([span[0], span[1]]);
+          }
+          covered = merged;
+        }
+
+        function coveredAt(t) {
+          return covered.find((s) => t >= s[0] - 0.05 && t < s[1] - 0.25);
+        }
+
+        // Where the next run should start: the gap the playhead is in, else the
+        // first gap after it, else the first gap from the top.
+        function nextGap(from) {
+          let t = from;
+          for (;;) {
+            const span = coveredAt(t);
+            if (!span) break;
+            t = span[1];
+          }
+          const duration = el.duration || Infinity;
+          if (t < duration - 0.5) return t;
+          if (from > 0) return nextGap(0) ?? null;
+          return null;
+        }
+
+        function coveredStartAfter(t) {
+          const next = covered.find((s) => s[0] > t + 0.05);
+          return next ? next[0] : Infinity;
+        }
+
+        function appendCues(cues) {
+          if (!cues.length) return;
+          const ok = el.appendSubtitleCues(cues, { lang, label, select: !selected });
+          if (ok && !selected) status({ state: "captioning" });
+          if (ok) selected = true;
+        }
+
+        async function transcribeWindow(samples, start, isLast) {
+          const length = samples.length / RATE;
+          if (rms(samples) < 0.004) {
+            markCovered(start, start + length);
+            return length;
+          }
+          const began = performance.now();
+          const chunks = await infer(samples);
+          status({ state: "window", start, seconds: length, ms: Math.round(performance.now() - began) });
+          let consumed = length;
+          if (!isLast && chunks.length > 1) {
+            const tail = chunks[chunks.length - 1];
+            const tailEnd = tail.timestamp[1];
+            if (tailEnd == null || tailEnd > length - TAIL_GUARD_S) {
+              const tailStart = tail.timestamp[0];
+              if (tailStart != null && tailStart > 5) {
+                consumed = tailStart;
+                chunks.pop();
+              }
+            }
+          }
+          // Whisper also breaks mid-sentence ("After a long" | "walk, we…"); join
+          // those back before cutting cues of our own.
+          const segments = [];
+          for (const c of chunks) {
+            const [s, e] = c.timestamp;
+            if (s == null) continue;
+            const text = cleanText(c.text || "");
+            const prev = segments[segments.length - 1];
+            if (prev && text && !/[.!?]$/.test(prev.text) && s - prev.e < 0.5 && !hasPause(samples, prev.e - 4, s + 1)) {
+              prev.text += " " + text;
+              prev.e = e;
+            } else {
+              segments.push({ s, e, text });
+            }
+          }
+          const cues = [];
+          for (const { s, e, text } of segments) {
+            if (!text || NOISE_ONLY.test(text)) continue;
+            if (isLoop(text, recentWords)) continue;
+            recentWords = recentWords.concat(wordsOf(text)).slice(-40);
+            if (text === lastText) continue;
+            if (SIGNOFFS.test(text) && rms(samples.subarray(Math.floor(s * RATE), Math.ceil((e ?? length) * RATE))) < 0.02) continue;
+            lastText = text;
+            const end = Math.min(e ?? consumed, consumed);
+            for (const cue of layCues(samples, s, Math.max(end, s + 0.6), text)) {
+              cues.push({ start: start + cue.start, end: start + cue.end, text: cue.text });
+            }
+          }
+          for (let i = 0; i + 1 < cues.length; i++) {
+            cues[i].end = Math.min(cues[i].end, Math.max(cues[i].start + 0.3, cues[i + 1].start));
+          }
+          appendCues(cues);
+          markCovered(start, start + consumed);
+          return consumed;
+        }
+
+        async function runFrom(from) {
+          const controller = new AbortController();
+          run = { controller, from };
+          // Joined to nothing before it: a run starts where the last one didn't end.
+          lastText = "";
+          recentWords = [];
+          const signal = controller.signal;
+          try {
+            await ensureWorker();
+            if (signal.aborted) return;
+            status({ state: "working", from });
+
+            const stopAt = coveredStartAfter(from);
+            let buffer = new Float32Array(0);
+            let bufferStart = from;
+            let decodeFrom = from;
+
+            // decodeAudio restarts cheaply, so a carried tail is re-decoded rather
+            // than stitched: each window starts on a fresh decode at its own time.
+            for (;;) {
+              if (signal.aborted) return;
+              // Rest while far enough ahead of the playhead.
+              let moveTo = null;
+              while (!signal.aborted && enabled && decodeFrom > el.currentTime + LEAD_S) {
+                // Far ahead of a playhead that went back to where nothing's done
+                // yet: that's the work that matters now.
+                const gap = nextGap(el.currentTime);
+                if (gap != null && gap < decodeFrom - 1) { moveTo = gap; break; }
+                await new Promise((r) => setTimeout(r, 1000));
+              }
+              if (signal.aborted) return;
+              if (moveTo != null) {
+                if (run && run.controller === controller) run = null;
+                runFrom(moveTo);
+                return;
+              }
+
+              const want = WINDOW_S * RATE;
+              let atEnd = false;
+              const parts = [];
+              let got = 0;
+              for await (const chunk of el.decodeAudio({ from: decodeFrom, chunkSeconds: 5, sampleRate: RATE, signal })) {
+                parts.push(chunk.samples);
+                got += chunk.samples.length;
+                if (got >= want) break;
+              }
+              if (signal.aborted) return;
+              if (got < want) atEnd = true;
+              buffer = new Float32Array(Math.min(got, want));
+              let off = 0;
+              for (const p of parts) {
+                const n = Math.min(p.length, buffer.length - off);
+                buffer.set(p.subarray(0, n), off);
+                off += n;
+                if (off >= buffer.length) break;
+              }
+              bufferStart = decodeFrom;
+              const windowEnd = bufferStart + buffer.length / RATE;
+              const isLast = atEnd || windowEnd >= stopAt;
+              if (windowEnd > stopAt) {
+                buffer = buffer.subarray(0, Math.max(0, Math.floor((stopAt - bufferStart) * RATE)));
+              }
+              if (buffer.length < RATE * 0.3) {
+                // Too little left to say anything; count it done so it isn't
+                // picked as the next gap forever.
+                markCovered(bufferStart, atEnd ? Math.max(windowEnd, el.duration || 0) : Math.min(windowEnd, stopAt));
+                break;
+              }
+
+              const consumed = await transcribeWindow(buffer, bufferStart, isLast);
+              if (signal.aborted) return;
+              decodeFrom = bufferStart + consumed;
+              if (isLast) break;
+            }
+          } catch (err) {
+            if (signal.aborted) return;
+            status({ state: "error", message: err.message });
+            return;
+          } finally {
+            if (run && run.controller === controller) run = null;
+          }
+          if (!enabled) return;
+          const gap = nextGap(el.currentTime);
+          if (gap == null) {
+            status({ state: "done" });
+            return;
+          }
+          runFrom(gap);
+        }
+
+        function restart() {
+          run?.controller.abort();
+          run = null;
+          if (!enabled) return;
+          const gap = nextGap(el.currentTime);
+          if (gap == null) {
+            status({ state: "done" });
+            return;
+          }
+          runFrom(gap);
+        }
+
+        function onSeeked() {
+          if (!enabled) return;
+          const t = el.currentTime;
+          // Still useful where it is: the playhead is inside or just behind the run.
+          if (run && t >= run.from - 0.5 && !coveredAt(t)) {
+            const ahead = covered.find((s) => s[0] <= run.from + 0.05 && s[1] >= run.from);
+            const frontier = ahead ? ahead[1] : run.from;
+            if (t <= frontier + WINDOW_S) return;
+          }
+          if (coveredAt(t)) {
+            // Already done here; keep whatever is running.
+            if (run) return;
+          }
+          restart();
+        }
+
+        function onSource() {
+          const now = el.src || el.getAttribute("src");
+          if (now === src) return;
+          src = now;
+          run?.controller.abort();
+          run = null;
+          covered = [];
+          selected = false;
+          lastText = "";
+          recentWords = [];
+          if (enabled) restart();
+        }
+
+        el.addEventListener("seeked", onSeeked);
+        el.addEventListener("loadeddata", onSource);
+
+        return {
+          get enabled() { return enabled; },
+          enable() {
+            if (enabled) return;
+            // Encrypted playback decrypts inside the player's own pipeline; a
+            // second reader of the file would get ciphertext.
+            if (el.hasAttribute("encrypted")) {
+              status({ state: "unsupported" });
+              return;
+            }
+            enabled = true;
+            const now = el.src || el.getAttribute("src");
+            if (now !== src) {
+              src = now;
+              covered = [];
+              selected = false;
+              lastText = "";
+              recentWords = [];
+          recentWords = [];
+            } else if (covered.length) {
+              el.selectSubtitleLang?.(lang);
+            }
+            restart();
+          },
+          disable() {
+            enabled = false;
+            run?.controller.abort();
+            run = null;
+            const active = el.getSubtitleLangs?.().find((l) => l.active);
+            if (active && active.lang === lang) el.selectSubtitleLang(null);
+            status({ state: "off" });
+          },
+          destroy() {
+            this.disable();
+            el.removeEventListener("seeked", onSeeked);
+            el.removeEventListener("loadeddata", onSource);
+            worker?.terminate();
+            worker = null;
+            workerReady = null;
+          },
+        };
+      }
+
+      customElements.whenDefined("movi-player").then(() => {
+        const player = document.getElementById("movi-player");
+        // An older bundle without the two APIs this needs: no menu row.
+        if (!player || typeof player.decodeAudio !== "function" || typeof player.appendSubtitleCues !== "function") return;
+        if (typeof Worker === "undefined" || typeof WebAssembly === "undefined") return;
+
+        const ID = "autocaptions";
+        const LABEL = "Auto captions";
+        const setLabel = (label) => player.updateControl(ID, { label });
+        let announced = false;
+        let captions = null;
+        const turnOff = () => {
+          captions.disable();
+          player.updateControl(ID, { active: false });
+          setLabel(LABEL);
+        };
+
+        captions = createAutoCaptions(player, {
+          onStatus(s) {
+            if (s.state === "downloading") {
+              setLabel(`${LABEL} · ${Math.round(s.progress * 100)}%`);
+            } else if (s.state === "ready") {
+              setLabel(LABEL);
+            } else if (s.state === "working" && !announced) {
+              announced = true;
+              player.showOsd("Listening for speech…");
+            } else if (s.state === "captioning") {
+              player.showOsd("Captions on — English (auto)");
+            } else if (s.state === "unsupported") {
+              player.showOsd("Auto captions can't read encrypted videos");
+              player.updateControl(ID, { active: false });
+            } else if (s.state === "error") {
+              console.warn("[autocaptions]", s.message);
+              player.showOsd("Couldn't start auto captions");
+              turnOff();
+            }
+          },
+        });
+
+        player.addControl({
+          id: ID,
+          label: LABEL,
+          // The subtitles glyph with a spark in its corner: captions, made.
+          icon: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><path d="M13 5H5a2 2 0 0 0-2 2v10a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-5"/><path d="M7 15h4M13 15h4"/><path d="M19 2l.8 1.9 1.9.8-1.9.8L19 7.4l-.8-1.9-1.9-.8 1.9-.8z"/></svg>',
+          anchors: { menu: { after: ["subtitle-track", "ambient-toggle", "crop-toggle"] } },
+          placement: "menu",
+          media: "video",
+          toggle: true,
+          active: false,
+          onSelect(on) {
+            if (on) {
+              announced = false;
+              player.showOsd("Getting auto captions ready — the first time downloads about 80 MB");
+              captions.enable();
+            } else {
+              turnOff();
+            }
+          },
+        });
+      });
+    </script>
+
     <!-- ===== VISITOR FEEDBACK ===== -->
     <!-- Own module so a failure here (D1 down, Turnstile blocked) can never
          take the player script with it. Loads lazily: the list is only
