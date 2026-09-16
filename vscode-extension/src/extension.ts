@@ -813,6 +813,9 @@ function renderHtml(webview: vscode.Webview, webviewRoot: vscode.Uri): string {
         `theme="${settings.theme}"`,
         settings.ambientMode ? "ambientmode" : "",
         settings.resume ? "resume" : "",
+        // Say so up front when a file won't keep up on this machine, rather
+        // than let the first sign of it be a stutter.
+        "smoothwarning",
       ]
         .filter(Boolean)
         .join(" ")
