@@ -12041,6 +12041,23 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
     }, MoviPlayer.THUMB_BUFFER_IDLE_MS);
   }
 
+  /**
+   * The seek bar is done asking: stop downloading the rest of the preview
+   * reader's fetch window, keeping the bytes that have arrived.
+   *
+   * The window keeps streaming after its frame is made so a scrub's next hover
+   * finds its bytes already here — worth it only while the pointer is still
+   * travelling. The caller is the one that knows: the player sees requests, and
+   * on a fetching source the seek bar deliberately holds those back for up to
+   * 1.5s mid-drag, so a quiet spell here is not a pointer at rest. Ignored
+   * while a frame is being made; its own reads need the window.
+   */
+  stopPreviewFill(): void {
+    if (this.isPreviewGenerating) return;
+    const src = this.thumbnailSource as { stopFill?: () => void } | null;
+    src?.stopFill?.();
+  }
+
   private destroyPreviewPipeline() {
     this._previewGeneration++;
     if (this._durationRescanTimer) {

@@ -3951,6 +3951,43 @@ export class MoviElement extends HTMLElement {
      * goes on the next frame or waits for the pointer to settle.
      */
     const previewPace = { lastMs: 0, lastMoveAt: 0, lastShownAt: 0 };
+
+    /**
+     * How long the pointer has to have been still, with its picture made and
+     * nothing waiting, before the rest of the preview's 2MB window stops
+     * downloading.
+     *
+     * The window streams on after the frame so that the next positions of a
+     * drag are already in hand; for a pointer at rest they are bytes for
+     * nobody. Measured at 12 Mbit: the preview was up 0.17s into its request
+     * and 1.9MB kept arriving for 1.3s more, and on a 4 Mbit link for four.
+     * The player cannot judge this itself — mid-drag the pacer above holds its
+     * requests back for up to PREVIEW_SLOW_MAX_WAIT_MS.
+     */
+    const PREVIEW_FILL_IDLE_MS = 500;
+    let previewFillTimer: number | null = null;
+    const armPreviewFillStop = (cardHidden = false) => {
+      if (previewFillTimer !== null) clearTimeout(previewFillTimer);
+      previewFillTimer = window.setTimeout(
+        () => {
+          previewFillTimer = null;
+          // A frame being made needs the window, and re-arms this when done.
+          if (previewLoopState.isFetching) return;
+          if (!cardHidden) {
+            // A position still waiting its turn will be fetched, and re-arm
+            // this when it is.
+            if (previewLoopState.nextTime !== null) return;
+            const stillFor = performance.now() - previewPace.lastMoveAt;
+            if (stillFor < PREVIEW_FILL_IDLE_MS) {
+              armPreviewFillStop();
+              return;
+            }
+          }
+          (this.player as any)?.stopPreviewFill?.();
+        },
+        cardHidden ? 0 : PREVIEW_FILL_IDLE_MS,
+      );
+    };
     let previewSettleTimer: number | null = null;
     const cancelSettleTimer = () => {
       if (previewSettleTimer !== null) {
@@ -4074,6 +4111,7 @@ export class MoviElement extends HTMLElement {
         // Ignore aborts
       } finally {
         previewLoopState.isFetching = false;
+        armPreviewFillStop();
         // A time was requested while we were busy. Go through the pacer rather
         // than straight back into the fetch: on a source that has to fetch,
         // looping immediately is the whole problem — the moment one 2MB window
@@ -4180,6 +4218,7 @@ export class MoviElement extends HTMLElement {
       // Schedule this time
       previewLoopState.nextTime = time;
       previewPace.lastMoveAt = performance.now();
+      armPreviewFillStop();
 
       // Paced by what the source costs, NOT by a fixed quiet period.
       //
@@ -4381,6 +4420,8 @@ export class MoviElement extends HTMLElement {
 
       const doHide = () => {
         thumbnail.classList.remove("visible");
+        // The card is going: nothing will ask for the rest of that window.
+        armPreviewFillStop(true);
         if (previewFrameRaf !== null) {
           cancelAnimationFrame(previewFrameRaf);
           previewFrameRaf = null;

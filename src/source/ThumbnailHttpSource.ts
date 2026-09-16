@@ -556,6 +556,22 @@ export class ThumbnailHttpSource implements SourceAdapter {
   }
 
   /**
+   * Stop the window that is still streaming in, keeping what has arrived.
+   *
+   * The window is 2MB so that the next hovers of a scrub land inside it, but
+   * the frame that asked for it needed its first 32KB: measured at 12 Mbit,
+   * the preview was on screen 0.17s into the request and the other 1.9MB kept
+   * downloading for 1.3s after — four seconds of it on a 4 Mbit link — for a
+   * pointer that had stopped moving. The bytes already here still serve any
+   * read that falls inside them.
+   */
+  stopFill(): void {
+    if (this.fillEnd <= this.bufferEnd) return;
+    this.invalidateFill();
+    Logger.debug(TAG, `Window stopped at ${this.bufferEnd} (was filling to its end)`);
+  }
+
+  /**
    * Clear buffer to free memory when thumbnails aren't being actively generated
    * Call this after thumbnail generation is complete
    */
