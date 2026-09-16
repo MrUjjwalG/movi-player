@@ -2666,6 +2666,75 @@ the tooltips and the settings rows stop naming keys.
 
 ### Static Utilities
 
+#### `MoviElement.canPlaySmoothly(input, options?): Promise<PlaybackAssessment>`
+
+Will this play smoothly **here** — on this device, in this browser, at this
+speed — asked before committing to playing it. Offer a lower quality, warn
+before a 2x on a heavy file, or pick between two encodes, instead of finding
+out from a stutter.
+
+```typescript
+const a = await MoviElement.canPlaySmoothly("https://cdn.example/film.mkv");
+if (!a.smooth) showLowerQualityOption(a.reasons);
+
+await MoviElement.canPlaySmoothly(file, { rate: 2 });   // a File or Blob, at 2x
+await MoviElement.canPlaySmoothly({ codec: "av1", width: 3840, height: 2160, fps: 60 });
+```
+
+**`input`** — a URL or `File`/`Blob`, opened just long enough to read its tracks
+(on its own WASM instance, so a player already playing is not disturbed); or a
+query `{ codec, width, height, fps?, bitrate? }` when there is nothing to open.
+`codec` is a WebCodecs string (`"av01.0.13M.10"`) or a family (`"av1"`, `"hevc"`,
+`"h264"`, `"vp9"`).
+
+**`options.rate`** — the speed to judge at. Decode work scales with it: 2x is
+twice the frames per wall-clock second. Default `1`.
+
+**Resolves — never rejects — with:**
+
+| Field | Meaning |
+|---|---|
+| `playable` | Something here can decode it at all |
+| `smooth` | Expected to play without dropping frames, at `rate` |
+| `powerEfficient` | Decoded on dedicated hardware (cool laptop, battery-friendly phone). `false` does not mean it stutters |
+| `rate` | The speed it was judged at |
+| `video` | `{ codec, width, height, fps, decoder, smooth, powerEfficient, load }` — `decoder` is `"hardware"`, `"software"` (the browser's) or `"wasm"` (the player's built-in FFmpeg); `load` is software decode work relative to what this class of device sustains (1 = at the limit) |
+| `audio` | `{ codec, channels, sampleRate, decoder }` — reported, never decisive |
+| `reasons` | Plain-language reasons for anything short of smooth; empty when smooth |
+
+**How it decides.** The same judgement the player acts on when it picks a
+rendition, so the answer and the behaviour cannot disagree:
+
+1. **Hardware decoder?** Asked of WebCodecs with `prefer-hardware` — the API that
+   actually decides; MediaCapabilities is advisory. A hardware path is smooth up
+   to **8K at 60fps**, which is the top of what hardware decoders are built for
+   (AV1/HEVC level 6.1) — past it, typically only reached with a speed setting,
+   it is not.
+2. **Otherwise software** — the browser's own decoder, or the player's WASM
+   FFmpeg when the browser has none (which is why nearly anything with a video
+   track is `playable`). Then it comes down to cost: width × height × fps × the
+   codec's work factor × rate, against this class of device's budget (desktop and
+   mobile differ).
+3. **The browser's own estimate** (MediaCapabilities) can veto `smooth`.
+
+A source that cannot be read — a bad URL, an adaptive manifest — comes back
+`playable: false` with the error in `reasons`. For HLS/DASH, load it into the
+element and ask the instance instead.
+
+#### `element.canPlaySmoothly(options?): Promise<PlaybackAssessment>`
+
+The same question about what this element is playing or about to play: the
+tracks already open when there are any, `src` otherwise. Judged at the
+element's current `playbackRate` unless `options.rate` says otherwise — the
+speed the viewer will actually get.
+
+```typescript
+const now = await player.canPlaySmoothly();
+const faster = await player.canPlaySmoothly({ rate: 2 });
+speed2xButton.disabled = !faster.smooth;
+```
+
+
 #### `MoviElement.cleanVideoTitle(filename: string): string`
 
 Turns a raw filename or metadata string into a human-readable title by stripping separators, release-group tags, and quality/codec suffixes — the same logic the player uses internally for tab titles, the in-player overlay, and the resume localStorage key.

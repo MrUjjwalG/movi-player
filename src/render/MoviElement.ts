@@ -21,6 +21,9 @@ import type {
   SubtitleRenderer,
   DecoderType,
   PlayerState,
+  PlaybackAssessment,
+  PlaybackAssessmentOptions,
+  PlaybackQuery,
 } from "../types";
 import { Logger, LogLevel } from "../utils/Logger";
 import type { StoryboardSpec, StoryboardTile } from "../utils/Storyboard";
@@ -1463,6 +1466,62 @@ export class MoviElement extends HTMLElement {
    * `VERSION` export from `movi-player/element`.
    */
   static readonly version: string = VERSION;
+
+  /**
+   * Will this play smoothly on this device, in this browser, at this speed —
+   * asked before committing to playing it.
+   *
+   *   const a = await MoviElement.canPlaySmoothly("https://cdn.example/film.mkv");
+   *   if (!a.smooth) showLowerQualityOption(a.reasons);
+   *
+   *   await MoviElement.canPlaySmoothly(file, { rate: 2 });   // a File, at 2x
+   *   await MoviElement.canPlaySmoothly({ codec: "av1", width: 3840, height: 2160, fps: 60 });
+   *
+   * A URL or File is opened just long enough to read its tracks, on its own
+   * WASM instance, so a player already playing is not disturbed. A
+   * PlaybackQuery needs no file at all. Resolves — never rejects — with
+   * `playable`, `smooth`, `powerEfficient`, which decoder would carry the
+   * video, and plain-language `reasons` for anything short of smooth.
+   *
+   * This is the same judgement the player acts on when it picks a rendition,
+   * so the answer and the behaviour cannot disagree. See
+   * MoviPlayer.assessPlayback for how it is reached.
+   */
+  static canPlaySmoothly(
+    input: string | File | Blob | PlaybackQuery,
+    options?: PlaybackAssessmentOptions,
+  ): Promise<PlaybackAssessment> {
+    return MoviPlayer.assessPlayback(input, options);
+  }
+
+  /**
+   * The same question about what this element is playing — or about to play.
+   *
+   * Uses the tracks already open when there are any, and opens `src` when there
+   * are not. Judged at the element's own current speed unless `rate` says
+   * otherwise, since that is the speed the viewer will actually get.
+   */
+  canPlaySmoothly(
+    options: PlaybackAssessmentOptions = {},
+  ): Promise<PlaybackAssessment> {
+    const rate = options.rate ?? this.playbackRate;
+    const tracks = this.player?.getMediaInfo?.()?.tracks;
+    if (tracks && tracks.length > 0) {
+      return MoviPlayer.assessPlayback(tracks, { rate });
+    }
+    if (this._src) {
+      return MoviPlayer.assessPlayback(this._src, { rate });
+    }
+    return Promise.resolve({
+      playable: false,
+      smooth: false,
+      powerEfficient: false,
+      rate,
+      video: null,
+      audio: null,
+      reasons: ["No source is loaded."],
+    });
+  }
 
   /** Instance mirror of {@link MoviElement.version}. */
   get version(): string {

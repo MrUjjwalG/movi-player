@@ -93,7 +93,7 @@ export class MoviAudioDecoder {
     }
 
     // Check if we should force software decoding for this codec
-    if (this.needsSoftwareDecoding(track.codec)) {
+    if (MoviAudioDecoder.needsSoftwareDecoding(track.codec)) {
       Logger.info(TAG, `Forcing software decoding for codec: ${track.codec}`);
       return this.initSoftwareDecoder();
     }
@@ -254,7 +254,7 @@ export class MoviAudioDecoder {
    * moving software decode off the main thread. Anyone reopening this owes a
    * reproduction of the failure case, not another sweep of the files to hand.
    */
-  private needsSoftwareDecoding(_codec: string): boolean {
+  static needsSoftwareDecoding(_codec: string): boolean {
     return true;
   }
 

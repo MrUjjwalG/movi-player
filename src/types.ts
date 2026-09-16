@@ -215,6 +215,72 @@ export interface Chapter {
   image?: string;
 }
 
+/**
+ * A video to ask about without a file: what `canPlaySmoothly()` needs when the
+ * page already knows the shape of what it is going to play (a ladder rung, an
+ * upload's metadata) and has no reason to open it.
+ */
+export interface PlaybackQuery {
+  /** A WebCodecs string ("av01.0.13M.10", "avc1.640028") or a bare family
+   *  ("av1", "hevc", "h264", "vp9"), which is filled in with a representative
+   *  profile. */
+  codec: string;
+  width: number;
+  height: number;
+  /** Frames per second. Defaults to 30. */
+  fps?: number;
+  /** Bits per second, when known — only the browser's own estimate uses it. */
+  bitrate?: number;
+}
+
+export interface PlaybackAssessmentOptions {
+  /** Playback speed to judge at. Decode work scales with it: 2x is twice the
+   *  frames per second of wall time. Defaults to 1. */
+  rate?: number;
+}
+
+/** What `canPlaySmoothly()` concluded, and why. */
+export interface PlaybackAssessment {
+  /** Something here can decode it at all. */
+  playable: boolean;
+  /** Expected to play without dropping frames, at `rate`. */
+  smooth: boolean;
+  /** Decoded on dedicated hardware, which is what keeps a laptop cool and a
+   *  phone's battery alive. False does not mean it stutters. */
+  powerEfficient: boolean;
+  /** The speed this was judged at. */
+  rate: number;
+  video: {
+    /** The codec string the question was asked with. */
+    codec: string;
+    width: number;
+    height: number;
+    fps: number;
+    /**
+     * Which decoder would carry it: "hardware" — the GPU's; "software" — the
+     * browser's own software decoder; "wasm" — this player's built-in FFmpeg,
+     * used when the browser has no decoder for it at all.
+     */
+    decoder: "hardware" | "software" | "wasm";
+    smooth: boolean;
+    powerEfficient: boolean;
+    /**
+     * Software decode work relative to what this class of device can carry
+     * (1 = exactly at the limit). Only decides anything when there is no
+     * hardware path; a hardware decoder is not bound by it.
+     */
+    load: number;
+  } | null;
+  audio: {
+    codec: string;
+    channels: number;
+    sampleRate: number;
+    decoder: "webcodecs" | "wasm";
+  } | null;
+  /** Plain-language reasons for anything short of smooth. Empty when smooth. */
+  reasons: string[];
+}
+
 export interface MediaInfo {
   formatName: string;
   duration: number;

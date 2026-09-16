@@ -17,6 +17,9 @@ import type {
   SubtitleCue,
   SubtitleRenderer,
   Packet,
+  PlaybackAssessment,
+  PlaybackAssessmentOptions,
+  PlaybackQuery,
 } from "../types";
 import { EventEmitter } from "../events/EventEmitter";
 import {
@@ -48,6 +51,7 @@ import {
 import { probeLinkBandwidth } from "../utils/bandwidthProbe";
 import { MoviVideoDecoder } from "../decode/VideoDecoder";
 import { MoviAudioDecoder } from "../decode/AudioDecoder";
+import { CodecParser } from "../decode/CodecParser";
 import { SubtitleDecoder } from "../decode/SubtitleDecoder";
 import {
   CanvasRenderer,
@@ -342,6 +346,21 @@ function softwareDecodeCost(
  */
 const SOFTWARE_DECODE_BUDGET_MOBILE = 100_000_000;
 const SOFTWARE_DECODE_BUDGET_DESKTOP = 400_000_000;
+
+/**
+ * The most a HARDWARE decoder is built to carry, in pixels per second: 8K at
+ * 60fps. That is the top of AV1 level 6.1 and HEVC level 6.1, which is where
+ * the decoders in laptops, phones and consumer GPUs stop — a device advertising
+ * "8K AV1" means 8K60, and nothing past it.
+ *
+ * It exists because nothing else here will say no. Asked about 8K at 120fps,
+ * WebCodecs configured a hardware decoder and MediaCapabilities answered
+ * smooth and power-efficient — its "smooth" comes from past playback of that
+ * configuration, and with no history it is optimistic by default. Only a speed
+ * setting reaches this in practice (8K60 at 2x is 8K120), which is exactly the
+ * question canPlaySmoothly is asked with a rate for.
+ */
+const HARDWARE_DECODE_CEILING = 7680 * 4320 * 60;
 
 async function screenLadderForDecode(
   rungs: {
@@ -716,6 +735,301 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
     const exact = decodeBoundExactKey(codec || "", height);
     if (exact && deviceDecodeBoundHeights.has(exact)) return true;
     return deviceDecodeBoundHeights.has(decodeBoundKey(codec || "", height));
+  }
+
+  /**
+   * Will this play smoothly HERE — on this device, in this browser, at this
+   * speed — before committing to playing it?
+   *
+   * Answered with the same judgement the player itself acts on when it picks a
+   * rendition (screenLadderForDecode), not a second opinion that could
+   * disagree with it:
+   *
+   *  1. Is there a HARDWARE decoder for this exact configuration? Asked of
+   *     WebCodecs with `prefer-hardware`, because that is the API that decides
+   *     — MediaCapabilities is advisory, and Safari has been caught answering
+   *     "supported" for 4K AV1 that isConfigSupported then refused.
+   *  2. Failing that, is there a browser SOFTWARE decoder? Failing that, the
+   *     player's own FFmpeg (WASM) takes it — which is why `playable` is true
+   *     for nearly anything with a video track.
+   *  3. Without hardware, it comes down to cost: width × height × fps × the
+   *     codec's work factor × playback rate, against the budget for this class
+   *     of device — the same two constants the player's ABR uses, calibrated on
+   *     a phone that could not produce a frame of 1440p AV1 and the 1080p H.264
+   *     it plays without complaint.
+   *  4. MediaCapabilities gets a veto over "smooth": when the browser says a
+   *     configuration will not be smooth, that is believed.
+   *
+   * Audio is reported but never decides it. Every audio track goes through the
+   * software decoder already, and audio decode is a rounding error next to
+   * video's.
+   *
+   * @param input A URL or File to open and read (an isolated WASM instance, so
+   *   a player already playing is not disturbed), the tracks of something
+   *   already open, or a {@link PlaybackQuery} when there is nothing to open.
+   */
+  static async assessPlayback(
+    input: string | File | Blob | Track[] | PlaybackQuery,
+    options: PlaybackAssessmentOptions = {},
+  ): Promise<PlaybackAssessment> {
+    const rate =
+      typeof options.rate === "number" && options.rate > 0 ? options.rate : 1;
+    const reasons: string[] = [];
+
+    // ── What are we looking at ────────────────────────────────────────────
+    let tracks: Track[];
+    let fromQuery: PlaybackQuery | null = null;
+    if (Array.isArray(input)) {
+      tracks = input;
+    } else if (typeof input === "string" || input instanceof Blob) {
+      try {
+        tracks = await MoviPlayer.probeTracks(input);
+      } catch (e) {
+        // A source that cannot be opened is a verdict, not an exception: the
+        // caller asked "will this play", and "it could not be read" answers it.
+        // Adaptive manifests land here too — open one with the player instead,
+        // and ask the element once it has loaded.
+        return {
+          playable: false,
+          smooth: false,
+          powerEfficient: false,
+          rate,
+          video: null,
+          audio: null,
+          reasons: [
+            `The source could not be read: ${e instanceof Error ? e.message : String(e)}`,
+          ],
+        };
+      }
+    } else {
+      fromQuery = input;
+      tracks = [
+        {
+          id: 0,
+          type: "video",
+          codec: input.codec,
+          width: input.width,
+          height: input.height,
+          frameRate: input.fps && input.fps > 0 ? input.fps : 30,
+          bitRate: input.bitrate,
+        } as VideoTrack,
+      ];
+    }
+
+    const video = tracks.find(
+      (t): t is VideoTrack =>
+        t.type === "video" && !(t as VideoTrack).isAttachedPic,
+    );
+    const audioTrack = tracks.find((t): t is AudioTrack => t.type === "audio");
+
+    const audio: PlaybackAssessment["audio"] = audioTrack
+      ? {
+          codec: audioTrack.codec,
+          channels: audioTrack.channels,
+          sampleRate: audioTrack.sampleRate,
+          decoder: MoviAudioDecoder.needsSoftwareDecoding(audioTrack.codec)
+            ? "wasm"
+            : "webcodecs",
+        }
+      : null;
+
+    if (!video) {
+      // Sound only: nothing here is expensive enough to stutter.
+      return {
+        playable: !!audioTrack,
+        smooth: !!audioTrack,
+        powerEfficient: !!audioTrack,
+        rate,
+        video: null,
+        audio,
+        reasons: audioTrack ? [] : ["No video or audio track was found."],
+      };
+    }
+
+    // ── The codec string to ask with ──────────────────────────────────────
+    // A full WebCodecs string when the stream's own extradata can build one;
+    // otherwise the representative profile for its family, the same fill-in
+    // the ladder screen uses. A query that already names a full string is
+    // taken at its word.
+    const family = (video.codec || "").split(".")[0].toLowerCase();
+    const codec =
+      (fromQuery && fromQuery.codec.includes(".") ? fromQuery.codec : null) ||
+      (!fromQuery ? MoviPlayer.codecStringFor(video) : null) ||
+      REPRESENTATIVE_CODECS[family] ||
+      "";
+
+    const width = video.width || 0;
+    const height = video.height || 0;
+    const fps = video.frameRate && video.frameRate > 0 ? video.frameRate : 30;
+    const budget = MoviPlayer._isMobileDevice
+      ? SOFTWARE_DECODE_BUDGET_MOBILE
+      : SOFTWARE_DECODE_BUDGET_DESKTOP;
+    const load =
+      softwareDecodeCost(width, height, fps * rate, codec || family) / budget;
+
+    // ── Which decoder would carry it ──────────────────────────────────────
+    const ask = async (
+      hardwareAcceleration?: "prefer-hardware",
+    ): Promise<boolean> => {
+      if (!codec || typeof VideoDecoder === "undefined") return false;
+      try {
+        const config: VideoDecoderConfig = {
+          codec,
+          codedWidth: width,
+          codedHeight: height,
+        };
+        if (hardwareAcceleration) config.hardwareAcceleration = hardwareAcceleration;
+        if (video.extradata && video.extradata.length > 0) {
+          config.description = video.extradata;
+        }
+        const r = await VideoDecoder.isConfigSupported(config);
+        return r?.supported === true;
+      } catch {
+        return false;
+      }
+    };
+    const hardware = await ask("prefer-hardware");
+    const software = hardware ? true : await ask();
+    const decoder: "hardware" | "software" | "wasm" = hardware
+      ? "hardware"
+      : software
+        ? "software"
+        : "wasm";
+
+    // ── The browser's own estimate ────────────────────────────────────────
+    let browserSmooth: boolean | undefined;
+    let browserEfficient: boolean | undefined;
+    const caps = (
+      navigator as unknown as {
+        mediaCapabilities?: {
+          decodingInfo?: (c: unknown) => Promise<{
+            supported?: boolean;
+            smooth?: boolean;
+            powerEfficient?: boolean;
+          }>;
+        };
+      }
+    ).mediaCapabilities;
+    if (codec && caps?.decodingInfo && width > 0 && height > 0) {
+      try {
+        const container = /^(vp0?[89]|vp8)/i.test(codec)
+          ? "video/webm"
+          : "video/mp4";
+        const info = await caps.decodingInfo({
+          type: "file",
+          video: {
+            contentType: `${container}; codecs="${codec}"`,
+            width,
+            height,
+            bitrate: video.bitRate || 0,
+            framerate: fps * rate,
+          },
+        });
+        // Only an answer about a configuration the browser recognised counts.
+        if (info?.supported) {
+          browserSmooth = info.smooth;
+          browserEfficient = info.powerEfficient;
+        }
+      } catch {
+        /* the query itself was rejected — no opinion */
+      }
+    }
+
+    // ── Verdict ───────────────────────────────────────────────────────────
+    const dims = `${width}×${height} @ ${Math.round(fps)}fps${rate !== 1 ? ` × ${rate}x` : ""}`;
+    let smooth: boolean;
+    if (decoder === "hardware") {
+      // Hardware is not bound by the software budget — but it is bound by what
+      // hardware decoders are built for, and the browser saying otherwise.
+      const pixelRate = width * height * fps * rate;
+      const beyondHardware = pixelRate > HARDWARE_DECODE_CEILING;
+      smooth = !beyondHardware && browserSmooth !== false;
+      if (beyondHardware) {
+        reasons.push(
+          `${dims} is beyond what hardware video decoders are built for (8K at 60fps).`,
+        );
+      }
+    } else {
+      const overBudget = load > 1;
+      smooth = !overBudget && browserSmooth !== false;
+      reasons.push(
+        decoder === "software"
+          ? `No hardware decoder for ${codec || family} at ${width}×${height} — the browser decodes it in software.`
+          : `The browser cannot decode ${codec || family} — the player's built-in decoder (WASM) takes it.`,
+      );
+      if (overBudget) {
+        reasons.push(
+          `Software decoding ${dims} needs about ${load.toFixed(1)}× what this ${MoviPlayer._isMobileDevice ? "mobile" : "desktop"} device can sustain.`,
+        );
+      }
+    }
+    if (browserSmooth === false) {
+      reasons.push(`The browser reports ${dims} as not smooth on this device.`);
+    }
+    const powerEfficient =
+      decoder === "hardware" && browserEfficient !== false;
+
+    return {
+      playable: true,
+      smooth,
+      powerEfficient,
+      rate,
+      video: {
+        codec: codec || video.codec,
+        width,
+        height,
+        fps,
+        decoder,
+        smooth,
+        powerEfficient,
+        load: Math.round(load * 100) / 100,
+      },
+      audio,
+      // "Smooth" with a note about software decode is still smooth — the note
+      // is information, not a problem, so a smooth verdict carries no reasons.
+      reasons: smooth ? [] : reasons,
+    };
+  }
+
+  /** The stream's own codec string, or null — never a throw on odd extradata. */
+  private static codecStringFor(video: VideoTrack): string | null {
+    try {
+      return CodecParser.getCodecString(
+        video.codec,
+        video.extradata,
+        video.width,
+        video.height,
+      );
+    } catch {
+      return null;
+    }
+  }
+
+  /** Open a URL or File just long enough to read its tracks. */
+  private static async probeTracks(input: string | Blob): Promise<Track[]> {
+    const source: SourceAdapter =
+      typeof input === "string"
+        ? new HttpSource(input)
+        : new FileSource(
+            input instanceof File ? input : new File([input], "media"),
+          );
+    // An isolated WASM instance: the shared one belongs to whatever is playing.
+    const demuxer = new Demuxer(source, undefined, true);
+    try {
+      const info = await demuxer.open();
+      return info.tracks;
+    } finally {
+      try {
+        demuxer.close();
+      } catch {
+        /* already gone */
+      }
+      try {
+        source.close();
+      } catch {
+        /* already gone */
+      }
+    }
   }
 
   /**
