@@ -163,6 +163,36 @@ See [Sources → Creating Custom Sources](./sources.md#creating-custom-sources) 
 
 ### Methods
 
+#### `MoviPlayer.assessPlayback(input, options?): Promise<PlaybackAssessment>` (static)
+
+Will this play smoothly on this device, in this browser, at this speed — without
+creating a player or rendering anything.
+
+```typescript
+import { MoviPlayer } from "movi-player/player";
+
+const a = await MoviPlayer.assessPlayback("https://cdn.example/film.mkv");
+if (!a.smooth) console.log(a.reasons);
+
+await MoviPlayer.assessPlayback(file, { rate: 2 });                        // File or Blob
+await MoviPlayer.assessPlayback({ codec: "av1", width: 3840, height: 2160, fps: 60 });
+await MoviPlayer.assessPlayback(player.getMediaInfo()?.tracks ?? []);      // already open
+```
+
+`input` is a URL, a `File`/`Blob` (opened on an isolated WASM instance just long
+enough to read its tracks), the tracks of something already open, or a query
+`{ codec, width, height, fps?, bitrate? }`. Resolves — never rejects — with
+`playable`, `smooth`, `powerEfficient`, `rate`, `video` (`codec`, size, `fps`,
+`decoder`: `"hardware"` / `"software"` / `"wasm"`, `load`), `audio`, and
+`reasons`. How the verdict is reached, and the same method on the element, are in
+[`canPlaySmoothly`](./element.md#movielement-canplaysmoothly-input-options-promise-playbackassessment).
+
+**Cost.** A query or already-open tracks answer immediately. A URL reads the
+file's header — tens of milliseconds locally, a few hundred over an ordinary
+link (measured ~400–520ms at 20 Mbps / 80ms RTT); results are not cached. The
+first call also needs the library and its WASM loaded, once.
+
+
 #### `load(sourceConfig?: SourceConfig): Promise<void>`
 
 Loads the media source set in the constructor (or the override passed here) and initializes the playback pipeline. `SourceConfig` requires a `type` discriminant.

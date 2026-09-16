@@ -651,6 +651,15 @@ await player.load();
 await player.play();
 ```
 
+Ask before playing whether it will be smooth on this device, at this speed:
+
+```typescript
+const a = await MoviPlayer.assessPlayback("film.mkv", { rate: 2 });
+if (!a.smooth) console.log(a.reasons);   // e.g. no hardware decoder, over the software budget
+```
+
+The same is `MoviElement.canPlaySmoothly()` and `element.canPlaySmoothly()` on the element.
+
 See the [Programmatic API guide](https://moviplayer.com/docs/guide/programmatic-api).
 
 ### Demuxer Only (50KB)

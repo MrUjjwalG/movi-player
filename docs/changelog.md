@@ -19,6 +19,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **ChromeOS Files app integration and lock-screen skip** for the Chrome extension.
 - **Firefox extension and Chrome's toolbar icon** open the full player page directly instead of a popup, and both work from an incognito/private window.
 - **In-player debug console** gets a level filter and search.
+- **A centred bar control** (`placement: "center"`) and **fullscreen-only controls** (`screen: "fullscreen" | "windowed"`).
+- **`spinnerdelay` takes two numbers** — a mid-play stall's wait, then the opening's (`spinnerdelay="0.25 1"`).
+- **Ask whether something will play smoothly**: `MoviElement.canPlaySmoothly(url | file | query, { rate })`, `element.canPlaySmoothly()`, and `MoviPlayer.assessPlayback()` — `playable`, `smooth`, `powerEfficient`, which decoder would carry it, and plain-language `reasons`. The same judgement the player uses to pick a rendition, plus a hardware ceiling at 8K60.
+- **A build a plain `<script>` tag can load**: `dist/element.global.js` and `dist/element.slim.global.js` (subpaths `movi-player/element/global`, `/element/slim/global`); `jsdelivr`/`unpkg` point at it, so a CDN's default install snippet works as printed.
+- **Seamless loop**: a video-only file turns over without a black frame or freeze. `loop` gained a grammar — bare/`one` repeats the item, `loop="all"` the queue, a number is the gap between items — plus a `loop` event and `loopCount`.
+- **`shuffle`**: the queue in a random order, a fresh order each pass, `reshuffle()`, `shufflechange`.
+- **Shuffle and repeat in the playlist panels** of the Chrome/Firefox extensions and the web app, driven by the element so the panel and the context menu can't disagree.
 
 ### Changed
 - **The WASM module compiles once and is instantiated many times** — a second player, the preview pipeline, and a post-quality-switch rebuild no longer each pay for their own fetch and compile.
@@ -27,6 +34,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Auto (adaptive) quality**: fixed a unit bug that read the link estimate 8x too small, a bottom-rung confirm pass that never ran, an ignored persisted link measurement, and a climb into 8K priced off a different stream's throughput.
 - **`/embed` runs inside the embedding page's own origin** now (a `srcdoc` iframe) instead of a cross-origin frame that needed CORS headers a host may never send; an old embed explains what happened and offers a one-copy replacement.
 - Built against **FFmpeg 9.0.1**.
+- **The loading spinner waits before it appears**: `spinnerdelay` defaults to `"1 2"` (a stall after 1s, an opening after 2s) instead of `0`, so a fast local open never flashes a ring. `spinnerdelay="0"` restores the old behaviour.
 
 ### Fixed
 - **A file whose audio ends before its picture now plays to the real end** instead of stopping dead where the sound ran out; also fixed a finished soundtrack read as "starving", a hang seeking into that tail, and a leftover pre-seek frame dragging playback backward.
@@ -43,6 +51,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Open-GOP (CRA/BLA) streams and transport-stream seeks**: a string of decoder-queue, reference-chain and reorder-tail fixes.
 - A control capsule could get permanently marked "empty" by a measurement taken while the bar was hidden.
 - **DASH sources**: an audio track no longer lists once per bitrate rendition, dash.js's own thumbnail track is read, and a preview is no longer promised on a source that can't produce one.
+- **A discarded tab comes back where it was**: after Chrome's Memory Saver reloads a background tab, the position, play state and speed are restored (URL sources, Chromium).
+- **No freeze a moment after playback starts**: frames decoded while leaving buffering were being thrown away (a 1.1s hole on a 1080p30 file).
+- **No freezes at slow speeds**: drift budgets that were 4× too loose at 0.25x, a speed change made while paused, and a read-ahead trim that cut a GOP.
+- **No hitch at a speed change on Bluetooth**: the picture was waiting out the headset's full output latency (~250ms) at every change.
+- **A video-only file's picture no longer waits for sound that never comes** — a 560ms hold after every loop turn.
+- **No spinner over a picture that never stopped**, after a backward seek or a loop turn.
+- **Seek-bar hover right after a resume** is fast on large remote files (it took 4–7s).
+- **A video-only file in a background tab** plays its tail out instead of ending early.
 
 ## [0.4.0] - 2026-08-15
 
