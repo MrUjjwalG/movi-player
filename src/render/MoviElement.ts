@@ -64,6 +64,7 @@ type EngineName = (typeof ENGINE_NAMES)[number];
 // OSD icon constants — shared across keyboard, button, and context menu handlers
 const OSD = {
   loop: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><path d="M17 2l4 4-4 4"/><path d="M3 11v-1a4 4 0 0 1 4-4h14"/><path d="M7 22l-4-4 4-4"/><path d="M21 13v1a4 4 0 0 1-4 4H3"/></svg>`,
+  shuffle: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><polyline points="16 3 21 3 21 8"/><line x1="4" y1="20" x2="21" y2="3"/><polyline points="21 16 21 21 16 21"/><line x1="15" y1="15" x2="21" y2="21"/><line x1="4" y1="4" x2="9" y2="9"/></svg>`,
   stableAudio: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75"><rect x="2" y="4" width="20" height="16" rx="2"/><path d="M6 15v-2M9 15v-4M12 15v-6M15 15v-4M18 15v-2"/></svg>`,
   hdr: `<span style="font-weight:700;font-size:14px;letter-spacing:1px;padding:4px 10px;border:2px solid currentColor;border-radius:var(--movi-radius-tile,6px);">HDR</span>`,
   speed: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><path d="M5.64 18.36a9 9 0 1 1 12.72 0"/><path d="m12 12 4-4"/></svg>`,
@@ -2168,6 +2169,20 @@ export class MoviElement extends HTMLElement {
         <span class="movi-context-menu-label">Loop</span>
         <span class="movi-context-menu-status movi-loop-status">Off</span>
         <span class="movi-context-menu-shortcut" data-shortcut-action="loop">L</span>
+      </div>
+      <!-- Shuffle sits under Loop because the two are one question asked about a
+           queue: in what order, and again or not. Shown only when there IS a
+           queue (updateShuffleUI) — the same rule the Next button and the
+           settings row follow. -->
+      <div class="movi-context-menu-item" data-action="shuffle-toggle" style="display: none;">
+        <svg class="movi-context-menu-icon movi-context-menu-shuffle-outline" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round">
+          <polyline points="16 3 21 3 21 8"/><line x1="4" y1="20" x2="21" y2="3"/><polyline points="21 16 21 21 16 21"/><line x1="15" y1="15" x2="21" y2="21"/><line x1="4" y1="4" x2="9" y2="9"/>
+        </svg>
+        <svg class="movi-context-menu-icon movi-context-menu-shuffle-filled" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round" style="display: none;">
+          <polyline points="16 3 21 3 21 8"/><line x1="4" y1="20" x2="21" y2="3"/><polyline points="21 16 21 21 16 21"/><line x1="15" y1="15" x2="21" y2="21"/><line x1="4" y1="4" x2="9" y2="9"/>
+        </svg>
+        <span class="movi-context-menu-label">Shuffle</span>
+        <span class="movi-context-menu-status movi-shuffle-status">Off</span>
       </div>
       <div class="movi-context-menu-item" data-action="stable-audio-toggle">
         <svg class="movi-context-menu-icon movi-context-menu-stable-outline" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">
@@ -7453,6 +7468,13 @@ export class MoviElement extends HTMLElement {
         this.showOSD(
           OSD.loop,
           this.loop ? "Loop On" : "Loop Off",
+        );
+        hideContextMenu();
+      } else if (action === "shuffle-toggle") {
+        this.shuffle = !this._shuffle;
+        this.showOSD(
+          OSD.shuffle,
+          this._shuffle ? "Shuffle On" : "Shuffle Off",
         );
         hideContextMenu();
       } else if (action === "stable-audio-toggle") {
@@ -14193,6 +14215,7 @@ export class MoviElement extends HTMLElement {
     hdr: `<span class="movi-settings-icon movi-settings-icon-text">HDR</span>`,
     stable: `<svg class="movi-settings-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="4" width="20" height="16" rx="2"/><path d="M6 15v-2M9 15v-4M12 15v-6M15 15v-4M18 15v-2"/></svg>`,
     loop: `<svg class="movi-settings-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><path d="M17 2l4 4-4 4"/><path d="M3 11v-1a4 4 0 0 1 4-4h14"/><path d="M7 22l-4-4 4-4"/><path d="M21 13v1a4 4 0 0 1-4 4H3"/></svg>`,
+    shuffle: `<svg class="movi-settings-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><polyline points="16 3 21 3 21 8"/><line x1="4" y1="20" x2="21" y2="3"/><polyline points="21 16 21 21 16 21"/><line x1="15" y1="15" x2="21" y2="21"/><line x1="4" y1="4" x2="9" y2="9"/></svg>`,
     aspect: `<svg class="movi-settings-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="18" height="18" rx="2"/><rect x="6" y="8" width="12" height="8" rx="1"/></svg>`,
     ambient: `<svg class="movi-settings-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="5"/><path d="M12 1v2M12 21v2M4.22 4.22l1.42 1.42M18.36 18.36l1.42 1.42M1 12h2M21 12h2M4.22 19.78l1.42-1.42M18.36 5.64l1.42-1.42"/></svg>`,
     // Crop marks — the two overhanging L's of the crop tool. A framed
@@ -14930,7 +14953,7 @@ export class MoviElement extends HTMLElement {
         } else if (row.dataset.toggle === "shuffle") {
           this.shuffle = !this._shuffle;
           this.showOSD(
-            OSD.loop,
+            OSD.shuffle,
             this._shuffle ? "Shuffle On" : "Shuffle Off",
           );
         } else if (row.dataset.toggle === "ambient") {
@@ -34082,6 +34105,36 @@ export class MoviElement extends HTMLElement {
     return this.shadowRoot!;
   }
 
+  /**
+   * The context menu's Shuffle item: on/off state, and whether it is there at
+   * all. Driven from refreshPlaylistUi, which every change to the queue and to
+   * shuffle itself already passes through — so there is no path that can move
+   * one without the other.
+   *
+   * Visibility is set here rather than by a :host() rule because the menu
+   * portals to a body-level shadow root while it is open, where this
+   * element's host selectors do not reach.
+   */
+  private updateShuffleUI(): void {
+    const menuRoot = this.contextMenuRoot();
+    const item = menuRoot.querySelector(
+      '.movi-context-menu-item[data-action="shuffle-toggle"]',
+    ) as HTMLElement | null;
+    if (!item) return;
+    item.style.display = this._playlist.length > 1 ? "" : "none";
+    item.classList.toggle("movi-context-menu-active", this._shuffle);
+    const status = menuRoot.querySelector(".movi-shuffle-status");
+    if (status) status.textContent = this._shuffle ? "On" : "Off";
+    const outline = menuRoot.querySelector(
+      ".movi-context-menu-shuffle-outline",
+    ) as HTMLElement | null;
+    const filled = menuRoot.querySelector(
+      ".movi-context-menu-shuffle-filled",
+    ) as HTMLElement | null;
+    if (outline) outline.style.display = this._shuffle ? "none" : "block";
+    if (filled) filled.style.display = this._shuffle ? "block" : "none";
+  }
+
   private updateLoopUI(): void {
     const shadowRoot = this.shadowRoot;
     if (!shadowRoot) return;
@@ -39001,6 +39054,7 @@ export class MoviElement extends HTMLElement {
     // One item is not a queue. The buttons stay off the bar for it — a Next
     // that can never be pressed is a control that only takes up room.
     this.classList.toggle("movi-has-playlist", this._playlist.length > 1);
+    this.updateShuffleUI();
     const sr = this.shadowRoot;
     const prev = sr?.querySelector(".movi-prev-btn") as HTMLButtonElement | null;
     const next = sr?.querySelector(".movi-next-btn") as HTMLButtonElement | null;
