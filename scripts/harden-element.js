@@ -25,9 +25,16 @@ const root = resolve(__dirname, "..");
 // one. The slim glue is the same Emscripten output, and property mangling is
 // off, so the same reserved set applies. element.slim.js only exists after the
 // slim entry is built, so a missing one is skipped, not an error.
-const targets = ["dist/element.js", "dist/element.slim.js"].map((t) =>
-  resolve(root, t),
-);
+//
+// …and the `.global` pair, which is the same code in an IIFE wrapper and is
+// the one a CDN hands out by default — leaving it out would make the most
+// widely served copy the only unhardened one.
+const targets = [
+  "dist/element.js",
+  "dist/element.slim.js",
+  "dist/element.global.js",
+  "dist/element.slim.global.js",
+].map((t) => resolve(root, t));
 
 const RESERVED_IDENTIFIERS = [
   // Emscripten / WASM boundary
@@ -72,7 +79,7 @@ async function harden() {
   const present = targets.filter((t) => {
     try { statSync(t); return true; } catch { return false; }
   });
-  if (!present.some((t) => t.endsWith("element.js"))) {
+  if (!present.some((t) => t.endsWith("/element.js"))) {
     console.error(`[harden-element] dist/element.js not found — run build first.`);
     process.exit(1);
   }

@@ -61,6 +61,25 @@ The `<movi-player>` custom HTML element provides a native `<video>`-like interfa
 npm install movi-player
 ```
 
+Or from a CDN, with no build step. The module build is the one to reach for —
+it is what `import` and every bundler want:
+
+```html
+<script type="module" src="https://cdn.jsdelivr.net/npm/movi-player/dist/element.js"></script>
+```
+
+…and the **`.global`** build is the same element for a page that cannot use a
+module: a classic script that registers `<movi-player>` on load and puts a
+`Movi` global on `window`. It is what `jsdelivr`/`unpkg` in the package point
+at, so a CDN's copied "default" line works as printed.
+
+```html
+<script src="https://cdn.jsdelivr.net/npm/movi-player/dist/element.global.js"></script>
+```
+
+`dist/element.slim.global.js` is the same thing built on the slim bundle —
+a third of the size, fetching `movi.wasm` from beside itself.
+
 ### Basic Usage
 
 ```html

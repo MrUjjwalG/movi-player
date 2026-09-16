@@ -34,6 +34,13 @@ One script tag, one element — this plays an MKV (or HEVC, AV1, HDR, multi-audi
 <movi-player src="video.mkv" controls></movi-player>
 ```
 
+A page that would rather not have a module — or that copies the line a CDN
+hands it — can use the `.global` build instead. Same element, plain script tag:
+
+```html
+<script src="https://cdn.jsdelivr.net/npm/movi-player/dist/element.global.js"></script>
+```
+
 Or with npm:
 
 ```bash

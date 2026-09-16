@@ -5,6 +5,8 @@
   "type": "module",
   "main": "dist/index.js",
   "module": "dist/index.js",
+  "jsdelivr": "dist/element.global.js",
+  "unpkg": "dist/element.global.js",
   "types": "dist/index.d.ts",
   "exports": {
     ".": {

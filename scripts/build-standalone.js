@@ -46,6 +46,25 @@ const PKG_VERSION = JSON.parse(
 /** `a,b` → `["a","b"]`; empty/unset → `[]`, which every filter reads as "all". */
 const list = (v) => (v || '').split(',').map((s) => s.trim()).filter(Boolean);
 
+/**
+ * The formats, and what each one is called on disk.
+ *
+ * `iife` is the one a CDN's copy-paste snippet can actually run. A plain
+ * `<script src="...">` cannot load an ES module, and this package is ESM-only
+ * — so jsDelivr, which falls back to `main` and prints a plain script tag for
+ * its "Default" install, was handing people a line that throws. The `.global`
+ * build registers <movi-player> on load with no import anywhere, which is the
+ * whole job for an element; `jsdelivr`/`unpkg` in package.json point at it.
+ *
+ * Only the entries that ARE a browser drop-in get one — building the demuxer
+ * or the index barrel as a global is two more multi-megabyte bundles nobody
+ * can use, since the thing you would want from them is the exports an IIFE
+ * does not give you.
+ */
+const ALL_FORMATS = ['es', 'cjs', 'iife'];
+const FORMAT_EXT = { es: 'js', cjs: 'cjs', iife: 'global.js' };
+const outFile = (entry, format) => `dist/${entry.name}.${FORMAT_EXT[format]}`;
+
 const ONLY_ENTRIES = list(process.env.MOVI_ENTRY);
 const ONLY_FORMATS = list(process.env.MOVI_FORMAT);
 const VERBOSE = process.env.MOVI_VERBOSE === '1';
@@ -60,13 +79,13 @@ const JOBS = Math.max(
 const entries = [
   { name: 'demuxer', path: 'src/demuxer.ts' },
   { name: 'player', path: 'src/player.ts' },
-  { name: 'element', path: 'src/element.ts' },
+  { name: 'element', path: 'src/element.ts', global: true },
   { name: 'index', path: 'src/index.ts' },
   // Slim build: same <movi-player>, but the WASM ships as a separate
   // movi-slim.wasm (streamed) instead of embedded, and playback auto-falls back
   // to native <video> when that WASM isn't available. `slim: true` swaps the
   // WASM glue via alias and flips the __MOVI_SLIM__ define below.
-  { name: 'element.slim', path: 'src/element-slim.ts', slim: true },
+  { name: 'element.slim', path: 'src/element-slim.ts', slim: true, global: true },
 ];
 
 
@@ -142,7 +161,7 @@ const terserConfig = {
 };
 
 async function buildEntry(entry, format) {
-  const formatExt = format === 'es' ? 'js' : format;
+  const formatExt = FORMAT_EXT[format];
   const started = Date.now();
 
   await build({
@@ -304,17 +323,21 @@ async function buildAll() {
     );
   }
   const formats = ONLY_FORMATS.length
-    ? ['es', 'cjs'].filter((f) => ONLY_FORMATS.includes(f))
-    : ['es', 'cjs'];
+    ? ALL_FORMATS.filter((f) => ONLY_FORMATS.includes(f))
+    : ALL_FORMATS;
   if (!formats.length) {
     throw new Error(
-      `MOVI_FORMAT=${process.env.MOVI_FORMAT} matches no format. Known: es, cjs`,
+      `MOVI_FORMAT=${process.env.MOVI_FORMAT} matches no format. Known: ` +
+        ALL_FORMATS.join(', '),
     );
   }
 
   const jobs = [];
   for (const entry of selected) {
-    for (const format of formats) jobs.push({ entry, format });
+    for (const format of formats) {
+      if (format === 'iife' && !entry.global) continue;
+      jobs.push({ entry, format });
+    }
   }
 
   const started = Date.now();
@@ -328,7 +351,7 @@ async function buildAll() {
   // what you want while iterating and exactly what you must not publish — and
   // a stale bundle looks identical to a fresh one on disk.
   const skippedEntries = entries.filter((e) => !selected.includes(e));
-  const skippedFormats = ['es', 'cjs'].filter((f) => !formats.includes(f));
+  const skippedFormats = ALL_FORMATS.filter((f) => !formats.includes(f));
   if (skippedEntries.length || skippedFormats.length) {
     const parts = [];
     if (skippedEntries.length)
@@ -347,7 +370,7 @@ async function buildAll() {
 
   const slimFiles = jobs
     .filter(({ entry }) => entry.slim)
-    .map(({ entry, format }) => `dist/${entry.name}.${format === 'es' ? 'js' : 'cjs'}`);
+    .map(({ entry, format }) => outFile(entry, format));
   if (slimFiles.length) externalizeSlimWasm(slimFiles);
 
   const secs = ((Date.now() - started) / 1000).toFixed(1);
