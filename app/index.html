@@ -7522,6 +7522,7 @@
             worker.onerror = (e) => reject(new Error(e.message || "worker failed"));
           });
           workerReady.catch((err) => {
+            dropIfEmpty();
             status({ state: "error", message: err.message });
             worker?.terminate();
             worker = null;
@@ -7582,9 +7583,25 @@
           if (!cues.length) return;
           const ok = el.appendSubtitleCues(cues, { lang, label, select: !selected });
           if (!ok) return;
+          const first = !made.length;
           made.push(...cues);
-          if (!selected) status({ state: "captioning" });
+          if (first) status({ state: "captioning" });
           selected = true;
+        }
+
+        // In the subtitle menu from the moment captions are on, turning until
+        // there is a line to show — rather than appearing out of nowhere later.
+        function listPending() {
+          if (made.length || !enabled) return;
+          if (el.appendSubtitleCues([], { lang, label, select: true, pending: true })) selected = true;
+        }
+
+        // Nothing made and nothing coming: an empty track would only be a menu
+        // entry that shows nothing.
+        function dropIfEmpty() {
+          if (made.length) return;
+          el.removeSubtitleCues?.(lang);
+          selected = false;
         }
 
         async function transcribeWindow(samples, start, isLast) {
@@ -7728,6 +7745,7 @@
             }
           } catch (err) {
             if (signal.aborted) return;
+            dropIfEmpty();
             status({ state: "error", message: err.message });
             return;
           } finally {
@@ -7736,10 +7754,18 @@
           if (!enabled) return;
           const gap = nextGap(el.currentTime);
           if (gap == null) {
-            status({ state: "done" });
+            finish();
             return;
           }
           runFrom(gap);
+        }
+
+        function finish() {
+          if (!made.length) {
+            dropIfEmpty();
+            status({ state: "nospeech" });
+          }
+          status({ state: "done" });
         }
 
         function restart() {
@@ -7748,7 +7774,7 @@
           if (!enabled) return;
           const gap = nextGap(el.currentTime);
           if (gap == null) {
-            status({ state: "done" });
+            finish();
             return;
           }
           runFrom(gap);
@@ -7779,7 +7805,7 @@
             src = undefined;
             return;
           }
-          if (await adopt()) restart();
+          if (await adopt()) { listPending(); restart(); }
         }
 
         el.addEventListener("seeked", onSeeked);
@@ -7799,13 +7825,14 @@
             enabled = true;
             const now = el.src || el.getAttribute("src");
             if (now !== src) {
-              adopt().then((current) => { if (current && enabled) restart(); });
+              adopt().then((current) => { if (current && enabled) { listPending(); restart(); } });
               return;
             }
             if (made.length) {
               el.selectSubtitleLang?.(lang);
               status({ state: "captioning" });
             }
+            listPending();
             restart();
           },
           disable() {
@@ -7814,6 +7841,7 @@
             flushSave();
             run?.controller.abort();
             run = null;
+            dropIfEmpty();
             const active = el.getSubtitleLangs?.().find((l) => l.active);
             if (active && active.lang === lang) el.selectSubtitleLang(null);
             status({ state: "off" });
@@ -7839,8 +7867,8 @@
         const ID = "autocaptions";
         const LABEL = "Auto captions";
         const setLabel = (label) => player.updateControl(ID, { label });
-        let announced = false;
         let downloadAnnounced = false;
+        let downloadTimer = 0;
         let captions = null;
         const turnOff = () => {
           captions.disable();
@@ -7851,22 +7879,30 @@
         captions = createAutoCaptions(player, {
           onStatus(s) {
             if (s.state === "downloading") {
-              if (!downloadAnnounced) {
-                downloadAnnounced = true;
-                player.showOsd("Downloading the captions model — about 80 MB, only this once");
+              // Loading from the browser's cache reports progress too, and is
+              // over in a moment; only a load still going after a second and a
+              // half is a real download worth saying so about.
+              if (!downloadAnnounced && !downloadTimer) {
+                downloadTimer = setTimeout(() => {
+                  downloadAnnounced = true;
+                  player.showOsd("Downloading the captions model — about 80 MB, only this once");
+                }, 1500);
               }
               setLabel(`${LABEL} · ${Math.round(s.progress * 100)}%`);
             } else if (s.state === "ready") {
+              clearTimeout(downloadTimer);
+              downloadTimer = 0;
               setLabel(LABEL);
-            } else if (s.state === "working" && !announced) {
-              announced = true;
-              player.showOsd("Listening for speech…");
+            } else if (s.state === "nospeech") {
+              player.showOsd("No speech found to caption");
             } else if (s.state === "captioning") {
               player.showOsd("Captions on — English (auto)");
             } else if (s.state === "unsupported") {
               player.showOsd("Auto captions can't read encrypted videos");
               player.updateControl(ID, { active: false });
             } else if (s.state === "error") {
+              clearTimeout(downloadTimer);
+              downloadTimer = 0;
               console.warn("[autocaptions]", s.message);
               player.showOsd("Couldn't start auto captions");
               turnOff();
@@ -7886,7 +7922,6 @@
           active: false,
           onSelect(on) {
             if (on) {
-              announced = false;
               captions.enable();
             } else {
               turnOff();

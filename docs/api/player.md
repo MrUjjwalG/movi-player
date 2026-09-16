@@ -560,15 +560,18 @@ Cover art is extracted from ID3v2 APIC (MP3), `covr` atom (MP4), FLAC PICTURE bl
 
 ---
 
-#### `appendSubtitleCues(lang: string, label: string, cues: SubtitleCue[]): void`
+#### `appendSubtitleCues(lang: string, label: string, cues: SubtitleCue[], pending?: boolean): void` / `removeSubtitleCues(lang: string): boolean`
 
 Adds cues to a subtitle track that is generated rather than loaded — speech
 recognition writing captions as it goes. The first call for a `lang` creates the
 track (listed by `getSubtitleLangs()`, selectable with `selectSubtitleLang()`);
 later calls extend it in any order. Cues are kept sorted and a near-duplicate
 (same text, starting within 0.1s) is dropped. If the track is showing, a cue
-covering the current time appears straight away. The element's
-[`appendSubtitleCues`](./element.md#appendsubtitlecues-cues-lang-label-select-boolean)
+covering the current time appears straight away. `pending: true` lists an
+empty track as still being made (`getSubtitleLangs()` reports `pending: true`)
+until its first cue; `removeSubtitleCues` takes a generated track away again. The
+element's
+[`appendSubtitleCues`](./element.md#appendsubtitlecues-cues-lang-label-select-pending-boolean)
 also updates the subtitle menu.
 
 ---

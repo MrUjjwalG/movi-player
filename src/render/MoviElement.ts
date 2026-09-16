@@ -1539,21 +1539,37 @@ export class MoviElement extends HTMLElement {
    * recognition as it goes. The first call for a `lang` puts the track in the
    * subtitle menu; later calls extend it, in any order. `select: true` switches
    * it on, without recording it as the viewer's own subtitle choice.
+   * `pending: true` lists the track straight away with a working indicator in
+   * the menus, before there is a cue to show; the first cue clears it, as does
+   * `pending: false` when none are coming.
    * Returns false when nothing is loaded to attach it to.
    */
   appendSubtitleCues(
     cues: SubtitleCue[],
-    options: { lang: string; label: string; select?: boolean },
+    options: { lang: string; label: string; select?: boolean; pending?: boolean },
   ): boolean {
     if (!this.player) return false;
-    this.player.appendSubtitleCues(options.lang, options.label, cues);
+    this.player.appendSubtitleCues(options.lang, options.label, cues, options.pending);
     this.updateSubtitleTrackMenu();
+    this.refreshOpenContextMenu();
     if (options.select) {
       const active = this.player
         .getSubtitleLangs()
         .find((l) => l.active)?.lang;
       if (active !== options.lang) void this.player.selectSubtitleLang(options.lang);
     }
+    return true;
+  }
+
+  /**
+   * Take a generated subtitle track out of the menus, cues and all — the
+   * captions were switched off before any were made, say. Subtitles go off if
+   * it was showing. False if there is no such track.
+   */
+  removeSubtitleCues(lang: string): boolean {
+    if (!this.player?.removeSubtitleCues(lang)) return false;
+    this.updateSubtitleTrackMenu();
+    this.refreshOpenContextMenu();
     return true;
   }
 
@@ -8063,7 +8079,8 @@ export class MoviElement extends HTMLElement {
       html += ctxExternalSubs
         .map((t) => {
           const activeClass = t.active ? " movi-context-menu-active" : "";
-          return `<div class="movi-context-menu-item${activeClass}" data-subtitle-lang="${t.lang}">${t.label} (${t.lang.toUpperCase()})</div>`;
+          const tail = t.pending ? MoviElement.SUBTITLE_PENDING : ` (${t.lang.toUpperCase()})`;
+          return `<div class="movi-context-menu-item${activeClass}" data-subtitle-lang="${t.lang}">${t.label}${tail}</div>`;
         })
         .join("");
 
@@ -9186,6 +9203,19 @@ export class MoviElement extends HTMLElement {
 
   private static readonly TRACK_ICON_AUDIO = `<svg class="movi-track-item-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><path d="M11 5L6 9H2v6h4l5 4V5z"/><path d="M15.54 8.46a5 5 0 0 1 0 7.07"/><path d="M19.07 4.93a10 10 0 0 1 0 14.14"/></svg>`;
   private static readonly TRACK_ICON_SUBTITLE = `<svg class="movi-track-item-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><rect width="20" height="16" x="2" y="4" rx="2" ry="2"/><path d="M10 8.5H8a2 2 0 0 0-2 2v3a2 2 0 0 0 2 2h2 M18 8.5h-2a2 2 0 0 0-2 2v3a2 2 0 0 0 2 2h2"/></svg>`;
+  /** Stands in for a generated subtitle track's language badge until its
+   *  first cue arrives: a small turning ring, in the bar's list and the
+   *  context menu alike. */
+  private static readonly SUBTITLE_PENDING = '<span class="movi-subtitle-pending" role="img" aria-label="Making captions" title="Making captions…"></span>';
+
+  /** An open context menu is built when it opens; a generated subtitle track
+   *  that changes under it (listed, or its first cue landed) redraws it. */
+  private refreshOpenContextMenu(): void {
+    if (!this._contextMenuVisible) return;
+    const ctx = this.contextMenuRoot().querySelector(".movi-context-menu") as HTMLElement | null;
+    if (ctx) this.updateContextMenuContent(ctx);
+  }
+
   private static readonly TRACK_ICON_OFF = `<svg class="movi-track-item-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><line x1="6" y1="12" x2="18" y2="12"/></svg>`;
   private static readonly TRACK_ICON_CHECK = `<svg class="movi-track-item-check" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg>`;
 
@@ -13368,7 +13398,7 @@ export class MoviElement extends HTMLElement {
              data-subtitle-lang="${t.lang}">
           ${ICON}
           <span class="movi-subtitle-track-label">${t.label}</span>
-          <span class="movi-subtitle-track-info">${t.lang.toUpperCase()}</span>
+          ${t.pending ? MoviElement.SUBTITLE_PENDING : `<span class="movi-subtitle-track-info">${t.lang.toUpperCase()}</span>`}
           ${CHECK}
         </div>
       `)
@@ -19053,6 +19083,35 @@ export class MoviElement extends HTMLElement {
         border-radius: var(--movi-radius-tile);
         background: color-mix(in srgb, var(--movi-controls-color) 0.08, transparent);
         border: 1px solid color-mix(in srgb, var(--movi-controls-color) 0.08, transparent);
+      }
+
+      /* A generated subtitle track still waiting for its first cue. */
+      .movi-subtitle-pending {
+        display: inline-block;
+        flex-shrink: 0;
+        box-sizing: border-box;
+        width: 14px;
+        height: 14px;
+        margin: 0 4px 0 8px;
+        vertical-align: -2px;
+        border-radius: 50%;
+        border: 2px solid color-mix(in srgb, currentColor 22%, transparent);
+        border-top-color: var(--movi-primary, currentColor);
+        animation: movi-subtitle-pending-turn 0.8s linear infinite;
+      }
+
+      @keyframes movi-subtitle-pending-turn {
+        to { transform: rotate(360deg); }
+      }
+
+      @keyframes movi-subtitle-pending-breathe {
+        50% { opacity: 0.35; }
+      }
+
+      @media (prefers-reduced-motion: reduce) {
+        .movi-subtitle-pending {
+          animation: movi-subtitle-pending-breathe 1.6s ease-in-out infinite;
+        }
       }
 
       .movi-audio-track-item.movi-audio-track-active .movi-audio-track-info,
@@ -33967,7 +34026,7 @@ export class MoviElement extends HTMLElement {
   /**
    * Get available external subtitle tracks
    */
-  getSubtitleLangs(): { lang: string; label: string; active: boolean }[] {
+  getSubtitleLangs(): { lang: string; label: string; active: boolean; pending?: boolean }[] {
     if (this.player) return this.player.getSubtitleLangs();
     return this._subtitleTracks.map((t) => ({
       lang: t.lang,

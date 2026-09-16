@@ -1504,6 +1504,9 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
    * append shows up on the next tick without a reload.
    */
   private _generatedSubCues = new Map<string, SubtitleCue[]>();
+  /** Generated tracks still waiting for their first cue — listed with a
+   *  working indicator rather than as an empty track that does nothing. */
+  private _pendingSubLangs = new Set<string>();
   private _externalSubTimer: number | null = null;
   public trackManager: TrackManager;
   private clock: Clock;
@@ -14161,8 +14164,18 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
    *
    * If the track is the one showing, the new cues are on screen on the next
    * subtitle tick.
+   *
+   * `pending: true` with no cues lists the track before anything is known —
+   * speech recognition warming up — and getSubtitleLangs() reports it as
+   * pending until its first cue lands (or `pending: false` says there will be
+   * none).
    */
-  appendSubtitleCues(lang: string, label: string, cues: SubtitleCue[]): void {
+  appendSubtitleCues(
+    lang: string,
+    label: string,
+    cues: SubtitleCue[],
+    pending?: boolean,
+  ): void {
     let list = this._generatedSubCues.get(lang);
     if (!list) {
       list = [];
@@ -14188,6 +14201,8 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
       list.splice(lo, 0, { start: cue.start, end: cue.end, text });
       added++;
     }
+    if (added || pending === false) this._pendingSubLangs.delete(lang);
+    else if (pending && list.length === 0) this._pendingSubLangs.add(lang);
     // The renderer remembers which index it last drew; an insertion ahead of it
     // shifts that index onto a different cue, so restart it rather than leave
     // the wrong line up.
@@ -14196,11 +14211,36 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
     }
   }
 
-  getSubtitleLangs(): { lang: string; label: string; active: boolean }[] {
+  /**
+   * Take a generated track (see appendSubtitleCues) out of the menu, cues and
+   * all, switching subtitles off if it was showing. False if there is none.
+   */
+  removeSubtitleCues(lang: string): boolean {
+    if (!this._generatedSubCues.has(lang)) return false;
+    if (this._activeSubtitleLang === lang) {
+      this.stopExternalSubtitles();
+      this._externalSubCues = [];
+      this._activeSubtitleLang = "";
+      this.videoRenderer?.clearSubtitles();
+      this.emit("subtitleTrackChange" as any, { lang: null, label: null });
+    }
+    this._generatedSubCues.delete(lang);
+    this._pendingSubLangs.delete(lang);
+    this._subtitleTracks = this._subtitleTracks.filter((t) => t.lang !== lang);
+    return true;
+  }
+
+  getSubtitleLangs(): {
+    lang: string;
+    label: string;
+    active: boolean;
+    pending?: boolean;
+  }[] {
     return this._subtitleTracks.map((t) => ({
       lang: t.lang,
       label: t.label,
       active: t.lang === this._activeSubtitleLang,
+      ...(this._pendingSubLangs.has(t.lang) ? { pending: true } : {}),
     }));
   }
 

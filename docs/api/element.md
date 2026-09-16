@@ -2378,7 +2378,7 @@ await player.selectSubtitleLang(null);    // Turn off
 
 ---
 
-#### `appendSubtitleCues(cues, { lang, label, select? }): boolean`
+#### `appendSubtitleCues(cues, { lang, label, select?, pending? }): boolean`
 
 Adds cues to a subtitle track that is being **written as it plays** rather than
 loaded — captions from speech recognition, a live transcript, a translation
@@ -2397,6 +2397,22 @@ player.appendSubtitleCues(
 
 A cue showing now appears as soon as it is appended. A new source starts with no
 generated tracks.
+
+`pending: true` (with no cues) lists the track **before** there is anything in
+it — recognition warming up — with a small turning ring in place of its
+language badge, in the bar's subtitle list and the context menu. The first cue
+clears it; so does `pending: false`, for when none are coming.
+`getSubtitleLangs()` reports it as `pending: true` meanwhile.
+
+```typescript
+player.appendSubtitleCues([], { lang: "en-auto", label: "English (auto)", select: true, pending: true });
+```
+
+#### `removeSubtitleCues(lang): boolean`
+
+Takes a generated track out of the menus, cues and all — captions switched off
+before any were made, or a file with no speech in it. Subtitles go off if it was
+showing. `false` if there is no such track.
 
 ---
 
