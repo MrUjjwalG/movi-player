@@ -7056,7 +7056,9 @@
          soundtrack (decoded by the player, 16 kHz mono) and its lines are
          appended as an "English (auto)" subtitle track as they're heard.
          Off until the viewer turns it on from the right-click menu; the
-         model (~80 MB) downloads once and the browser keeps it. -->
+         model (~80 MB) downloads once and the browser keeps it. Silero VAD
+         decides what is speech; finished captions are kept per video in
+         IndexedDB, so a second visit shows them without running anything. -->
     <script type="module">
       // Auto English captions for a <movi-player>: Whisper, in the browser.
       //
@@ -7070,11 +7072,54 @@
 
       // The worker is built from a string so the page needs no second file.
       const WORKER_SOURCE = `
-      import { pipeline, env } from "${TRANSFORMERS_URL}";
+      import { pipeline, env, AutoModel, Tensor } from "${TRANSFORMERS_URL}";
       env.allowLocalModels = false;
 
       let asr = null;
+      let vad = null;
       let device = "wasm";
+
+      // Silero VAD (2 MB): which 32 ms frames have someone speaking in them.
+      // Whisper hears words in music and noise; this doesn't.
+      async function loadVad() {
+        try {
+          vad = await AutoModel.from_pretrained("onnx-community/silero-vad", {
+            config: { model_type: "custom" }, dtype: "fp32", device: "wasm",
+          });
+        } catch (err) {
+          // Captions still work without it, on loudness alone.
+          console.warn("[autocaptions] no VAD:", err && err.message || err);
+          vad = null;
+        }
+      }
+
+      const VAD_HOP = 512;
+      const VAD_CONTEXT = 64;
+
+      async function speechFrames(samples) {
+        const count = Math.floor(samples.length / VAD_HOP);
+        const out = new Uint8Array(count);
+        const sr = new Tensor("int64", new BigInt64Array([16000n]), []);
+        let state = new Tensor("float32", new Float32Array(2 * 128), [2, 1, 128]);
+        let speaking = false;
+        let quiet = 0;
+        for (let i = 0; i < count; i++) {
+          const at = i * VAD_HOP;
+          // Each frame carries the 64 samples before it, as Silero v5 expects.
+          const input = new Float32Array(VAD_CONTEXT + VAD_HOP);
+          if (at >= VAD_CONTEXT) input.set(samples.subarray(at - VAD_CONTEXT, at), 0);
+          input.set(samples.subarray(at, at + VAD_HOP), VAD_CONTEXT);
+          const result = await vad({ input: new Tensor("float32", input, [1, input.length]), sr, state });
+          state = result.stateN;
+          const p = result.output.data[0];
+          // Hysteresis plus ~100 ms of hangover, so a word's soft ending stays in.
+          if (p >= 0.5) { speaking = true; quiet = 0; }
+          else if (speaking && p < 0.35) { if (++quiet > 3) speaking = false; }
+          else quiet = 0;
+          out[i] = speaking ? 1 : 0;
+        }
+        return out;
+      }
 
       async function pickDevice(wanted) {
         if (wanted === "wasm") return "wasm";
@@ -7108,15 +7153,28 @@
         const msg = e.data;
         try {
           if (msg.type === "load") {
-            await load(msg.model, msg.dtypes, msg.device);
+            await Promise.all([load(msg.model, msg.dtypes, msg.device), loadVad()]);
             self.postMessage({ type: "ready", device });
           } else if (msg.type === "run") {
-            const out = await asr(msg.samples, {
-              return_timestamps: true,
-              task: msg.task,
-              language: msg.language || null,
-            });
-            self.postMessage({ type: "result", id: msg.id, chunks: out.chunks || [], text: out.text || "" });
+            const speech = vad ? await speechFrames(msg.samples) : null;
+            let voiced = Infinity;
+            if (speech) {
+              voiced = 0;
+              for (let i = 0; i < speech.length; i++) voiced += speech[i];
+              voiced *= VAD_HOP / 16000;
+            }
+            // No one speaking: nothing for Whisper to hear, and nothing for it
+            // to invent either.
+            let chunks = [];
+            if (voiced >= 0.4) {
+              const out = await asr(msg.samples, {
+                return_timestamps: true,
+                task: msg.task,
+                language: msg.language || null,
+              });
+              chunks = out.chunks || [];
+            }
+            self.postMessage({ type: "result", id: msg.id, chunks, speech }, speech ? [speech.buffer] : []);
           }
         } catch (err) {
           self.postMessage({ type: "error", id: msg.id, message: String(err && err.message || err) });
@@ -7163,7 +7221,24 @@
         return pieces;
       }
 
-      function voicedFrames(samples, from, to) {
+      // Which FRAME_S frames of [from, to] have a voice in them. From the VAD's
+      // mask when the worker has one, else from loudness — which can't tell a
+      // voice from a drum, so it's only the fallback.
+      const VAD_FRAME_S = 512 / RATE;
+
+      function voicedFrames(voice, from, to) {
+        const { samples, speech } = voice;
+        if (speech) {
+          const out = [];
+          for (let t = from; t < to; t += FRAME_S) {
+            const a = Math.floor(t / VAD_FRAME_S);
+            const b = Math.min(speech.length - 1, Math.floor((t + FRAME_S) / VAD_FRAME_S));
+            let v = false;
+            for (let i = a; i <= b; i++) if (speech[i]) { v = true; break; }
+            out.push(v);
+          }
+          return out;
+        }
         const hop = Math.round(FRAME_S * RATE);
         const levels = [];
         for (let t = from; t < to; t += FRAME_S) {
@@ -7177,21 +7252,21 @@
       }
 
       // Whether the voice stops for most of a second anywhere in [from, to].
-      function hasPause(samples, from, to) {
+      function hasPause(voice, from, to) {
         from = Math.max(0, from);
-        to = Math.min(samples.length / RATE, to);
+        to = Math.min(voice.samples.length / RATE, to);
         if (to - from < 1) return false;
         let quiet = 0;
-        for (const v of voicedFrames(samples, from, to)) {
+        for (const v of voicedFrames(voice, from, to)) {
           quiet = v ? 0 : quiet + 1;
           if (quiet >= 0.8 / FRAME_S) return true;
         }
         return false;
       }
 
-      function layCues(samples, start, end, text) {
+      function layCues(voice, start, end, text) {
         const pieces = splitText(text);
-        const voiced = voicedFrames(samples, start, end);
+        const voiced = voicedFrames(voice, start, end);
         const total = voiced.filter(Boolean).length;
         if (!total) return [];
         const totalChars = pieces.reduce((n, p) => n + p.length, 0);
@@ -7261,6 +7336,70 @@
         return text.replace(/\s+/g, " ").replace(/\[[^\]]*\]|\([^)]*\)/g, "").trim();
       }
 
+      // Captions already made are kept per video in IndexedDB, so opening it
+      // again shows them at once — no model, no waiting — and only what was never
+      // reached gets made. The most recent CACHE_KEEP videos are kept.
+      const CACHE_DB = "movi-autocaptions";
+      const CACHE_KEEP = 40;
+      let cacheDb = null;
+
+      function idb(request) {
+        return new Promise((resolve, reject) => {
+          request.onsuccess = () => resolve(request.result);
+          request.onerror = () => reject(request.error);
+        });
+      }
+
+      function cacheStore(mode) {
+        if (!cacheDb) {
+          const open = indexedDB.open(CACHE_DB, 1);
+          open.onupgradeneeded = () => {
+            open.result.createObjectStore("tracks", { keyPath: "key" }).createIndex("savedAt", "savedAt");
+          };
+          cacheDb = idb(open);
+          cacheDb.catch(() => { cacheDb = null; });
+        }
+        return cacheDb.then((db) => db.transaction("tracks", mode).objectStore("tracks"));
+      }
+
+      async function cacheGet(key) {
+        try { return await idb((await cacheStore("readonly")).get(key)); } catch { return null; }
+      }
+
+      async function cachePut(record, evict) {
+        try {
+          const store = await cacheStore("readwrite");
+          await idb(store.put(record));
+          if (!evict) return;
+          const extra = (await idb(store.count())) - CACHE_KEEP;
+          if (extra <= 0) return;
+          // Oldest first, by key only: the cues themselves are never read.
+          const keys = await idb(store.index("savedAt").getAllKeys(null, extra));
+          for (const key of keys) store.delete(key);
+        } catch { /* private mode, quota: captions just aren't kept */ }
+      }
+
+      // What identifies a video across visits. A local file by name, size and
+      // date; a link by its address — through the app's proxy, the address it
+      // was signed for, since the signature changes every time. A blob: URL
+      // lives for one page, so there's nothing to come back to.
+      function sourceKey(src) {
+        if (!src) return null;
+        if (typeof src === "object" && "size" in src) {
+          return `file:${src.name || ""}:${src.size}:${src.lastModified || 0}`;
+        }
+        if (typeof src !== "string" || src.startsWith("blob:") || src.startsWith("data:")) return null;
+        try {
+          const url = new URL(src, location.href);
+          const target = url.origin === location.origin && url.pathname === "/proxy" && url.searchParams.get("url");
+          if (target) return "url:" + target;
+          url.hash = "";
+          return "url:" + url.href;
+        } catch {
+          return null;
+        }
+      }
+
       /**
        * @param {HTMLElement} el   a <movi-player>
        * @param {object} [opts]
@@ -7290,14 +7429,67 @@
         const pending = new Map();
 
         let enabled = false;
-        let src = null;          // the source this state belongs to
+        let src;                 // the source this state belongs to (undefined: none yet)
         let covered = [];        // [start, end] media spans already transcribed
         let run = null;          // { controller, from }
         let selected = false;
         let lastText = "";
         let recentWords = [];
+        let made = [];           // every cue appended for this source, for the cache
+        let cacheKey = null;
+        let saveTimer = 0;
+        let savedOnce = false;
+        let generation = 0;
 
         function status(s) { onStatus(s); }
+
+        function flushSave() {
+          clearTimeout(saveTimer);
+          saveTimer = 0;
+          if (!cacheKey || (!made.length && !covered.length)) return Promise.resolve();
+          const record = {
+            key: cacheKey,
+            cues: made.map(({ start, end, text }) => ({ start, end, text })),
+            covered: covered.map((span) => span.slice()),
+            savedAt: Date.now(),
+          };
+          const evict = !savedOnce;
+          savedOnce = true;
+          return cachePut(record, evict);
+        }
+
+        function scheduleSave() {
+          if (!cacheKey || saveTimer) return;
+          saveTimer = setTimeout(flushSave, 2000);
+        }
+
+        // Take on whatever the element has loaded now: start clean, then pick up
+        // what an earlier visit already made. False if superseded meanwhile.
+        async function adopt() {
+          await flushSave();
+          const gen = ++generation;
+          run?.controller.abort();
+          run = null;
+          const now = el.src || el.getAttribute("src");
+          src = undefined;
+          covered = [];
+          made = [];
+          selected = false;
+          lastText = "";
+          recentWords = [];
+          savedOnce = false;
+          cacheKey = null;
+          const key = sourceKey(now);
+          const record = key ? await cacheGet(`${model}|${task}|${key}`) : null;
+          if (gen !== generation) return false;
+          src = now;
+          cacheKey = key ? `${model}|${task}|${key}` : null;
+          if (record) {
+            covered = record.covered || [];
+            if (record.cues?.length) appendCues(record.cues);
+          }
+          return true;
+        }
 
         function ensureWorker() {
           if (workerReady) return workerReady;
@@ -7323,7 +7515,7 @@
                   return;
                 }
                 pending.delete(m.id);
-                if (m.type === "result") p.resolve(m.chunks);
+                if (m.type === "result") p.resolve({ chunks: m.chunks, speech: m.speech || null });
                 else p.reject(new Error(m.message));
               }
             };
@@ -7389,19 +7581,23 @@
         function appendCues(cues) {
           if (!cues.length) return;
           const ok = el.appendSubtitleCues(cues, { lang, label, select: !selected });
-          if (ok && !selected) status({ state: "captioning" });
-          if (ok) selected = true;
+          if (!ok) return;
+          made.push(...cues);
+          if (!selected) status({ state: "captioning" });
+          selected = true;
         }
 
         async function transcribeWindow(samples, start, isLast) {
           const length = samples.length / RATE;
           if (rms(samples) < 0.004) {
             markCovered(start, start + length);
+            scheduleSave();
             return length;
           }
           const began = performance.now();
-          const chunks = await infer(samples);
-          status({ state: "window", start, seconds: length, ms: Math.round(performance.now() - began) });
+          const { chunks, speech } = await infer(samples);
+          const voice = { samples, speech };
+          status({ state: "window", start, seconds: length, ms: Math.round(performance.now() - began), vad: !!speech });
           let consumed = length;
           if (!isLast && chunks.length > 1) {
             const tail = chunks[chunks.length - 1];
@@ -7422,7 +7618,7 @@
             if (s == null) continue;
             const text = cleanText(c.text || "");
             const prev = segments[segments.length - 1];
-            if (prev && text && !/[.!?]$/.test(prev.text) && s - prev.e < 0.5 && !hasPause(samples, prev.e - 4, s + 1)) {
+            if (prev && text && !/[.!?]$/.test(prev.text) && s - prev.e < 0.5 && !hasPause(voice, prev.e - 4, s + 1)) {
               prev.text += " " + text;
               prev.e = e;
             } else {
@@ -7438,7 +7634,12 @@
             if (SIGNOFFS.test(text) && rms(samples.subarray(Math.floor(s * RATE), Math.ceil((e ?? length) * RATE))) < 0.02) continue;
             lastText = text;
             const end = Math.min(e ?? consumed, consumed);
-            for (const cue of layCues(samples, s, Math.max(end, s + 0.6), text)) {
+            if (speech) {
+              // Words over a stretch the VAD calls music or noise are Whisper's.
+              const frames = voicedFrames(voice, s, Math.max(end, s + 0.6));
+              if (frames.filter(Boolean).length < frames.length * 0.15) continue;
+            }
+            for (const cue of layCues(voice, s, Math.max(end, s + 0.6), text)) {
               cues.push({ start: start + cue.start, end: start + cue.end, text: cue.text });
             }
           }
@@ -7447,6 +7648,7 @@
           }
           appendCues(cues);
           markCovered(start, start + consumed);
+          scheduleSave();
           return consumed;
         }
 
@@ -7568,21 +7770,21 @@
           restart();
         }
 
-        function onSource() {
-          const now = el.src || el.getAttribute("src");
-          if (now === src) return;
-          src = now;
-          run?.controller.abort();
-          run = null;
-          covered = [];
-          selected = false;
-          lastText = "";
-          recentWords = [];
-          if (enabled) restart();
+        // Every load starts with no generated track — even a reload of the same
+        // source — so every load is adopted afresh (from the cache, which the
+        // adopt flushes to first, so nothing already made is lost).
+        async function onSource() {
+          if (!enabled) {
+            flushSave();
+            src = undefined;
+            return;
+          }
+          if (await adopt()) restart();
         }
 
         el.addEventListener("seeked", onSeeked);
         el.addEventListener("loadeddata", onSource);
+        addEventListener("pagehide", flushSave);
 
         return {
           get enabled() { return enabled; },
@@ -7597,19 +7799,19 @@
             enabled = true;
             const now = el.src || el.getAttribute("src");
             if (now !== src) {
-              src = now;
-              covered = [];
-              selected = false;
-              lastText = "";
-              recentWords = [];
-          recentWords = [];
-            } else if (covered.length) {
+              adopt().then((current) => { if (current && enabled) restart(); });
+              return;
+            }
+            if (made.length) {
               el.selectSubtitleLang?.(lang);
+              status({ state: "captioning" });
             }
             restart();
           },
           disable() {
             enabled = false;
+            generation++;
+            flushSave();
             run?.controller.abort();
             run = null;
             const active = el.getSubtitleLangs?.().find((l) => l.active);
@@ -7620,6 +7822,7 @@
             this.disable();
             el.removeEventListener("seeked", onSeeked);
             el.removeEventListener("loadeddata", onSource);
+            removeEventListener("pagehide", flushSave);
             worker?.terminate();
             worker = null;
             workerReady = null;
@@ -7637,6 +7840,7 @@
         const LABEL = "Auto captions";
         const setLabel = (label) => player.updateControl(ID, { label });
         let announced = false;
+        let downloadAnnounced = false;
         let captions = null;
         const turnOff = () => {
           captions.disable();
@@ -7647,6 +7851,10 @@
         captions = createAutoCaptions(player, {
           onStatus(s) {
             if (s.state === "downloading") {
+              if (!downloadAnnounced) {
+                downloadAnnounced = true;
+                player.showOsd("Downloading the captions model — about 80 MB, only this once");
+              }
               setLabel(`${LABEL} · ${Math.round(s.progress * 100)}%`);
             } else if (s.state === "ready") {
               setLabel(LABEL);
@@ -7679,7 +7887,6 @@
           onSelect(on) {
             if (on) {
               announced = false;
-              player.showOsd("Getting auto captions ready — the first time downloads about 80 MB");
               captions.enable();
             } else {
               turnOff();

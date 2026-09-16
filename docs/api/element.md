@@ -2431,7 +2431,10 @@ playback is not readable this way.
 transformers.js) runs in a worker on 30s windows from `decodeAudio`, and its
 lines go into an "English (auto)" track with `appendSubtitleCues` — work starts
 at the playhead, follows a seek, rests once far enough ahead, and fills in what
-was skipped. Nothing leaves the browser but the one-time model download.
+was skipped. Silero VAD picks out the stretches with someone speaking, so music
+and noise never reach Whisper, and finished captions are kept per video in
+IndexedDB — a second visit shows them at once. Nothing leaves the browser but
+the one-time model download.
 
 ---
 
