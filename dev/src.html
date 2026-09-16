@@ -3,7 +3,7 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>Movi - Premium Player</title>
+    <title>Movi - Premium Player (src)</title>
     <style>
       :root {
         --primary-accent: #6c5dd3;
@@ -536,22 +536,17 @@
       </div>
     </div>
 
-    <!-- The element, from the global build: a classic script, no type="module"
-         anywhere on this page. This is the line a CDN hands out verbatim —
-         <script src="https://cdn.jsdelivr.net/npm/movi-player/dist/element.global.js">
-         — and it registers <movi-player> on load. Swap in
-         element.slim.global.js for the third-of-the-size build, which fetches
-         movi.wasm from beside itself.
+    <script type="module">
+      // The TypeScript source, served straight by vite: an edit in src/ is on
+      // screen on the next reload, with no build step in between. That is what
+      // this page is for.
+      //
+      // dev/index.html is the same page loading the built global bundle
+      // through a plain <script src> instead — the CDN drop-in, no module
+      // anywhere — which needs a build first.
+      import "../src/element.ts";
 
-         Needs the bundle to exist: `npm run build:ts`, or just this one with
-         MOVI_ENTRY=element MOVI_FORMAT=iife node scripts/build-standalone.js
-
-         Editing src/? Use dev/src.html, which imports the TypeScript straight
-         and needs no build at all. -->
-    <script src="/dist/element.global.js"></script>
-
-    <script>
-      const buildLabel = "dist/element.global.js (classic script)";
+      const buildLabel = "src/element.ts (module)";
 
       const urlInput = document.getElementById("url-input");
       const loadBtn = document.getElementById("load-btn");
