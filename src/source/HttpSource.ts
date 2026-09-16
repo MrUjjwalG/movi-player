@@ -248,6 +248,10 @@ export class HttpSource implements SourceAdapter {
   private consecutiveForceRestarts: number = 0;
   private lastForceRestartTime: number = 0;
   private readonly MAX_FORCE_RESTARTS = 3; // Max consecutive force restarts before giving up
+  // Bumped on every startStream(), on both the SAB and main-thread paths (the
+  // SAB header VERSION only exists on one). Lets a read tell "my stream died"
+  // from "someone else's stream replaced mine" before tearing it down.
+  private streamGeneration = 0;
   // Consecutive one-off range fetches served while the read fell outside the
   // stream window. A lone spike (stray metadata/index read) shouldn't disturb
   // the sequential stream, but a run of them means the play position genuinely
@@ -1096,6 +1100,7 @@ export class HttpSource implements SourceAdapter {
     this.atomicSetWritePos(0);
     this.atomicSetStreaming(true);
     this.atomicIncrementVersion();
+    this.streamGeneration++;
 
     // Starting a new stream means old full-cache is invalid
     this.fullyBuffered = false;
@@ -1947,6 +1952,12 @@ export class HttpSource implements SourceAdapter {
     let lastProgress = this.bufferEnd;
     let lastProgressTime = Date.now();
     const PROGRESS_TIMEOUT = 15000; // 15s without any progress = stalled
+    // A stream that has not delivered its FIRST byte is a different case. A
+    // slow link still trickles bytes; a request the origin (or a proxy in
+    // front of it) is sitting on delivers none at all, and a fresh connection
+    // usually answers at once. Waiting the full 15s there — twice, once per
+    // read that finds the corpse — was 30s of black screen before playback.
+    const FIRST_BYTE_TIMEOUT = 6000;
 
     while (this.bufferEnd < needed && this.atomicIsStreaming()) {
       // Check for fatal stream errors (e.g., CORS) and throw immediately
@@ -1973,7 +1984,11 @@ export class HttpSource implements SourceAdapter {
 
       // Check for stalled stream (no progress for PROGRESS_TIMEOUT)
       const timeSinceProgress = now - lastProgressTime;
-      if (timeSinceProgress > PROGRESS_TIMEOUT) {
+      const noBytesYet = this.atomicGetWritePos() === 0;
+      if (
+        timeSinceProgress >
+        (noBytesYet ? FIRST_BYTE_TIMEOUT : PROGRESS_TIMEOUT)
+      ) {
         Logger.error(
           TAG,
           `Stream stalled: no progress for ${(timeSinceProgress / 1000).toFixed(1)}s at ${offset}, needed ${needed}, currently ${this.bufferEnd}`,
@@ -2301,9 +2316,39 @@ export class HttpSource implements SourceAdapter {
     Logger.debug(TAG, `Read: starting new stream from ${offset}`);
     await this.startStream(offset);
     Logger.debug(TAG, `Read: waiting for data...`);
-    const success = await this.waitForData(offset, length);
+    let generation = this.streamGeneration;
+    let success = await this.waitForData(offset, length);
     Logger.debug(TAG, `Read: waitForData returned ${success}`);
-    if (!success) throw new Error(`Timeout at ${offset}`);
+    // The stream we just opened never delivered a byte and is still "active":
+    // its request is hung. Throwing here left that corpse marked as streaming,
+    // so the retried read saw it as covering the offset and waited on it all
+    // over again before restarting. Replace it now, once — unless another read
+    // already replaced it, or the source was torn down meanwhile.
+    if (
+      !success &&
+      !this.closed &&
+      !this.fatalError &&
+      generation === this.streamGeneration &&
+      this.atomicIsStreaming() &&
+      this.atomicGetWritePos() === 0
+    ) {
+      Logger.warn(TAG, `Stream at ${offset} delivered nothing — reopening it`);
+      await this.startStream(offset);
+      generation = this.streamGeneration;
+      success = await this.waitForData(offset, length);
+    }
+    if (!success) {
+      // Still hung: stop it so the caller's retry opens a fresh request
+      // instead of waiting on this one.
+      if (
+        generation === this.streamGeneration &&
+        this.atomicIsStreaming() &&
+        this.atomicGetWritePos() === 0
+      ) {
+        await this.stopStream();
+      }
+      throw new Error(`Timeout at ${offset}`);
+    }
 
     // Reset force restart counter on successful read
     this.consecutiveForceRestarts = 0;
