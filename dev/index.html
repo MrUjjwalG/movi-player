@@ -536,22 +536,8 @@
       </div>
     </div>
 
-    <!-- The element, from the global build: a classic script, no type="module"
-         anywhere on this page. This is the line a CDN hands out verbatim —
-         <script src="https://cdn.jsdelivr.net/npm/movi-player/dist/element.global.js">
-         — and it registers <movi-player> on load. Swap in
-         element.slim.global.js for the third-of-the-size build, which fetches
-         movi.wasm from beside itself.
-
-         Needs the bundle to exist: `npm run build:ts`, or just this one with
-         MOVI_ENTRY=element MOVI_FORMAT=iife node scripts/build-standalone.js
-
-         Editing src/? Use dev/src.html, which imports the TypeScript straight
-         and needs no build at all. -->
-    <script src="/dist/element.global.js"></script>
-
-    <script>
-      const buildLabel = "dist/element.global.js (classic script)";
+    <script type="module">
+      import "../src/element.ts";
 
       const urlInput = document.getElementById("url-input");
       const loadBtn = document.getElementById("load-btn");
@@ -704,10 +690,6 @@
 
       // Initial Apply
       applyTheme(currentMode);
-
-      // Say which build is on screen — the two are meant to be
-      // indistinguishable, which is exactly why it has to be visible.
-      updateStatus(`Ready to play · ${buildLabel}`);
     </script>
   </body>
 </html>
