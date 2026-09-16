@@ -34,6 +34,18 @@
       "require": "./dist/element.slim.cjs",
       "types": "./dist/element.d.ts"
     },
+    "./element/global": {
+      "import": "./dist/element.global.js",
+      "require": "./dist/element.global.js",
+      "default": "./dist/element.global.js",
+      "types": "./dist/element.d.ts"
+    },
+    "./element/slim/global": {
+      "import": "./dist/element.slim.global.js",
+      "require": "./dist/element.slim.global.js",
+      "default": "./dist/element.slim.global.js",
+      "types": "./dist/element.d.ts"
+    },
     "./movi.wasm": "./dist/movi.wasm",
     "./react": {
       "types": "./dist/react/index.tsx",

@@ -10,6 +10,8 @@ Movi-Player is designed with modularity in mind. Use only what you need.
 | **Player**  | `movi-player/player`  | ~180KB | 2.52 MB | 1.91 MB | Playback control, custom UI             |
 | **Element** | `movi-player` / `movi-player/element` | ~410KB | 2.57 MB | 1.95 MB | Full UI player (drop-in)                |
 | **Element (slim)** | `movi-player/element/slim` | ~410KB | 1.00 MB + WASM | 750 KB + WASM | Same player, WASM as a separate file |
+| **Element (global)** | `movi-player/element/global` | — | — | — | The same element as a classic script — registers itself, exports nothing |
+| **Element (slim, global)** | `movi-player/element/slim/global` | — | — | — | The slim build as a classic script |
 
 > Module sizes (first column) exclude the embedded WASM binary. Gzip/Brotli columns show the total transfer size including WASM. Enable Brotli compression on your server for optimal delivery.
 
@@ -275,6 +277,30 @@ Import one or the other, not both: whichever loads second finds `<movi-player>`
 already defined, so it registers nothing while still shipping its own copy of
 the engine.
 
+## The global builds
+
+`element.global.js` and `element.slim.global.js` are the same two bundles in an
+IIFE wrapper: they define `<movi-player>` on load and export **nothing**. That is
+what a plain `<script src>` needs — a classic script cannot parse an `export`
+statement, and `dist/element.js` ends in one (42 named exports) and uses
+`import.meta` besides, so it can only ever be loaded as a module.
+
+```html
+<!-- no type="module" — this is the line a CDN hands out -->
+<script src="https://cdn.jsdelivr.net/npm/movi-player/dist/element.global.js"></script>
+```
+
+`jsdelivr` and `unpkg` in the package point at the first one, so a CDN's default
+install snippet works as printed. Under a bundler the subpaths above reach them
+by name, as a side-effect import:
+
+```typescript
+import "movi-player/element/global";
+```
+
+…but there, prefer `movi-player/element`: the exports are what let a bundler
+drop the two thirds of the code you didn't ask for.
+
 ## Module Composition
 
 ```
@@ -333,6 +359,14 @@ Use specific modules via CDN:
 <script type="module">
   import "https://cdn.jsdelivr.net/npm/movi-player/dist/element.js";
 </script>
+
+<!-- The same thing without a module: a classic script that registers the
+     element on load. What `jsdelivr`/`unpkg` point at, so a CDN's own
+     copy-paste snippet works as printed. -->
+<script src="https://cdn.jsdelivr.net/npm/movi-player/dist/element.global.js"></script>
+
+<!-- …and the slim one, likewise -->
+<script src="https://cdn.jsdelivr.net/npm/movi-player/dist/element.slim.global.js"></script>
 
 <!-- Slim element: WASM streams from movi.wasm next to the JS -->
 <script type="module">
