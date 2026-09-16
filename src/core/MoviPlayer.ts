@@ -20,6 +20,8 @@ import type {
   PlaybackAssessment,
   PlaybackAssessmentOptions,
   PlaybackQuery,
+  DecodeAudioOptions,
+  DecodedAudioChunk,
 } from "../types";
 import { EventEmitter } from "../events/EventEmitter";
 import {
@@ -991,6 +993,214 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
     };
   }
 
+  /**
+   * The audio track of a URL or File, decoded to mono PCM and handed back in
+   * chunks — without playing it, and alongside anything that IS playing.
+   *
+   *   for await (const chunk of MoviPlayer.decodeAudio(file, { from: 60 })) {
+   *     // chunk.samples: Float32Array @ 16 kHz, chunk.start / chunk.end in seconds
+   *   }
+   *
+   * Built for work that needs the sound ahead of the playhead — speech
+   * recognition for captions is the case it was written for. It decodes with
+   * this player's own demuxer and audio decoder, so anything the player can
+   * play it can read: MKV, Opus, TrueHD, DTS — not just what the browser's
+   * decodeAudioData happens to understand, and never the whole file into
+   * memory at once.
+   *
+   * Runs on its own WASM instance, like assessPlayback, so a player that is
+   * playing is not disturbed, and yields to the event loop as it goes. Resampled
+   * with an OfflineAudioContext, which band-limits properly — a speech model
+   * fed aliased audio hears noise that is not in the file.
+   *
+   * Uses the first audio track. Stops, and releases everything, when the
+   * signal aborts or the loop is broken out of.
+   */
+  static async *decodeAudio(
+    input: string | File | Blob,
+    options: DecodeAudioOptions = {},
+  ): AsyncGenerator<DecodedAudioChunk> {
+    const outRate =
+      options.sampleRate && options.sampleRate > 0 ? options.sampleRate : 16000;
+    const chunkSeconds =
+      options.chunkSeconds && options.chunkSeconds > 0 ? options.chunkSeconds : 30;
+    const from = Math.max(0, options.from ?? 0);
+    const signal = options.signal;
+
+    const source: SourceAdapter =
+      typeof input === "string"
+        ? new HttpSource(input)
+        : new FileSource(input instanceof File ? input : new File([input], "media"));
+    const demuxer = new Demuxer(source, undefined, true);
+    const decoder = new MoviAudioDecoder();
+
+    // Decoded blocks, already mixed to mono, waiting to be gathered.
+    const pending: { time: number; samples: Float32Array; rate: number }[] = [];
+    const toMono = (planes: Float32Array[], frames: number): Float32Array => {
+      if (planes.length === 1) return planes[0].slice(0, frames);
+      const out = new Float32Array(frames);
+      for (const plane of planes) {
+        for (let i = 0; i < frames; i++) out[i] += plane[i];
+      }
+      const k = 1 / planes.length;
+      for (let i = 0; i < frames; i++) out[i] *= k;
+      return out;
+    };
+
+    try {
+      const info = await demuxer.open();
+      const track = info.tracks.find((t): t is AudioTrack => t.type === "audio");
+      if (!track) return;
+
+      const bindings = demuxer.getBindings();
+      if (bindings) decoder.setBindings(bindings);
+      // Stereo out of the software decoder, whatever the source layout; the mix
+      // to one channel happens here, where it is a plain average.
+      decoder.setDownmix(true);
+      decoder.setOnPCM((frame) => {
+        pending.push({
+          time: frame.timestamp / 1e6,
+          samples: toMono(frame.planes, frame.numberOfFrames),
+          rate: frame.sampleRate,
+        });
+      });
+      decoder.setOnData((data) => {
+        try {
+          const planes: Float32Array[] = [];
+          for (let c = 0; c < data.numberOfChannels; c++) {
+            const plane = new Float32Array(data.numberOfFrames);
+            data.copyTo(plane, { planeIndex: c, format: "f32-planar" });
+            planes.push(plane);
+          }
+          pending.push({
+            time: data.timestamp / 1e6,
+            samples: toMono(planes, data.numberOfFrames),
+            rate: data.sampleRate,
+          });
+        } finally {
+          data.close();
+        }
+      });
+      const configured = await decoder.configure(
+        track,
+        demuxer.getExtradata(track.id) ?? undefined,
+      );
+      if (!configured) {
+        throw new Error(`Cannot decode the ${track.codec} audio track`);
+      }
+      if (from > 0) await demuxer.seek(from);
+
+      // Gathered mono samples at the source rate, not yet handed back.
+      let parts: Float32Array[] = [];
+      let length = 0;
+      let startTime = -1;
+      let rate = track.sampleRate || 48000;
+
+      const resample = async (mono: Float32Array): Promise<Float32Array> => {
+        if (rate === outRate) return mono;
+        if (typeof OfflineAudioContext === "undefined") {
+          // No audio graph (a worker): nearest-lower sample. Crude, but only
+          // reached where the good path cannot run at all.
+          const n = Math.floor((mono.length * outRate) / rate);
+          const out = new Float32Array(n);
+          const step = rate / outRate;
+          for (let i = 0; i < n; i++) out[i] = mono[Math.floor(i * step)];
+          return out;
+        }
+        const n = Math.max(1, Math.round((mono.length * outRate) / rate));
+        const ctx = new OfflineAudioContext(1, n, outRate);
+        const buffer = ctx.createBuffer(1, mono.length, rate);
+        buffer.copyToChannel(mono as Float32Array<ArrayBuffer>, 0);
+        const node = ctx.createBufferSource();
+        node.buffer = buffer;
+        node.connect(ctx.destination);
+        node.start();
+        const rendered = await ctx.startRendering();
+        return rendered.getChannelData(0).slice();
+      };
+
+      const takeChunk = async (samplesWanted: number): Promise<DecodedAudioChunk> => {
+        const joined = new Float32Array(length);
+        let o = 0;
+        for (const p of parts) {
+          joined.set(p, o);
+          o += p.length;
+        }
+        const head = joined.subarray(0, samplesWanted);
+        const rest = joined.slice(samplesWanted);
+        const chunkStart = startTime;
+        parts = rest.length ? [rest] : [];
+        length = rest.length;
+        startTime = chunkStart + samplesWanted / rate;
+        return {
+          start: chunkStart,
+          end: chunkStart + samplesWanted / rate,
+          sampleRate: outRate,
+          samples: await resample(head.slice()),
+        };
+      };
+
+      const gather = () => {
+        while (pending.length) {
+          const block = pending.shift()!;
+          // Pre-roll decoded ahead of a seek target is not part of the answer.
+          let samples = block.samples;
+          let time = block.time;
+          if (time < from) {
+            const skip = Math.floor((from - time) * block.rate);
+            if (skip >= samples.length) continue;
+            samples = samples.subarray(skip);
+            time = from;
+          }
+          if (startTime < 0) startTime = time;
+          rate = block.rate;
+          parts.push(samples);
+          length += samples.length;
+        }
+      };
+
+      let packets = 0;
+      for (;;) {
+        if (signal?.aborted) return;
+        const packet = await demuxer.readPacket();
+        if (!packet) break;
+        if (packet.streamIndex !== track.id) continue;
+        decoder.decode(packet.data, packet.timestamp, packet.keyframe);
+        gather();
+        const chunkSamples = Math.round(chunkSeconds * rate);
+        while (length >= chunkSamples && startTime >= 0) {
+          yield await takeChunk(chunkSamples);
+          if (signal?.aborted) return;
+        }
+        // Keep the page responsive: this can be minutes of audio.
+        if (++packets % 48 === 0) {
+          await new Promise<void>((resolve) => setTimeout(resolve, 0));
+        }
+      }
+      await decoder.flush().catch(() => {});
+      gather();
+      if (length > 0 && startTime >= 0 && !signal?.aborted) {
+        yield await takeChunk(length);
+      }
+    } finally {
+      try {
+        decoder.close();
+      } catch {
+        /* already gone */
+      }
+      try {
+        demuxer.close();
+      } catch {
+        /* already gone */
+      }
+      try {
+        source.close();
+      } catch {
+        /* already gone */
+      }
+    }
+  }
+
   /** The stream's own codec string, or null — never a throw on odd extradata. */
   private static codecStringFor(video: VideoTrack): string | null {
     try {
@@ -1287,6 +1497,13 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
   private static readonly AUDIO_TAIL_GAP_S = 6;
   private _activeSubtitleLang: string = "";
   private _externalSubCues: SubtitleCue[] = [];
+  /**
+   * Subtitle tracks whose cues were handed to us rather than fetched — see
+   * appendSubtitleCues. Keyed by lang, each list kept sorted by start. The
+   * array IS what the external renderer reads when that lang is active, so an
+   * append shows up on the next tick without a reload.
+   */
+  private _generatedSubCues = new Map<string, SubtitleCue[]>();
   private _externalSubTimer: number | null = null;
   public trackManager: TrackManager;
   private clock: Clock;
@@ -13931,6 +14148,54 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
     Logger.info(TAG, `External subtitle added: ${entry.label} (${entry.lang})`);
   }
 
+  /**
+   * Add cues to a subtitle track that is being generated rather than loaded —
+   * speech recognition writing captions as it goes is what this is for.
+   *
+   * The first call for a `lang` creates the track (it appears in the subtitle
+   * menu like any other); later calls extend it. Cues may arrive in any order —
+   * a recogniser that jumps to wherever the viewer seeked, then fills in the
+   * rest — and are kept sorted; one that duplicates a cue already there (same
+   * text, starting within a tenth of a second) is ignored, so overlapping
+   * windows do not print a line twice. Empty or zero-length cues are dropped.
+   *
+   * If the track is the one showing, the new cues are on screen on the next
+   * subtitle tick.
+   */
+  appendSubtitleCues(lang: string, label: string, cues: SubtitleCue[]): void {
+    let list = this._generatedSubCues.get(lang);
+    if (!list) {
+      list = [];
+      this._generatedSubCues.set(lang, list);
+      this.addSubtitleTrack({ url: "", lang, label, format: "vtt" });
+    }
+    let added = 0;
+    for (const cue of cues) {
+      const text = cue.text?.trim();
+      if (!text || !(cue.end > cue.start)) continue;
+      const dupe = list.some(
+        (c) => c.text === text && Math.abs(c.start - cue.start) < 0.1,
+      );
+      if (dupe) continue;
+      // Binary search for the insertion point — lists run to thousands.
+      let lo = 0;
+      let hi = list.length;
+      while (lo < hi) {
+        const mid = (lo + hi) >> 1;
+        if (list[mid].start <= cue.start) lo = mid + 1;
+        else hi = mid;
+      }
+      list.splice(lo, 0, { start: cue.start, end: cue.end, text });
+      added++;
+    }
+    // The renderer remembers which index it last drew; an insertion ahead of it
+    // shifts that index onto a different cue, so restart it rather than leave
+    // the wrong line up.
+    if (added && this._activeSubtitleLang === lang) {
+      this.startExternalSubtitles();
+    }
+  }
+
   getSubtitleLangs(): { lang: string; label: string; active: boolean }[] {
     return this._subtitleTracks.map((t) => ({
       lang: t.lang,
@@ -13959,6 +14224,19 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
     if (!track) {
       Logger.warn(TAG, `Subtitle track not found for lang: ${lang}`);
       return false;
+    }
+
+    // A generated track has nothing to fetch: its cues are already here, and
+    // still arriving.
+    const generated = this._generatedSubCues.get(lang);
+    if (generated) {
+      this.videoRenderer?.setSubtitleFormat("vtt");
+      this._externalSubCues = generated;
+      this._activeSubtitleLang = lang;
+      this.selectSubtitleTrack(null);
+      this.startExternalSubtitles();
+      this.emit("subtitleTrackChange" as any, { lang, label: track.label });
+      return true;
     }
 
     try {

@@ -281,6 +281,29 @@ export interface PlaybackAssessment {
   reasons: string[];
 }
 
+/** Options for decodeAudio(). */
+export interface DecodeAudioOptions {
+  /** Output sample rate. Defaults to 16000 — what speech models expect. */
+  sampleRate?: number;
+  /** Where to start, in seconds of media time. Defaults to 0. */
+  from?: number;
+  /** Length of each chunk handed back, in seconds. Defaults to 30. */
+  chunkSeconds?: number;
+  /** Stops decoding (and releases the file) when aborted. */
+  signal?: AbortSignal;
+}
+
+/** One stretch of decoded audio from decodeAudio(): mono, resampled. */
+export interface DecodedAudioChunk {
+  /** Media time of the first sample, in seconds. */
+  start: number;
+  /** Media time just past the last sample, in seconds. */
+  end: number;
+  sampleRate: number;
+  /** Mono samples in [-1, 1]. */
+  samples: Float32Array;
+}
+
 export interface MediaInfo {
   formatName: string;
   duration: number;

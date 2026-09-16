@@ -24,6 +24,9 @@ import type {
   PlaybackAssessment,
   PlaybackAssessmentOptions,
   PlaybackQuery,
+  SubtitleCue,
+  DecodeAudioOptions,
+  DecodedAudioChunk,
 } from "../types";
 import { Logger, LogLevel } from "../utils/Logger";
 import type { StoryboardSpec, StoryboardTile } from "../utils/Storyboard";
@@ -1511,6 +1514,49 @@ export class MoviElement extends HTMLElement {
    * are not. Judged at the element's own current speed unless `rate` says
    * otherwise, since that is the speed the viewer will actually get.
    */
+  /**
+   * Decode the audio of a URL or File to mono PCM chunks (16 kHz by default),
+   * without playing it. See MoviPlayer.decodeAudio.
+   */
+  static decodeAudio(
+    input: string | File | Blob,
+    options?: DecodeAudioOptions,
+  ): AsyncGenerator<DecodedAudioChunk> {
+    return MoviPlayer.decodeAudio(input, options);
+  }
+
+  /** The same, for what this element has loaded. Empty if nothing is. */
+  decodeAudio(options?: DecodeAudioOptions): AsyncGenerator<DecodedAudioChunk> {
+    const src = this._src;
+    if (!src) {
+      return (async function* () {})();
+    }
+    return MoviPlayer.decodeAudio(src, options);
+  }
+
+  /**
+   * Add cues to a generated subtitle track — "English (auto)" written by speech
+   * recognition as it goes. The first call for a `lang` puts the track in the
+   * subtitle menu; later calls extend it, in any order. `select: true` switches
+   * it on, without recording it as the viewer's own subtitle choice.
+   * Returns false when nothing is loaded to attach it to.
+   */
+  appendSubtitleCues(
+    cues: SubtitleCue[],
+    options: { lang: string; label: string; select?: boolean },
+  ): boolean {
+    if (!this.player) return false;
+    this.player.appendSubtitleCues(options.lang, options.label, cues);
+    this.updateSubtitleTrackMenu();
+    if (options.select) {
+      const active = this.player
+        .getSubtitleLangs()
+        .find((l) => l.active)?.lang;
+      if (active !== options.lang) void this.player.selectSubtitleLang(options.lang);
+    }
+    return true;
+  }
+
   /**
    * `smoothwarning`: show a notice when what is loaded is not expected to play
    * smoothly on this device at the current speed — "This video may not play

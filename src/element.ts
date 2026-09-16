@@ -41,6 +41,8 @@ export type {
   PlaybackAssessment,
   PlaybackAssessmentOptions,
   PlaybackQuery,
+  DecodeAudioOptions,
+  DecodedAudioChunk,
 } from './types';
 
 // Utilities
