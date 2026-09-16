@@ -545,7 +545,7 @@ The custom element re-exposes player activity as DOM events so you can wire `add
 | `loopchange`           | `{ enabled: boolean, mode: string }` | Loop switched or changed kind — `mode` is `off`, `one` (the item) or `all` (the queue); see [`loop`](./element.md#loop) |
 | `loop`                 | `{ count: number }`                  | The item started over on a seamless loop; `count` is which turn this is, from 1 |
 | `shufflechange`        | `{ enabled: boolean }`               | Shuffle switched on or off (see [`shuffle`](./element.md#shuffle)); a fresh order is already drawn |
-| `smoothwarning`        | `PlaybackAssessment & { media: string }` | **Cancelable** — what is loaded is not expected to play smoothly at the current speed; `media` is `video` or `audio`. `preventDefault()` keeps the built-in notice down (see [`smoothwarning`](./element.md#smoothwarning)) |
+| `smoothwarning`        | `PlaybackAssessment & { media: string, message: object }` | **Cancelable** — what is loaded is not expected to play smoothly at the current speed; `media` is `video` or `audio`, `message` is the notice's plain-language `{ title, body }`. `preventDefault()` keeps the built-in notice down (see [`smoothwarning`](./element.md#smoothwarning)) |
 | `coverart`             | `ImageBitmap \| null`                | Embedded cover art extracted at load (close the bitmap when done) |
 | `preloadcomplete`      | —                                    | Initial preload buffer filled, ready to play       |
 | `linearmode`           | —                                    | Source server ignores `Range` (`200`, not `206`) — playback is forward-only via a sliding RAM window; hide seek-dependent UI |

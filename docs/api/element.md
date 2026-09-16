@@ -1217,12 +1217,18 @@ device at the current speed. Off by default.
 <movi-player src="film.mkv" controls smoothwarning></movi-player>
 ```
 
-The notice is worded for the media — **"This video may not play smoothly"**, or
-**"This audio…"** for a sound-only source — names the speed when the speed is
-part of it (**"…at 2x"**), and carries the reason underneath (no hardware
-decoder, over this device's software budget, beyond 8K60). It sits at the bottom
-left, opposite the resume prompt, has a dismiss button, and goes by itself after
-12 seconds.
+The notice is written for the viewer, not a developer — no codec names or
+pixel counts — and worded for the media and the cause:
+
+| Situation | Title | Line under it |
+|---|---|---|
+| Fine at normal speed, not at this one | This video may not play smoothly at 2× speed | It plays fine at normal speed — switch back to 1× if it stutters. |
+| Too demanding for the device | This video may not play smoothly on this device | It's very demanding for this device, so it may stutter or lag. |
+| Sound-only source | This audio may not play smoothly on this device | Your device may have trouble keeping up, so you might hear gaps or skips. |
+| Cannot be decoded at all | This video can't be played on this device | Your device or browser doesn't support this file's format. |
+
+It sits at the bottom left, opposite the resume prompt, has a dismiss button, and
+goes by itself after 12 seconds.
 
 It asks [`canPlaySmoothly()`](#element-canplaysmoothly-options-promise-playbackassessment)
 when a source finishes loading and again whenever the speed changes — a 4K file
@@ -1230,14 +1236,17 @@ can be fine at 1x and not at 2x — once per source and speed, and a speed that
 fixes it takes the notice down. It judges only sources this player demuxes
 itself; an adaptive stream or the native fallback is not second-guessed.
 
-**Event:** a cancelable `smoothwarning` fires first, with the assessment plus
-`media: "video" | "audio"` as `detail`. Call `preventDefault()` to keep the
-built-in notice down and show your own:
+**Event:** a cancelable `smoothwarning` fires first. Its `detail` is the
+assessment plus `media: "video" | "audio"` and `message: { title, body }` — the
+same plain-language text the notice would show. The technical `reasons` are
+there too, for logging. Call `preventDefault()` to keep the built-in notice down
+and show your own:
 
 ```typescript
 player.addEventListener("smoothwarning", (e) => {
   e.preventDefault();
-  showMyBanner(e.detail.media, e.detail.reasons[0]);
+  showMyBanner(e.detail.message.title, e.detail.message.body);
+  console.debug(e.detail.reasons);
 });
 ```
 
@@ -2833,7 +2842,7 @@ The element re-exposes player activity as DOM events so you can wire `addEventLi
 | `controlschange`       | `{ visible: boolean }`               | The control bar appeared or auto-hid. Fires on the change only, so a host drawing its own chrome over the player can follow it |
 | `loopchange`           | `{ enabled: boolean, mode: "off" \| "one" \| "all" }` | Loop toggled or changed kind (see [`loop`](#loop)). `enabled` is `mode !== "off"` |
 | `loop`                 | `{ count: number }`                  | The item started over, from the seamless [`loop`](#loop). `count` is which turn this is, from 1; it resets with the source and `loopCount` reads it back |
-| `smoothwarning`        | `PlaybackAssessment & { media: "video" \| "audio" }` | **Cancelable** — what is loaded is not expected to play smoothly at the current speed (see [`smoothwarning`](#smoothwarning)). `preventDefault()` keeps the built-in notice down |
+| `smoothwarning`        | `PlaybackAssessment & { media, message: { title, body } }` | **Cancelable** — what is loaded is not expected to play smoothly at the current speed (see [`smoothwarning`](#smoothwarning)). `preventDefault()` keeps the built-in notice down |
 | `shufflechange`        | `{ enabled: boolean }`               | Shuffle toggled (see [`shuffle`](#shuffle)). A fresh order is already drawn when it fires |
 | `stablevolumechange`   | `{ enabled: boolean }`               | Stable volume toggled                              |
 | `hdrchange`            | `{ enabled: boolean }`               | HDR toggled                                        |

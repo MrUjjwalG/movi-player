@@ -787,7 +787,7 @@ Every attribute can also be read and set as a JS property (`el.rotate = 90`). Gr
 | `subtitlepicker` | `subtitlepicker` | Add an "Add subtitle file…" row to the subtitle menu — picks a local SRT/VTT/TTML and shows it straight away. The file is read in the page (a `blob:` URL), never uploaded. Also exposed as `player.addSubtitleFile(file)` for a host with its own button |
 | `titlemode` | `titlemode="fullscreen back"` | Where the title bar may show: `both` (default) \| `fullscreen` \| `windowed`; add `back` (or `back-mobile`, `back-fullscreen`, `back-windowed`, `back-mobile-fullscreen`) for a back arrow that fires a cancelable `back` event. The placement tokens gate the whole bar; the `back-*` scopes gate only the arrow, so `back-windowed` keeps the title in fullscreen and drops just the arrow |
 | `spinnerdelay` | `spinnerdelay="0.4"`, `spinnerdelay="0.25 1"` | Seconds an interruption must last before the loading spinner appears. Defaults to `"1 2"` — a mid-play stall after a second, an opening after two — so anything the player sorts out inside that passes in silence. A second number is the wait the *opening* gets, which is usually worth more patience than a mid-play stall; `0` shows the spinner at once |
-| `smoothwarning` | `smoothwarning` | Show a notice when the loaded video or audio is not expected to play smoothly on this device at the current speed, with the reason. Rechecked on every speed change; a cancelable `smoothwarning` event fires first |
+| `smoothwarning` | `smoothwarning` | Show a notice when the loaded video or audio is not expected to play smoothly on this device at the current speed, in plain language (e.g. "It plays fine at normal speed — switch back to 1×"). Rechecked on every speed change; a cancelable `smoothwarning` event fires first |
 
 </details>
 
@@ -918,7 +918,7 @@ The standard `HTMLMediaElement` events all fire (`loadedmetadata`, `canplay`, `p
 | `audiotrackchange` / `subtitletrackchange` | — | Active audio / subtitle track switched |
 | `qualitychange` | `{ trackId }` | Active video quality / track switched |
 | `subtitledelaychange` | `{ subtitleDelay }` | Subtitle offset changed |
-| `smoothwarning` | `PlaybackAssessment & { media }` | Cancelable — not expected to play smoothly at this speed; `preventDefault()` hides the built-in notice |
+| `smoothwarning` | `PlaybackAssessment & { media, message }` | Cancelable — not expected to play smoothly at this speed; `preventDefault()` hides the built-in notice |
 | `loop` | `{ count }` | The item started over on a seamless [`loop`](#attributes) — `count` is which turn this is, from 1 |
 | `aspectchange`, `loopchange`, `shufflechange`, `stablevolumechange`, `hdrchange`, `ambientchange`, `rotatechange`, `audioonlychange` | setting-specific | A viewer changed a setting — persist it host-side if you want |
 | `fullscreenchange` | `{ fullscreen }` | Entered/exited fullscreen |

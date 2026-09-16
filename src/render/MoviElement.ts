@@ -1570,38 +1570,79 @@ export class MoviElement extends HTMLElement {
       return;
     }
     const media: "video" | "audio" = assessment.video ? "video" : "audio";
+    // Is it the SPEED? One more question at normal speed — free once the
+    // tracks are open — decides which of two very different things to say.
+    const fineAtNormalSpeed =
+      rate !== 1 && assessment.playable
+        ? (await this.canPlaySmoothly({ rate: 1 })).smooth
+        : false;
+    if (seq !== this._smoothCheckSeq || !this._smoothWarning) return;
+    const message = MoviElement.plainSmoothMessage(
+      assessment,
+      media,
+      fineAtNormalSpeed,
+    );
     const allowed = this.dispatchEvent(
       new CustomEvent("smoothwarning", {
-        detail: { ...assessment, media },
+        detail: { ...assessment, media, message },
         cancelable: true,
         bubbles: true,
         composed: true,
       }),
     );
     if (!allowed) return;
-    this.showSmoothWarning(assessment, media);
+    this.showSmoothWarning(message);
   }
 
-  private showSmoothWarning(
+  /**
+   * What the notice says, in words for the person watching.
+   *
+   * `reasons` are for developers — codec strings, pixel counts, budgets — and
+   * put in front of a viewer they read as an error log. The viewer needs two
+   * things: will this be a problem, and is there anything they can do. So the
+   * technical reasons stay in the event and the API, and this is written from
+   * the verdict instead. The one piece of advice given is the one that is
+   * always true when it is given: if the file is fine at normal speed, say
+   * so. "Try a lower quality" is not offered — a local file has none.
+   */
+  private static plainSmoothMessage(
     assessment: PlaybackAssessment,
     media: "video" | "audio",
-  ): void {
+    fineAtNormalSpeed: boolean,
+  ): { title: string; body: string } {
+    if (!assessment.playable) {
+      return {
+        title: `This ${media} can't be played on this device`,
+        body: "Your device or browser doesn't support this file's format.",
+      };
+    }
+    if (fineAtNormalSpeed) {
+      return {
+        title: `This ${media} may not play smoothly at ${assessment.rate}× speed`,
+        body: "It plays fine at normal speed — switch back to 1× if it stutters.",
+      };
+    }
+    if (media === "audio") {
+      return {
+        title: "This audio may not play smoothly on this device",
+        body: "Your device may have trouble keeping up, so you might hear gaps or skips.",
+      };
+    }
+    return {
+      title: "This video may not play smoothly on this device",
+      body: "It's very demanding for this device, so it may stutter or lag.",
+    };
+  }
+
+  private showSmoothWarning(message: { title: string; body: string }): void {
     const el = this.shadowRoot?.querySelector(
       ".movi-smooth-warning",
     ) as HTMLElement | null;
     if (!el) return;
-    // Worded for what is actually playing — a song is not "this video" — and
-    // for the speed when the speed is the reason: "at 2x" is the part the
-    // viewer can change.
-    const atSpeed = assessment.rate !== 1 ? ` at ${assessment.rate}x` : "";
-    const title = assessment.playable
-      ? `This ${media} may not play smoothly${atSpeed}`
-      : `This ${media} can't be played on this device`;
     const titleEl = el.querySelector(".movi-smooth-warning-title");
     const reasonEl = el.querySelector(".movi-smooth-warning-reason");
-    if (titleEl) titleEl.textContent = title;
-    // The first reason is the one that decided it; the rest are detail.
-    if (reasonEl) reasonEl.textContent = assessment.reasons[0] ?? "";
+    if (titleEl) titleEl.textContent = message.title;
+    if (reasonEl) reasonEl.textContent = message.body;
     el.style.animation = "";
     el.style.display = "flex";
     if (this._smoothWarnTimer !== null) clearTimeout(this._smoothWarnTimer);
