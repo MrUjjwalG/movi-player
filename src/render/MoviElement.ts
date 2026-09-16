@@ -21538,37 +21538,8 @@ export class MoviElement extends HTMLElement {
         width: 100%;
         height: 100%;
         display: block;
-        /* Above the scrim below, which is the only reason either is positioned. */
-        position: relative;
-        z-index: 1;
       }
 
-      /* A scrim the shape of the light it is protecting.
-
-         The drop-shadows under the container answer a LIGHT backdrop: they
-         trace the outline so a white mark keeps an edge on white. They do
-         nothing about a BUSY one. Over picture — which is the backdrop this
-         actually has, since a spinner means a video is on screen — the 0.2
-         track falls into whatever is behind it and the mark stops reading as
-         a play triangle at all: what is left is one bright stroke floating
-         over the image with no shape around it.
-
-         So a soft radial well underneath, dark in the middle and gone by its
-         own edge. No border, no box, nothing that could read as a card — at
-         full opacity it is a quarter-stop of shade, which is enough to put
-         the faint outline back and not enough to notice as an object. */
-      .movi-loader-container::before {
-        content: "";
-        position: absolute;
-        inset: -22%;
-        border-radius: 50%;
-        background: radial-gradient(
-          closest-side,
-          rgba(0, 0, 0, 0.38),
-          rgba(0, 0, 0, 0.22) 58%,
-          rgba(0, 0, 0, 0) 78%
-        );
-      }
 
       .movi-loader-track,
       .movi-loader-chase {
@@ -21585,11 +21556,9 @@ export class MoviElement extends HTMLElement {
       /* Present enough to hold the shape, quiet enough that the segment is
          what the eye follows.
 
-         0.2 was tuned against the drop-shadows alone, and over a black frame —
-         which a player shows more than any other single thing — that is a
-         white line at a fifth strength on black: gone. With the scrim under it
-         the whole mark sits on a known surface rather than on the picture, so
-         the outline can be worth seeing without ever competing with the
+         0.2 was a white line at a fifth strength, and over a black frame —
+         which a player shows more than any other single thing — that is gone.
+         0.3 keeps the outline worth seeing without it ever competing with the
          segment travelling it. */
       .movi-loader-track {
         opacity: 0.3;
