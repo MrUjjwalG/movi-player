@@ -1179,6 +1179,19 @@
               "url": "https://moviplayer.com/docs/api/element#shuffle"
             }
           ]
+        },
+        {
+          "name": "smoothwarning",
+          "description": {
+            "kind": "markdown",
+            "value": "Shows a notice when what is loaded is not expected to play smoothly on this"
+          },
+          "references": [
+            {
+              "name": "Documentation",
+              "url": "https://moviplayer.com/docs/api/element#smoothwarning"
+            }
+          ]
         }
       ],
       "references": [

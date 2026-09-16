@@ -347,6 +347,10 @@
             {
               "name": "shuffle",
               "description": "Play the queue in a random order. **Off by default.**"
+            },
+            {
+              "name": "smoothwarning",
+              "description": "Shows a notice when what is loaded is not expected to play smoothly on this"
             }
           ],
           "events": [
@@ -642,6 +646,34 @@
               "description": "The last item ended with nothing after it. Fires whether or not autoadvance is on",
               "type": {
                 "text": "CustomEvent<{ index: number }>"
+              }
+            },
+            {
+              "name": "loopchange",
+              "description": "Loop switched or changed kind — mode is off, one (the item) or all (the queue); see loop",
+              "type": {
+                "text": "CustomEvent<{ enabled: boolean, mode: string }>"
+              }
+            },
+            {
+              "name": "loop",
+              "description": "The item started over on a seamless loop; count is which turn this is, from 1",
+              "type": {
+                "text": "CustomEvent<{ count: number }>"
+              }
+            },
+            {
+              "name": "shufflechange",
+              "description": "Shuffle switched on or off (see shuffle); a fresh order is already drawn",
+              "type": {
+                "text": "CustomEvent<{ enabled: boolean }>"
+              }
+            },
+            {
+              "name": "smoothwarning",
+              "description": "Cancelable — what is loaded is not expected to play smoothly at the current speed; media is video or audio. preventDefault() keeps the built-in notice down (see smoothwarning)",
+              "type": {
+                "text": "CustomEvent<PlaybackAssessment & { media: string }>"
               }
             },
             {

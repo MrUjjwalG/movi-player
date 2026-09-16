@@ -281,6 +281,13 @@ export interface MoviPlayerAttributes {
    * passes in silence.
    */
   spinnerdelay?: number | string;
+  /**
+   * Show a notice when what is loaded is not expected to play smoothly on this
+   * device at the current speed — "This video may not play smoothly", with the
+   * reason. Checked on load and on every speed change. Fires a cancelable
+   * `smoothwarning` event first.
+   */
+  smoothwarning?: boolean | "";
   /** Override the video frame rate (0 = use the source's own). */
   fps?: number | string;
   /** Force software decoding (FFmpeg WASM) instead of WebCodecs. `auto` (default) picks per source. */

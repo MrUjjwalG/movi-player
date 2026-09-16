@@ -21,6 +21,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **In-player debug console** gets a level filter and search.
 - **A centred bar control** (`placement: "center"`) and **fullscreen-only controls** (`screen: "fullscreen" | "windowed"`).
 - **`spinnerdelay` takes two numbers** — a mid-play stall's wait, then the opening's (`spinnerdelay="0.25 1"`).
+- **`smoothwarning`**: one attribute shows "This video (or audio) may not play smoothly", with the reason, on load and on every speed change; a cancelable `smoothwarning` event lets a page show its own.
 - **Ask whether something will play smoothly**: `MoviElement.canPlaySmoothly(url | file | query, { rate })`, `element.canPlaySmoothly()`, and `MoviPlayer.assessPlayback()` — `playable`, `smooth`, `powerEfficient`, which decoder would carry it, and plain-language `reasons`. The same judgement the player uses to pick a rendition, plus a hardware ceiling at 8K60.
 - **A build a plain `<script>` tag can load**: `dist/element.global.js` and `dist/element.slim.global.js` (subpaths `movi-player/element/global`, `/element/slim/global`); `jsdelivr`/`unpkg` point at it, so a CDN's default install snippet works as printed.
 - **Seamless loop**: a video-only file turns over without a black frame or freeze. `loop` gained a grammar — bare/`one` repeats the item, `loop="all"` the queue, a number is the gap between items — plus a `loop` event and `loopCount`.

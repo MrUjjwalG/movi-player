@@ -1285,6 +1285,16 @@ export class MoviElement extends HTMLElement {
   private _showTitle: boolean = false; // Show title at top if true
   /** `subtitlepicker` — offer "Add subtitle file…" in the subtitle menu. */
   private _subtitlePicker: boolean = false;
+  /** `smoothwarning` — say so when this source is not expected to play
+   *  smoothly here. See checkSmoothPlayback. */
+  private _smoothWarning: boolean = false;
+  /** The source and speed last judged, so the same question is not asked —
+   *  or answered with a popup — twice. */
+  private _smoothWarnKey: string | null = null;
+  private _smoothWarnTimer: number | null = null;
+  /** Bumped per check: a slower answer for a source or speed that has since
+   *  changed must not put up a popup about the old one. */
+  private _smoothCheckSeq = 0;
   /** Object URLs minted for picked subtitle files, revoked on teardown. */
   private _pickedSubtitleUrls: string[] = [];
   /** Where the title bar is allowed to appear — see `applyTitleMode`. */
@@ -1501,6 +1511,127 @@ export class MoviElement extends HTMLElement {
    * are not. Judged at the element's own current speed unless `rate` says
    * otherwise, since that is the speed the viewer will actually get.
    */
+  /**
+   * `smoothwarning`: show a notice when what is loaded is not expected to play
+   * smoothly on this device at the current speed — "This video may not play
+   * smoothly", with the reason. Off by default. Mirrors the attribute.
+   */
+  get smoothWarning(): boolean {
+    return this._smoothWarning;
+  }
+
+  set smoothWarning(value: boolean) {
+    if (value) this.setAttribute("smoothwarning", "");
+    else this.removeAttribute("smoothwarning");
+  }
+
+  /** Present, and not a framework writing it off as "false". */
+  private isSmoothWarningOn(value: string | null): boolean {
+    return value !== null && value !== "false";
+  }
+
+  /**
+   * Ask canPlaySmoothly about what is loaded, and say so if the answer is no.
+   *
+   * Asked when a source finishes loading and again whenever the speed changes,
+   * because speed is half the question: a 4K file can be fine at 1x and not at
+   * 2x. This is the PREDICTION; the stutter hint ("Play at 1x for smoother
+   * playback") is the MEASUREMENT, raised only after eight bad seconds. They
+   * answer different moments and both stay.
+   *
+   * Only for sources this player demuxes itself. An adaptive stream or the
+   * native fallback has no tracks here to judge, and asking about its URL
+   * instead would open a manifest as if it were a file and report it
+   * unplayable while it plays perfectly well.
+   *
+   * Fires a cancelable `smoothwarning` event first, carrying the assessment
+   * and `media: "video" | "audio"`; preventDefault() keeps the built-in notice
+   * down for a host that shows its own.
+   */
+  private async checkSmoothPlayback(): Promise<void> {
+    if (!this._smoothWarning || !this.player) return;
+    const tracks = this.player.getMediaInfo?.()?.tracks;
+    if (!tracks || tracks.length === 0) return;
+
+    const rate = this._playbackRate;
+    const src =
+      typeof this._src === "string" ? this._src : this._src?.name ?? "";
+    const key = `${src}@${rate}`;
+    if (key === this._smoothWarnKey) return;
+    const seq = ++this._smoothCheckSeq;
+
+    const assessment = await this.canPlaySmoothly({ rate });
+    if (seq !== this._smoothCheckSeq || !this._smoothWarning) return;
+    this._smoothWarnKey = key;
+
+    if (assessment.smooth) {
+      // A speed that fixes it takes the notice down with it.
+      this.hideSmoothWarning();
+      return;
+    }
+    const media: "video" | "audio" = assessment.video ? "video" : "audio";
+    const allowed = this.dispatchEvent(
+      new CustomEvent("smoothwarning", {
+        detail: { ...assessment, media },
+        cancelable: true,
+        bubbles: true,
+        composed: true,
+      }),
+    );
+    if (!allowed) return;
+    this.showSmoothWarning(assessment, media);
+  }
+
+  private showSmoothWarning(
+    assessment: PlaybackAssessment,
+    media: "video" | "audio",
+  ): void {
+    const el = this.shadowRoot?.querySelector(
+      ".movi-smooth-warning",
+    ) as HTMLElement | null;
+    if (!el) return;
+    // Worded for what is actually playing — a song is not "this video" — and
+    // for the speed when the speed is the reason: "at 2x" is the part the
+    // viewer can change.
+    const atSpeed = assessment.rate !== 1 ? ` at ${assessment.rate}x` : "";
+    const title = assessment.playable
+      ? `This ${media} may not play smoothly${atSpeed}`
+      : `This ${media} can't be played on this device`;
+    const titleEl = el.querySelector(".movi-smooth-warning-title");
+    const reasonEl = el.querySelector(".movi-smooth-warning-reason");
+    if (titleEl) titleEl.textContent = title;
+    // The first reason is the one that decided it; the rest are detail.
+    if (reasonEl) reasonEl.textContent = assessment.reasons[0] ?? "";
+    el.style.animation = "";
+    el.style.display = "flex";
+    if (this._smoothWarnTimer !== null) clearTimeout(this._smoothWarnTimer);
+    // Long enough to read a sentence, short enough not to sit on the picture.
+    this._smoothWarnTimer = window.setTimeout(() => {
+      this._smoothWarnTimer = null;
+      el.style.animation = "movi-resume-fade-out 0.4s ease forwards";
+      window.setTimeout(() => {
+        if (el.style.animation.startsWith("movi-resume-fade-out")) {
+          el.style.display = "none";
+          el.style.animation = "";
+        }
+      }, 400);
+    }, 12000);
+  }
+
+  private hideSmoothWarning(): void {
+    if (this._smoothWarnTimer !== null) {
+      clearTimeout(this._smoothWarnTimer);
+      this._smoothWarnTimer = null;
+    }
+    const el = this.shadowRoot?.querySelector(
+      ".movi-smooth-warning",
+    ) as HTMLElement | null;
+    if (el) {
+      el.style.display = "none";
+      el.style.animation = "";
+    }
+  }
+
   canPlaySmoothly(
     options: PlaybackAssessmentOptions = {},
   ): Promise<PlaybackAssessment> {
@@ -1675,6 +1806,7 @@ export class MoviElement extends HTMLElement {
       "playlistindex",
       "autoadvance",
       "shuffle",
+      "smoothwarning",
     ];
   }
 
@@ -2991,6 +3123,35 @@ export class MoviElement extends HTMLElement {
       </div>
     `;
     shadowRoot.appendChild(resumeDialog);
+
+    // "May not play smoothly" — see checkSmoothPlayback. Bottom-LEFT, mirroring
+    // the resume prompt on the right, so the two never land on each other.
+    const smoothWarning = document.createElement("div");
+    smoothWarning.className = "movi-smooth-warning";
+    smoothWarning.setAttribute("role", "status");
+    smoothWarning.style.display = "none";
+    smoothWarning.innerHTML = `
+      <svg class="movi-smooth-warning-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+        <path d="M10.29 3.86 1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/>
+        <line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/>
+      </svg>
+      <div class="movi-smooth-warning-body">
+        <div class="movi-smooth-warning-title"></div>
+        <div class="movi-smooth-warning-reason"></div>
+      </div>
+      <button class="movi-smooth-warning-close" type="button" aria-label="Dismiss">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" aria-hidden="true"><line x1="6" y1="6" x2="18" y2="18"/><line x1="6" y1="18" x2="18" y2="6"/></svg>
+      </button>
+    `;
+    // A click on the notice is not a click on the video under it.
+    smoothWarning.addEventListener("click", (e) => e.stopPropagation());
+    smoothWarning
+      .querySelector(".movi-smooth-warning-close")
+      ?.addEventListener("click", (e) => {
+        e.stopPropagation();
+        this.hideSmoothWarning();
+      });
+    shadowRoot.appendChild(smoothWarning);
 
     resumeDialog.querySelector(".movi-resume-yes")?.addEventListener("click", (e) => {
       e.stopPropagation();
@@ -20475,6 +20636,123 @@ export class MoviElement extends HTMLElement {
         to { opacity: 0; transform: translateY(10px); }
       }
 
+      /* "May not play smoothly" (smoothwarning). The resume prompt's surface
+         and motion, on the opposite side so both can be up at once, and taller
+         because it carries a sentence of reason rather than a question. */
+      .movi-smooth-warning {
+        position: absolute;
+        bottom: 90px;
+        left: 16px;
+        z-index: 50;
+        max-width: min(380px, calc(100% - 32px));
+        background: var(--movi-chrome-bg);
+        border: 1px solid var(--movi-chrome-border);
+        border-radius: var(--movi-radius-panel);
+        padding: 12px 10px 12px 14px;
+        align-items: flex-start;
+        gap: 10px;
+        box-shadow: 0 8px 32px rgba(0, 0, 0, 0.5);
+        font-family: 'Inter', -apple-system, sans-serif;
+        pointer-events: auto;
+        animation: movi-resume-slide-up 0.3s ease;
+        transition: bottom 0.2s ease;
+      }
+
+      :host:has(.movi-controls-container.movi-controls-hidden) .movi-smooth-warning,
+      :host(:not([controls])) .movi-smooth-warning {
+        bottom: 16px;
+      }
+
+      .movi-smooth-warning-icon {
+        width: 18px;
+        height: 18px;
+        flex-shrink: 0;
+        margin-top: 1px;
+        color: #f5b83d;
+      }
+
+      .movi-smooth-warning-body {
+        display: flex;
+        flex-direction: column;
+        gap: 3px;
+        min-width: 0;
+      }
+
+      .movi-smooth-warning-title {
+        font-size: 13px;
+        font-weight: 600;
+        color: rgba(255, 255, 255, 0.95);
+      }
+
+      .movi-smooth-warning-reason {
+        font-size: 12px;
+        line-height: 1.4;
+        color: rgba(255, 255, 255, 0.65);
+      }
+
+      .movi-smooth-warning-reason:empty {
+        display: none;
+      }
+
+      .movi-smooth-warning-close {
+        flex-shrink: 0;
+        width: 24px;
+        height: 24px;
+        margin: -3px 0 0 2px;
+        padding: 5px;
+        border: none;
+        border-radius: 6px;
+        background: transparent;
+        color: rgba(255, 255, 255, 0.6);
+        cursor: pointer;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+      }
+
+      .movi-smooth-warning-close:hover {
+        background: rgba(255, 255, 255, 0.1);
+        color: #fff;
+      }
+
+      .movi-smooth-warning-close svg {
+        width: 14px;
+        height: 14px;
+      }
+
+      @container movi-host (max-width: 720px) {
+        .movi-smooth-warning {
+          bottom: 80px;
+          padding: 10px 8px 10px 12px;
+        }
+        .movi-smooth-warning-title {
+          font-size: 12px;
+        }
+        .movi-smooth-warning-reason {
+          font-size: 11px;
+        }
+      }
+
+      /* On a player too narrow for both notices side by side, this one goes to
+         the top: at the bottom it would span the same width the resume prompt
+         does and sit on it. */
+      @container movi-host (max-width: 400px) {
+        .movi-smooth-warning {
+          top: 12px;
+          bottom: auto;
+          left: 12px;
+          right: 12px;
+          max-width: none;
+        }
+      }
+
+      @media (prefers-reduced-motion: reduce) {
+        .movi-smooth-warning {
+          animation: none;
+          transition: none;
+        }
+      }
+
       .movi-resume-text {
         font-size: 13px;
         font-weight: 500;
@@ -24791,6 +25069,7 @@ export class MoviElement extends HTMLElement {
     this.classList.toggle("movi-no-controls", !this._controls);
     this.applyLoop(this.getAttribute("loop"));
     this._shuffle = this.hasAttribute("shuffle");
+    this._smoothWarning = this.isSmoothWarningOn(this.getAttribute("smoothwarning"));
     this._muted = this.hasAttribute("muted");
     this._playsinline = this.hasAttribute("playsinline");
     this._preload =
@@ -25397,6 +25676,16 @@ export class MoviElement extends HTMLElement {
         break;
       case "titlemode":
         this.applyTitleMode(newValue);
+        break;
+      case "smoothwarning":
+        this._smoothWarning = this.isSmoothWarningOn(newValue);
+        if (this._smoothWarning) {
+          // Turned on with something already loaded: ask now, not at the next load.
+          this._smoothWarnKey = null;
+          void this.checkSmoothPlayback();
+        } else {
+          this.hideSmoothWarning();
+        }
         break;
       case "subtitlepicker":
         this._subtitlePicker = newValue !== null;
@@ -29434,6 +29723,9 @@ export class MoviElement extends HTMLElement {
         resumeDialog.style.display = "none";
         resumeDialog.style.animation = "";
       }
+      // Likewise a smoothness notice: it was about the source that just left.
+      this.hideSmoothWarning();
+      this._smoothWarnKey = null;
       if (!this._title) {
         const titleText = sr.querySelector(".movi-title-text") as HTMLElement | null;
         if (titleText) titleText.textContent = "";
@@ -29785,6 +30077,9 @@ export class MoviElement extends HTMLElement {
     if (withMetadata) this.dispatchEvent(new Event("loadedmetadata"));
     this.dispatchEvent(new Event("loadeddata"));
     if (withMetadata) this.dispatchEvent(new Event("canplay"));
+    // Every pipeline's load ends here exactly once, which makes it the one
+    // place to ask whether what just loaded will play smoothly.
+    void this.checkSmoothPlayback();
   }
   /** Byte cursor / timer backing the `stalled` no-data window. */
   private _lastStalledBytes = -1;
@@ -37690,6 +37985,8 @@ export class MoviElement extends HTMLElement {
     this.updateMediaSessionPosition();
     // Each new speed gets a fresh stutter warning if it can't keep up.
     this.resetStutterHint();
+    // …and a fresh prediction, which can say so before it has stuttered at all.
+    void this.checkSmoothPlayback();
     // Speed is the setting most often changed from the keyboard while the panel
     // is open — the row's value and the speed list's tick both have to move.
     this.refreshOpenSettingsSurfaces();
@@ -37697,7 +37994,8 @@ export class MoviElement extends HTMLElement {
 
   /**
    * Seconds an interruption must last before the viewer is shown a spinner.
-   * `0` — the default — shows it the moment the player says it is loading.
+   * Defaults to 1 (and 2 for the opening); `0` shows it the moment the player
+   * says it is loading.
    */
   get spinnerDelay(): number {
     return this._spinnerDelay;
