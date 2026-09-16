@@ -20774,16 +20774,45 @@ export class MoviElement extends HTMLElement {
         }
       }
 
-      /* On a player too narrow for both notices side by side, this one goes to
-         the top: at the bottom it would span the same width the resume prompt
-         does and sit on it. */
+      /* A phone held upright. The notice keeps to the bottom — the top is where
+         the speed OSD appears, and a speed change is exactly when this notice
+         goes up, so up there the two landed on each other. It spans the width
+         and gets compact, and the line under the title stops at two.
+
+         Moving it to the top with top AND leaving bottom to the rules above was
+         tried first, and the controls-hidden rule (more specific) kept its
+         bottom: the notice was pinned at both ends and stretched over the whole
+         picture. */
       @container movi-host (max-width: 400px) {
         .movi-smooth-warning {
-          top: 12px;
-          bottom: auto;
-          left: 12px;
-          right: 12px;
+          left: 10px;
+          right: 10px;
           max-width: none;
+          padding: 8px 6px 8px 10px;
+          gap: 8px;
+        }
+        .movi-smooth-warning-icon {
+          width: 16px;
+          height: 16px;
+        }
+        .movi-smooth-warning-title {
+          font-size: 12px;
+          line-height: 1.3;
+        }
+        .movi-smooth-warning-reason {
+          font-size: 11px;
+          line-height: 1.35;
+          display: -webkit-box;
+          -webkit-line-clamp: 2;
+          -webkit-box-orient: vertical;
+          overflow: hidden;
+        }
+        /* Unless the resume prompt holds the bottom: at this width it spans it
+           too. Then go up — the OSD passes in a second, the prompt does not.
+           bottom has to be forced: the controls-hidden rule outranks this. */
+        :host:has(.movi-resume-dialog[style*="flex"]) .movi-smooth-warning {
+          top: 10px;
+          bottom: auto !important;
         }
       }
 
