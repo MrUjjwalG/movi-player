@@ -21511,12 +21511,63 @@ export class MoviElement extends HTMLElement {
           drop-shadow(0 0 1px rgba(0, 0, 0, 0.55))
           drop-shadow(0 1px 1px rgba(0, 0, 0, 0.4))
           drop-shadow(0 2px 8px rgba(0, 0, 0, 0.35));
+        position: relative;
+        /* Arrive, rather than appear.
+           The ring is held back for a second or two now (see spinnerdelay), so
+           by the time it is shown the viewer is already looking at a picture
+           that has stopped — and something snapping into the middle of that
+           reads as another fault rather than as an answer. A short rise puts
+           it there as a response to the wait instead. It runs off the display
+           flip, so there is nothing to undo on the way out: by then the
+           picture is moving again and nobody is watching the spinner leave. */
+        animation: movi-loader-in 240ms cubic-bezier(0.2, 0.8, 0.2, 1) both;
+      }
+
+      @keyframes movi-loader-in {
+        from {
+          opacity: 0;
+          transform: scale(0.84);
+        }
+        to {
+          opacity: 1;
+          transform: none;
+        }
       }
 
       .movi-loader-mark {
         width: 100%;
         height: 100%;
         display: block;
+        /* Above the scrim below, which is the only reason either is positioned. */
+        position: relative;
+        z-index: 1;
+      }
+
+      /* A scrim the shape of the light it is protecting.
+
+         The drop-shadows under the container answer a LIGHT backdrop: they
+         trace the outline so a white mark keeps an edge on white. They do
+         nothing about a BUSY one. Over picture — which is the backdrop this
+         actually has, since a spinner means a video is on screen — the 0.2
+         track falls into whatever is behind it and the mark stops reading as
+         a play triangle at all: what is left is one bright stroke floating
+         over the image with no shape around it.
+
+         So a soft radial well underneath, dark in the middle and gone by its
+         own edge. No border, no box, nothing that could read as a card — at
+         full opacity it is a quarter-stop of shade, which is enough to put
+         the faint outline back and not enough to notice as an object. */
+      .movi-loader-container::before {
+        content: "";
+        position: absolute;
+        inset: -22%;
+        border-radius: 50%;
+        background: radial-gradient(
+          closest-side,
+          rgba(0, 0, 0, 0.38),
+          rgba(0, 0, 0, 0.22) 58%,
+          rgba(0, 0, 0, 0) 78%
+        );
       }
 
       .movi-loader-track,
@@ -21532,24 +21583,94 @@ export class MoviElement extends HTMLElement {
       }
 
       /* Present enough to hold the shape, quiet enough that the segment is
-         what the eye follows. */
+         what the eye follows.
+
+         0.2 was tuned against the drop-shadows alone, and over a black frame —
+         which a player shows more than any other single thing — that is a
+         white line at a fifth strength on black: gone. With the scrim under it
+         the whole mark sits on a known surface rather than on the picture, so
+         the outline can be worth seeing without ever competing with the
+         segment travelling it. */
       .movi-loader-track {
-        opacity: 0.2;
+        opacity: 0.3;
       }
 
       .movi-loader-chase {
-        /* Just over a quarter of the way round — long enough to read as a
-           stroke with a direction, short enough that it is clearly a segment
-           and not the outline itself. */
-        /* 28% and 72% of the triangle's 67.2666-unit perimeter. */
-        stroke-dasharray: 18.8347 48.4319;
-        animation: movi-loader-chase 1.35s linear infinite;
+        /* The dash is animated, not fixed — see the keyframes. */
+        animation: movi-loader-chase 1.6s cubic-bezier(0.45, 0.05, 0.55, 0.95)
+          infinite;
       }
 
+      /* A segment that BREATHES its way round, instead of a bead on a string.
+
+         A fixed-length dash at a constant speed is a bead: the eye tracks one
+         object going round and round, which is the same thing a ring does and
+         says nothing the ring did not. Letting the length animate turns it
+         into a stroke being DRAWN — the head runs ahead down an edge, the tail
+         gathers in behind it at the corner — so the mark reads as something
+         being worked on rather than something orbiting.
+
+         It also fixes the thing a bead is worst at: at a quarter of the
+         perimeter the segment spends most of a lap on one edge, so the
+         triangle barely participates. Stretched to over half, the stroke wraps
+         a corner and both edges are lit at once, and the shape is in the
+         motion rather than beside it.
+
+         Every pair below sums to the perimeter (67.2666), which is what keeps
+         exactly ONE dash on the path — a pair that sums to less puts a second
+         copy of the segment on the far side, and the whole thing reads as two
+         beads chasing.
+
+         Written in user units for the same reason the old fixed dash was:
+         WebKit ignores pathLength when it computes dashes (Safari measured
+         percentages against the real 67.27 perimeter and drew a static box),
+         so percentages of the way round cannot be used here. */
       @keyframes movi-loader-chase {
-        to {
-          /* One full lap of the perimeter, in the same units as the dash. */
+        0% {
+          stroke-dasharray: 14 53.2666;
+          stroke-dashoffset: 0;
+        }
+        45% {
+          stroke-dasharray: 40 27.2666;
+          stroke-dashoffset: -16;
+        }
+        100% {
+          stroke-dasharray: 14 53.2666;
           stroke-dashoffset: -67.2666;
+        }
+      }
+
+      /* A segment travelling a triangle is exactly the kind of motion this
+         setting is about, and it is the one part of the mark that is not
+         information: the shape says "video", the lap only says "still". So
+         the lap stops and the outline closes up to full strength — a solid
+         play mark, which is the same thing said without moving anything —
+         and the waiting is carried by a slow breath of opacity, which is not
+         motion in the sense the setting means. */
+      @media (prefers-reduced-motion: reduce) {
+        .movi-loader-container {
+          animation: none;
+        }
+        .movi-loader-track {
+          opacity: 0.85;
+        }
+        .movi-loader-chase {
+          animation: none;
+          stroke-dasharray: none;
+          opacity: 0;
+        }
+        .movi-loader-mark {
+          animation: movi-loader-breathe 2.4s ease-in-out infinite;
+        }
+      }
+
+      @keyframes movi-loader-breathe {
+        0%,
+        100% {
+          opacity: 0.45;
+        }
+        50% {
+          opacity: 1;
         }
       }
 
