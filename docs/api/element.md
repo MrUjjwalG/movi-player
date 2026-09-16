@@ -1218,6 +1218,17 @@ Saves playback position to localStorage and shows a resume dialog on reload.
 
 Position is saved every 5 seconds and on pause. Cleared when video ends. Uses URL as key for streams, filename+size for local files.
 
+**Not needed for a discarded tab.** When the browser takes a background tab's
+memory back (Chrome's Memory Saver) and the viewer returns, the page reloads —
+and the player puts them back where they were on its own, the way a native
+`<video>` or YouTube does, with no prompt and no attribute. That is a different
+thing from `resume`: a discard interrupts the *same* visit and nobody asked for
+it, so the position just comes back — paused if it was paused, playing if it
+was (where the browser allows playback without a fresh gesture), at the speed
+it was at. It is kept in `sessionStorage`, so it lives exactly as long as the
+tab, and it applies only to URL sources: a local file cannot be handed back to a
+page after a reload. It needs `document.wasDiscarded`, which today is Chromium.
+
 ---
 
 #### `stablevolume`

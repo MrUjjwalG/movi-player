@@ -1417,6 +1417,8 @@ export class MoviElement extends HTMLElement {
 
   private _onVisibilityChange = () => {
     if (document.visibilityState === "hidden") {
+      // The tab may be discarded from here on — see saveDiscardState.
+      this.saveDiscardState();
       // Capture last visible frame BEFORE the OS may kill the GL context.
       if (this.canvas) {
         try {
@@ -24841,6 +24843,11 @@ export class MoviElement extends HTMLElement {
     // time webglcontextlost fires the GPU buffer is already gone, so snapshot
     // proactively. Used as a poster during context-loss recovery.
     document.addEventListener("visibilitychange", this._onVisibilityChange);
+    // The last two moments a page can still write anything before the browser
+    // takes its memory back: `freeze` is what Chrome fires ahead of a discard,
+    // `pagehide` covers the rest.
+    document.addEventListener("freeze", this._onPageLeaving);
+    window.addEventListener("pagehide", this._onPageLeaving);
 
     // Initial state: disable controls except volume
     this.updateControlsState();
@@ -25146,6 +25153,8 @@ export class MoviElement extends HTMLElement {
       this.handleContextRestored,
     );
     document.removeEventListener("visibilitychange", this._onVisibilityChange);
+    document.removeEventListener("freeze", this._onPageLeaving);
+    window.removeEventListener("pagehide", this._onPageLeaving);
     if (this._outsideTapHandler) {
       document.removeEventListener("pointerdown", this._outsideTapHandler, true);
       this._outsideTapHandler = null;
@@ -27360,9 +27369,26 @@ export class MoviElement extends HTMLElement {
       // background. _preloadGateActive stays false, so every gate branch below
       // (defer play, force spinner, release-on-preloadcomplete) is a no-op.
 
-      // Auto-play if requested
-      // Seek to initial position if set
-      if (this._startAt > 0 && this.player) {
+      // Coming back from a discarded tab: put the viewer where they were.
+      // Ahead of startat, because startat describes where a fresh visit should
+      // begin and this is not a fresh visit — see takeDiscardState.
+      const discarded = this.takeDiscardState();
+      if (discarded && this.player) {
+        await this.player.seek(discarded.t).catch((e: unknown) => {
+          Logger.warn(TAG, "Failed to restore the position of a discarded tab", e);
+        });
+        // Already there — a "Resume from X?" prompt at X is noise.
+        this._resumeDialogPending = false;
+        if (discarded.rate > 0 && discarded.rate !== this.playbackRate) {
+          this.playbackRate = discarded.rate;
+        }
+        // Play again only if it was playing, and only in a visible tab. With no
+        // gesture on the reloaded page the browser may refuse; then it simply
+        // stays paused on the right frame, which is still the point.
+        if (discarded.playing && document.visibilityState === "visible") {
+          void this.play()?.catch?.(() => {});
+        }
+      } else if (this._startAt > 0 && this.player) {
         await this.player.seek(this._startAt).catch((e: unknown) => {
           Logger.warn(TAG, "Failed to seek to start time", e);
         });
@@ -27422,7 +27448,17 @@ export class MoviElement extends HTMLElement {
         } else {
           await this._startAutoplay();
         }
-      } else if (this._startAt === 0 && this.player && !this._poster) {
+      } else if (
+        this._startAt === 0 &&
+        // …and not over a restored position. This branch paints the opening
+        // frame by seeking to 0 (or to postertime and then resetting the clock
+        // to 0), so run after a discard restore it put the viewer straight back
+        // at the start — 5ms after the restore had put them where they were.
+        // startat escapes it by being non-zero; the restore has to say so.
+        !discarded &&
+        this.player &&
+        !this._poster
+      ) {
         // Render the poster frame on canvas via a seek on the main decoder
         // (never the thumbnail pipeline). With a `postertime`, seek to that
         // timestamp to paint the poster frame, then — once it lands — reset
@@ -36953,6 +36989,97 @@ export class MoviElement extends HTMLElement {
         }, 400);
       }
     }, 10000);
+  }
+
+  // ─── Tab discard recovery ───────────────────────────────────────
+
+  /**
+   * When a tab sits in the background long enough, the browser takes its
+   * memory back — Chrome's Memory Saver discards the page outright, and going
+   * back to it RELOADS it. A native <video> and YouTube come back where they
+   * were; this came back at 0:00, which reads as the player having lost the
+   * viewer's place for no reason they can see.
+   *
+   * This is not the `resume` attribute. That one is a page's choice to offer a
+   * position across visits, days apart, behind a prompt. A discard is the
+   * browser interrupting the SAME visit, and nobody asked for it — so there is
+   * no prompt and no opt-in: the position simply comes back, the way it would
+   * on any other player.
+   *
+   * sessionStorage, not localStorage: it is scoped to this one tab, it
+   * survives the discard's reload, and it is gone when the tab closes — which
+   * is exactly the lifetime of "the place you were in this tab".
+   */
+  private static readonly DISCARD_KEY_PREFIX = "movi-discard:";
+
+  /** A URL source only. A File cannot survive a discard — the page that reloads
+   *  has no way to be handed it again — so there is no position worth keeping. */
+  private discardKey(): string {
+    return typeof this._src === "string" && this._src
+      ? `${MoviElement.DISCARD_KEY_PREFIX}${this._src}`
+      : "";
+  }
+
+  private _onPageLeaving = (): void => {
+    this.saveDiscardState();
+  };
+
+  private saveDiscardState(): void {
+    // The poster seek parks currentTime at the poster timestamp for a moment;
+    // that is not where the viewer is.
+    if (this._posterSeekActive) return;
+    const key = this.discardKey();
+    if (!key || !this.player) return;
+    const t = this.currentTime;
+    if (!(t > 0)) return;
+    try {
+      sessionStorage.setItem(
+        key,
+        JSON.stringify({
+          t: Math.round(t * 100) / 100,
+          playing: this.player.getState() === "playing",
+          rate: this.playbackRate,
+        }),
+      );
+    } catch {
+      // Storage unavailable (private mode quota, sandboxed frame) — nothing to do.
+    }
+  }
+
+  /**
+   * The saved place, if and only if this page is the reload of a discard.
+   *
+   * `document.wasDiscarded` is the whole gate. A plain reload, a new visit or a
+   * navigation back all read it false, so none of them are pulled to a
+   * position the viewer did not ask for — that is what `resume` is for.
+   * Positions too close to either end are not worth a seek: near the start it
+   * is where playback begins anyway, and near the end it would only finish.
+   */
+  private takeDiscardState(): {
+    t: number;
+    playing: boolean;
+    rate: number;
+  } | null {
+    const doc = document as Document & { wasDiscarded?: boolean };
+    if (!doc.wasDiscarded) return null;
+    const key = this.discardKey();
+    if (!key) return null;
+    try {
+      const raw = sessionStorage.getItem(key);
+      if (!raw) return null;
+      const v = JSON.parse(raw) as { t?: unknown; playing?: unknown; rate?: unknown };
+      const t = typeof v.t === "number" ? v.t : NaN;
+      if (!(t > 2)) return null;
+      const d = this.duration;
+      if (d > 0 && t > d - 5) return null;
+      return {
+        t,
+        playing: v.playing === true,
+        rate: typeof v.rate === "number" && v.rate > 0 ? v.rate : 1,
+      };
+    } catch {
+      return null;
+    }
   }
 
   // ─── Resume Playback ────────────────────────────────────────────
