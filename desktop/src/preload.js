@@ -30,6 +30,11 @@ contextBridge.exposeInMainWorld("movi", {
   // would fight over.
   toggleFullscreen: () => ipcRenderer.send("window:toggle-fullscreen"),
 
+  // Size the window around the picture (QuickTime-style) — see main.js.
+  fitVideo: (width, height) => ipcRenderer.send("window:fit-video", { width, height }),
+  releaseVideo: () => ipcRenderer.send("window:release-video"),
+  playlistPanel: (open, width) => ipcRenderer.send("window:playlist-panel", { open, width }),
+
   // Recent files (path-based opens only).
   getRecents: () => ipcRenderer.invoke("recents:get"),
   openRecent: (p) => ipcRenderer.send("recents:open", p),

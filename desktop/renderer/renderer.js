@@ -91,12 +91,15 @@ function updatePlToggle() {
   const show = playlist.length > 1 && !panelOpen && (controlsVisible || iconHovered);
   plToggle.hidden = !show;
 }
+const PANEL_WIDTH = 320; // .playlist-panel flex-basis
 function openPanel() {
+  if (!panelOpen) window.movi.playlistPanel(true, PANEL_WIDTH);
   panelOpen = true;
   playlistPanel.classList.add("open");
   updatePlToggle();
 }
 function closePanel() {
+  if (panelOpen) window.movi.playlistPanel(false, PANEL_WIDTH);
   panelOpen = false;
   playlistPanel.classList.remove("open");
   updatePlToggle();
@@ -328,6 +331,44 @@ window.addEventListener("drop", async (e) => {
     loadFile(files[0]); // no path available → single, zero-copy
   }
 });
+
+// ---------- Window follows the video (QuickTime-style) ----------
+// Once per picture: the file's own size decides the window, and after that the
+// viewer's resizing is theirs — a PiP round trip or a repeat event for the same
+// file must not undo it.
+let fittedKey = "";
+function fitWindowToVideo() {
+  if (player.hidden) return;
+  const w = player.videoWidth || 0;
+  const h = player.videoHeight || 0;
+  if (!(w > 0 && h > 0) || player.classList.contains("movi-audio-strip")) {
+    if (player.duration > 0 && fittedKey !== "audio") {
+      fittedKey = "audio";
+      window.movi.releaseVideo();
+    }
+    return;
+  }
+  // Phone clips are stored landscape with a rotation flag, so a portrait video
+  // reads 1920×1080 here and has to open tall. The flag is on the track;
+  // getVideoRotation() is the viewer's own turn on top of it (0 until they
+  // rotate), so the track's is the one that says which way up the file is.
+  let rot = 0;
+  try {
+    rot =
+      player.player?.getVideoTracks?.()?.[0]?.rotation ||
+      player.player?.getVideoRotation?.() ||
+      0;
+  } catch {}
+  const turned = Math.abs(rot) % 180 === 90;
+  const dw = turned ? h : w;
+  const dh = turned ? w : h;
+  const key = `${player.src?.name ?? player.src}|${dw}x${dh}`;
+  if (key === fittedKey) return;
+  fittedKey = key;
+  window.movi.fitVideo(dw, dh);
+}
+player.addEventListener("resize", fitWindowToVideo);
+player.addEventListener("loadedmetadata", fitWindowToVideo);
 
 // Surface player errors instead of failing silently
 player.addEventListener("error", (e) => {
