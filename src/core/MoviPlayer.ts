@@ -854,11 +854,12 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
     // the ladder screen uses. A query that already names a full string is
     // taken at its word.
     const family = (video.codec || "").split(".")[0].toLowerCase();
-    const codec =
+    const parsedCodec =
       (fromQuery && fromQuery.codec.includes(".") ? fromQuery.codec : null) ||
       (!fromQuery ? MoviPlayer.codecStringFor(video) : null) ||
       REPRESENTATIVE_CODECS[family] ||
       "";
+    let codec = parsedCodec;
 
     const width = video.width || 0;
     const height = video.height || 0;
@@ -870,19 +871,39 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
       softwareDecodeCost(width, height, fps * rate, codec || family) / budget;
 
     // ── Which decoder would carry it ──────────────────────────────────────
+    //
+    // Asked the way the decoder will actually be configured, or the answer is
+    // about a decoder nobody builds. Two things the playback path does and this
+    // did not, both on every MPEG-TS file:
+    //  - Its extradata is Annex B (start codes, not an avcC/hvcC record). The
+    //    decoder drops it and reads the inline parameter sets; handed over as
+    //    `description` it makes the browser refuse the config outright.
+    //  - The parser reads that Annex B as if it were a record and builds a
+    //    string like "avc1.000001". The decoder falls back to a mapped string
+    //    when its first one is refused, so this falls back too.
+    // Without both, a 4K HEVC .ts that plays in hardware was judged WASM-only,
+    // 3.7× over the software budget, and warned about as not smooth.
+    const extradata = video.extradata;
+    const annexB =
+      !!extradata &&
+      extradata.length > 4 &&
+      extradata[0] === 0 &&
+      extradata[1] === 0 &&
+      (extradata[2] === 1 || (extradata[2] === 0 && extradata[3] === 1));
     const ask = async (
+      codecString: string,
       hardwareAcceleration?: "prefer-hardware",
     ): Promise<boolean> => {
-      if (!codec || typeof VideoDecoder === "undefined") return false;
+      if (!codecString || typeof VideoDecoder === "undefined") return false;
       try {
         const config: VideoDecoderConfig = {
-          codec,
+          codec: codecString,
           codedWidth: width,
           codedHeight: height,
         };
         if (hardwareAcceleration) config.hardwareAcceleration = hardwareAcceleration;
-        if (video.extradata && video.extradata.length > 0) {
-          config.description = video.extradata;
+        if (extradata && extradata.length > 0 && !annexB) {
+          config.description = extradata;
         }
         const r = await VideoDecoder.isConfigSupported(config);
         return r?.supported === true;
@@ -890,8 +911,19 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
         return false;
       }
     };
-    const hardware = await ask("prefer-hardware");
-    const software = hardware ? true : await ask();
+    const candidates = [parsedCodec, REPRESENTATIVE_CODECS[family] || ""].filter(
+      (c, i, all) => !!c && all.indexOf(c) === i,
+    );
+    let hardware = false;
+    let software = false;
+    for (const candidate of candidates) {
+      hardware = await ask(candidate, "prefer-hardware");
+      software = hardware ? true : await ask(candidate);
+      if (software) {
+        codec = candidate;
+        break;
+      }
+    }
     const decoder: "hardware" | "software" | "wasm" = hardware
       ? "hardware"
       : software
