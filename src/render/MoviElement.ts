@@ -2295,10 +2295,6 @@ export class MoviElement extends HTMLElement {
             <rect class="movi-empty-card-front" x="28" y="25" width="100" height="66" rx="15"/>
             <rect class="movi-empty-card-detail" x="42" y="39" width="19" height="17" rx="4.5"/>
             <path class="movi-empty-card-play" d="M49 43.5v8l6.5-4-6.5-4Z"/>
-            <rect class="movi-empty-card-detail" x="42" y="73" width="17" height="5" rx="2.5"/>
-            <rect class="movi-empty-card-detail" x="65" y="73" width="17" height="5" rx="2.5"/>
-            <rect class="movi-empty-card-detail" x="88" y="73" width="17" height="5" rx="2.5"/>
-            <rect class="movi-empty-card-detail" x="111" y="73" width="9" height="5" rx="2.5"/>
           </svg>
         </div>
         <div class="movi-empty-text">

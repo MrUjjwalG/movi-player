@@ -954,6 +954,22 @@
               "description": "Movi Player theme variable.\n\nDefault: `cubic-bezier(0.2, 0.9, 0.25, 1.18)`"
             },
             {
+              "name": "--movi-divider-color",
+              "description": "Movi Player theme variable.\n\nDefault: `rgba(255, 255, 255, 0.14)`"
+            },
+            {
+              "name": "--movi-divider-width",
+              "description": "Movi Player theme variable.\n\nDefault: `1px`"
+            },
+            {
+              "name": "--movi-divider-height",
+              "description": "Movi Player theme variable.\n\nDefault: `20px`"
+            },
+            {
+              "name": "--movi-divider-gap",
+              "description": "Movi Player theme variable.\n\nDefault: `4px`"
+            },
+            {
               "name": "--movi-controls-bg",
               "description": "Movi Player theme variable.\n\nDefault: `var(--movi-glass-bg)`"
             },
