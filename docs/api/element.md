@@ -977,6 +977,14 @@ Specifies external element for ambient effects.
 </div>
 ```
 
+The wrapper is painted with a soft radial wash of the picture's colour. Set
+`--movi-ambient-strength` on the wrapper to scale how strong it is (default `1`):
+a wrapper that only shows a thin rim around a framed player usually wants `2`–`3`.
+
+```css
+#wrapper { --movi-ambient-strength: 2.4; }
+```
+
 ---
 
 #### `thumb`
@@ -3187,6 +3195,7 @@ movi-player::part(error-button)  { border-radius: 2px; }
 | `error-button` | Both buttons |
 | `error-retry-button` | Retry only |
 | `error-software-button` | "Try Software Decoding" only |
+| `error-exit-fullscreen-button` | "Exit full screen" — shown only while the player is fullscreen |
 
 ### Replace it — `slot="error"`
 

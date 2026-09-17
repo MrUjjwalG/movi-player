@@ -71,7 +71,7 @@ type EngineName = (typeof ENGINE_NAMES)[number];
 // marks with sharp Feather-style outlines. 1.65px is deliberately between the
 // two old weights: it stays crisp at 16px in menus and calm at 24px in the bar.
 const SYMBOLS = {
-  play: `<path d="M6.4 5.6 17.6 12 6.4 18.4Z"/>`,
+  play: `<path d="M8.66 4.99 L18.06 10.54 A1.7 1.7 0 0 1 18.06 13.46 L8.66 19.01 A1.7 1.7 0 0 1 6.10 17.55 L6.10 6.45 A1.7 1.7 0 0 1 8.66 4.99Z"/>`,
   pause: `<rect x="6.4" y="4.75" width="3.8" height="14.5" rx="1.45"/><rect x="13.8" y="4.75" width="3.8" height="14.5" rx="1.45"/>`,
   previous: `<rect x="5.25" y="5" width="2.4" height="14" rx="1.2"/><path d="M18.25 6.1v11.8a1 1 0 0 1-1.55.84l-8.85-5.9a1 1 0 0 1 0-1.68l8.85-5.9a1 1 0 0 1 1.55.84Z"/>`,
   next: `<rect x="16.35" y="5" width="2.4" height="14" rx="1.2"/><path d="M5.75 6.1v11.8a1 1 0 0 0 1.55.84l8.85-5.9a1 1 0 0 0 0-1.68L7.3 5.26a1 1 0 0 0-1.55.84Z"/>`,
@@ -2230,11 +2230,14 @@ export class MoviElement extends HTMLElement {
       <div class="movi-broken-stage">
       <div class="movi-broken-container" part="error-container">
         <div class="movi-broken-icon-wrapper" part="error-icon">
-          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.35" stroke-linecap="round" stroke-linejoin="round">
-            <path d="M10.75 3H13.25C17.5 3 21 6.5 21 10.75V13.25C21 17.5 17.5 21 13.25 21H10.75C6.5 21 3 17.5 3 13.25V10.75C3 6.5 6.5 3 10.75 3Z" fill="rgba(255, 68, 68, 0.05)"/>
-            <path d="M12 8V12" stroke="#ff4444"/>
-            <path d="M12 16H12.01" stroke="#ff4444"/>
-            <path d="M3 3L21 21" stroke="white" stroke-opacity="0.2"/>
+          <!-- The empty state's card stack, so a failure reads as the same
+               place as "nothing loaded", with a warning mark where the play
+               button would be. -->
+          <svg viewBox="0 0 140 100" fill="none" aria-hidden="true">
+            <rect class="movi-broken-card-back" x="22" y="10" width="94" height="66" rx="14" transform="rotate(-13 69 43)"/>
+            <rect class="movi-broken-card-front" x="28" y="25" width="100" height="66" rx="15"/>
+            <rect class="movi-broken-card-badge" x="42" y="39" width="19" height="17" rx="4.5"/>
+            <path class="movi-broken-card-mark" d="M51.5 43.2v5M51.5 51.9h.01"/>
           </svg>
         </div>
         <div class="movi-broken-text" part="error-text">
@@ -2258,6 +2261,16 @@ export class MoviElement extends HTMLElement {
             </svg>
             Retry
           </button>
+          <!-- A failed source in fullscreen leaves the viewer on a black
+               screen with the bar faded; this is the way out that doesn't
+               need a key. Shown only while fullscreen (CSS, off the host's
+               movi-fullscreen-active class). -->
+          <button class="movi-error-exit-fs-btn" part="error-button error-exit-fullscreen-button" type="button">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" width="16" height="16" aria-hidden="true">
+              <path d="M8.5 3.5v3a2 2 0 0 1-2 2h-3M20.5 8.5h-3a2 2 0 0 1-2-2v-3M3.5 15.5h3a2 2 0 0 1 2 2v3M15.5 20.5v-3a2 2 0 0 1 2-2h3"/>
+            </svg>
+            Exit full screen
+          </button>
         </div>
       </div>
       </div>
@@ -2280,6 +2293,13 @@ export class MoviElement extends HTMLElement {
     retryBtn?.addEventListener("click", () => {
       this.load().catch(() => {});
     });
+
+    this.brokenIndicator
+      .querySelector(".movi-error-exit-fs-btn")
+      ?.addEventListener("click", (e) => {
+        e.stopPropagation();
+        this.exitFullscreen();
+      });
 
     // Create empty state indicator (shown when no src is set)
     this.emptyStateIndicator = document.createElement("div");
@@ -24138,14 +24158,14 @@ export class MoviElement extends HTMLElement {
         left: 0;
         width: 100%;
         height: 100%;
-        background: radial-gradient(circle at center, rgba(30, 30, 30, 0.4) 0%, rgba(10, 10, 10, 0.95) 100%);
+        background: #000;
         display: flex;
         flex-direction: column;
         align-items: center;
         justify-content: center;
         z-index: 10000;
         color: white;
-        font-family: 'Inter', sans-serif;
+        font-family: inherit;
         text-align: center;
         opacity: 0;
         animation: movi-fade-in 0.5s ease forwards;
@@ -24208,42 +24228,39 @@ export class MoviElement extends HTMLElement {
       
       .movi-broken-icon-wrapper {
         position: relative;
-        width: clamp(48px, 12vw, 80px);
-        height: clamp(48px, 12vw, 80px);
-        width: clamp(26px, min(17cqw, 20cqh), 80px);
-        height: clamp(26px, min(17cqw, 20cqh), 80px);
-        margin-bottom: clamp(12px, 3vw, 24px);
-        margin-bottom: clamp(6px, 3cqh, 24px);
-        background: rgba(255, 255, 255, 0.03);
-        border: 1px solid rgba(255, 255, 255, 0.08);
-        border-radius: clamp(12px, 3vw, 20px);
-        /* Proportional to the box, so the corner keeps its shape at any size. */
-        border-radius: 24%;
+        width: clamp(64px, min(22cqw, 30cqh), 176px);
+        aspect-ratio: 140 / 100;
+        height: auto;
+        margin-bottom: clamp(6px, 2.6cqh, 16px);
         display: flex;
         align-items: center;
         justify-content: center;
-        box-shadow: 0 20px 40px rgba(0, 0, 0, 0.4);
+        opacity: 0.92;
       }
 
       .movi-broken-icon-wrapper svg {
-        width: clamp(28px, 7vw, 44px);
-        height: clamp(28px, 7vw, 44px);
-        /* Track the wrapper instead of the window — one ratio, every size. */
-        width: 55%;
-        height: 55%;
-        filter: drop-shadow(0 0 15px rgba(255, 68, 68, 0.4));
+        width: 100%;
+        height: 100%;
+        overflow: visible;
+      }
+      .movi-broken-card-back { fill: var(--movi-chrome-fg, #fff); opacity: 0.1; }
+      .movi-broken-card-front { fill: var(--movi-chrome-fg, #fff); opacity: 0.16; }
+      .movi-broken-card-badge { fill: #ff5a5f; opacity: 0.55; }
+      .movi-broken-card-mark {
+        stroke: #fff;
+        stroke-opacity: 0.9;
+        stroke-width: 2.4;
+        stroke-linecap: round;
       }
 
       .movi-broken-title {
         font-size: clamp(16px, 4vw, 22px);
-        font-size: clamp(12px, min(5cqw, 6cqh), 22px);
-        font-weight: 700;
-        margin: 0 0 10px 0;
-        margin-bottom: clamp(3px, 1.4cqh, 10px);
-        letter-spacing: -0.02em;
-        background: linear-gradient(to bottom, var(--movi-chrome-fg, #fff), #bbb);
-        -webkit-background-clip: text;
-        -webkit-text-fill-color: transparent;
+        font-size: clamp(12px, min(4cqw, 5cqh), 18px);
+        font-weight: 600;
+        margin: 0 0 6px 0;
+        margin-bottom: clamp(3px, 1cqh, 6px);
+        letter-spacing: -0.01em;
+        color: rgba(255, 255, 255, 0.9);
         text-align: center;
         /* Same reasoning as the message below — a three-word title that wraps
            after its second word reads badly. */
@@ -24258,9 +24275,9 @@ export class MoviElement extends HTMLElement {
       
       .movi-broken-message {
         font-size: clamp(11px, 2.5vw, 14px);
-        font-size: clamp(9px, min(3.2cqw, 4cqh), 14px);
-        line-height: 1.6;
-        color: rgba(255, 255, 255, 0.6);
+        font-size: clamp(9px, min(3cqw, 3.6cqh), 13px);
+        line-height: 1.5;
+        color: rgba(255, 255, 255, 0.5);
         margin: 0;
         font-weight: 400;
         text-align: center;
@@ -24341,6 +24358,27 @@ export class MoviElement extends HTMLElement {
         .movi-sw-fallback-btn,
         .movi-retry-btn { margin-top: 0; padding: 0.45em 0.9em; }
       }
+
+      /* Quieter than Retry: it doesn't fix anything, it just gets you out. */
+      .movi-error-exit-fs-btn {
+        display: none;
+        align-items: center;
+        justify-content: center;
+        gap: 0.55em;
+        margin-top: clamp(4px, 1.4cqh, 10px);
+        padding: 0.55em 1.1em;
+        background: transparent;
+        border: 0;
+        border-radius: var(--movi-radius-control);
+        color: rgba(255, 255, 255, 0.7);
+        font-size: clamp(10px, min(2.8cqw, 3.4cqh), 13px);
+        font-weight: 500;
+        cursor: pointer;
+        transition: color 0.2s ease, background 0.2s ease;
+      }
+      :host(.movi-fullscreen-active) .movi-error-exit-fs-btn { display: flex; }
+      .movi-error-exit-fs-btn:hover { color: #fff; background: rgba(255, 255, 255, 0.08); }
+      .movi-error-exit-fs-btn svg { flex-shrink: 0; width: 1.15em; height: 1.15em; }
 
       .movi-sw-fallback-btn:hover,
       .movi-retry-btn:hover {
@@ -24707,6 +24745,15 @@ export class MoviElement extends HTMLElement {
            (see the controls rule above). Before and during, the from-frame
            and the keyframes apply exactly as they did. */
         animation: movi-surface-arrive 260ms var(--movi-motion-out) backwards;
+      }
+
+      /* The error screen rests at opacity 0 in its base rule and relied on its
+         own fade's forwards fill to become visible. The arrive animation above
+         replaces that fade and fills backwards only, so the moment it ended the
+         screen dropped back to 0 — shown for a quarter of a second, then gone.
+         Its resting state is visible; the animation still fades it in. */
+      .movi-broken-indicator[style*="display: flex"] {
+        opacity: 1;
       }
 
       .movi-settings-menu.is-open .movi-settings-root > * {
@@ -34104,11 +34151,18 @@ export class MoviElement extends HTMLElement {
         // colour itself was pulled down for the bars, and out here it is laid
         // over black, so matching the level the wrapper already had means
         // meeting the dimmer colour partway.
-        const alpha =
+        const w = this.ambientWrapperElement;
+        // A host can turn the glow up (or down) without restyling it: the
+        // wrapper's --movi-ambient-strength multiplies these alphas. The
+        // defaults suit a wrapper that fills the space around the player; one
+        // that only shows a rim past a framed player needs more to be seen.
+        const strength =
+          parseFloat(getComputedStyle(w).getPropertyValue("--movi-ambient-strength")) || 1;
+        const alpha = (
           this._theme === "light"
             ? [0.66, 0.4, 0.2, 0.07]
-            : [0.45, 0.24, 0.11, 0.03];
-        const w = this.ambientWrapperElement;
+            : [0.45, 0.24, 0.11, 0.03]
+        ).map((a) => Math.min(1, +(a * strength).toFixed(3)));
         w.style.backgroundImage = `radial-gradient(ellipse 110% 100% at ${centre.toFixed(
           1,
         )}% 50%, rgba(${wr}, ${wg}, ${wb}, ${alpha[0]}) 0%, rgba(${wr}, ${wg}, ${wb}, ${alpha[1]}) 30%, rgba(${wr}, ${wg}, ${wb}, ${alpha[2]}) 60%, rgba(${wr}, ${wg}, ${wb}, ${alpha[3]}) 100%)`;
