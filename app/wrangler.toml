@@ -120,6 +120,11 @@ database_id = "ea838cee-312d-46ea-b2f5-94efb870bcd3"   # replace with the id fro
 type = "Text"
 globs = ["**/*.html", "**/*.xml", "**/*.txt", "**/*.css"]
 
+[[rules]]
+type = "Data"
+globs = ["**/*.webp"]
+fallthrough = false
+
 # ─── Rate limits (manual setup in Cloudflare dashboard) ────────────────
 # Workers doesn't expose per-route rate limiting in wrangler.toml — it
 # has to be configured via the "Security → WAF → Rate limiting rules"

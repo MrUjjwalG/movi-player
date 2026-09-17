@@ -2,6 +2,26 @@
 <html lang="en">
   <head>
     <meta charset="UTF-8" />
+    <script>
+      // The extension is offered only where it installs: desktop Chromium
+      // (Chrome, Edge, Brave, Opera, Arc…). Everything that offers it hides
+      // without this class — see app/shared.css. In the head so nothing
+      // flashes in and out.
+      (function () {
+        try {
+          var ua = navigator.userAgent;
+          var hints = navigator.userAgentData;
+          var brands = (hints && hints.brands) || [];
+          var chromium =
+            brands.some(function (b) { return /Chromium|Google Chrome|Microsoft Edge|Brave|Opera/i.test(b.brand); }) ||
+            (!!window.chrome && /Chrome|Chromium|Edg|OPR/i.test(ua) && !/Firefox|FxiOS/i.test(ua));
+          var mobile = hints && typeof hints.mobile === "boolean"
+            ? hints.mobile
+            : /Android|iPhone|iPad|iPod|Mobile|Tablet|CriOS/i.test(ua);
+          if (chromium && !mobile) document.documentElement.classList.add("ext-installable");
+        } catch (e) { /* no offer is the safe default */ }
+      })();
+    </script>
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>Examples — real MoviPlayer setups you can copy</title>
 
@@ -380,7 +400,7 @@
          and the pages drift apart again. -->
     <link rel="preconnect" href="https://fonts.googleapis.com" />
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
-    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500;700&display=swap" rel="stylesheet" />
+    <link href="https://fonts.googleapis.com/css2?family=DM+Mono:wght@400;500&family=Manrope:wght@400;500;600;700;800&display=swap" rel="stylesheet" />
     <!-- Shared design system — spliced in by the worker AFTER this page's own
          <style> so it is the authority on the site-wide chrome. -->
     <!--__SHARED_CSS__-->
@@ -392,15 +412,21 @@
       <div class="nav-left">
         <a href="/" class="brand" aria-label="MoviPlayer — home">
           <svg class="brand-logo" viewBox="0 0 100 100" aria-hidden="true">
-            <defs>
-              <linearGradient id="brand-logo-grad" x1="0%" y1="0%" x2="100%" y2="100%">
-                <stop offset="0%" stop-color="#8a7cf2"/>
-                <stop offset="100%" stop-color="#6c5dd3"/>
-              </linearGradient>
-            </defs>
-            <circle cx="50" cy="50" r="46" fill="url(#brand-logo-grad)"/>
-            <polygon points="40,29 40,71 73,50" fill="#ffffff"/>
-          </svg>
+              <defs>
+                <linearGradient id="brand-logo-left" gradientUnits="userSpaceOnUse" x1="27" y1="18" x2="27" y2="84"><stop offset="0" stop-color="#6366ff"/><stop offset=".5" stop-color="#3d4dff"/><stop offset="1" stop-color="#1638d2"/></linearGradient>
+                <linearGradient id="brand-logo-top" gradientUnits="userSpaceOnUse" x1="27" y1="20" x2="80" y2="50"><stop offset="0" stop-color="#86b6ff"/><stop offset=".55" stop-color="#4f86ff"/><stop offset="1" stop-color="#14aaff"/></linearGradient>
+                <linearGradient id="brand-logo-bottom" gradientUnits="userSpaceOnUse" x1="27" y1="80" x2="80" y2="50"><stop offset="0" stop-color="#5a4dff"/><stop offset=".5" stop-color="#8e72ff"/><stop offset="1" stop-color="#7cb9ff"/></linearGradient>
+              </defs>
+              <!-- Three ribbons folded into a play mark: the bottom one under the
+                   top at the point, the left one over the top at its corner and
+                   under the bottom at its foot. -->
+              <g fill="none" stroke-linecap="round" stroke-width="17">
+                <path d="M77 52 27 80" stroke="url(#brand-logo-bottom)"/>
+                <path d="M27 20 77 48" stroke="url(#brand-logo-top)"/>
+                <path d="M27 20v60" stroke="url(#brand-logo-left)"/>
+                <path d="M27 80 41 72.2" stroke="url(#brand-logo-bottom)"/>
+              </g>
+            </svg>
           <span class="brand-text">MoviPlayer</span>
         </a>
         <ul class="nav-links">
@@ -411,12 +437,17 @@
         </ul>
       </div>
       <div class="nav-right">
-        <button id="theme-toggle" class="nav-icon-btn" aria-label="Switch Theme" type="button"></button>
-        <a href="https://chromewebstore.google.com/detail/movi-player/ckleeigcopjnpehkjokijokjegknfgej" target="_blank" rel="noopener" class="nav-icon-link" aria-label="Chrome Extension" title="Get Chrome Extension">
-          <svg width="18" height="18" viewBox="0 0 512 512" fill="currentColor"><path d="M188.8,255.93A67.2,67.2,0,1,0,256,188.75,67.38,67.38,0,0,0,188.8,255.93Z"/><path d="M476.75,217.79s0,0,0,.05a206.63,206.63,0,0,0-7-28.84h-.11a202.16,202.16,0,0,1,7.07,29h0a203.5,203.5,0,0,0-7.07-29H314.24c19.05,17,31.36,40.17,31.36,67.05a86.55,86.55,0,0,1-12.31,44.73L231,478.45a2.44,2.44,0,0,1,0,.27V479h0v-.26A224,224,0,0,0,256,480c6.84,0,13.61-.39,20.3-1a222.91,222.91,0,0,0,29.78-4.74C405.68,451.52,480,362.4,480,255.94A225.25,225.25,0,0,0,476.75,217.79Z"/><path d="M256,345.5c-33.6,0-61.6-17.91-77.29-44.79L76,123.05l-.14-.24A224,224,0,0,0,207.4,474.55l0-.05,77.69-134.6A84.13,84.13,0,0,1,256,345.5Z"/><path d="M91.29,104.57l77.35,133.25A89.19,89.19,0,0,1,256,166H461.17a246.51,246.51,0,0,0-25.78-43.94l.12.08A245.26,245.26,0,0,1,461.17,166h.17a245.91,245.91,0,0,0-25.66-44,2.63,2.63,0,0,1-.35-.26A223.93,223.93,0,0,0,91.14,104.34l.14.24Z"/></svg>
-        </a>
+        <label class="nav-search" aria-label="Search the site">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><circle cx="11" cy="11" r="7"></circle><path d="m20 20-3.5-3.5"></path></svg>
+          <input type="search" id="site-search" placeholder="Search anything..." autocomplete="off" spellcheck="false" />
+          <kbd aria-hidden="true">/</kbd>
+        </label>
         <a href="https://github.com/mrujjwalg/movi-player" target="_blank" rel="noopener" class="nav-icon-link" aria-label="GitHub" title="View on GitHub">
           <svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor"><path d="M12 0C5.37 0 0 5.37 0 12c0 5.31 3.435 9.795 8.205 11.385.6.105.825-.255.825-.57 0-.285-.015-1.23-.015-2.235-3.015.555-3.795-.735-4.035-1.41-.135-.345-.72-1.41-1.23-1.695-.42-.225-1.02-.78-.015-.795.945-.015 1.62.87 1.845 1.23 1.08 1.815 2.805 1.305 3.495.99.105-.78.42-1.305.765-1.605-2.67-.3-5.46-1.335-5.46-5.925 0-1.305.465-2.385 1.23-3.225-.12-.3-.54-1.53.12-3.18 0 0 1.005-.315 3.3 1.23.96-.27 1.98-.405 3-.405s2.04.135 3 .405c2.295-1.56 3.3-1.23 3.3-1.23.66 1.65.24 2.88.12 3.18.765.84 1.23 1.905 1.23 3.225 0 4.605-2.805 5.625-5.475 5.925.435.375.81 1.095.81 2.22 0 1.605-.015 2.895-.015 3.3 0 .315.225.69.825.57A12.02 12.02 0 0024 12c0-6.63-5.37-12-12-12z"/></svg>
+        </a>
+        <button id="theme-toggle" class="nav-icon-btn" aria-label="Switch Theme" type="button"></button>
+        <a class="nav-extension-cta" href="https://chromewebstore.google.com/detail/movi-player/ckleeigcopjnpehkjokijokjegknfgej" target="_blank" rel="noopener">
+          <span class="chrome-badge"><svg class="chrome-logo" viewBox="0 0 48 48" aria-hidden="true"><circle cx="24" cy="24" r="12" fill="#fff"/><path d="M24 12h20.78A24 24 0 0 0 3.22 12L13.61 30A12 12 0 0 1 24 12Z" fill="#ea4335"/><path d="M34.39 30 24 48A24 24 0 0 0 44.78 12H24a12 12 0 0 1 10.39 18Z" fill="#fbbc04"/><path d="M13.61 30 3.22 12A24 24 0 0 0 24 48l10.39-18a12 12 0 0 1-20.78 0Z" fill="#34a853"/><circle cx="24" cy="24" r="9.5" fill="#1a73e8"/></svg></span> Get Extension
         </a>
       </div>
     </nav>
@@ -875,17 +906,23 @@ npm install movi-player</code></pre>
           <a href="/" class="brand" aria-label="MoviPlayer — home">
             <svg class="brand-logo" viewBox="0 0 100 100" aria-hidden="true">
               <defs>
-                <linearGradient id="footer-logo-grad" x1="0%" y1="0%" x2="100%" y2="100%">
-                  <stop offset="0%" stop-color="#8a7cf2"/>
-                  <stop offset="100%" stop-color="#6c5dd3"/>
-                </linearGradient>
+                <linearGradient id="footer-logo-left" gradientUnits="userSpaceOnUse" x1="27" y1="18" x2="27" y2="84"><stop offset="0" stop-color="#6366ff"/><stop offset=".5" stop-color="#3d4dff"/><stop offset="1" stop-color="#1638d2"/></linearGradient>
+                <linearGradient id="footer-logo-top" gradientUnits="userSpaceOnUse" x1="27" y1="20" x2="80" y2="50"><stop offset="0" stop-color="#86b6ff"/><stop offset=".55" stop-color="#4f86ff"/><stop offset="1" stop-color="#14aaff"/></linearGradient>
+                <linearGradient id="footer-logo-bottom" gradientUnits="userSpaceOnUse" x1="27" y1="80" x2="80" y2="50"><stop offset="0" stop-color="#5a4dff"/><stop offset=".5" stop-color="#8e72ff"/><stop offset="1" stop-color="#7cb9ff"/></linearGradient>
               </defs>
-              <circle cx="50" cy="50" r="46" fill="url(#footer-logo-grad)"/>
-              <polygon points="40,29 40,71 73,50" fill="#ffffff"/>
+              <!-- Three ribbons folded into a play mark: the bottom one under the
+                   top at the point, the left one over the top at its corner and
+                   under the bottom at its foot. -->
+              <g fill="none" stroke-linecap="round" stroke-width="17">
+                <path d="M77 52 27 80" stroke="url(#footer-logo-bottom)"/>
+                <path d="M27 20 77 48" stroke="url(#footer-logo-top)"/>
+                <path d="M27 20v60" stroke="url(#footer-logo-left)"/>
+                <path d="M27 80 41 72.2" stroke="url(#footer-logo-bottom)"/>
+              </g>
             </svg>
             <span class="brand-text">MoviPlayer</span>
           </a>
-          <p>Made with <a href="https://github.com/mrujjwalg/movi-player" target="_blank" rel="noopener">movi-player</a> &mdash; an open-source video player that runs in your browser.</p>
+          <p>Play your videos. Your way.</p>
         </div>
         <div class="site-footer-links">
           <a href="/">Player</a>
@@ -901,6 +938,11 @@ npm install movi-player</code></pre>
           <a href="/docs/privacy-policy" target="_blank" rel="noopener">Privacy Policy</a>
           <a href="/docs/terms-of-service" target="_blank" rel="noopener">Terms of Service</a>
           <a href="mailto:abuse@moviplayer.com">Report abuse / copyright</a>
+        </div>
+        <div class="site-footer-social" aria-label="MoviPlayer elsewhere">
+          <a href="https://github.com/mrujjwalg/movi-player" target="_blank" rel="noopener" aria-label="GitHub" title="GitHub"><svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M12 .5C5.65.5.5 5.65.5 12a11.5 11.5 0 0 0 7.86 10.92c.58.1.79-.25.79-.56v-2c-3.2.7-3.87-1.37-3.87-1.37-.53-1.33-1.28-1.69-1.28-1.69-1.05-.72.08-.7.08-.7 1.16.08 1.77 1.19 1.77 1.19 1.03 1.77 2.7 1.26 3.36.96.1-.75.4-1.26.73-1.55-2.55-.29-5.24-1.28-5.24-5.69 0-1.26.45-2.28 1.19-3.09-.12-.29-.52-1.46.11-3.05 0 0 .97-.31 3.17 1.18a11 11 0 0 1 5.77 0c2.2-1.49 3.17-1.18 3.17-1.18.63 1.59.23 2.76.11 3.05.74.81 1.19 1.83 1.19 3.09 0 4.42-2.7 5.39-5.26 5.68.41.36.78 1.06.78 2.14v3.17c0 .31.21.67.8.56A11.5 11.5 0 0 0 23.5 12C23.5 5.65 18.35.5 12 .5z"/></svg></a>
+          <a href="https://chromewebstore.google.com/detail/movi-player/ckleeigcopjnpehkjokijokjegknfgej" target="_blank" rel="noopener" aria-label="Chrome Web Store" title="Chrome Web Store"><svg viewBox="0 0 48 48" aria-hidden="true"><defs><mask id="footer-chrome-gaps"><rect width="48" height="48" fill="#fff"/><g fill="none" stroke="#000" stroke-width="2.6"><path d="M24 12h20.78A24 24 0 0 0 3.22 12L13.61 30A12 12 0 0 1 24 12Z"/><path d="M34.39 30 24 48A24 24 0 0 0 44.78 12H24a12 12 0 0 1 10.39 18Z"/><path d="M13.61 30 3.22 12A24 24 0 0 0 24 48l10.39-18a12 12 0 0 1-20.78 0Z"/></g></mask></defs><g fill="currentColor" mask="url(#footer-chrome-gaps)"><path d="M24 12h20.78A24 24 0 0 0 3.22 12L13.61 30A12 12 0 0 1 24 12Z"/><path d="M34.39 30 24 48A24 24 0 0 0 44.78 12H24a12 12 0 0 1 10.39 18Z"/><path d="M13.61 30 3.22 12A24 24 0 0 0 24 48l10.39-18a12 12 0 0 1-20.78 0Z"/><circle cx="24" cy="24" r="9"/></g></svg></a>
+          <a href="https://www.npmjs.com/package/movi-player" target="_blank" rel="noopener" aria-label="npm" title="npm"><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="1.5" y="6.5" width="21" height="11" rx="2.5" fill="currentColor"/><text x="12" y="15.2" text-anchor="middle" font-family="Arial, sans-serif" font-size="7.4" font-weight="700" fill="#f8fbff">npm</text></svg></a>
         </div>
       </div>
       <div class="site-footer-base">
@@ -1100,5 +1142,218 @@ npm install movi-player</code></pre>
         });
       });
     </script>
-  </body>
+      <!-- Site search — the same script on every page with the nav (keep the
+         copies in index.html, examples.html and compare.html identical).
+         Matches this page's own headings and FAQ first, then its body text,
+         then the site's other pages and docs; ↑ ↓ to move, Enter to go,
+         Esc to close, "/" to focus from anywhere. -->
+    <script>
+      (function () {
+        var input = document.getElementById("site-search");
+        if (!input) return;
+        var box = input.closest(".nav-search");
+        if (!box) return;
+
+        var SITE = [
+          { t: "Player", d: "Play any video right in your browser", u: "/", k: "home play url file folder" },
+          { t: "Examples", d: "Live setups: MKV, HLS, DASH, 360°, audio, split sources", u: "/examples", k: "demo hls dash vr 360 audio embed code" },
+          { t: "Compare to <video>", d: "Your file in MoviPlayer next to the native video tag", u: "/compare", k: "native video tag side by side mkv tracks subtitles" },
+          { t: "Google Drive", d: "Play videos straight from your Drive", u: "/drive", k: "drive google cloud" },
+          { t: "Documentation", d: "Guides, attributes and API reference", u: "/docs", k: "docs guide help api", ext: true },
+          { t: "<movi-player> element API", d: "Attributes, properties, methods and events", u: "/docs/api/element", k: "attributes controls addcontrol events", ext: true },
+          { t: "MoviPlayer API", d: "Programmatic playback without the element", u: "/docs/api/player", k: "programmatic canvas typescript", ext: true },
+          { t: "Chrome extension", d: "Open any video link with MoviPlayer", u: "https://chromewebstore.google.com/detail/movi-player/ckleeigcopjnpehkjokijokjegknfgej", k: "chrome extension install add browser", ext: true },
+          { t: "VS Code extension", d: "Preview videos inside VS Code", u: "https://marketplace.visualstudio.com/items?itemName=mrujjwalg.movi-player-vscode", k: "vscode editor", ext: true },
+          { t: "npm package", d: "npm install movi-player", u: "https://www.npmjs.com/package/movi-player", k: "npm install package cdn jsdelivr", ext: true },
+          { t: "GitHub", d: "Source code, issues and releases", u: "https://github.com/mrujjwalg/movi-player", k: "source code issues open source", ext: true },
+          { t: "Privacy Policy", d: "What MoviPlayer does and doesn't collect", u: "/docs/privacy-policy", k: "privacy data", ext: true },
+        ];
+
+        var norm = function (s) { return (s || "").toLowerCase().replace(/\s+/g, " ").trim(); };
+        var SKIP = "nav, footer, dialog, movi-player, .ext-prompt-wrap, .dev-log-panel, .nav-search, script, style, [hidden]";
+
+        // What this page has to offer, read once the page is there.
+        var local = null;
+        function readPage() {
+          if (local) return local;
+          local = [];
+          var seen = {};
+          document.querySelectorAll("h1, h2, h3, summary").forEach(function (el) {
+            if (el.closest(SKIP)) return;
+            // innerText: what is on screen — a <br> is a space, and text the
+            // stylesheet hides is not something to point anyone at.
+            var title = (el.innerText || "").replace(/\s+/g, " ").trim();
+            if (!title || title.length > 140 || seen[title]) return;
+            seen[title] = 1;
+            var section = el.closest("section");
+            var head = section && section.querySelector("h2");
+            var context = head && head !== el ? head.innerText.replace(/\s+/g, " ").trim() : "";
+            var body = "";
+            var details = el.closest("details");
+            if (details) body = details.textContent;
+            else if (el.tagName !== "H2" && el.parentElement) body = el.parentElement.innerText;
+            local.push({ t: title, d: context, el: details || el, body: norm(body) });
+          });
+          document.querySelectorAll("section").forEach(function (section) {
+            if (section.closest(SKIP)) return;
+            var head = section.querySelector("h2, h1");
+            if (!head) return;
+            local.push({ t: head.innerText.replace(/\s+/g, " ").trim(), d: "", el: head, body: norm(section.innerText), sectionOnly: true });
+          });
+          return local;
+        }
+
+        function snippet(text, word) {
+          var i = text.indexOf(word);
+          if (i < 0) return "";
+          var start = Math.max(0, i - 36);
+          return (start ? "…" : "") + text.slice(start, i + word.length + 48).trim() + "…";
+        }
+
+        function search(q) {
+          var words = norm(q).split(" ").filter(Boolean);
+          if (!words.length) return [];
+          var every = function (hay) { return words.every(function (w) { return hay.indexOf(w) >= 0; }); };
+          var out = [];
+          readPage().forEach(function (e) {
+            var title = norm(e.t);
+            if (!e.sectionOnly && every(title + " " + norm(e.d))) {
+              out.push({ score: title.indexOf(words[0]) === 0 ? 0 : 1, t: e.t, d: e.d || "On this page", el: e.el, kind: "This page" });
+            } else if (every(e.body)) {
+              out.push({ score: e.sectionOnly ? 4 : 3, t: e.t, d: snippet(e.body, words[0]) || e.d, el: e.el, kind: "This page" });
+            }
+          });
+          SITE.forEach(function (p) {
+            if (p.u === location.pathname) return;
+            var hay = norm(p.t + " " + p.d + " " + p.k);
+            if (every(hay)) out.push({ score: norm(p.t).indexOf(words[0]) === 0 ? 2 : 5, t: p.t, d: p.d, u: p.u, ext: p.ext, kind: p.ext ? "Link" : "Page" });
+          });
+          out.sort(function (a, b) { return a.score - b.score; });
+          var seen = {};
+          return out.filter(function (r) {
+            var key = r.t + "|" + (r.u || "");
+            if (seen[key]) return false;
+            seen[key] = 1;
+            return true;
+          }).slice(0, 8);
+        }
+
+        var list = document.createElement("div");
+        list.className = "nav-search-results";
+        list.id = "site-search-results";
+        list.setAttribute("role", "listbox");
+        list.hidden = true;
+        box.appendChild(list);
+        input.setAttribute("role", "combobox");
+        input.setAttribute("aria-controls", list.id);
+        input.setAttribute("aria-expanded", "false");
+        input.setAttribute("aria-autocomplete", "list");
+
+        var results = [];
+        var active = -1;
+
+        function close() {
+          list.hidden = true;
+          input.setAttribute("aria-expanded", "false");
+          active = -1;
+        }
+
+        function mark() {
+          Array.prototype.forEach.call(list.children, function (row, i) {
+            var on = i === active;
+            row.classList.toggle("is-active", on);
+            row.setAttribute("aria-selected", on ? "true" : "false");
+            if (on) row.scrollIntoView({ block: "nearest" });
+          });
+        }
+
+        function render() {
+          results = search(input.value);
+          list.textContent = "";
+          active = results.length ? 0 : -1;
+          if (!norm(input.value)) return close();
+          if (!results.length) {
+            var none = document.createElement("a");
+            none.className = "nav-search-empty";
+            none.href = "/docs";
+            none.target = "_blank";
+            none.rel = "noopener";
+            none.textContent = "Nothing here for “" + input.value.trim() + "” — try the docs →";
+            list.appendChild(none);
+          }
+          results.forEach(function (r, i) {
+            var row = document.createElement("a");
+            row.className = "nav-search-result";
+            row.setAttribute("role", "option");
+            row.href = r.u || "#";
+            if (r.ext && /^https?:/.test(r.u)) { row.target = "_blank"; row.rel = "noopener"; }
+            var title = document.createElement("strong");
+            title.textContent = r.t;
+            var kind = document.createElement("span");
+            kind.className = "nav-search-kind";
+            kind.textContent = r.kind;
+            var desc = document.createElement("small");
+            desc.textContent = r.d || "";
+            row.append(title, kind, desc);
+            row.addEventListener("mousedown", function (e) { e.preventDefault(); });
+            row.addEventListener("mouseenter", function () { active = i; mark(); });
+            row.addEventListener("click", function (e) { go(i, e); });
+            list.appendChild(row);
+          });
+          list.hidden = false;
+          input.setAttribute("aria-expanded", "true");
+          mark();
+        }
+
+        function go(i, e) {
+          var r = results[i];
+          if (!r) return;
+          if (r.el) {
+            if (e) e.preventDefault();
+            var details = r.el.tagName === "DETAILS" ? r.el : null;
+            if (details) details.open = true;
+            var top = r.el.getBoundingClientRect().top + window.scrollY - 96;
+            window.scrollTo({ top: top, behavior: "smooth" });
+            r.el.classList.remove("search-hit");
+            void r.el.offsetWidth;
+            r.el.classList.add("search-hit");
+            setTimeout(function () { r.el.classList.remove("search-hit"); }, 1800);
+            close();
+            input.blur();
+          } else if (!e) {
+            if (r.ext && /^https?:/.test(r.u)) window.open(r.u, "_blank", "noopener");
+            else location.href = r.u;
+          }
+        }
+
+        input.addEventListener("input", render);
+        input.addEventListener("focus", function () { if (norm(input.value)) render(); });
+        input.addEventListener("blur", function () { setTimeout(close, 120); });
+        input.addEventListener("keydown", function (e) {
+          if (e.key === "ArrowDown" || e.key === "ArrowUp") {
+            if (list.hidden) render();
+            if (!results.length) return;
+            e.preventDefault();
+            active = (active + (e.key === "ArrowDown" ? 1 : results.length - 1)) % results.length;
+            mark();
+          } else if (e.key === "Enter") {
+            e.preventDefault();
+            if (list.hidden) render();
+            go(active < 0 ? 0 : active);
+          } else if (e.key === "Escape") {
+            if (!list.hidden) { e.preventDefault(); close(); }
+            else input.blur();
+          }
+        });
+        document.addEventListener("keydown", function (e) {
+          if (e.key !== "/" || e.metaKey || e.ctrlKey || e.altKey) return;
+          var t = e.target;
+          if (t && (t.isContentEditable || /^(INPUT|TEXTAREA|SELECT)$/.test(t.tagName) || (t.closest && t.closest("movi-player")))) return;
+          e.preventDefault();
+          input.focus();
+          input.select();
+        });
+      })();
+    </script>
+</body>
 </html>

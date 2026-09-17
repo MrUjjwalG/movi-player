@@ -7,6 +7,7 @@ import SITEMAP from "./sitemap.xml";
 import ROBOTS from "./robots.txt";
 import LLMS from "./llms.txt";
 import SHARED_CSS from "./shared.css";
+import CINEMATIC_HERO from "./cinematic-hero-v2.webp";
 
 const BUILD_VERSION = "__BUILD_VERSION__";
 
@@ -311,14 +312,16 @@ export default {
   async fetch(request, env) {
     const url = new URL(request.url);
     const path = url.pathname;
+    const requestHost = (request.headers.get("host") || "").split(":")[0];
 
     // One canonical origin: https, no www. The www half was already here; the
     // http half was not, so http://moviplayer.com/ answered 200 with the page
     // and Search Console filed it as a second copy that happened to carry the
     // right canonical. A redirect says it once, at the door.
     if (
-      url.hostname === "www.moviplayer.com" ||
-      (url.hostname === "moviplayer.com" && url.protocol === "http:")
+      !env.LOCAL_DEV &&
+      (requestHost === "www.moviplayer.com" ||
+        (requestHost === "moviplayer.com" && url.protocol === "http:"))
     ) {
       return Response.redirect(`https://moviplayer.com${path}${url.search}`, 301);
     }
@@ -464,6 +467,14 @@ export default {
     }
     if (path === "/llms.txt") {
       return new Response(LLMS, { headers: { "Content-Type": "text/plain;charset=UTF-8", "Cache-Control": "public, max-age=86400" } });
+    }
+    if (path === "/cinematic-hero-v2.webp") {
+      return new Response(CINEMATIC_HERO, {
+        headers: {
+          "Content-Type": "image/webp",
+          "Cache-Control": "public, max-age=31536000, immutable",
+        },
+      });
     }
 
     // --- Extension install/usage badges, proxied from upstream badge
@@ -688,7 +699,7 @@ a:hover{text-decoration:underline}
 <body>
 <div class="wrap">
 <div class="brand">
-<svg width="26" height="26" viewBox="0 0 100 100" aria-hidden="true"><defs><linearGradient id="g" x1="0%" y1="0%" x2="100%" y2="100%"><stop offset="0%" stop-color="#8a7cf2"/><stop offset="100%" stop-color="#6c5dd3"/></linearGradient></defs><circle cx="50" cy="50" r="46" fill="url(#g)"/><polygon points="40,29 40,71 73,50" fill="#ffffff"/></svg>
+<svg viewBox="0 0 100 100" width="26" height="26" aria-hidden="true"><defs><linearGradient id="logoL" gradientUnits="userSpaceOnUse" x1="27" y1="18" x2="27" y2="84"><stop offset="0" stop-color="#6366ff"/><stop offset=".5" stop-color="#3d4dff"/><stop offset="1" stop-color="#1638d2"/></linearGradient><linearGradient id="logoT" gradientUnits="userSpaceOnUse" x1="27" y1="20" x2="80" y2="50"><stop offset="0" stop-color="#86b6ff"/><stop offset=".55" stop-color="#4f86ff"/><stop offset="1" stop-color="#14aaff"/></linearGradient><linearGradient id="logoB" gradientUnits="userSpaceOnUse" x1="27" y1="80" x2="80" y2="50"><stop offset="0" stop-color="#5a4dff"/><stop offset=".5" stop-color="#8e72ff"/><stop offset="1" stop-color="#7cb9ff"/></linearGradient></defs><g fill="none" stroke-linecap="round" stroke-width="17"><path d="M77 52 27 80" stroke="url(#logoB)"/><path d="M27 20 77 48" stroke="url(#logoT)"/><path d="M27 20v60" stroke="url(#logoL)"/><path d="M27 80 41 72.2" stroke="url(#logoB)"/></g></svg>
 <span class="brand-name">MoviPlayer</span>
 </div>
 <h1>This embed is out of date</h1>
@@ -783,7 +794,7 @@ a:hover{text-decoration:underline}
 <body>
 <div>
 <div class="brand">
-<svg width="40" height="40" viewBox="0 0 100 100" aria-hidden="true"><defs><linearGradient id="g" x1="0%" y1="0%" x2="100%" y2="100%"><stop offset="0%" stop-color="#8a7cf2"/><stop offset="100%" stop-color="#6c5dd3"/></linearGradient></defs><circle cx="50" cy="50" r="46" fill="url(#g)"/><polygon points="40,29 40,71 73,50" fill="#ffffff"/></svg>
+<svg viewBox="0 0 100 100" width="40" height="40" aria-hidden="true"><defs><linearGradient id="logoL" gradientUnits="userSpaceOnUse" x1="27" y1="18" x2="27" y2="84"><stop offset="0" stop-color="#6366ff"/><stop offset=".5" stop-color="#3d4dff"/><stop offset="1" stop-color="#1638d2"/></linearGradient><linearGradient id="logoT" gradientUnits="userSpaceOnUse" x1="27" y1="20" x2="80" y2="50"><stop offset="0" stop-color="#86b6ff"/><stop offset=".55" stop-color="#4f86ff"/><stop offset="1" stop-color="#14aaff"/></linearGradient><linearGradient id="logoB" gradientUnits="userSpaceOnUse" x1="27" y1="80" x2="80" y2="50"><stop offset="0" stop-color="#5a4dff"/><stop offset=".5" stop-color="#8e72ff"/><stop offset="1" stop-color="#7cb9ff"/></linearGradient></defs><g fill="none" stroke-linecap="round" stroke-width="17"><path d="M77 52 27 80" stroke="url(#logoB)"/><path d="M27 20 77 48" stroke="url(#logoT)"/><path d="M27 20v60" stroke="url(#logoL)"/><path d="M27 80 41 72.2" stroke="url(#logoB)"/></g></svg>
 <span class="brand-name">MoviPlayer</span>
 </div>
 <h1>This is an embed-only page</h1>
@@ -919,7 +930,7 @@ const BADGE_SOURCES = {
   chrome:
     "https://img.shields.io/chrome-web-store/users/ckleeigcopjnpehkjokijokjegknfgej?label=Chrome%20Web%20Store&color=7c6cf0&labelColor=23232e",
   vscode:
-    "https://vsmarketplacebadges.dev/downloads-short/mrujjwalg.movi-player-vscode.svg?label=VS%20Code&color=7c6cf0",
+    "https://vsmarketplacebadges.dev/downloads-short/mrujjwalg.movi-player-vscode.svg?label=VS%20Code&color=7c6cf0&labelColor=23232e",
   npm:
     "https://img.shields.io/npm/dt/movi-player?label=npm%20downloads&color=7c6cf0&labelColor=23232e",
 };

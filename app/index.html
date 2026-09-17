@@ -2,6 +2,26 @@
 <html lang="en">
   <head>
     <meta charset="UTF-8" />
+    <script>
+      // The extension is offered only where it installs: desktop Chromium
+      // (Chrome, Edge, Brave, Opera, Arc…). Everything that offers it hides
+      // without this class — see app/shared.css. In the head so nothing
+      // flashes in and out.
+      (function () {
+        try {
+          var ua = navigator.userAgent;
+          var hints = navigator.userAgentData;
+          var brands = (hints && hints.brands) || [];
+          var chromium =
+            brands.some(function (b) { return /Chromium|Google Chrome|Microsoft Edge|Brave|Opera/i.test(b.brand); }) ||
+            (!!window.chrome && /Chrome|Chromium|Edg|OPR/i.test(ua) && !/Firefox|FxiOS/i.test(ua));
+          var mobile = hints && typeof hints.mobile === "boolean"
+            ? hints.mobile
+            : /Android|iPhone|iPad|iPod|Mobile|Tablet|CriOS/i.test(ua);
+          if (chromium && !mobile) document.documentElement.classList.add("ext-installable");
+        } catch (e) { /* no offer is the safe default */ }
+      })();
+    </script>
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>Online Video Player — Play MKV, HEVC, AV1, HDR Videos Free in Browser | MoviPlayer</title>
 
@@ -3894,14 +3914,14 @@
     <a class="skip-link" href="#watch">Skip to player</a>
     <style id="ott-redesign">
       :root {
-        --accent: #e85b4d;
-        --accent-hover: #f06b5d;
-        --accent-glow: rgba(232, 91, 77, 0.26);
+        --accent: #7c6cf0;
+        --accent-hover: #9184f5;
+        --accent-glow: rgba(124, 108, 240, 0.3);
         --font-family: "Manrope", system-ui, -apple-system, sans-serif;
-        --bg-base: #080b0c;
-        --bg-elevated: #111516;
-        --bg-card: #121718;
-        --bg-surface: rgba(255, 255, 255, 0.045);
+        --bg-base: #20202a;
+        --bg-elevated: #292936;
+        --bg-card: #2d2c3a;
+        --bg-surface: rgba(255, 255, 255, 0.075);
         --text-primary: #f5f7f5;
         --text-secondary: #a8b0ad;
         --text-muted: #69716f;
@@ -3910,8 +3930,8 @@
         --input-bg: rgba(5, 8, 9, 0.78);
         --input-focus-bg: rgba(5, 8, 9, 0.94);
         --input-border: rgba(255, 255, 255, 0.15);
-        --badge-bg: rgba(232, 91, 77, 0.13);
-        --badge-text: #ff8c80;
+        --badge-bg: rgba(124, 108, 240, 0.16);
+        --badge-text: #b6acf9;
         --shadow-heavy: 0 32px 90px rgba(0, 0, 0, 0.46);
       }
 
@@ -3927,13 +3947,13 @@
         --border-hover: rgba(17, 23, 22, 0.24);
         --input-bg: rgba(255, 255, 255, 0.92);
         --input-focus-bg: #ffffff;
-        --badge-bg: rgba(205, 62, 49, 0.1);
-        --badge-text: #b83429;
+        --badge-bg: rgba(108, 93, 211, 0.12);
+        --badge-text: #5e4fc4;
       }
 
       body {
         background:
-          radial-gradient(circle at 15% 25%, rgba(38, 59, 57, 0.14), transparent 28rem),
+          radial-gradient(circle at 15% 25%, rgba(124, 108, 240, 0.12), transparent 32rem),
           var(--bg-base);
       }
 
@@ -3964,20 +3984,24 @@
       .navbar {
         height: 76px;
         padding: 0 clamp(1.25rem, 4vw, 4rem);
-        background: linear-gradient(180deg, rgba(5, 8, 9, 0.92), rgba(5, 8, 9, 0));
-        border-bottom: 0;
+        background: linear-gradient(180deg, rgba(15, 14, 22, 0.84), rgba(15, 14, 22, 0));
+        border-bottom: 1px solid rgba(255, 255, 255, 0.06);
+        box-shadow: none;
         backdrop-filter: none;
       }
+      .navbar::after { display: none; }
       .navbar.scrolled {
         height: 64px;
-        background: rgba(8, 11, 12, 0.86);
+        background: rgba(23, 23, 31, 0.88);
         border-bottom: 1px solid var(--border-subtle);
+        box-shadow: none;
         backdrop-filter: blur(22px) saturate(1.2);
       }
       [data-theme="light"] .navbar,
       [data-theme="light"] .navbar.scrolled {
         background: rgba(240, 241, 237, 0.88);
         border-bottom-color: var(--border-subtle);
+        box-shadow: none;
       }
       .brand-logo {
         width: 31px;
@@ -4020,18 +4044,19 @@
       }
       .hero-bg {
         background-image:
-          linear-gradient(90deg, rgba(5, 8, 9, 0.98) 0%, rgba(5, 8, 9, 0.72) 35%, rgba(5, 8, 9, 0.1) 70%),
+          linear-gradient(90deg, rgba(18, 17, 28, 0.86) 0%, rgba(18, 17, 28, 0.5) 38%, rgba(18, 17, 28, 0.04) 72%),
           linear-gradient(0deg, var(--bg-base) 0%, transparent 35%),
-          url("/cinematic-hero.webp");
+          url("/cinematic-hero-v2.webp");
         background-position: center;
         background-size: cover;
+        filter: brightness(1.18) saturate(0.96);
         transform: scale(1.01);
       }
       .hero-bg::after {
         content: "";
         position: absolute;
         inset: 0;
-        background: radial-gradient(circle at 76% 22%, transparent 0 13%, rgba(5, 8, 9, 0.12) 42%, rgba(5, 8, 9, 0.42) 100%);
+        background: radial-gradient(circle at 76% 22%, transparent 0 18%, rgba(18, 17, 28, 0.04) 48%, rgba(18, 17, 28, 0.2) 100%);
       }
       .hero::after {
         background: linear-gradient(to bottom, transparent 55%, var(--bg-base) 100%);
@@ -4065,10 +4090,10 @@
         background: var(--accent);
       }
       .hero h1 {
-        max-width: 9.5ch;
+        max-width: 13ch;
         margin: 0;
         color: #f7f8f6;
-        font-size: clamp(3.7rem, 6.8vw, 7.2rem);
+        font-size: clamp(3.7rem, 5.8vw, 5.8rem);
         font-weight: 700;
         line-height: 0.88;
         letter-spacing: -0.072em;
@@ -4078,6 +4103,9 @@
         color: #f7f8f6;
         background: none;
         -webkit-text-fill-color: currentColor;
+      }
+      @media (min-width: 769px) {
+        .hero h1 .highlight { white-space: nowrap; }
       }
       .hero-tagline {
         max-width: 56ch;
@@ -4114,7 +4142,7 @@
         padding: clamp(1.15rem, 2vw, 1.6rem);
         border: 1px solid rgba(255, 255, 255, 0.13);
         border-radius: 1.15rem;
-        background: rgba(11, 15, 16, 0.72);
+        background: rgba(46, 43, 64, 0.78);
         box-shadow: 0 32px 80px rgba(0, 0, 0, 0.38), inset 0 1px rgba(255, 255, 255, 0.05);
         backdrop-filter: blur(26px) saturate(1.18);
       }
@@ -4153,7 +4181,7 @@
         margin: 0;
         border-color: rgba(255, 255, 255, 0.13);
         border-radius: 0.68rem;
-        background: rgba(0, 0, 0, 0.34);
+        background: rgba(17, 16, 26, 0.58);
         box-shadow: none;
       }
       .url-bar.hero-url-bar:focus-within {
@@ -4271,7 +4299,7 @@
       movi-player {
         --movi-accent: var(--accent);
         --movi-progress-color: var(--accent);
-        --movi-btn-hover-bg: rgba(232, 91, 77, 0.18);
+        --movi-btn-hover-bg: rgba(124, 108, 240, 0.2);
       }
 
       .watch-rail {
@@ -4309,13 +4337,13 @@
         background: linear-gradient(180deg, transparent 25%, rgba(4, 6, 7, 0.86) 100%);
       }
       .watch-card--file::before {
-        background: radial-gradient(circle at 70% 28%, rgba(216, 113, 74, 0.7), transparent 9%), radial-gradient(circle at 64% 34%, rgba(82, 116, 110, 0.7), transparent 28%), linear-gradient(145deg, #1c2828, #0d1112 70%);
+        background: radial-gradient(circle at 70% 28%, rgba(163, 148, 255, 0.74), transparent 10%), radial-gradient(circle at 64% 34%, rgba(92, 83, 155, 0.62), transparent 30%), linear-gradient(145deg, #343044, #20202a 70%);
       }
       .watch-card--link::before {
-        background: radial-gradient(circle at 73% 30%, rgba(184, 202, 194, 0.58), transparent 7%), linear-gradient(125deg, #253433, #111717 58%, #0c0e0f);
+        background: radial-gradient(circle at 73% 30%, rgba(210, 205, 255, 0.66), transparent 8%), linear-gradient(125deg, #3a3950, #242331 58%, #1c1c26);
       }
       .watch-card--folder::before {
-        background: radial-gradient(circle at 72% 32%, rgba(232, 91, 77, 0.55), transparent 13%), linear-gradient(145deg, #3a2522, #171211 62%, #0e0f0f);
+        background: radial-gradient(circle at 72% 32%, rgba(124, 108, 240, 0.62), transparent 14%), linear-gradient(145deg, #3b3151, #272131 62%, #1d1c26);
       }
       .watch-card:hover {
         transform: translateY(-5px) scale(1.012);
@@ -4368,12 +4396,13 @@
         line-height: 1.75;
       }
       .features-grid { gap: 0.75rem; }
+      .features-grid--2up { grid-template-columns: repeat(2, minmax(0, 1fr)); }
       .feature-card {
         min-height: 210px;
         padding: clamp(1.35rem, 2.3vw, 2rem);
         border-color: transparent;
         border-radius: 0.75rem;
-        background: #111617;
+        background: #2c2b38;
       }
       [data-theme="light"] .feature-card { background: #e4e7e2; }
       .feature-card::before {
@@ -4381,7 +4410,7 @@
         width: 15rem;
         height: 15rem;
         border-radius: 50%;
-        background: radial-gradient(circle, rgba(232, 91, 77, 0.15), transparent 68%);
+        background: radial-gradient(circle, rgba(124, 108, 240, 0.2), transparent 68%);
         opacity: 1;
       }
       .feature-card:hover {
@@ -4402,7 +4431,7 @@
         overflow: hidden;
         border-radius: 0.8rem;
         border-color: var(--border-subtle);
-        background: #101516;
+        background: #2a2936;
       }
       [data-theme="light"] .spec-panel { background: #e4e7e2; }
       .spec-grid { gap: 1px; background: var(--border-subtle); }
@@ -4412,7 +4441,7 @@
       .faq-item > div { padding: 0 0 1.25rem; }
 
       .drop-overlay {
-        background: rgba(5, 8, 9, 0.92);
+        background: rgba(22, 21, 31, 0.9);
         backdrop-filter: blur(18px);
       }
       .drop-overlay-content {
@@ -4423,7 +4452,8 @@
       .drop-overlay-content svg { stroke: var(--accent); }
       .to-player { border-radius: 0.65rem; background: var(--accent); }
 
-      .site-footer { margin-top: 5rem; background: #050708; }
+
+      .site-footer { margin-top: 5rem; background: #191922; }
       [data-theme="light"] .site-footer { background: #dde0db; }
 
       @media (max-width: 980px) {
@@ -4447,7 +4477,7 @@
           background-image:
             linear-gradient(90deg, rgba(5, 8, 9, 0.68), rgba(5, 8, 9, 0.12)),
             linear-gradient(0deg, var(--bg-base) 0%, rgba(5, 8, 9, 0.12) 60%),
-            url("/cinematic-hero.webp");
+            url("/cinematic-hero-v2.webp");
           background-position: 68% top;
         }
         .hero-content { gap: 2rem; }
@@ -4483,6 +4513,1325 @@
         .navbar { transition: none; }
       }
     </style>
+    <style id="mockup-redesign">
+      /* Dark by default, light under [data-theme="light"] — the switch the
+         theme script flips. These tokens override the older blocks above;
+         the palettes match app/shared.css. */
+      :root,
+      [data-theme="dark"] {
+        color-scheme: dark;
+        --accent: #7c75ff;
+        --accent-hover: #948eff;
+        --accent-glow: rgba(124, 117, 255, 0.3);
+        --bg-base: #0a0f1e;
+        --bg-elevated: #151e34;
+        --bg-card: #121a2e;
+        --bg-surface: #141d31;
+        --text-primary: #eef2ff;
+        --text-secondary: #aab4cc;
+        --text-muted: #7c88a3;
+        --border-subtle: rgba(255, 255, 255, 0.08);
+        --border-hover: rgba(255, 255, 255, 0.18);
+        --input-bg: #10172a;
+        --input-focus-bg: #121a2e;
+        --input-border: rgba(255, 255, 255, 0.12);
+        --badge-bg: rgba(124, 117, 255, 0.16);
+        --badge-text: #b3aeff;
+        --shadow-heavy: 0 26px 80px rgba(0, 0, 0, 0.45);
+      }
+      [data-theme="light"] {
+        color-scheme: light;
+        --accent: #635bff;
+        --accent-hover: #4d47ed;
+        --accent-glow: rgba(80, 91, 255, 0.2);
+        --bg-base: #f8fbff;
+        --bg-elevated: #ffffff;
+        --bg-card: #ffffff;
+        --bg-surface: #f2f6fd;
+        --text-primary: #09132e;
+        --text-secondary: #4d5d7c;
+        --text-muted: #74819a;
+        --border-subtle: #e5ebf5;
+        --border-hover: #ccd7e8;
+        --input-bg: #ffffff;
+        --input-focus-bg: #ffffff;
+        --input-border: #dce5f2;
+        --badge-bg: #eef0ff;
+        --badge-text: #554de8;
+        --shadow-heavy: 0 26px 80px rgba(44, 67, 120, 0.13);
+      }
+
+      html { scroll-behavior: smooth; background: #0a0f1e; }
+      [data-theme="light"] { background: #f8fbff; }
+      [data-theme="light"] body {
+        color: var(--text-primary);
+        background:
+          radial-gradient(circle at 8% 17%, rgba(116, 174, 255, 0.08), transparent 23rem),
+          radial-gradient(circle at 91% 28%, rgba(132, 100, 255, 0.08), transparent 25rem),
+          #f8fbff;
+      }
+      body::after { opacity: 0.012; }
+
+      .navbar,
+      .navbar.scrolled,
+      [data-theme="light"] .navbar,
+      [data-theme="light"] .navbar.scrolled {
+        height: 74px;
+        padding: 0 max(2rem, calc((100vw - 1400px) / 2));
+        color: #0b1634;
+        background: rgba(248, 251, 255, 0.88);
+        border-bottom: 1px solid rgba(213, 224, 240, 0.72);
+        box-shadow: none;
+        backdrop-filter: blur(22px) saturate(1.25);
+      }
+      .navbar::after { display: none; }
+      .nav-left { gap: clamp(2rem, 4vw, 4.7rem); }
+      .brand { flex: 0 0 auto; }
+      .brand-logo { width: 32px; height: 32px; overflow: visible; }
+      .brand-logo circle { display: none; }
+      .brand-text,
+      [data-theme="light"] .brand-text {
+        color: #0a1740;
+        font-size: 1.24rem;
+        font-weight: 800;
+        letter-spacing: -0.05em;
+      }
+      .nav-links { gap: 0.1rem; }
+      .nav-links a {
+        padding: 0.55rem 0.65rem;
+        border-radius: 0.55rem;
+        color: #52617e;
+        font-size: 0.72rem;
+        font-weight: 600;
+        letter-spacing: -0.01em;
+      }
+      .nav-links a:hover { color: #101d3c; background: #eef3fb; }
+      .nav-links a.active,
+      [data-theme="light"] .nav-links a.active { color: #0b1734; background: transparent; }
+      .nav-right { gap: 0.65rem; }
+      .nav-right > .nav-icon-link { display: none; }
+      .nav-search {
+        width: clamp(170px, 16vw, 250px);
+        height: 38px;
+        display: flex;
+        align-items: center;
+        gap: 0.55rem;
+        padding: 0 0.85rem;
+        border: 1px solid #e0e7f2;
+        border-radius: 999px;
+        color: #60708e;
+        background: #f2f6fc;
+      }
+      .nav-search svg { width: 15px; height: 15px; flex: 0 0 auto; }
+      .nav-search { position: relative; }
+      .nav-search input {
+        min-width: 0;
+        width: 100%;
+        border: 0;
+        outline: 0;
+        color: #243353;
+        background: transparent;
+        font: 500 0.7rem/1 var(--font-family);
+      }
+      .nav-search input::placeholder { color: #8794a9; }
+      .nav-icon-btn {
+        width: 38px;
+        height: 38px;
+        color: #5b6a86;
+        border: 1px solid #e1e8f3;
+        background: #fff;
+        box-shadow: 0 6px 18px rgba(41, 61, 105, 0.08);
+      }
+      .nav-extension-cta {
+        min-height: 40px;
+        display: inline-flex;
+        align-items: center;
+        gap: 0.55rem;
+        padding: 0 1rem;
+        border-radius: 999px;
+        color: #fff;
+        background: linear-gradient(110deg, #674cff, #3c6df5);
+        box-shadow: 0 10px 24px rgba(73, 85, 245, 0.22);
+        font-size: 0.72rem;
+        font-weight: 700;
+        transition: transform 180ms ease, box-shadow 180ms ease;
+      }
+      .nav-extension-cta:hover { transform: translateY(-1px); box-shadow: 0 13px 28px rgba(73, 85, 245, 0.28); }
+      .chrome-dot {
+        width: 16px;
+        height: 16px;
+        border-radius: 50%;
+        background: conic-gradient(#e94235 0 33%, #f7c840 0 66%, #35aa5a 0);
+        box-shadow: inset 0 0 0 4px #2c77de;
+      }
+
+      .hero {
+        min-height: auto;
+        display: block;
+        padding: 8.5rem max(2rem, calc((100vw - 1400px) / 2)) 3.6rem;
+        color: #0a1430;
+        background: transparent;
+      }
+      .hero-bg {
+        background:
+          radial-gradient(ellipse at 73% 30%, rgba(119, 186, 255, 0.16), transparent 30%),
+          radial-gradient(ellipse at 88% 45%, rgba(160, 111, 255, 0.12), transparent 27%);
+        filter: none;
+        transform: none;
+      }
+      .hero-bg::after,
+      .hero::after { display: none; }
+      .hero-content {
+        width: min(100%, 1400px);
+        display: grid;
+        grid-template-columns: minmax(0, 0.92fr) minmax(480px, 1.08fr);
+        align-items: center;
+        gap: clamp(2.5rem, 5vw, 5.5rem);
+      }
+      .hero-left { min-width: 0; }
+      .hero-copy { max-width: 670px; }
+      .hero-kicker,
+      .section-eyebrow {
+        margin-bottom: 0.9rem;
+        color: #536788;
+        font: 700 0.68rem/1 "DM Mono", monospace;
+        letter-spacing: 0.19em;
+      }
+      .hero-kicker span { display: none; }
+      .hero h1 {
+        max-width: 12.5ch;
+        color: #07112a;
+        font-size: clamp(3.7rem, 5.2vw, 5.6rem);
+        font-weight: 800;
+        line-height: 0.98;
+        letter-spacing: -0.065em;
+      }
+      .hero h1 .highlight {
+        color: transparent;
+        background: linear-gradient(95deg, #415dff 0%, #8354f5 44%, #13aaa5 100%);
+        -webkit-background-clip: text;
+        background-clip: text;
+        -webkit-text-fill-color: transparent;
+        white-space: nowrap;
+      }
+      .hero-tagline {
+        max-width: 60ch;
+        margin-top: 1.25rem;
+        color: #52627e;
+        font-size: 0.98rem;
+        line-height: 1.55;
+      }
+      .hero-meta,
+      .hero-trust,
+      .hero-badges,
+      .hero-formats { display: none; }
+
+      .hero-panel {
+        width: min(100%, 650px);
+        margin-top: 1.65rem;
+        padding: 0;
+        border: 0;
+        border-radius: 0;
+        background: transparent;
+        box-shadow: none;
+        backdrop-filter: none;
+      }
+      .hero-panel-heading { display: none; }
+      .hero-mode-tabs {
+        width: min(100%, 510px);
+        display: grid;
+        grid-template-columns: repeat(4, minmax(0, 1fr));
+        gap: 0.25rem;
+        margin-bottom: 1rem;
+        padding: 0.22rem;
+        border-radius: 0.72rem;
+        background: #f0f4fa;
+      }
+      .hero-mode-tab {
+        min-height: 44px;
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        gap: 0.45rem;
+        padding: 0 0.65rem;
+        border: 1px solid transparent;
+        border-radius: 0.6rem;
+        color: #50607d;
+        background: transparent;
+        font: 600 0.75rem/1 var(--font-family);
+        cursor: pointer;
+        transition: 180ms ease;
+      }
+      .hero-mode-tab svg { width: 16px; height: 16px; }
+      .hero-mode-tab:hover { color: #3846dc; background: rgba(255, 255, 255, 0.65); }
+      .hero-mode-tab.active {
+        color: #4654ed;
+        border-color: #e0e6f3;
+        background: #fff;
+        box-shadow: 0 6px 18px rgba(46, 68, 117, 0.08);
+      }
+      .url-bar.hero-url-bar {
+        width: 100%;
+        min-height: 58px;
+        border: 1px solid #dce5f2;
+        border-radius: 0.78rem;
+        background: #fff;
+        box-shadow: 0 14px 36px rgba(46, 71, 126, 0.09);
+      }
+      .url-bar.hero-url-bar:focus-within { border-color: #7680f5; box-shadow: 0 0 0 4px rgba(99, 91, 255, 0.1), 0 14px 36px rgba(46, 71, 126, 0.09); }
+      .url-bar.hero-url-bar input { color: #1d2b48; font-size: 0.78rem; }
+      .url-bar.hero-url-bar input::placeholder { color: #8794a9; }
+      .url-bar.hero-url-bar .url-bar-btn {
+        min-width: 104px;
+        min-height: 48px;
+        margin: 4px;
+        border-radius: 0.62rem;
+        color: #fff;
+        background: linear-gradient(110deg, #6650fa, #5b5cf2);
+        box-shadow: 0 9px 20px rgba(85, 77, 231, 0.22);
+      }
+      .url-bar.hero-url-bar .url-bar-btn:hover { background: linear-gradient(110deg, #5a45ef, #4a50e5); transform: translateY(-1px); }
+      .url-bar-paste { color: #7b879c; }
+      .hero-or,
+      label.hero-cta-primary,
+      .hero-secondary { display: none; }
+      .hero-panel > label.hero-cta-primary {
+        display: none !important;
+        min-height: 0 !important;
+        height: 0 !important;
+        margin: 0 !important;
+        padding: 0 !important;
+        overflow: hidden !important;
+      }
+      .hero-panel::after {
+        content: "or drop your files anywhere on this page";
+        display: block;
+        margin-top: 0.9rem;
+        color: #71809a;
+        font-size: 0.72rem;
+        text-align: center;
+      }
+
+      .hero-showcase {
+        position: relative;
+        min-height: 490px;
+        display: grid;
+        place-items: center;
+      }
+      .hero-blob {
+        position: absolute;
+        border-radius: 44% 56% 62% 38% / 45% 38% 62% 55%;
+        filter: blur(0.2px);
+        opacity: 0.7;
+      }
+      .hero-blob-a { width: 68%; height: 73%; top: 4%; left: 5%; background: linear-gradient(145deg, #d5edff, #dfe8ff); transform: rotate(8deg); }
+      .hero-blob-b { width: 65%; height: 70%; right: -2%; bottom: 2%; background: linear-gradient(145deg, #f1dcff, #dce8ff 56%, #d8fbf4); transform: rotate(-9deg); }
+      .hero-browser {
+        position: relative;
+        z-index: 2;
+        width: 92%;
+        padding: 0.72rem;
+        border: 1px solid rgba(180, 195, 220, 0.75);
+        border-radius: 1.45rem;
+        background: #edf4fd;
+        box-shadow: 0 34px 70px rgba(49, 73, 126, 0.23);
+        transform: perspective(1200px) rotateY(-4deg) rotateZ(3deg);
+      }
+      .hero-browser-bar {
+        height: 30px;
+        display: flex;
+        align-items: center;
+        gap: 0.38rem;
+        padding: 0 0.65rem;
+        border-radius: 0.82rem 0.82rem 0 0;
+        background: #141b2b;
+      }
+      .hero-browser-bar span { width: 7px; height: 7px; border-radius: 50%; background: #ff6f78; }
+      .hero-browser-bar span:nth-child(2) { background: #ffd058; }
+      .hero-browser-bar span:nth-child(3) { background: #5dd6c6; }
+      .hero-browser-screen { position: relative; aspect-ratio: 16/9; overflow: hidden; border-radius: 0 0 0.82rem 0.82rem; background: #111827; }
+      .hero-browser-screen::after {
+        content: "";
+        position: absolute;
+        inset: 0;
+        background: linear-gradient(180deg, transparent 52%, rgba(5, 10, 22, 0.78) 100%);
+      }
+      .hero-browser-screen img { width: 100%; height: 100%; display: block; object-fit: cover; }
+      .hero-browser-note {
+        position: absolute;
+        z-index: 2;
+        right: 7%;
+        bottom: 24%;
+        color: #fff;
+        font-family: "Comic Sans MS", cursive;
+        font-size: clamp(1.1rem, 2.2vw, 1.9rem);
+        line-height: 0.95;
+        text-align: center;
+        transform: rotate(-8deg);
+        text-shadow: 0 2px 10px rgba(0,0,0,.35);
+      }
+      .hero-browser-controls {
+        position: absolute;
+        z-index: 3;
+        right: 4%;
+        bottom: 6%;
+        left: 4%;
+        display: grid;
+        grid-template-columns: 20px auto 1fr 20px 20px;
+        align-items: center;
+        gap: 0.65rem;
+        color: #fff;
+        font-size: 0.64rem;
+      }
+      .hero-browser-controls svg { width: 18px; height: 18px; fill: currentColor; stroke: currentColor; stroke-width: 1.7; }
+      .hero-browser-controls i { position: relative; height: 3px; border-radius: 4px; background: rgba(255,255,255,.34); }
+      .hero-browser-controls i::before { content: ""; position: absolute; width: 42%; inset: 0 auto 0 0; border-radius: inherit; background: #665cff; }
+      .hero-browser-controls b { position: absolute; left: 40%; top: 50%; width: 8px; height: 8px; border-radius: 50%; background: #766bff; transform: translate(-50%, -50%); }
+      .hero-handnote { position: absolute; z-index: 3; top: -1rem; right: 1rem; color: #506383; font: italic 0.9rem/1.3 Georgia, serif; transform: rotate(-8deg); }
+      .hero-handnote span { display: inline-block; color: #6658ef; font-size: 1.35rem; transform: rotate(25deg); }
+
+      .hero-proof {
+        width: min(100%, 1400px);
+        display: grid;
+        grid-template-columns: repeat(4, minmax(0, 1fr));
+        margin: 3.4rem auto 0;
+        padding-top: 1.65rem;
+        border-top: 1px solid #e4ebf5;
+      }
+      .hero-proof > div {
+        min-width: 0;
+        display: flex;
+        align-items: center;
+        gap: 0.9rem;
+        padding: 0 1.3rem;
+        border-right: 1px solid #e4ebf5;
+      }
+      .hero-proof > div:first-child { padding-left: 0; }
+      .hero-proof > div:last-child { border-right: 0; }
+      .proof-icon { width: 48px; height: 48px; flex: 0 0 auto; display: grid; place-items: center; border-radius: 50%; color: #564df0; background: #eaf1ff; font-size: 1.35rem; font-weight: 700; }
+      .proof-icon-warm { color: #f39800; background: #fff3e5; }
+      .hero-proof p { margin: 0; min-width: 0; }
+      .hero-proof strong { display: block; color: #101a34; font-size: 0.8rem; }
+      .hero-proof small { display: block; margin-top: 0.24rem; color: #71809a; font-size: 0.67rem; line-height: 1.35; }
+
+      .player-section,
+      .watch-rail,
+      .features-section {
+        width: min(100%, 1240px);
+        max-width: 1240px;
+        margin: 0 auto;
+        padding-right: 2rem;
+        padding-left: 2rem;
+      }
+      .player-section { padding-top: 5.8rem; padding-bottom: 3.4rem; }
+      .watch-rail { padding-top: 3.8rem; padding-bottom: 4.8rem; }
+      .features-section { padding-top: 5rem; padding-bottom: 3rem; scroll-margin-top: 90px; }
+      .features-section > h2,
+      .features-section > .section-desc {
+        margin-right: 0;
+        margin-left: 0;
+        text-align: left;
+      }
+      .player-section-head,
+      .rail-heading { margin-bottom: 1.8rem; }
+      .section-eyebrow { color: #596e91; }
+      .player-section-head h2,
+      .rail-heading h2,
+      .features-section > h2,
+      .comments-head h2 {
+        max-width: 20ch;
+        color: #0a1430;
+        font-size: clamp(2rem, 3.4vw, 3.15rem);
+        font-weight: 800;
+        line-height: 1.02;
+        letter-spacing: -0.055em;
+      }
+      .player-section-head p,
+      .rail-heading p,
+      .features-section .section-desc { color: #65738e; }
+      .player-wrapper {
+        --frame-radius: 1.35rem;
+        --frame-width: 10px;
+        border: var(--frame-width) solid #eaf0f8;
+        border-radius: var(--frame-radius);
+        box-shadow: 0 30px 75px rgba(46, 67, 112, 0.16);
+      }
+      /* The frame is a border, so the picture sits inside it: its corners
+         follow the border's INNER curve, the outer radius less the border.
+         Inheriting the outer radius rounded the picture wider than the hole
+         it sits in, and the wrapper's black showed in each corner. */
+      .player-wrapper > .player-stage {
+        border-radius: max(0px, calc(var(--frame-radius) - var(--frame-width)));
+      }
+      .player-ambient { opacity: 0.2; }
+
+      .watch-cards { grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 1rem; }
+      .watch-card {
+        min-height: 220px;
+        color: #111b35;
+        border: 1px solid #e4eaf4;
+        border-radius: 0.9rem;
+        box-shadow: none;
+      }
+      .watch-card::after { background: linear-gradient(180deg, transparent 12%, rgba(255,255,255,.78) 100%); }
+      .watch-card--file::before { background: linear-gradient(145deg, #eaf9f4, #eef6ff); }
+      .watch-card--link::before { background: linear-gradient(145deg, #eff5ff, #e7f1ff); }
+      .watch-card--folder::before { background: linear-gradient(145deg, #f4efff, #edf0ff); }
+      .watch-card:hover { border-color: #cfd9ea; box-shadow: 0 18px 40px rgba(53, 74, 119, 0.1); }
+      .watch-card-index { color: #697996; }
+      .watch-card-art { color: rgba(76, 86, 238, 0.38); }
+      .watch-card-copy strong { color: #121c35; }
+      .watch-card-copy small { color: #63728c; }
+
+      .features-grid { gap: 1rem; }
+      #features .features-grid--2up { grid-template-columns: repeat(4, minmax(0, 1fr)); }
+      .feature-card,
+      [data-theme="light"] .feature-card {
+        min-height: 210px;
+        padding: 1.45rem;
+        border: 1px solid transparent;
+        border-radius: 0.9rem;
+        color: #13203b;
+        background: #eff7ff;
+      }
+      .feature-card:nth-child(4n+1) { background: linear-gradient(145deg, #ecfaf5, #eef8ff); }
+      .feature-card:nth-child(4n+2) { background: linear-gradient(145deg, #edf5ff, #eaf1ff); }
+      .feature-card:nth-child(4n+3) { background: linear-gradient(145deg, #f4efff, #eef0ff); }
+      .feature-card:nth-child(4n+4) { background: linear-gradient(145deg, #fff1eb, #fff6ee); }
+      .feature-card::before { opacity: 0.3; }
+      .feature-card:hover { border-color: #d5deed; box-shadow: 0 18px 38px rgba(52, 76, 126, 0.08); }
+      .feature-icon { background: rgba(255,255,255,.72); box-shadow: 0 8px 20px rgba(62, 81, 130, 0.08); }
+      .feature-card h3 { margin-top: 1.7rem; color: #101a32; }
+      .feature-card p { color: #5e6f8c; }
+      #how-it-works .features-grid {
+        grid-template-columns: repeat(3, minmax(0, 1fr));
+        gap: 0;
+        border-top: 1px solid #e3eaf4;
+        border-bottom: 1px solid #e3eaf4;
+      }
+      #how-it-works .feature-card { min-height: 160px; border-radius: 0; border: 0; border-right: 1px solid #e3eaf4; background: transparent; }
+      #how-it-works .feature-card:last-child { border-right: 0; }
+      #how-it-works .feature-card:hover { box-shadow: none; transform: none; }
+      .spec-panel,
+      [data-theme="light"] .spec-panel { border: 1px solid #e2e9f3; border-radius: 0.9rem; background: #f1f5fc; }
+      .spec-panel-head { color: #15213b; background: transparent; }
+      .spec-panel-head p { color: #74819a; }
+      .spec-grid { gap: 0.55rem; padding: 1rem; background: transparent; }
+      .spec-chip { border: 0; border-radius: 0.65rem; background: #fff; box-shadow: 0 7px 18px rgba(46, 69, 117, 0.05); }
+      .spec-chip:nth-child(5n+1) { background: #eeeaff; }
+      .spec-chip:nth-child(5n+2) { background: #eaf2ff; }
+      .spec-chip:nth-child(5n+3) { background: #eafaf3; }
+      .spec-chip:nth-child(5n+4) { background: #ffeef1; }
+      .spec-chip:nth-child(5n) { background: #fff2e5; }
+      .faq-item { border-color: #e3eaf4; }
+      .faq-item summary { color: #14213d; }
+      .comments-section { border: 0; }
+      .comment-form { border-color: #e0e7f1; background: #fff; box-shadow: 0 18px 50px rgba(46, 69, 117, 0.08); }
+
+      .extension-cta {
+        width: min(calc(100% - 4rem), 1180px);
+        margin: 5rem auto 0;
+        padding: 3rem 2rem;
+        overflow: hidden;
+        position: relative;
+        border: 1px solid #dfe8f5;
+        border-radius: 1.35rem;
+        text-align: center;
+        background:
+          radial-gradient(circle at 0 100%, rgba(116, 96, 255, .2), transparent 31%),
+          radial-gradient(circle at 100% 0, rgba(63, 146, 255, .24), transparent 34%),
+          linear-gradient(110deg, #eef2ff, #e7f7ff);
+      }
+      .extension-cta h2 { margin: 0; color: #0c1732; font-size: clamp(1.8rem, 3vw, 2.65rem); letter-spacing: -.05em; }
+      .extension-cta p { margin: .65rem 0 1.4rem; color: #60708d; font-size: .84rem; }
+      .extension-cta a { display: inline-flex; align-items: center; gap: .55rem; min-height: 46px; padding: 0 1.25rem; border-radius: 999px; color: #fff; background: linear-gradient(110deg, #674cff, #3c6df5); box-shadow: 0 12px 25px rgba(69, 83, 236, .22); font-size: .78rem; font-weight: 700; }
+
+      .site-footer,
+      [data-theme="light"] .site-footer { margin-top: 3rem; color: #5f6f8b; background: #f8fbff; border-top: 1px solid #e2e9f3; }
+      .site-footer .brand-text { color: #0b1734; }
+      .site-footer-links a { color: #5d6e89; }
+      .site-footer-links a:hover { color: #4e4ae5; }
+      .site-footer-base { border-color: #e2e9f3; }
+      .drop-overlay { background: rgba(235, 241, 252, 0.92); }
+      .drop-overlay-content { color: #14213d; border-color: #9ba8f3; background: rgba(255,255,255,.88); }
+
+      @media (max-width: 1180px) {
+        .navbar { padding-inline: 1.5rem; }
+        .hero { padding-inline: 2rem; }
+        .hero-content { grid-template-columns: minmax(0, 1fr) minmax(410px, .95fr); gap: 2rem; }
+        .hero h1 { font-size: clamp(3.35rem, 5.3vw, 4.7rem); }
+        .hero-showcase { min-height: 420px; }
+        .hero-proof > div { padding-inline: .75rem; }
+        #features .features-grid--2up { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+      }
+
+      @media (max-width: 920px) {
+        .hero { padding-top: 7.2rem; }
+        .hero-content { grid-template-columns: 1fr; }
+        .hero-left { max-width: 720px; }
+        .hero-showcase { min-height: 480px; }
+        .hero-proof { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 1rem 0; }
+        .hero-proof > div:nth-child(2) { border-right: 0; }
+        .hero-proof > div:nth-child(n+3) { padding-top: 1rem; border-top: 1px solid #e4ebf5; }
+        .features-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+      }
+
+      @media (max-width: 640px) {
+        .navbar,
+        .navbar.scrolled { height: 62px; padding-inline: 1rem; }
+        .brand-logo { width: 28px; height: 28px; }
+        .brand-text { font-size: 1.08rem; }
+        .nav-links { display: none; }
+        .nav-icon-btn { display: none; }
+        .nav-extension-cta { min-height: 36px; padding-inline: .8rem; font-size: .65rem; }
+        .hero { min-height: auto; padding: 6.3rem 1.1rem 2.5rem; }
+        .hero h1 { max-width: 10ch; font-size: clamp(3rem, 14vw, 4.4rem); line-height: .94; }
+        .hero h1 .highlight { white-space: normal; }
+        .hero-tagline { font-size: .9rem; }
+        .hero-mode-tabs { width: 100%; }
+        .hero-mode-tab { min-height: 42px; padding-inline: .3rem; font-size: .66rem; }
+        .hero-mode-tab svg { width: 14px; height: 14px; }
+        .url-bar.hero-url-bar { min-height: 54px; }
+        .url-bar.hero-url-bar .url-bar-btn { min-width: 82px; }
+        .hero-showcase { min-height: 255px; align-items: start; margin-top: 0; }
+        .hero-browser { width: 98%; border-radius: 1rem; transform: rotateZ(2deg); }
+        .hero-browser-note, .hero-handnote { display: none; }
+        .hero-proof { margin-top: 2rem; grid-template-columns: 1fr; }
+        .hero-proof > div { padding: .9rem 0; border-right: 0; border-top: 1px solid #e4ebf5; }
+        .hero-proof > div:first-child { border-top: 0; }
+        .player-section,
+        .watch-rail,
+        .features-section { padding-right: 1.1rem; padding-left: 1.1rem; }
+        .player-section { padding-top: 4rem; }
+        .watch-cards { display: flex; }
+        #features .features-grid--2up,
+        .features-grid,
+        #how-it-works .features-grid { grid-template-columns: 1fr; }
+        #how-it-works .feature-card { border-right: 0; border-bottom: 1px solid #e3eaf4; }
+        #how-it-works .feature-card:last-child { border-bottom: 0; }
+        .feature-card { min-height: 180px; }
+        .extension-cta { width: calc(100% - 2.2rem); margin-top: 3.5rem; padding: 2.4rem 1.1rem; }
+      }
+
+      /* ── Match to the reference mockup ──────────────────────────────────
+         One content width for every band, so the hero, the proof strip and
+         each section share the same left and right edges; the rest restyles
+         pieces to the reference without renaming anything the scripts use. */
+      :root {
+        --lp-max: 1320px;
+        --lp-pad: clamp(1.1rem, 4.4vw, 4rem);
+      }
+      .navbar,
+      .navbar.scrolled,
+      [data-theme="light"] .navbar,
+      [data-theme="light"] .navbar.scrolled {
+        padding-inline: max(var(--lp-pad), calc((100vw - var(--lp-max)) / 2));
+      }
+      .navbar { justify-content: space-between; }
+      .navbar > .nav-left,
+      .navbar > .nav-right { margin-inline: 0; }
+      .brand-logo { width: 34px; height: 34px; }
+      .nav-extension-cta,
+      .nav-extension-cta:hover,
+      .extension-cta a,
+      .extension-cta a:hover,
+      .way-card,
+      .way-card:hover { text-decoration: none; }
+
+      .hero { padding: 7.4rem var(--lp-pad) 2.6rem; }
+      .hero-content,
+      .hero-proof,
+      .hero-format-strip {
+        width: min(100%, var(--lp-max));
+        margin-inline: auto;
+      }
+      .hero--split .hero-content { max-width: none; grid-template-columns: minmax(0, 1fr) minmax(0, 1.02fr); }
+      .player-layout { max-width: none; }
+      .hero h1 {
+        max-width: none;
+        font-size: clamp(2.5rem, 4.1vw, 3.9rem);
+        line-height: 1.05;
+        letter-spacing: -0.035em;
+      }
+      .hero h1 .highlight {
+        background: linear-gradient(92deg, #3f5bff 0%, #7c4dff 48%, #3f8dff 100%);
+        -webkit-background-clip: text;
+        background-clip: text;
+      }
+      .hero-tagline { font-size: 1rem; }
+      /* URL, Files, Folder — a folder already opens as a playlist. */
+      .hero-mode-tabs {
+        width: min(100%, 400px);
+        grid-template-columns: repeat(3, minmax(0, 1fr));
+      }
+      /* Room for the descenders: the gradient is clipped to the text's own
+         box, and at this line height "g" hangs below it. */
+      .hero h1 .highlight {
+        padding-bottom: 0.14em;
+        margin-bottom: -0.14em;
+      }
+      /* The panel clipped its own URL bar's shadow to a hard edge. */
+      .hero--split .hero-panel { overflow: visible; }
+
+      /* Trust line and download counts, under the ways in. */
+      .hero--split .hero-left .hero-trust,
+      .hero--split .hero-left .hero-badges {
+        display: flex;
+        flex-wrap: wrap;
+        align-items: center;
+        justify-content: flex-start;
+        width: min(100%, 650px);
+      }
+      .hero--split .hero-left .hero-trust {
+        gap: 0.4rem 0.7rem;
+        margin: 1.6rem 0 0;
+        color: #5b6a86;
+        font-size: 0.8rem;
+      }
+      .hero--split .hero-trust .trust-item {
+        display: inline-flex;
+        align-items: center;
+        gap: 0.4rem;
+        color: #4f5e7b;
+        text-decoration: none;
+      }
+      .hero--split .hero-trust .trust-item svg { width: 15px; height: 15px; flex: 0 0 auto; }
+      .hero--split .hero-trust a.trust-item:hover { color: #4b4ff0; }
+      .hero--split .hero-trust .trust-dot {
+        width: 3px;
+        height: 3px;
+        border-radius: 50%;
+        background: #b6c1d4;
+      }
+      .hero--split .hero-left .hero-badges { gap: 0.5rem; margin-top: 0.85rem; }
+      /* Trust line over the download counts as three columns, each badge
+         starting under its own item. One grid for both rows (the two
+         wrappers are display: contents), so a column is as wide as the
+         wider of its two cells and the rows cannot drift apart. */
+      .hero--split .hero-proof-grid {
+        display: grid;
+        grid-template-columns: repeat(3, auto);
+        justify-content: start;
+        align-items: center;
+        gap: 0.75rem 1.6rem;
+        margin-top: 1.6rem;
+      }
+      .hero--split .hero-proof-grid .hero-trust,
+      .hero--split .hero-proof-grid .hero-badges { display: contents; }
+      .hero--split .hero-proof-grid .trust-dot { display: none; }
+      .hero--split .hero-proof-grid .trust-item { white-space: nowrap; }
+      .hero--split .hero-proof-grid .hero-badges a { justify-self: start; }
+      .stat-pill {
+        display: inline-flex;
+        align-items: center;
+        gap: 0.4rem;
+        padding: 0.32rem 0.7rem 0.32rem 0.55rem;
+        border: 1px solid #e0e7f2;
+        border-radius: 999px;
+        color: #5b6a86;
+        background: #fff;
+        font-size: 0.74rem;
+        font-weight: 500;
+        line-height: 1.2;
+        text-decoration: none;
+        white-space: nowrap;
+        transition: border-color 160ms ease, color 160ms ease;
+      }
+      .stat-pill[hidden] { display: none; }
+
+      .hero--split .hero-badges a.stat-pill { line-height: 1.2; }
+      .stat-pill svg { width: 14px; height: 14px; flex: 0 0 auto; color: #6a5cf0; }
+      .stat-pill b { color: #0f1a34; font-weight: 800; }
+      .stat-pill:hover { border-color: #c9d4e7; color: #3c4a66; }
+      :root:not([data-theme="light"]) .stat-pill { color: #9aa6c2; border-color: rgba(255, 255, 255, 0.1); background: rgba(255, 255, 255, 0.04); }
+      :root:not([data-theme="light"]) .stat-pill svg { color: #a9a4ff; }
+      :root:not([data-theme="light"]) .stat-pill b { color: #eef2ff; }
+      :root:not([data-theme="light"]) .stat-pill:hover { border-color: rgba(255, 255, 255, 0.2); color: #c9d2e6; }
+      @media (max-width: 640px) {
+        .hero--split .hero-proof-grid { display: block; margin-top: 1.4rem; }
+        .hero--split .hero-proof-grid .hero-trust,
+        .hero--split .hero-proof-grid .hero-badges { display: flex; }
+        .hero--split .hero-proof-grid .hero-trust { margin-top: 0; }
+        .hero--split .hero-proof-grid .trust-dot { display: block; }
+      }
+      .hero--split .hero-badges a { display: inline-flex; line-height: 0; }
+      .hero--split .hero-badges img { height: 20px; width: auto; }
+
+      /* GitHub back in the nav; the Chrome icon stays out, Get Extension is it. */
+      .nav-right > .nav-icon-link:not(.nav-chrome-icon) {
+        display: inline-flex;
+        width: 38px;
+        height: 38px;
+        align-items: center;
+        justify-content: center;
+        border: 1px solid #e1e8f3;
+        border-radius: 50%;
+        color: #3a4762;
+        background: #fff;
+        box-shadow: 0 6px 18px rgba(41, 61, 105, 0.08);
+      }
+      .nav-right > .nav-icon-link:not(.nav-chrome-icon):hover { color: #4b4ff0; }
+
+      /* The divider and the row of link buttons under the URL bar belonged to
+         the old panel and drew as bare rules here. The tabs above already
+         open a file, a folder and the playlist; what stays reachable from
+         this row is only what appears on its own — Embed once something is
+         playing, Show playlist once there is one. */
+      .hero--split .hero-panel .hero-or { display: none !important; }
+      .hero--split .hero-panel .hero-secondary {
+        display: flex !important;
+        flex-wrap: wrap;
+        justify-content: center;
+        gap: 0.45rem;
+        margin: 0.7rem 0 0 !important;
+        padding: 0 !important;
+        border: 0 !important;
+      }
+      .hero--split .hero-secondary #folder-btn,
+      .hero--split .hero-secondary a[href="/compare"],
+      .hero--split .hero-secondary [hidden] { display: none !important; }
+      .hero--split .hero-secondary .hero-link-btn {
+        min-height: 0;
+        padding: 0.38rem 0.75rem;
+        border: 0;
+        border-radius: 999px;
+        color: #4b55e6;
+        background: #eef1fc;
+        font: 600 0.72rem/1 var(--font-family);
+      }
+      .hero--split .hero-secondary .hero-link-btn.btn-embed:not(.visible) { display: none !important; }
+
+      .hero-proof { margin-top: 3rem; }
+      .proof-icon svg { width: 22px; height: 22px; }
+      .proof-icon-violet { color: #6a4ff0; background: #f0ebff; }
+
+      .hero-format-strip {
+        display: flex;
+        align-items: center;
+        gap: clamp(1rem, 3vw, 3rem);
+        margin-top: 2rem;
+        padding: 1.15rem clamp(1rem, 2.4vw, 2rem);
+        border: 1px solid #e6ecf6;
+        border-radius: 1rem;
+        background: rgba(242, 246, 253, 0.75);
+      }
+      .hero-format-strip p {
+        flex: 0 0 auto;
+        margin: 0;
+        color: #0f1a34;
+        font-size: 0.95rem;
+        font-weight: 700;
+        line-height: 1.3;
+        letter-spacing: -0.01em;
+      }
+      .format-chips {
+        flex: 1 1 auto;
+        display: flex;
+        flex-wrap: wrap;
+        justify-content: space-between;
+        gap: 0.6rem;
+        margin: 0;
+        padding: 0;
+        list-style: none;
+      }
+      .format-chips li {
+        padding: 0.6rem 1.05rem;
+        border-radius: 0.6rem;
+        font: 600 0.8rem/1 var(--font-family);
+      }
+      .format-chips .tone-violet { color: #6a4ff0; background: #efeaff; }
+      .format-chips .tone-blue { color: #3d6ee0; background: #e8f1ff; }
+      .format-chips .tone-green { color: #1f8f5c; background: #e4f6ed; }
+      .format-chips .tone-red { color: #de3f58; background: #ffebee; }
+      .format-chips .tone-orange { color: #dd7410; background: #fff0de; }
+      .format-chips li:last-child { padding: 0; }
+      .format-chips a {
+        display: block;
+        padding: 0.6rem 1.05rem;
+        border: 1px solid #e1e8f3;
+        border-radius: 0.6rem;
+        color: #33405c;
+        background: #fff;
+        text-decoration: none;
+      }
+      .format-chips a:hover { border-color: #c9d4e7; }
+
+      .player-section,
+      .watch-rail,
+      .features-section {
+        width: min(100%, calc(var(--lp-max) + 2 * var(--lp-pad)));
+        max-width: none;
+        padding-inline: var(--lp-pad);
+      }
+      .player-section-head h2,
+      .rail-heading h2,
+      .features-section > h2,
+      .section-head h2,
+      .comments-head h2 {
+        max-width: none;
+        font-size: clamp(1.9rem, 2.8vw, 2.65rem);
+        letter-spacing: -0.035em;
+      }
+      .section-head,
+      .rail-heading,
+      .player-section-head,
+      .comments-head {
+        display: flex;
+        align-items: flex-end;
+        justify-content: space-between;
+        gap: 2rem;
+        margin-bottom: 1.9rem;
+      }
+      .section-head p,
+      .rail-heading p,
+      .player-section-head p {
+        max-width: 44ch;
+        margin: 0;
+        color: #5f6e89;
+        font-size: 0.92rem;
+        line-height: 1.6;
+        text-align: left;
+      }
+
+      /* How it works: three steps on one line */
+      .how-section { padding-bottom: 3.2rem; border-bottom: 1px solid #e4eaf4; }
+      .how-steps {
+        display: grid;
+        grid-template-columns: repeat(3, minmax(0, 1fr));
+        gap: 1.5rem;
+        margin: 0;
+        padding: 0.4rem 0 0;
+        list-style: none;
+      }
+      .how-step {
+        position: relative;
+        display: flex;
+        align-items: center;
+        gap: 0.85rem;
+        padding-right: 2.6rem;
+      }
+      .how-step:not(:last-child)::after {
+        content: "";
+        position: absolute;
+        top: 50%;
+        right: 0.3rem;
+        width: 20px;
+        height: 20px;
+        background: #7b88a2;
+        -webkit-mask: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M5 12h14M13 6l6 6-6 6'/%3E%3C/svg%3E") center / contain no-repeat;
+        mask: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M5 12h14M13 6l6 6-6 6'/%3E%3C/svg%3E") center / contain no-repeat;
+        transform: translateY(-50%);
+      }
+      .how-step-num,
+      .how-step-icon {
+        width: 46px;
+        height: 46px;
+        flex: 0 0 auto;
+        display: grid;
+        place-items: center;
+        border-radius: 50%;
+      }
+      .how-step-num { color: #4b4ff0; background: #eceffe; font-size: 1.05rem; font-weight: 700; }
+      .how-step-icon { color: #5a55f0; background: #fff; border: 1px solid #e3e8f4; }
+      .how-step-icon svg { width: 21px; height: 21px; }
+      .how-step-copy { min-width: 0; }
+      .how-step-copy strong { display: block; color: #0f1a33; font-size: 0.92rem; font-weight: 700; }
+      .how-step-copy small { display: block; margin-top: 0.25rem; color: #67758f; font-size: 0.8rem; line-height: 1.45; }
+
+      /* A smoother, smarter way to watch: four source cards */
+      .way-cards {
+        display: grid;
+        grid-template-columns: repeat(4, minmax(0, 1fr));
+        gap: 1rem;
+      }
+      .way-card {
+        min-height: 190px;
+        display: flex;
+        flex-direction: column;
+        align-items: flex-start;
+        gap: 0.5rem;
+        padding: 1.35rem;
+        border: 1px solid transparent;
+        border-radius: 0.95rem;
+        color: #111b35;
+        font: inherit;
+        text-align: left;
+        cursor: pointer;
+        transition: transform 180ms ease, box-shadow 180ms ease, border-color 180ms ease;
+      }
+      .way-card:hover { transform: translateY(-2px); border-color: #d6dfee; box-shadow: 0 18px 40px rgba(53, 74, 119, 0.1); }
+      .way-card:focus-visible { outline: 3px solid rgba(99, 91, 255, 0.35); outline-offset: 2px; }
+      .way-card.tone-green { background: linear-gradient(150deg, #e9f8f1, #f1f8fd); }
+      .way-card.tone-blue { background: linear-gradient(150deg, #edf3ff, #e9f1ff); }
+      .way-card.tone-violet { background: linear-gradient(150deg, #f3eeff, #eef0ff); }
+      .way-card.tone-peach { background: linear-gradient(150deg, #fff1ea, #fff6ef); }
+      .way-card-icon {
+        width: 40px;
+        height: 40px;
+        display: grid;
+        place-items: center;
+        margin-bottom: 1.4rem;
+        border-radius: 0.65rem;
+        background: rgba(255, 255, 255, 0.8);
+        box-shadow: 0 8px 18px rgba(62, 81, 130, 0.07);
+      }
+      .way-card-icon svg { width: 21px; height: 21px; }
+      .tone-green .way-card-icon { color: #1f9a63; }
+      .tone-blue .way-card-icon { color: #3d6ee0; }
+      .tone-violet .way-card-icon { color: #6a4ff0; }
+      .way-card-icon--chrome svg { width: 24px; height: 24px; }
+      .way-card strong { font-size: 1rem; font-weight: 700; letter-spacing: -0.01em; }
+      .way-card small { color: #5e6d88; font-size: 0.84rem; line-height: 1.55; }
+
+      /* What people are saying: the real visitor wall, as cards */
+      .comments-head { align-items: flex-end; }
+      .comment-list {
+        display: grid;
+        grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
+        gap: 1rem;
+        align-items: start;
+      }
+      .comment-card {
+        border: 1px solid #e3e9f3;
+        border-radius: 0.95rem;
+        background: #fff;
+        box-shadow: 0 12px 30px rgba(46, 69, 117, 0.06);
+      }
+
+      .extension-cta { width: min(calc(100% - 2 * var(--lp-pad)), var(--lp-max)); }
+      /* The floating way back to the player: the new accent is its fill, so
+         its glyph and label were drawn in the fill colour and vanished. */
+      .to-player,
+      .to-player span { color: #fff; }
+      .to-player svg { stroke: #fff; color: #fff; }
+      /* Only while something is loaded: with nothing to go back to, the
+         button would take you to an empty player. */
+      .to-player:not(.has-media) { display: none !important; }
+      /* The Chrome mark sits on a white disc wherever it is on colour, the way
+         the store badges draw it — its red and green disappear into the
+         purple of a button otherwise. */
+      .chrome-badge,
+      .cta-chrome {
+        width: 22px;
+        height: 22px;
+        flex: 0 0 auto;
+        display: inline-grid;
+        place-items: center;
+        border-radius: 50%;
+        background: #fff;
+        box-shadow: 0 1px 3px rgba(20, 24, 60, 0.18);
+      }
+      .chrome-badge svg,
+      .cta-chrome svg { width: 18px; height: 18px; display: block; }
+      .way-card-icon--chrome svg { width: 24px; height: 24px; display: block; }
+
+      /* Footer: brand, links and elsewhere on one band */
+      .site-footer-inner {
+        width: min(100%, calc(var(--lp-max) + 2 * var(--lp-pad)));
+        max-width: none;
+        margin-inline: auto;
+        padding-inline: var(--lp-pad);
+        display: grid;
+        grid-template-columns: auto minmax(0, 1fr) auto;
+        align-items: center;
+        gap: 1.5rem 3rem;
+      }
+      .site-footer-brand { display: flex; align-items: center; gap: 1.25rem; }
+      .site-footer-brand p { margin: 0; color: #5f6f8b; font-size: 0.82rem; }
+      .site-footer-links { justify-content: center; gap: 0.35rem 1.3rem; font-size: 0.8rem; }
+      .site-footer,
+      [data-theme="light"] .site-footer { padding-inline: 0; }
+      .site-footer-social { display: flex; gap: 0.5rem; }
+      .site-footer-social a {
+        width: 38px;
+        height: 38px;
+        display: grid;
+        place-items: center;
+        border-radius: 50%;
+        color: #3a4762;
+        transition: background 160ms ease, color 160ms ease;
+      }
+      .site-footer-social a:hover { color: #4e4ae5; background: #eef1fc; }
+      .site-footer-social svg { width: 20px; height: 20px; }
+      .site-footer-base {
+        width: min(100%, calc(var(--lp-max) + 2 * var(--lp-pad)));
+        max-width: none;
+        margin-inline: auto;
+        padding-inline: var(--lp-pad);
+      }
+
+      @media (max-width: 1100px) {
+        .way-cards { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+        .hero-format-strip { flex-direction: column; align-items: flex-start; }
+        .nav-right > .nav-icon-link:not(.nav-chrome-icon) { display: none; }
+        .format-chips { justify-content: flex-start; }
+        .site-footer-inner { grid-template-columns: 1fr; justify-items: start; }
+        .site-footer-links { justify-content: flex-start; }
+      }
+      @media (max-width: 860px) {
+        .nav-search { display: none; }
+      }
+      @media (max-width: 920px) {
+        .hero--split .hero-content,
+        .hero--split .hero-copy,
+        .hero--split .hero-kicker,
+        .hero--split h1 { grid-template-columns: 1fr; text-align: left; }
+        .hero--split .hero-content { grid-template-columns: 1fr; }
+        .how-steps { grid-template-columns: 1fr; gap: 1.1rem; }
+        .how-step { padding-right: 0; }
+        .how-step:not(:last-child)::after { display: none; }
+        .section-head,
+        .rail-heading,
+        .player-section-head,
+        .comments-head { flex-direction: column; align-items: flex-start; gap: 0.8rem; }
+      }
+      @media (max-width: 640px) {
+        .hero { padding: 6.2rem var(--lp-pad) 2.2rem; }
+        .hero h1 { font-size: clamp(2.3rem, 10.5vw, 3rem); }
+        .way-cards { grid-template-columns: 1fr; }
+        .way-card { min-height: 0; }
+        .way-card-icon { margin-bottom: 0.6rem; }
+        .format-chips li,
+        .format-chips a { padding: 0.5rem 0.8rem; font-size: 0.74rem; }
+        .site-footer-brand { flex-direction: column; align-items: flex-start; gap: 0.5rem; }
+      }
+
+      /* ── Dark palette for the page ──────────────────────────────────────
+         Everything above is written in the light palette; these restate the
+         surfaces and ink for the default (dark) theme. */
+      :root:not([data-theme="light"]) body {
+        color: #eef2ff;
+        background:
+          radial-gradient(circle at 8% 17%, rgba(80, 120, 255, 0.12), transparent 26rem),
+          radial-gradient(circle at 91% 28%, rgba(132, 100, 255, 0.12), transparent 28rem),
+          #0a0f1e;
+      }
+      :root:not([data-theme="light"]) body::after { opacity: 0.02; }
+      :root:not([data-theme="light"]) .navbar,
+      :root:not([data-theme="light"]) .navbar.scrolled {
+        color: #f2f5ff;
+        background: rgba(10, 15, 30, 0.82);
+        border-bottom-color: rgba(255, 255, 255, 0.08);
+      }
+      :root:not([data-theme="light"]) .brand-text { color: #f2f5ff; }
+      :root:not([data-theme="light"]) .nav-links a { color: #aab4cc; }
+      :root:not([data-theme="light"]) .nav-links a:hover { color: #f2f5ff; background: rgba(255, 255, 255, 0.07); }
+      :root:not([data-theme="light"]) .nav-links a.active { color: #f2f5ff; }
+      :root:not([data-theme="light"]) .nav-search { color: #aab4cc; border-color: rgba(255, 255, 255, 0.1); background: rgba(255, 255, 255, 0.05); }
+      :root:not([data-theme="light"]) .nav-search:focus-within { background: #121a2e; }
+      :root:not([data-theme="light"]) .nav-search input { color: #e6ebf7; }
+      :root:not([data-theme="light"]) .nav-search input::placeholder { color: #8390ab; }
+
+      :root:not([data-theme="light"]) .hero { color: #eef2ff; }
+      :root:not([data-theme="light"]) .hero-bg {
+        background:
+          radial-gradient(ellipse at 73% 30%, rgba(80, 130, 255, 0.14), transparent 30%),
+          radial-gradient(ellipse at 88% 45%, rgba(150, 100, 255, 0.12), transparent 27%);
+      }
+      :root:not([data-theme="light"]) .hero h1 { color: #f4f6ff; }
+      :root:not([data-theme="light"]) .hero h1 .highlight { background-image: linear-gradient(92deg, #7d8dff 0%, #a47dff 48%, #6fb0ff 100%); }
+      :root:not([data-theme="light"]) .hero-kicker,
+      :root:not([data-theme="light"]) .section-eyebrow { color: #8e9bb8; }
+      :root:not([data-theme="light"]) .hero-tagline { color: #aab4cc; }
+      :root:not([data-theme="light"]) .hero-mode-tabs { background: rgba(255, 255, 255, 0.05); }
+      :root:not([data-theme="light"]) .hero-mode-tab { color: #aab4cc; }
+      :root:not([data-theme="light"]) .hero-mode-tab:hover { color: #d9dcff; background: rgba(255, 255, 255, 0.06); }
+      :root:not([data-theme="light"]) .hero-mode-tab.active { color: #c3beff; border-color: rgba(255, 255, 255, 0.1); background: #182238; box-shadow: 0 6px 18px rgba(0, 0, 0, 0.3); }
+      :root:not([data-theme="light"]) .url-bar.hero-url-bar { border-color: rgba(255, 255, 255, 0.12); background: #10172a; box-shadow: 0 14px 36px rgba(0, 0, 0, 0.35); }
+      :root:not([data-theme="light"]) .url-bar.hero-url-bar input { color: #e6ebf7; }
+      :root:not([data-theme="light"]) .url-bar.hero-url-bar input::placeholder { color: #7c88a3; }
+      :root:not([data-theme="light"]) .url-bar-paste { color: #8390ab; }
+      :root:not([data-theme="light"]) .hero-panel::after { color: #8390ab; }
+      :root:not([data-theme="light"]) .hero--split .hero-secondary .hero-link-btn { color: #c3beff; background: rgba(124, 117, 255, 0.14); }
+      :root:not([data-theme="light"]) .hero--split .hero-left .hero-trust,
+      :root:not([data-theme="light"]) .hero--split .hero-trust .trust-item { color: #aab4cc; }
+      :root:not([data-theme="light"]) .hero--split .hero-trust .trust-dot { background: #4a5570; }
+      :root:not([data-theme="light"]) .hero-blob-a { background: linear-gradient(145deg, rgba(60, 100, 200, 0.28), rgba(70, 90, 190, 0.2)); }
+      :root:not([data-theme="light"]) .hero-blob-b { background: linear-gradient(145deg, rgba(120, 80, 210, 0.26), rgba(60, 90, 190, 0.18) 56%, rgba(40, 150, 140, 0.16)); }
+      :root:not([data-theme="light"]) .hero-browser { border-color: rgba(255, 255, 255, 0.12); background: #151e34; box-shadow: 0 34px 70px rgba(0, 0, 0, 0.5); }
+      :root:not([data-theme="light"]) .hero-handnote { color: #9aa6c2; }
+      :root:not([data-theme="light"]) .hero-proof { border-top-color: rgba(255, 255, 255, 0.08); }
+      :root:not([data-theme="light"]) .hero-proof > div { border-right-color: rgba(255, 255, 255, 0.08); }
+      :root:not([data-theme="light"]) .hero-proof strong { color: #eef2ff; }
+      :root:not([data-theme="light"]) .hero-proof small { color: #8390ab; }
+      :root:not([data-theme="light"]) .proof-icon { color: #a9a4ff; background: rgba(124, 117, 255, 0.14); }
+      :root:not([data-theme="light"]) .proof-icon-warm { color: #ffb347; background: rgba(255, 170, 60, 0.14); }
+      :root:not([data-theme="light"]) .proof-icon-violet { color: #c2a8ff; background: rgba(160, 120, 255, 0.16); }
+      :root:not([data-theme="light"]) .hero-format-strip { border-color: rgba(255, 255, 255, 0.08); background: rgba(255, 255, 255, 0.03); }
+      :root:not([data-theme="light"]) .hero-format-strip p { color: #eef2ff; }
+      :root:not([data-theme="light"]) .format-chips .tone-violet { color: #c2b3ff; background: rgba(140, 110, 255, 0.16); }
+      :root:not([data-theme="light"]) .format-chips .tone-blue { color: #9cc0ff; background: rgba(80, 140, 255, 0.16); }
+      :root:not([data-theme="light"]) .format-chips .tone-green { color: #7fdcae; background: rgba(40, 180, 120, 0.15); }
+      :root:not([data-theme="light"]) .format-chips .tone-red { color: #ff9aa9; background: rgba(240, 70, 100, 0.15); }
+      :root:not([data-theme="light"]) .format-chips .tone-orange { color: #ffc07a; background: rgba(240, 140, 40, 0.15); }
+      :root:not([data-theme="light"]) .format-chips a { color: #d4dbef; border-color: rgba(255, 255, 255, 0.12); background: rgba(255, 255, 255, 0.04); }
+
+      :root:not([data-theme="light"]) .player-section-head h2,
+      :root:not([data-theme="light"]) .rail-heading h2,
+      :root:not([data-theme="light"]) .features-section > h2,
+      :root:not([data-theme="light"]) .section-head h2,
+      :root:not([data-theme="light"]) .comments-head h2 { color: #f2f5ff; }
+      :root:not([data-theme="light"]) .player-section-head p,
+      :root:not([data-theme="light"]) .rail-heading p,
+      :root:not([data-theme="light"]) .section-head p,
+      :root:not([data-theme="light"]) .features-section .section-desc { color: #9aa6c2; }
+      :root:not([data-theme="light"]) .player-wrapper { border-color: #151e34; box-shadow: 0 30px 75px rgba(0, 0, 0, 0.45); }
+      :root:not([data-theme="light"]) .how-section { border-bottom-color: rgba(255, 255, 255, 0.08); }
+      :root:not([data-theme="light"]) .how-step-num { color: #b9b4ff; background: rgba(124, 117, 255, 0.16); }
+      :root:not([data-theme="light"]) .how-step-icon { color: #b9b4ff; border-color: rgba(255, 255, 255, 0.1); background: rgba(255, 255, 255, 0.04); }
+      :root:not([data-theme="light"]) .how-step:not(:last-child)::after { background: #5d6985; }
+      :root:not([data-theme="light"]) .how-step-copy strong { color: #eef2ff; }
+      :root:not([data-theme="light"]) .how-step-copy small { color: #8f9bb6; }
+      :root:not([data-theme="light"]) .way-card { color: #eef2ff; }
+      :root:not([data-theme="light"]) .way-card:hover { border-color: rgba(255, 255, 255, 0.14); box-shadow: 0 18px 40px rgba(0, 0, 0, 0.35); }
+      :root:not([data-theme="light"]) .way-card.tone-green { background: linear-gradient(150deg, rgba(40, 170, 120, 0.14), rgba(60, 120, 200, 0.08)); }
+      :root:not([data-theme="light"]) .way-card.tone-blue { background: linear-gradient(150deg, rgba(70, 120, 255, 0.16), rgba(70, 100, 220, 0.1)); }
+      :root:not([data-theme="light"]) .way-card.tone-violet { background: linear-gradient(150deg, rgba(140, 100, 255, 0.16), rgba(100, 100, 230, 0.1)); }
+      :root:not([data-theme="light"]) .way-card.tone-peach { background: linear-gradient(150deg, rgba(255, 140, 90, 0.14), rgba(255, 170, 110, 0.08)); }
+      :root:not([data-theme="light"]) .way-card-icon { background: rgba(255, 255, 255, 0.08); box-shadow: none; }
+      :root:not([data-theme="light"]) .tone-green .way-card-icon { color: #6fe0a8; }
+      :root:not([data-theme="light"]) .tone-blue .way-card-icon { color: #8fb4ff; }
+      :root:not([data-theme="light"]) .tone-violet .way-card-icon { color: #b9a4ff; }
+      :root:not([data-theme="light"]) .way-card small { color: #9aa6c2; }
+      :root:not([data-theme="light"]) .feature-card { color: #eef2ff; }
+      :root:not([data-theme="light"]) .feature-card:nth-child(4n+1) { background: linear-gradient(145deg, rgba(40, 170, 120, 0.12), rgba(60, 120, 200, 0.07)); }
+      :root:not([data-theme="light"]) .feature-card:nth-child(4n+2) { background: linear-gradient(145deg, rgba(70, 120, 255, 0.14), rgba(70, 100, 220, 0.08)); }
+      :root:not([data-theme="light"]) .feature-card:nth-child(4n+3) { background: linear-gradient(145deg, rgba(140, 100, 255, 0.14), rgba(100, 100, 230, 0.08)); }
+      :root:not([data-theme="light"]) .feature-card:nth-child(4n+4) { background: linear-gradient(145deg, rgba(255, 140, 90, 0.12), rgba(255, 170, 110, 0.07)); }
+      :root:not([data-theme="light"]) .feature-card:hover { border-color: rgba(255, 255, 255, 0.12); box-shadow: 0 18px 38px rgba(0, 0, 0, 0.3); }
+      :root:not([data-theme="light"]) .feature-icon { color: #b9b4ff; background: rgba(255, 255, 255, 0.07); box-shadow: none; }
+      :root:not([data-theme="light"]) .feature-card h3 { color: #eef2ff; }
+      :root:not([data-theme="light"]) .feature-card p { color: #9aa6c2; }
+      :root:not([data-theme="light"]) .spec-panel { border-color: rgba(255, 255, 255, 0.08); background: rgba(255, 255, 255, 0.03); }
+      :root:not([data-theme="light"]) .spec-panel-head { color: #eef2ff; }
+      :root:not([data-theme="light"]) .spec-panel-head p { color: #8390ab; }
+      :root:not([data-theme="light"]) .spec-chip { box-shadow: none; }
+      :root:not([data-theme="light"]) .spec-chip:nth-child(5n+1) { background: rgba(140, 110, 255, 0.14); }
+      :root:not([data-theme="light"]) .spec-chip:nth-child(5n+2) { background: rgba(80, 140, 255, 0.14); }
+      :root:not([data-theme="light"]) .spec-chip:nth-child(5n+3) { background: rgba(40, 180, 120, 0.13); }
+      :root:not([data-theme="light"]) .spec-chip:nth-child(5n+4) { background: rgba(240, 70, 100, 0.13); }
+      :root:not([data-theme="light"]) .spec-chip:nth-child(5n) { background: rgba(240, 140, 40, 0.13); }
+      :root:not([data-theme="light"]) .faq-item { border-color: rgba(255, 255, 255, 0.08); }
+      :root:not([data-theme="light"]) .faq-item summary { color: #eef2ff; }
+      :root:not([data-theme="light"]) .comment-card { border-color: rgba(255, 255, 255, 0.08); background: #121a2e; box-shadow: none; }
+      :root:not([data-theme="light"]) .comment-form { border-color: rgba(255, 255, 255, 0.1); background: #121a2e; box-shadow: none; }
+      :root:not([data-theme="light"]) .extension-cta {
+        border-color: rgba(255, 255, 255, 0.08);
+        background:
+          radial-gradient(circle at 0 100%, rgba(116, 96, 255, 0.24), transparent 31%),
+          radial-gradient(circle at 100% 0, rgba(63, 146, 255, 0.2), transparent 34%),
+          linear-gradient(110deg, #141a38, #0f1c33);
+      }
+      :root:not([data-theme="light"]) .extension-cta h2 { color: #f2f5ff; }
+      :root:not([data-theme="light"]) .extension-cta p { color: #9aa6c2; }
+      :root:not([data-theme="light"]) .drop-overlay { background: rgba(10, 15, 30, 0.9); }
+      :root:not([data-theme="light"]) .drop-overlay-content { color: #eef2ff; border-color: rgba(124, 117, 255, 0.5); background: rgba(18, 26, 46, 0.9); }
+      :root:not([data-theme="light"]) .nav-right > .nav-icon-link:not(.nav-chrome-icon),
+      :root:not([data-theme="light"]) .nav-right > .nav-icon-btn { color: #c9d2e6; border-color: rgba(255, 255, 255, 0.1); background: rgba(255, 255, 255, 0.06); box-shadow: 0 6px 18px rgba(0, 0, 0, 0.3); }
+      :root:not([data-theme="light"]) .site-footer { color: #aab4cc; background: #0a0f1e; border-top-color: rgba(255, 255, 255, 0.08); }
+      :root:not([data-theme="light"]) .site-footer .brand-text { color: #f2f5ff; }
+      :root:not([data-theme="light"]) .site-footer-brand p,
+      :root:not([data-theme="light"]) .site-footer-links a { color: #aab4cc; }
+      :root:not([data-theme="light"]) .site-footer-links a:hover,
+      :root:not([data-theme="light"]) .site-footer-social a:hover { color: #a9a4ff; }
+      :root:not([data-theme="light"]) .site-footer-social a { color: #c9d2e6; }
+      :root:not([data-theme="light"]) .site-footer-social a:hover { background: rgba(255, 255, 255, 0.07); }
+      :root:not([data-theme="light"]) .site-footer-social text { fill: #0a0f1e; }
+      :root:not([data-theme="light"]) .site-footer-base { border-color: rgba(255, 255, 255, 0.08); }
+      /* ── Proof + formats, calmer ────────────────────────────────────────
+         Four equal claims and a format list read as one band: no rules
+         between the claims, icons without their coloured discs, and the
+         formats as one quiet line of same-looking chips instead of a boxed
+         rainbow spread across the full width. */
+      .hero-proof { margin-top: 2.6rem; padding-top: 1.6rem; gap: 1.5rem; }
+      .hero-proof > div,
+      .hero-proof > div:first-child { gap: 0.75rem; padding: 0; border-right: 0; }
+      .proof-icon,
+      .proof-icon-warm,
+      .proof-icon-violet {
+        width: 36px;
+        height: 36px;
+        border-radius: 10px;
+        background: #eef2fb;
+      }
+      .proof-icon svg { width: 19px; height: 19px; }
+      .hero-proof strong { font-size: 0.84rem; }
+      .hero-proof small { font-size: 0.74rem; }
+
+      .hero-format-strip {
+        gap: 1rem;
+        margin-top: 1.4rem;
+        padding: 0;
+        border: 0;
+        border-radius: 0;
+        background: transparent;
+      }
+      .hero-format-strip p {
+        color: #74819a;
+        font: 700 0.66rem/1 "DM Mono", monospace;
+        letter-spacing: 0.14em;
+        text-transform: uppercase;
+      }
+      .hero-format-strip p br { display: none; }
+      .format-chips { justify-content: flex-start; gap: 0.4rem; }
+      .format-chips li,
+      .format-chips .tone-violet,
+      .format-chips .tone-blue,
+      .format-chips .tone-green,
+      .format-chips .tone-red,
+      .format-chips .tone-orange {
+        padding: 0.34rem 0.62rem;
+        border: 1px solid #e3e9f3;
+        border-radius: 0.45rem;
+        color: #4f5e7b;
+        background: #fff;
+        font-size: 0.72rem;
+      }
+      .format-chips li:last-child { padding: 0; border: 0; background: transparent; }
+      .format-chips a {
+        padding: 0.34rem 0.3rem;
+        border: 0;
+        color: #5a55e6;
+        background: transparent;
+        font-weight: 600;
+      }
+      .format-chips a:hover { text-decoration: underline; }
+
+      :root:not([data-theme="light"]) .proof-icon,
+      :root:not([data-theme="light"]) .proof-icon-warm,
+      :root:not([data-theme="light"]) .proof-icon-violet { background: rgba(255, 255, 255, 0.05); }
+      :root:not([data-theme="light"]) .hero-format-strip { background: transparent; }
+      :root:not([data-theme="light"]) .hero-format-strip p { color: #7c88a3; }
+      :root:not([data-theme="light"]) .format-chips li,
+      :root:not([data-theme="light"]) .format-chips .tone-violet,
+      :root:not([data-theme="light"]) .format-chips .tone-blue,
+      :root:not([data-theme="light"]) .format-chips .tone-green,
+      :root:not([data-theme="light"]) .format-chips .tone-red,
+      :root:not([data-theme="light"]) .format-chips .tone-orange { color: #aab4cc; border-color: rgba(255, 255, 255, 0.09); background: rgba(255, 255, 255, 0.03); }
+      :root:not([data-theme="light"]) .format-chips li:last-child { border: 0; background: transparent; }
+      :root:not([data-theme="light"]) .format-chips a { color: #a9a4ff; background: transparent; }
+      /* With the formats no longer a boxed band, the hero's bottom padding and
+         the player section's top padding added up to an empty 134px. */
+      .hero { padding-top: 11.4rem; padding-bottom: 1.4rem; }
+      @media (max-width: 640px) {
+        .hero { padding-top: 8rem; }
+        /* Tabs as wide as the URL bar beneath them. */
+        .hero--split .hero-mode-tabs { width: 100%; }
+      }
+      .player-section { padding-top: 3.4rem; }
+      @media (max-width: 1100px) {
+        .hero-format-strip { flex-direction: row; flex-wrap: wrap; align-items: center; }
+      }
+      @media (max-width: 920px) {
+        .hero-proof { gap: 1rem 1.5rem; }
+        .hero-proof > div:nth-child(n+3) { padding-top: 0; border-top: 0; }
+      }
+      @media (max-width: 640px) {
+        .hero-proof { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+        .hero-proof > div { border-top: 0; padding: 0; }
+        .hero-format-strip { gap: 0.7rem; }
+      }
+    </style>
     <!-- Drop Zone Overlay -->
     <div class="drop-overlay" id="drop-overlay">
       <div class="drop-overlay-content">
@@ -4501,26 +5850,37 @@
       <div class="nav-left">
         <a href="/" class="brand" aria-label="MoviPlayer — home">
           <svg class="brand-logo" viewBox="0 0 100 100" aria-hidden="true">
-            <defs>
-              <linearGradient id="brand-logo-grad" x1="0%" y1="0%" x2="100%" y2="100%">
-                <stop offset="0%" stop-color="#8a7cf2"/>
-                <stop offset="100%" stop-color="#6c5dd3"/>
-              </linearGradient>
-            </defs>
-            <circle cx="50" cy="50" r="46" fill="url(#brand-logo-grad)"/>
-            <polygon points="40,29 40,71 73,50" fill="#ffffff"/>
-          </svg>
+              <defs>
+                <linearGradient id="brand-logo-left" gradientUnits="userSpaceOnUse" x1="27" y1="18" x2="27" y2="84"><stop offset="0" stop-color="#6366ff"/><stop offset=".5" stop-color="#3d4dff"/><stop offset="1" stop-color="#1638d2"/></linearGradient>
+                <linearGradient id="brand-logo-top" gradientUnits="userSpaceOnUse" x1="27" y1="20" x2="80" y2="50"><stop offset="0" stop-color="#86b6ff"/><stop offset=".55" stop-color="#4f86ff"/><stop offset="1" stop-color="#14aaff"/></linearGradient>
+                <linearGradient id="brand-logo-bottom" gradientUnits="userSpaceOnUse" x1="27" y1="80" x2="80" y2="50"><stop offset="0" stop-color="#5a4dff"/><stop offset=".5" stop-color="#8e72ff"/><stop offset="1" stop-color="#7cb9ff"/></linearGradient>
+              </defs>
+              <!-- Three ribbons folded into a play mark: the bottom one under the
+                   top at the point, the left one over the top at its corner and
+                   under the bottom at its foot. -->
+              <g fill="none" stroke-linecap="round" stroke-width="17">
+                <path d="M77 52 27 80" stroke="url(#brand-logo-bottom)"/>
+                <path d="M27 20 77 48" stroke="url(#brand-logo-top)"/>
+                <path d="M27 20v60" stroke="url(#brand-logo-left)"/>
+                <path d="M27 80 41 72.2" stroke="url(#brand-logo-bottom)"/>
+              </g>
+            </svg>
           <span class="brand-text">MoviPlayer</span>
         </a>
         <ul class="nav-links">
-          <li><a href="#" class="active">Player</a></li>
+          <li><a href="/" class="active">Player</a></li>
           <li><a href="/examples">Examples</a></li>
           <li><a href="/compare">Compare</a></li>
           <li class="nav-link-docs"><a href="/docs" target="_blank" rel="noopener">Docs</a></li>
         </ul>
       </div>
       <div class="nav-right">
-        <a href="https://chromewebstore.google.com/detail/movi-player/ckleeigcopjnpehkjokijokjegknfgej" target="_blank" rel="noopener" class="nav-icon-link" aria-label="Chrome Extension" title="Get Chrome Extension">
+        <label class="nav-search" aria-label="Search the site">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><circle cx="11" cy="11" r="7"></circle><path d="m20 20-3.5-3.5"></path></svg>
+          <input type="search" id="site-search" placeholder="Search anything..." autocomplete="off" spellcheck="false" />
+          <kbd aria-hidden="true">/</kbd>
+        </label>
+        <a href="https://chromewebstore.google.com/detail/movi-player/ckleeigcopjnpehkjokijokjegknfgej" target="_blank" rel="noopener" class="nav-icon-link nav-chrome-icon" aria-label="Chrome Extension" title="Get Chrome Extension">
           <svg width="18" height="18" viewBox="0 0 512 512" fill="currentColor"><path d="M188.8,255.93A67.2,67.2,0,1,0,256,188.75,67.38,67.38,0,0,0,188.8,255.93Z"/><path d="M476.75,217.79s0,0,0,.05a206.63,206.63,0,0,0-7-28.84h-.11a202.16,202.16,0,0,1,7.07,29h0a203.5,203.5,0,0,0-7.07-29H314.24c19.05,17,31.36,40.17,31.36,67.05a86.55,86.55,0,0,1-12.31,44.73L231,478.45a2.44,2.44,0,0,1,0,.27V479h0v-.26A224,224,0,0,0,256,480c6.84,0,13.61-.39,20.3-1a222.91,222.91,0,0,0,29.78-4.74C405.68,451.52,480,362.4,480,255.94A225.25,225.25,0,0,0,476.75,217.79Z"/><path d="M256,345.5c-33.6,0-61.6-17.91-77.29-44.79L76,123.05l-.14-.24A224,224,0,0,0,207.4,474.55l0-.05,77.69-134.6A84.13,84.13,0,0,1,256,345.5Z"/><path d="M91.29,104.57l77.35,133.25A89.19,89.19,0,0,1,256,166H461.17a246.51,246.51,0,0,0-25.78-43.94l.12.08A245.26,245.26,0,0,1,461.17,166h.17a245.91,245.91,0,0,0-25.66-44,2.63,2.63,0,0,1-.35-.26A223.93,223.93,0,0,0,91.14,104.34l.14.24Z"/></svg>
         </a>
         <a href="https://github.com/mrujjwalg/movi-player" target="_blank" rel="noopener" class="nav-icon-link" aria-label="GitHub" title="View on GitHub">
@@ -4531,6 +5891,9 @@
           <span class="label">DEV</span>
           <span class="track" aria-hidden="true"><span class="thumb"></span></span>
         </button>
+        <a class="nav-extension-cta" href="https://chromewebstore.google.com/detail/movi-player/ckleeigcopjnpehkjokijokjegknfgej" target="_blank" rel="noopener">
+          <span class="chrome-badge"><svg class="chrome-logo" viewBox="0 0 48 48" aria-hidden="true"><circle cx="24" cy="24" r="12" fill="#fff"/><path d="M24 12h20.78A24 24 0 0 0 3.22 12L13.61 30A12 12 0 0 1 24 12Z" fill="#ea4335"/><path d="M34.39 30 24 48A24 24 0 0 0 44.78 12H24a12 12 0 0 1 10.39 18Z" fill="#fbbc04"/><path d="M13.61 30 3.22 12A24 24 0 0 0 24 48l10.39-18a12 12 0 0 1-20.78 0Z" fill="#34a853"/><circle cx="24" cy="24" r="9.5" fill="#1a73e8"/></svg></span> Get Extension
+        </a>
       </div>
     </nav>
 
@@ -4683,55 +6046,18 @@
              them stops the headline and the input fighting for the same
              vertical centre, and puts a real control above the fold on a
              laptop instead of below it. -->
+        <div class="hero-left">
         <div class="hero-copy">
-          <p class="hero-kicker"><span></span> Your private screening room</p>
-          <h1 aria-label="MoviPlayer — Free online video player. Play any video without download.">
-            Your media.<br><span class="highlight">Now showing.</span>
+          <p class="hero-kicker"><span></span> Your videos. Your way.</p>
+          <h1 aria-label="MoviPlayer — Free online video player. Play any video right in your browser.">
+            Play any video<br><span class="highlight">right in your browser</span>
           </h1>
           <p class="hero-tagline">
-            Turn any file or link into a cinema-ready stream. MKV, HEVC, AV1 and 4K HDR play right here, with no upload and no account.
+            Open a local file, folder, or any video URL and enjoy smooth, high-quality playback. No uploads. No signup. Just open and play.
           </p>
 
           <div class="hero-meta" aria-label="Playback highlights">
             <span>2026</span><span>4K HDR</span><span>Spatial audio</span><span>All formats</span>
-          </div>
-
-          <!-- Subtle trust strip -->
-          <div class="hero-trust">
-            <span class="trust-item">
-              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/></svg>
-              Stays on your device
-            </span>
-            <span class="trust-dot"></span>
-            <span class="trust-item">
-              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg>
-              Free, no sign-up
-            </span>
-            <span class="trust-dot"></span>
-            <a class="trust-item trust-item-verified" href="https://chromewebstore.google.com/detail/movi-player/ckleeigcopjnpehkjokijokjegknfgej" target="_blank" rel="noopener" title="Verified publisher on the Chrome Web Store">
-              <svg viewBox="0 0 24 24" aria-hidden="true"><path fill="#4d9bff" d="M23 12l-2.44-2.78.34-3.68-3.61-.82-1.89-3.18L12 3 8.6 1.54 6.71 4.72 3.1 5.53l.34 3.68L1 12l2.44 2.78-.34 3.69 3.61.82 1.89 3.18L12 21l3.4 1.46 1.89-3.18 3.61-.82-.34-3.68L23 12z"/><path fill="#fff" d="M10.09 16.72 6 12.59l1.41-1.41 2.68 2.68 6.68-6.68L18.18 8.6l-8.09 8.12z"/></svg>
-              Verified Chrome extension
-            </a>
-          </div>
-
-          <!-- Install/usage badges, proxied same-origin from /badge/*.svg (worker.js) -->
-          <div class="hero-badges" aria-label="Extension stats">
-            <!-- No Chrome badge here. The store publishes a "users" figure, not
-                 installs, and it does not track them: the dashboard showed 197
-                 installs over four weeks and climbing while the public number
-                 read 5. Standing next to real download counts it read as a dead
-                 extension. The verified-publisher item above carries the trust
-                 this was meant to; /badge/chrome.svg still exists if a metric
-                 worth showing ever appears (ratings, once there are some). -->
-            <a href="https://marketplace.visualstudio.com/items?itemName=mrujjwalg.movi-player-vscode" rel="noopener" target="_blank" title="Movi Player on the VS Code Marketplace">
-              <img src="/badge/vscode.svg" height="20" loading="lazy" decoding="async" alt="VS Code Marketplace downloads" />
-            </a>
-            <a href="https://www.npmjs.com/package/movi-player" rel="noopener" target="_blank" title="movi-player on npm">
-              <img src="/badge/npm.svg" height="20" loading="lazy" decoding="async" alt="npm total downloads" />
-            </a>
-            <a href="https://www.jsdelivr.com/package/npm/movi-player" rel="noopener" target="_blank" title="movi-player on jsDelivr">
-              <img src="/badge/jsdelivr.svg" height="20" loading="lazy" decoding="async" alt="jsDelivr CDN downloads" />
-            </a>
           </div>
 
           <!-- Format strip — small footnote so it doesn't dominate the hero -->
@@ -4750,6 +6076,20 @@
           <div class="hero-panel-heading">
             <span class="hero-panel-label">Start watching</span>
             <span class="hero-panel-status"><i></i> Ready on this device</span>
+          </div>
+          <div class="hero-mode-tabs" role="group" aria-label="Choose how to open a video">
+            <button class="hero-mode-tab active" type="button" data-hero-mode="url" aria-pressed="true">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M10 13a5 5 0 0 0 7.1.1l2-2a5 5 0 0 0-7.1-7.1l-1.1 1.1"/><path d="M14 11a5 5 0 0 0-7.1-.1l-2 2a5 5 0 0 0 7.1 7.1l1.1-1.1"/></svg>
+              URL
+            </button>
+            <button class="hero-mode-tab" type="button" data-hero-mode="file">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><path d="M14 2v6h6"/></svg>
+              Files
+            </button>
+            <button class="hero-mode-tab" type="button" data-hero-mode="folder">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/></svg>
+              Folder
+            </button>
           </div>
           <div class="url-bar hero-url-bar">
             <input
@@ -4904,8 +6244,145 @@
           </div>
 
         </div>
+
+          <div class="hero-proof-grid">
+          <!-- Subtle trust strip -->
+          <div class="hero-trust">
+            <span class="trust-item">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/></svg>
+              Stays on your device
+            </span>
+            <span class="trust-dot"></span>
+            <span class="trust-item">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg>
+              Free, no sign-up
+            </span>
+            <span class="trust-dot"></span>
+            <a class="trust-item trust-item-verified" href="https://chromewebstore.google.com/detail/movi-player/ckleeigcopjnpehkjokijokjegknfgej" target="_blank" rel="noopener" title="Verified publisher on the Chrome Web Store">
+              <svg viewBox="0 0 24 24" aria-hidden="true"><path fill="#4d9bff" d="M23 12l-2.44-2.78.34-3.68-3.61-.82-1.89-3.18L12 3 8.6 1.54 6.71 4.72 3.1 5.53l.34 3.68L1 12l2.44 2.78-.34 3.69 3.61.82 1.89 3.18L12 21l3.4 1.46 1.89-3.18 3.61-.82-.34-3.68L23 12z"/><path fill="#fff" d="M10.09 16.72 6 12.59l1.41-1.41 2.68 2.68 6.68-6.68L18.18 8.6l-8.09 8.12z"/></svg>
+              Verified Chrome extension
+            </a>
+          </div>
+
+          <!-- Install/usage badges, proxied same-origin from /badge/*.svg (worker.js) -->
+          <div class="hero-badges" aria-label="Extension stats">
+            <!-- No Chrome badge here. The store publishes a "users" figure, not
+                 installs, and it does not track them: the dashboard showed 197
+                 installs over four weeks and climbing while the public number
+                 read 5. Standing next to real download counts it read as a dead
+                 extension. The verified-publisher item above carries the trust
+                 this was meant to; /badge/chrome.svg still exists if a metric
+                 worth showing ever appears (ratings, once there are some). -->
+            <!-- Our own pills rather than the badge images: the numbers come from
+                 the same /badge/*.svg endpoints (read out of their aria-label),
+                 but drawn in the page's type and shape instead of shields.io's
+                 Verdana blocks. A pill whose count doesn't arrive stays hidden. -->
+            <a class="stat-pill" data-badge="vscode" href="https://marketplace.visualstudio.com/items?itemName=mrujjwalg.movi-player-vscode" rel="noopener" target="_blank" title="Movi Player on the VS Code Marketplace" hidden>
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m8 7-5 5 5 5M16 7l5 5-5 5"/></svg>
+              <b>—</b><span>VS Code installs</span>
+            </a>
+            <a class="stat-pill" data-badge="npm" href="https://www.npmjs.com/package/movi-player" rel="noopener" target="_blank" title="movi-player on npm" hidden>
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21 8 12 3 3 8v8l9 5 9-5z"/><path d="m3 8 9 5 9-5M12 13v8"/></svg>
+              <b>—</b><span>npm downloads</span>
+            </a>
+            <a class="stat-pill" data-badge="jsdelivr" href="https://www.jsdelivr.com/package/npm/movi-player" rel="noopener" target="_blank" title="movi-player on jsDelivr" hidden>
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 3v12M7 10l5 5 5-5"/><path d="M4 19h16"/></svg>
+              <b>—</b><span>jsDelivr hits / yr</span>
+            </a>
+          </div>
+          <script>
+            (function () {
+              document.querySelectorAll(".stat-pill[data-badge]").forEach(function (pill) {
+                fetch("/badge/" + pill.getAttribute("data-badge") + ".svg")
+                  .then(function (r) { return r.ok ? r.text() : ""; })
+                  .then(function (svg) {
+                    var m = /aria-label="[^":]*:\s*([^"]+)"/.exec(svg);
+                    if (!m) return;
+                    pill.querySelector("b").textContent = m[1].trim();
+                    pill.hidden = false;
+                  })
+                  .catch(function () {});
+              });
+            })();
+          </script>
+          </div>
+        </div>
+
+        <div class="hero-showcase" aria-label="MoviPlayer preview playing a mountain landscape video">
+          <div class="hero-blob hero-blob-a" aria-hidden="true"></div>
+          <div class="hero-blob hero-blob-b" aria-hidden="true"></div>
+          <div class="hero-browser">
+            <div class="hero-browser-bar" aria-hidden="true">
+              <span></span><span></span><span></span>
+            </div>
+            <div class="hero-browser-screen">
+              <img src="/cinematic-hero-v2.webp" alt="Mountain lake video playing in MoviPlayer" width="1536" height="1024" fetchpriority="high" />
+              <div class="hero-browser-note" aria-hidden="true">Just open<br>and play</div>
+              <div class="hero-browser-controls" aria-hidden="true">
+                <svg viewBox="0 0 24 24"><polygon points="6 4 20 12 6 20"/></svg>
+                <span>12:24 / 45:10</span>
+                <i><b></b></i>
+                <svg viewBox="0 0 24 24"><path d="M11 5 6 9H2v6h4l5 4zM15.5 8.5a5 5 0 0 1 0 7"/></svg>
+                <svg viewBox="0 0 24 24"><rect x="3" y="5" width="18" height="14" rx="2"/><path d="M9 10.5c-.4-.5-.9-.8-1.5-.8-1.1 0-2 1-2 2.3s.9 2.3 2 2.3c.6 0 1.1-.3 1.5-.8M18.5 10.5c-.4-.5-.9-.8-1.5-.8-1.1 0-2 1-2 2.3s.9 2.3 2 2.3c.6 0 1.1-.3 1.5-.8"/></svg>
+              </div>
+            </div>
+          </div>
+          <p class="hero-handnote" aria-hidden="true">A better way<br>to watch <span>↘</span></p>
+        </div>
+      </div>
+      <div class="hero-proof" aria-label="MoviPlayer benefits">
+        <div><span class="proof-icon" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><rect x="4.5" y="10.5" width="15" height="10" rx="2.5"/><path d="M8 10.5V7.5a4 4 0 0 1 8 0v3"/><path d="M12 14.5v2"/></svg></span><p><strong>100% Private</strong><small>Nothing leaves your device.</small></p></div>
+        <div><span class="proof-icon proof-icon-warm" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M13 2.5 5 13.5h6l-1 8 8-11h-6z"/></svg></span><p><strong>Plays Instantly</strong><small>No conversion needed.</small></p></div>
+        <div><span class="proof-icon proof-icon-violet" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="12.5" rx="2"/><path d="M8.5 20.5h7M12 16.5v4"/><path d="M10.5 8.5v4l3.5-2z"/></svg></span><p><strong>Works on Any Device</strong><small>Desktop, tablet, or phone.</small></p></div>
+        <div><span class="proof-icon" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M14 3H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8z"/><path d="M14 3v5h5"/><path d="M9 13h6M9 17h4"/></svg></span><p><strong>Supports All Formats</strong><small>From MP4 to AV1, and more.</small></p></div>
+      </div>
+      <div class="hero-format-strip" aria-label="Supported formats">
+        <p>Plays every format</p>
+        <ul class="format-chips">
+          <li class="tone-violet">MKV</li>
+          <li class="tone-blue">MP4</li>
+          <li class="tone-green">HEVC</li>
+          <li class="tone-red">AV1</li>
+          <li class="tone-orange">VP9</li>
+          <li class="tone-blue">MOV</li>
+          <li class="tone-violet">WebM</li>
+          <li class="tone-green">FLAC</li>
+          <li class="tone-red">SRT</li>
+          <li><a href="#formats">and more&hellip;</a></li>
+        </ul>
       </div>
     </section>
+
+    <script>
+      (function () {
+        var tabs = Array.from(document.querySelectorAll(".hero-mode-tab"));
+        var urlInput = document.getElementById("url-input");
+        var fileInput = document.getElementById("file-input");
+        var folderButton = document.getElementById("folder-btn");
+        var playlistButton = document.getElementById("playlist-show-btn");
+        function activate(tab) {
+          tabs.forEach(function (item) {
+            var active = item === tab;
+            item.classList.toggle("active", active);
+            item.setAttribute("aria-pressed", active ? "true" : "false");
+          });
+        }
+        tabs.forEach(function (tab) {
+          tab.addEventListener("click", function () {
+            activate(tab);
+            var mode = tab.getAttribute("data-hero-mode");
+            if (mode === "url") urlInput && urlInput.focus();
+            if (mode === "file") fileInput && fileInput.click();
+            if (mode === "folder") folderButton && folderButton.click();
+            if (mode === "playlist") {
+              if (playlistButton && !playlistButton.hidden) playlistButton.click();
+              else if (folderButton) folderButton.click();
+            }
+          });
+        });
+
+      })();
+    </script>
 
     <!-- ===== PLAYER ===== -->
     <section class="player-section" id="watch">
@@ -5022,40 +6499,64 @@
       </aside>
     </section>
 
+    <!-- ===== HOW IT WORKS ===== -->
+    <section class="features-section how-section" id="how-it-works">
+      <div class="section-head">
+        <div>
+          <span class="section-eyebrow">Get started in seconds</span>
+          <h2>How it works</h2>
+        </div>
+        <p>A simple, powerful way to watch your videos. No uploads. No sign up. No hassle.</p>
+      </div>
+      <ol class="how-steps">
+        <li class="how-step">
+          <span class="how-step-num" aria-hidden="true">1</span>
+          <span class="how-step-icon" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M10 13a5 5 0 0 0 7.1.1l2-2a5 5 0 0 0-7.1-7.1l-1.1 1.1"/><path d="M14 11a5 5 0 0 0-7.1-.1l-2 2a5 5 0 0 0 7.1 7.1l1.1-1.1"/></svg></span>
+          <span class="how-step-copy"><strong>Open a file, folder or URL</strong><small>Choose your video, or paste a link.</small></span>
+        </li>
+        <li class="how-step">
+          <span class="how-step-num" aria-hidden="true">2</span>
+          <span class="how-step-icon" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M7 4.5v15l12-7.5z"/></svg></span>
+          <span class="how-step-copy"><strong>Play in your browser</strong><small>Enjoy smooth, high-quality playback.</small></span>
+        </li>
+        <li class="how-step">
+          <span class="how-step-num" aria-hidden="true">3</span>
+          <span class="how-step-icon" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><path d="M8.5 14a4.5 4.5 0 0 0 7 0"/><path d="M9 9.5h.01M15 9.5h.01"/></svg></span>
+          <span class="how-step-copy"><strong>That&rsquo;s it!</strong><small>No sign up. No uploads. No waiting.</small></span>
+        </li>
+      </ol>
+    </section>
+
     <!-- ===== WATCH MODES ===== -->
-    <section class="watch-rail" aria-labelledby="watch-rail-title">
+    <section class="watch-rail" id="extensions" aria-labelledby="watch-rail-title">
       <div class="rail-heading">
         <div>
-          <span class="section-eyebrow">Choose your source</span>
-          <h2 id="watch-rail-title">Watch it your way</h2>
+          <span class="section-eyebrow">More than a video player</span>
+          <h2 id="watch-rail-title">A smoother, smarter way to watch</h2>
         </div>
-        <p>Your media stays yours. Every option runs locally in this tab.</p>
+        <p>Built for everyone who loves videos &mdash; from casual viewers to power users. MoviPlayer gives you a clean, fast, and flexible playback experience right in your browser.</p>
       </div>
-      <div class="watch-cards">
-        <button class="watch-card watch-card--file" type="button" data-watch-action="file">
-          <span class="watch-card-index">01</span>
-          <span class="watch-card-art" aria-hidden="true">
-            <svg viewBox="0 0 64 64"><path d="M14 8h23l13 13v35H14z"/><path d="M37 8v14h13"/><circle cx="31" cy="38" r="10"/><path d="m28 33 9 5-9 5z"/></svg>
-          </span>
-          <span class="watch-card-copy"><strong>From your device</strong><small>Movies, episodes and audio</small></span>
-          <span class="watch-card-arrow" aria-hidden="true">&#8599;</span>
+      <div class="way-cards">
+        <button class="way-card tone-green" type="button" data-watch-action="link">
+          <span class="way-card-icon" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M13 2.5 5 13.5h6l-1 8 8-11h-6z"/></svg></span>
+          <strong>Play from a URL</strong>
+          <small>Paste any direct video link and start watching instantly.</small>
         </button>
-        <button class="watch-card watch-card--link" type="button" data-watch-action="link">
-          <span class="watch-card-index">02</span>
-          <span class="watch-card-art" aria-hidden="true">
-            <svg viewBox="0 0 64 64"><path d="M26 38 38 26"/><path d="M21 44h-3a10 10 0 0 1 0-20h11"/><path d="M43 20h3a10 10 0 0 1 0 20H35"/></svg>
-          </span>
-          <span class="watch-card-copy"><strong>From a link</strong><small>Direct URLs and streams</small></span>
-          <span class="watch-card-arrow" aria-hidden="true">&#8599;</span>
+        <button class="way-card tone-blue" type="button" data-watch-action="file">
+          <span class="way-card-icon" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M3.5 7a2 2 0 0 1 2-2h4l2 2.5h7a2 2 0 0 1 2 2V17a2 2 0 0 1-2 2h-13a2 2 0 0 1-2-2z"/></svg></span>
+          <strong>Open Files or Folders</strong>
+          <small>Drag &amp; drop or choose files from your device. Play single videos or entire folders.</small>
         </button>
-        <button class="watch-card watch-card--folder" type="button" data-watch-action="folder">
-          <span class="watch-card-index">03</span>
-          <span class="watch-card-art" aria-hidden="true">
-            <svg viewBox="0 0 64 64"><path d="M8 18h19l6 7h23v27H8z"/><path d="M17 37h30M17 44h22"/></svg>
-          </span>
-          <span class="watch-card-copy"><strong>Build a playlist</strong><small>Open a whole folder at once</small></span>
-          <span class="watch-card-arrow" aria-hidden="true">&#8599;</span>
+        <button class="way-card tone-violet" type="button" data-watch-action="folder">
+          <span class="way-card-icon" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M9 6h11M9 12h11M9 18h11"/><path d="M4.5 6h.01M4.5 12h.01M4.5 18h.01"/></svg></span>
+          <strong>Create Playlists</strong>
+          <small>Organize your videos the way you like. Linear or shuffled playback.</small>
         </button>
+        <a class="way-card tone-peach" href="https://chromewebstore.google.com/detail/movi-player/ckleeigcopjnpehkjokijokjegknfgej" target="_blank" rel="noopener">
+          <span class="way-card-icon way-card-icon--chrome" aria-hidden="true"><svg class="chrome-logo" viewBox="0 0 48 48" aria-hidden="true"><circle cx="24" cy="24" r="12" fill="#fff"/><path d="M24 12h20.78A24 24 0 0 0 3.22 12L13.61 30A12 12 0 0 1 24 12Z" fill="#ea4335"/><path d="M34.39 30 24 48A24 24 0 0 0 44.78 12H24a12 12 0 0 1 10.39 18Z" fill="#fbbc04"/><path d="M13.61 30 3.22 12A24 24 0 0 0 24 48l10.39-18a12 12 0 0 1-20.78 0Z" fill="#34a853"/><circle cx="24" cy="24" r="9.5" fill="#1a73e8"/></svg></span>
+          <strong>Chrome Extension</strong>
+          <small>Add MoviPlayer to your browser and open video links with one click.</small>
+        </a>
       </div>
     </section>
     <script>
@@ -5073,7 +6574,7 @@
     </script>
 
     <!-- ===== FEATURES ===== -->
-    <section class="features-section">
+    <section class="features-section" id="features">
       <h2>Why people love MoviPlayer</h2>
       <p class="section-desc">A simple, free <strong>online video player</strong> for the files other players give up on. Drop a movie, paste a link &mdash; it just plays.</p>
       <!-- Four cards, so two columns — a 3+1 row leaves an orphan. -->
@@ -5109,37 +6610,8 @@
       </div>
     </section>
 
-    <!-- ===== HOW IT WORKS ===== -->
-    <section class="features-section">
-      <h2>How it works</h2>
-      <p class="section-desc">Three steps. No sign-up, no installs, no waiting.</p>
-      <div class="features-grid">
-        <div class="feature-card">
-          <div class="feature-icon">
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg>
-          </div>
-          <h3>1. Open your video</h3>
-          <p>Drag a file onto the page, click "Pick a video" to browse, or paste a video link. Whatever's easiest &mdash; folders work too, the whole folder becomes a playlist.</p>
-        </div>
-        <div class="feature-card">
-          <div class="feature-icon">
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polygon points="5 3 19 12 5 21 5 3"/></svg>
-          </div>
-          <h3>2. It just plays</h3>
-          <p>No "unsupported format" errors. No "install this codec" pop-ups. No converting. Whatever you give it &mdash; an MKV with HEVC, an old AVI, a 4K HDR file &mdash; it figures it out and plays right away.</p>
-        </div>
-        <div class="feature-card">
-          <div class="feature-icon">
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>
-          </div>
-          <h3>3. Full control</h3>
-          <p>Speed up, slow down, picture-in-picture, fullscreen, keyboard shortcuts, scrub thumbnails, even-loudness audio &mdash; everything you'd expect from a real video player, all built in.</p>
-        </div>
-      </div>
-    </section>
-
     <!-- ===== SUPPORTED FORMATS ===== -->
-    <section class="features-section">
+    <section class="features-section" id="formats">
       <h2>What can it play?</h2>
       <p class="section-desc">Pretty much anything. From old AVI files to modern 4K HDR movies &mdash; right in your browser, with no software to install. Behind the scenes it uses FFmpeg (the same engine that powers VLC and most pro tools) along with your browser's WebCodecs API for fast, hardware-accelerated playback.</p>
       <!-- The board below carries the same names, but as labelled chips. This
@@ -5226,6 +6698,20 @@
           <h3>Subtitles that never show up</h3>
           <p>The &lt;video&gt; tag only reads WebVTT from a separate &lt;track&gt;, so the SRT and ASS subtitles baked into an MKV are invisible to it. MoviPlayer reads them straight out of the file &mdash; styling and all &mdash; and takes .srt or .ass files you drop in alongside.</p>
         </div>
+        <div class="feature-card">
+          <div class="feature-icon">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><circle cx="12" cy="12" r="3"/><path d="M12 2a10 10 0 0 1 7.07 2.93"/></svg>
+          </div>
+          <h3>Old AVI, DivX and DVD rips</h3>
+          <p>Browsers never learned AVI, FLV or DVD&rsquo;s MPEG-PS, and they can&rsquo;t decode the DivX/Xvid (MPEG-4) or MPEG-2 video inside them either. MoviPlayer opens those old files and decodes them in software, so a clip from 2008 plays next to a 4K movie.</p>
+        </div>
+        <div class="feature-card">
+          <div class="feature-icon">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3l1.9 5.1L19 10l-5.1 1.9L12 17l-1.9-5.1L5 10l5.1-1.9z"/><path d="M19 17l.8 2.2L22 20l-2.2.8L19 23l-.8-2.2L16 20l2.2-.8z"/></svg>
+          </div>
+          <h3>New H.266 (VVC) files</h3>
+          <p>VVC is the successor to HEVC, and no browser can play it yet &mdash; the file just won&rsquo;t start. MoviPlayer carries its own H.266 decoder, so these files open in a normal browser tab today.</p>
+        </div>
       </div>
       <p class="section-desc" style="margin-top: 2rem; margin-bottom: 0;">There&rsquo;s no server transcoding involved: your file is never uploaded or re-encoded in the cloud. Demuxing, decoding and subtitles all happen on your own device.</p>
     </section>
@@ -5297,7 +6783,10 @@
          exactly what Google's rich-results policy excludes. -->
     <section class="features-section comments-section" id="comments" hidden>
       <div class="comments-head">
-        <h2>What visitors are saying</h2>
+        <div>
+          <span class="section-eyebrow">Loved by video lovers</span>
+          <h2>What people are saying</h2>
+        </div>
         <span class="comments-score" id="comments-score" hidden></span>
       </div>
       <p class="section-desc">
@@ -5369,6 +6858,14 @@
       <span>Back to player</span>
     </button>
 
+    <section class="extension-cta" aria-labelledby="extension-cta-title">
+      <h2 id="extension-cta-title">Ready to play your videos?</h2>
+      <p>A cleaner, faster, and more personal video playback experience.</p>
+      <a href="https://chromewebstore.google.com/detail/movi-player/ckleeigcopjnpehkjokijokjegknfgej" target="_blank" rel="noopener">
+        <span class="cta-chrome"><svg class="chrome-logo" viewBox="0 0 48 48" aria-hidden="true"><circle cx="24" cy="24" r="12" fill="#fff"/><path d="M24 12h20.78A24 24 0 0 0 3.22 12L13.61 30A12 12 0 0 1 24 12Z" fill="#ea4335"/><path d="M34.39 30 24 48A24 24 0 0 0 44.78 12H24a12 12 0 0 1 10.39 18Z" fill="#fbbc04"/><path d="M13.61 30 3.22 12A24 24 0 0 0 24 48l10.39-18a12 12 0 0 1-20.78 0Z" fill="#34a853"/><circle cx="24" cy="24" r="9.5" fill="#1a73e8"/></svg></span> Add to Chrome <span aria-hidden="true">→</span>
+      </a>
+    </section>
+
     <!-- ===== FOOTER (identical on every page — see app/shared.css) ===== -->
     <footer class="site-footer">
       <div class="site-footer-inner">
@@ -5376,17 +6873,23 @@
           <a href="/" class="brand" aria-label="MoviPlayer — home">
             <svg class="brand-logo" viewBox="0 0 100 100" aria-hidden="true">
               <defs>
-                <linearGradient id="footer-logo-grad" x1="0%" y1="0%" x2="100%" y2="100%">
-                  <stop offset="0%" stop-color="#8a7cf2"/>
-                  <stop offset="100%" stop-color="#6c5dd3"/>
-                </linearGradient>
+                <linearGradient id="footer-logo-left" gradientUnits="userSpaceOnUse" x1="27" y1="18" x2="27" y2="84"><stop offset="0" stop-color="#6366ff"/><stop offset=".5" stop-color="#3d4dff"/><stop offset="1" stop-color="#1638d2"/></linearGradient>
+                <linearGradient id="footer-logo-top" gradientUnits="userSpaceOnUse" x1="27" y1="20" x2="80" y2="50"><stop offset="0" stop-color="#86b6ff"/><stop offset=".55" stop-color="#4f86ff"/><stop offset="1" stop-color="#14aaff"/></linearGradient>
+                <linearGradient id="footer-logo-bottom" gradientUnits="userSpaceOnUse" x1="27" y1="80" x2="80" y2="50"><stop offset="0" stop-color="#5a4dff"/><stop offset=".5" stop-color="#8e72ff"/><stop offset="1" stop-color="#7cb9ff"/></linearGradient>
               </defs>
-              <circle cx="50" cy="50" r="46" fill="url(#footer-logo-grad)"/>
-              <polygon points="40,29 40,71 73,50" fill="#ffffff"/>
+              <!-- Three ribbons folded into a play mark: the bottom one under the
+                   top at the point, the left one over the top at its corner and
+                   under the bottom at its foot. -->
+              <g fill="none" stroke-linecap="round" stroke-width="17">
+                <path d="M77 52 27 80" stroke="url(#footer-logo-bottom)"/>
+                <path d="M27 20 77 48" stroke="url(#footer-logo-top)"/>
+                <path d="M27 20v60" stroke="url(#footer-logo-left)"/>
+                <path d="M27 80 41 72.2" stroke="url(#footer-logo-bottom)"/>
+              </g>
             </svg>
             <span class="brand-text">MoviPlayer</span>
           </a>
-          <p>Made with <a href="https://github.com/mrujjwalg/movi-player" target="_blank" rel="noopener">movi-player</a> &mdash; an open-source video player that runs in your browser.</p>
+          <p>Play your videos. Your way.</p>
         </div>
         <div class="site-footer-links">
           <a href="/">Player</a>
@@ -5402,6 +6905,11 @@
           <a href="/docs/privacy-policy" target="_blank" rel="noopener">Privacy Policy</a>
           <a href="/docs/terms-of-service" target="_blank" rel="noopener">Terms of Service</a>
           <a href="mailto:abuse@moviplayer.com">Report abuse / copyright</a>
+        </div>
+        <div class="site-footer-social" aria-label="MoviPlayer elsewhere">
+          <a href="https://github.com/mrujjwalg/movi-player" target="_blank" rel="noopener" aria-label="GitHub" title="GitHub"><svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M12 .5C5.65.5.5 5.65.5 12a11.5 11.5 0 0 0 7.86 10.92c.58.1.79-.25.79-.56v-2c-3.2.7-3.87-1.37-3.87-1.37-.53-1.33-1.28-1.69-1.28-1.69-1.05-.72.08-.7.08-.7 1.16.08 1.77 1.19 1.77 1.19 1.03 1.77 2.7 1.26 3.36.96.1-.75.4-1.26.73-1.55-2.55-.29-5.24-1.28-5.24-5.69 0-1.26.45-2.28 1.19-3.09-.12-.29-.52-1.46.11-3.05 0 0 .97-.31 3.17 1.18a11 11 0 0 1 5.77 0c2.2-1.49 3.17-1.18 3.17-1.18.63 1.59.23 2.76.11 3.05.74.81 1.19 1.83 1.19 3.09 0 4.42-2.7 5.39-5.26 5.68.41.36.78 1.06.78 2.14v3.17c0 .31.21.67.8.56A11.5 11.5 0 0 0 23.5 12C23.5 5.65 18.35.5 12 .5z"/></svg></a>
+          <a href="https://chromewebstore.google.com/detail/movi-player/ckleeigcopjnpehkjokijokjegknfgej" target="_blank" rel="noopener" aria-label="Chrome Web Store" title="Chrome Web Store"><svg viewBox="0 0 48 48" aria-hidden="true"><defs><mask id="footer-chrome-gaps"><rect width="48" height="48" fill="#fff"/><g fill="none" stroke="#000" stroke-width="2.6"><path d="M24 12h20.78A24 24 0 0 0 3.22 12L13.61 30A12 12 0 0 1 24 12Z"/><path d="M34.39 30 24 48A24 24 0 0 0 44.78 12H24a12 12 0 0 1 10.39 18Z"/><path d="M13.61 30 3.22 12A24 24 0 0 0 24 48l10.39-18a12 12 0 0 1-20.78 0Z"/></g></mask></defs><g fill="currentColor" mask="url(#footer-chrome-gaps)"><path d="M24 12h20.78A24 24 0 0 0 3.22 12L13.61 30A12 12 0 0 1 24 12Z"/><path d="M34.39 30 24 48A24 24 0 0 0 44.78 12H24a12 12 0 0 1 10.39 18Z"/><path d="M13.61 30 3.22 12A24 24 0 0 0 24 48l10.39-18a12 12 0 0 1-20.78 0Z"/><circle cx="24" cy="24" r="9"/></g></svg></a>
+          <a href="https://www.npmjs.com/package/movi-player" target="_blank" rel="noopener" aria-label="npm" title="npm"><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="1.5" y="6.5" width="21" height="11" rx="2.5" fill="currentColor"/><text x="12" y="15.2" text-anchor="middle" font-family="Arial, sans-serif" font-size="7.4" font-weight="700" fill="#f8fbff">npm</text></svg></a>
         </div>
       </div>
       <div class="site-footer-base">
@@ -5515,10 +7023,21 @@
         // Shown only once the picture has left the viewport, so it never sits
         // over the thing it would take you to. An observer rather than a
         // scroll handler: no work per frame while you read the page.
+        // …and only once something is loaded: with nothing playing it would
+        // take you to an empty player.
+        var player = document.getElementById("movi-player");
+        if (player) {
+          player.addEventListener("loadeddata", function () { btn.classList.add("has-media"); });
+          player.addEventListener("emptied", function () { btn.classList.remove("has-media"); });
+        }
         if (!("IntersectionObserver" in window)) return;
         new IntersectionObserver(
           function (entries) {
-            btn.classList.toggle("visible", !entries[0].isIntersecting);
+            var entry = entries[0];
+            btn.classList.toggle(
+              "visible",
+              !entry.isIntersecting && entry.boundingClientRect.top < 0,
+            );
           },
           // A sliver of the player still counts as "you can see it".
           { threshold: 0.12 },
@@ -9036,5 +10555,218 @@
         });
       }
     </script>
-  </body>
+      <!-- Site search — the same script on every page with the nav (keep the
+         copies in index.html, examples.html and compare.html identical).
+         Matches this page's own headings and FAQ first, then its body text,
+         then the site's other pages and docs; ↑ ↓ to move, Enter to go,
+         Esc to close, "/" to focus from anywhere. -->
+    <script>
+      (function () {
+        var input = document.getElementById("site-search");
+        if (!input) return;
+        var box = input.closest(".nav-search");
+        if (!box) return;
+
+        var SITE = [
+          { t: "Player", d: "Play any video right in your browser", u: "/", k: "home play url file folder" },
+          { t: "Examples", d: "Live setups: MKV, HLS, DASH, 360°, audio, split sources", u: "/examples", k: "demo hls dash vr 360 audio embed code" },
+          { t: "Compare to <video>", d: "Your file in MoviPlayer next to the native video tag", u: "/compare", k: "native video tag side by side mkv tracks subtitles" },
+          { t: "Google Drive", d: "Play videos straight from your Drive", u: "/drive", k: "drive google cloud" },
+          { t: "Documentation", d: "Guides, attributes and API reference", u: "/docs", k: "docs guide help api", ext: true },
+          { t: "<movi-player> element API", d: "Attributes, properties, methods and events", u: "/docs/api/element", k: "attributes controls addcontrol events", ext: true },
+          { t: "MoviPlayer API", d: "Programmatic playback without the element", u: "/docs/api/player", k: "programmatic canvas typescript", ext: true },
+          { t: "Chrome extension", d: "Open any video link with MoviPlayer", u: "https://chromewebstore.google.com/detail/movi-player/ckleeigcopjnpehkjokijokjegknfgej", k: "chrome extension install add browser", ext: true },
+          { t: "VS Code extension", d: "Preview videos inside VS Code", u: "https://marketplace.visualstudio.com/items?itemName=mrujjwalg.movi-player-vscode", k: "vscode editor", ext: true },
+          { t: "npm package", d: "npm install movi-player", u: "https://www.npmjs.com/package/movi-player", k: "npm install package cdn jsdelivr", ext: true },
+          { t: "GitHub", d: "Source code, issues and releases", u: "https://github.com/mrujjwalg/movi-player", k: "source code issues open source", ext: true },
+          { t: "Privacy Policy", d: "What MoviPlayer does and doesn't collect", u: "/docs/privacy-policy", k: "privacy data", ext: true },
+        ];
+
+        var norm = function (s) { return (s || "").toLowerCase().replace(/\s+/g, " ").trim(); };
+        var SKIP = "nav, footer, dialog, movi-player, .ext-prompt-wrap, .dev-log-panel, .nav-search, script, style, [hidden]";
+
+        // What this page has to offer, read once the page is there.
+        var local = null;
+        function readPage() {
+          if (local) return local;
+          local = [];
+          var seen = {};
+          document.querySelectorAll("h1, h2, h3, summary").forEach(function (el) {
+            if (el.closest(SKIP)) return;
+            // innerText: what is on screen — a <br> is a space, and text the
+            // stylesheet hides is not something to point anyone at.
+            var title = (el.innerText || "").replace(/\s+/g, " ").trim();
+            if (!title || title.length > 140 || seen[title]) return;
+            seen[title] = 1;
+            var section = el.closest("section");
+            var head = section && section.querySelector("h2");
+            var context = head && head !== el ? head.innerText.replace(/\s+/g, " ").trim() : "";
+            var body = "";
+            var details = el.closest("details");
+            if (details) body = details.textContent;
+            else if (el.tagName !== "H2" && el.parentElement) body = el.parentElement.innerText;
+            local.push({ t: title, d: context, el: details || el, body: norm(body) });
+          });
+          document.querySelectorAll("section").forEach(function (section) {
+            if (section.closest(SKIP)) return;
+            var head = section.querySelector("h2, h1");
+            if (!head) return;
+            local.push({ t: head.innerText.replace(/\s+/g, " ").trim(), d: "", el: head, body: norm(section.innerText), sectionOnly: true });
+          });
+          return local;
+        }
+
+        function snippet(text, word) {
+          var i = text.indexOf(word);
+          if (i < 0) return "";
+          var start = Math.max(0, i - 36);
+          return (start ? "…" : "") + text.slice(start, i + word.length + 48).trim() + "…";
+        }
+
+        function search(q) {
+          var words = norm(q).split(" ").filter(Boolean);
+          if (!words.length) return [];
+          var every = function (hay) { return words.every(function (w) { return hay.indexOf(w) >= 0; }); };
+          var out = [];
+          readPage().forEach(function (e) {
+            var title = norm(e.t);
+            if (!e.sectionOnly && every(title + " " + norm(e.d))) {
+              out.push({ score: title.indexOf(words[0]) === 0 ? 0 : 1, t: e.t, d: e.d || "On this page", el: e.el, kind: "This page" });
+            } else if (every(e.body)) {
+              out.push({ score: e.sectionOnly ? 4 : 3, t: e.t, d: snippet(e.body, words[0]) || e.d, el: e.el, kind: "This page" });
+            }
+          });
+          SITE.forEach(function (p) {
+            if (p.u === location.pathname) return;
+            var hay = norm(p.t + " " + p.d + " " + p.k);
+            if (every(hay)) out.push({ score: norm(p.t).indexOf(words[0]) === 0 ? 2 : 5, t: p.t, d: p.d, u: p.u, ext: p.ext, kind: p.ext ? "Link" : "Page" });
+          });
+          out.sort(function (a, b) { return a.score - b.score; });
+          var seen = {};
+          return out.filter(function (r) {
+            var key = r.t + "|" + (r.u || "");
+            if (seen[key]) return false;
+            seen[key] = 1;
+            return true;
+          }).slice(0, 8);
+        }
+
+        var list = document.createElement("div");
+        list.className = "nav-search-results";
+        list.id = "site-search-results";
+        list.setAttribute("role", "listbox");
+        list.hidden = true;
+        box.appendChild(list);
+        input.setAttribute("role", "combobox");
+        input.setAttribute("aria-controls", list.id);
+        input.setAttribute("aria-expanded", "false");
+        input.setAttribute("aria-autocomplete", "list");
+
+        var results = [];
+        var active = -1;
+
+        function close() {
+          list.hidden = true;
+          input.setAttribute("aria-expanded", "false");
+          active = -1;
+        }
+
+        function mark() {
+          Array.prototype.forEach.call(list.children, function (row, i) {
+            var on = i === active;
+            row.classList.toggle("is-active", on);
+            row.setAttribute("aria-selected", on ? "true" : "false");
+            if (on) row.scrollIntoView({ block: "nearest" });
+          });
+        }
+
+        function render() {
+          results = search(input.value);
+          list.textContent = "";
+          active = results.length ? 0 : -1;
+          if (!norm(input.value)) return close();
+          if (!results.length) {
+            var none = document.createElement("a");
+            none.className = "nav-search-empty";
+            none.href = "/docs";
+            none.target = "_blank";
+            none.rel = "noopener";
+            none.textContent = "Nothing here for “" + input.value.trim() + "” — try the docs →";
+            list.appendChild(none);
+          }
+          results.forEach(function (r, i) {
+            var row = document.createElement("a");
+            row.className = "nav-search-result";
+            row.setAttribute("role", "option");
+            row.href = r.u || "#";
+            if (r.ext && /^https?:/.test(r.u)) { row.target = "_blank"; row.rel = "noopener"; }
+            var title = document.createElement("strong");
+            title.textContent = r.t;
+            var kind = document.createElement("span");
+            kind.className = "nav-search-kind";
+            kind.textContent = r.kind;
+            var desc = document.createElement("small");
+            desc.textContent = r.d || "";
+            row.append(title, kind, desc);
+            row.addEventListener("mousedown", function (e) { e.preventDefault(); });
+            row.addEventListener("mouseenter", function () { active = i; mark(); });
+            row.addEventListener("click", function (e) { go(i, e); });
+            list.appendChild(row);
+          });
+          list.hidden = false;
+          input.setAttribute("aria-expanded", "true");
+          mark();
+        }
+
+        function go(i, e) {
+          var r = results[i];
+          if (!r) return;
+          if (r.el) {
+            if (e) e.preventDefault();
+            var details = r.el.tagName === "DETAILS" ? r.el : null;
+            if (details) details.open = true;
+            var top = r.el.getBoundingClientRect().top + window.scrollY - 96;
+            window.scrollTo({ top: top, behavior: "smooth" });
+            r.el.classList.remove("search-hit");
+            void r.el.offsetWidth;
+            r.el.classList.add("search-hit");
+            setTimeout(function () { r.el.classList.remove("search-hit"); }, 1800);
+            close();
+            input.blur();
+          } else if (!e) {
+            if (r.ext && /^https?:/.test(r.u)) window.open(r.u, "_blank", "noopener");
+            else location.href = r.u;
+          }
+        }
+
+        input.addEventListener("input", render);
+        input.addEventListener("focus", function () { if (norm(input.value)) render(); });
+        input.addEventListener("blur", function () { setTimeout(close, 120); });
+        input.addEventListener("keydown", function (e) {
+          if (e.key === "ArrowDown" || e.key === "ArrowUp") {
+            if (list.hidden) render();
+            if (!results.length) return;
+            e.preventDefault();
+            active = (active + (e.key === "ArrowDown" ? 1 : results.length - 1)) % results.length;
+            mark();
+          } else if (e.key === "Enter") {
+            e.preventDefault();
+            if (list.hidden) render();
+            go(active < 0 ? 0 : active);
+          } else if (e.key === "Escape") {
+            if (!list.hidden) { e.preventDefault(); close(); }
+            else input.blur();
+          }
+        });
+        document.addEventListener("keydown", function (e) {
+          if (e.key !== "/" || e.metaKey || e.ctrlKey || e.altKey) return;
+          var t = e.target;
+          if (t && (t.isContentEditable || /^(INPUT|TEXTAREA|SELECT)$/.test(t.tagName) || (t.closest && t.closest("movi-player")))) return;
+          e.preventDefault();
+          input.focus();
+          input.select();
+        });
+      })();
+    </script>
+</body>
 </html>

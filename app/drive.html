@@ -3,6 +3,26 @@
 
 <head>
   <meta charset="UTF-8" />
+    <script>
+      // The extension is offered only where it installs: desktop Chromium
+      // (Chrome, Edge, Brave, Opera, Arc…). Everything that offers it hides
+      // without this class — see app/shared.css. In the head so nothing
+      // flashes in and out.
+      (function () {
+        try {
+          var ua = navigator.userAgent;
+          var hints = navigator.userAgentData;
+          var brands = (hints && hints.brands) || [];
+          var chromium =
+            brands.some(function (b) { return /Chromium|Google Chrome|Microsoft Edge|Brave|Opera/i.test(b.brand); }) ||
+            (!!window.chrome && /Chrome|Chromium|Edg|OPR/i.test(ua) && !/Firefox|FxiOS/i.test(ua));
+          var mobile = hints && typeof hints.mobile === "boolean"
+            ? hints.mobile
+            : /Android|iPhone|iPad|iPod|Mobile|Tablet|CriOS/i.test(ua);
+          if (chromium && !mobile) document.documentElement.classList.add("ext-installable");
+        } catch (e) { /* no offer is the safe default */ }
+      })();
+    </script>
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>Movi Player for Google Drive — play your Drive videos in the browser</title>
   <meta name="description" content="Open and stream your Google Drive videos (MKV, HEVC, AV1, 4K/HDR) directly in the browser with Movi Player. No download, read-only, decoded on your device." />
@@ -184,7 +204,7 @@
        and the pages drift apart again. -->
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
-  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500;700&display=swap" rel="stylesheet" />
+  <link href="https://fonts.googleapis.com/css2?family=DM+Mono:wght@400;500&family=Manrope:wght@400;500;600;700;800&display=swap" rel="stylesheet" />
   <!-- Shared design system — spliced in by the worker AFTER this page's own
        <style> so it is the authority on the site-wide chrome. -->
   <!--__SHARED_CSS__-->
@@ -199,10 +219,21 @@
     <section class="hero" id="hero">
       <div class="brand">
         <svg class="brand-logo" viewBox="0 0 100 100" aria-hidden="true">
-          <defs><linearGradient id="brand-grad-h" x1="0%" y1="0%" x2="100%" y2="100%"><stop offset="0%" stop-color="#8a7cf2"/><stop offset="100%" stop-color="#6c5dd3"/></linearGradient></defs>
-          <circle cx="50" cy="50" r="46" fill="url(#brand-grad-h)"/>
-          <polygon points="40,29 40,71 73,50" fill="#ffffff"/>
-        </svg>
+              <defs>
+                <linearGradient id="drive-logo-1-left" gradientUnits="userSpaceOnUse" x1="27" y1="18" x2="27" y2="84"><stop offset="0" stop-color="#6366ff"/><stop offset=".5" stop-color="#3d4dff"/><stop offset="1" stop-color="#1638d2"/></linearGradient>
+                <linearGradient id="drive-logo-1-top" gradientUnits="userSpaceOnUse" x1="27" y1="20" x2="80" y2="50"><stop offset="0" stop-color="#86b6ff"/><stop offset=".55" stop-color="#4f86ff"/><stop offset="1" stop-color="#14aaff"/></linearGradient>
+                <linearGradient id="drive-logo-1-bottom" gradientUnits="userSpaceOnUse" x1="27" y1="80" x2="80" y2="50"><stop offset="0" stop-color="#5a4dff"/><stop offset=".5" stop-color="#8e72ff"/><stop offset="1" stop-color="#7cb9ff"/></linearGradient>
+              </defs>
+              <!-- Three ribbons folded into a play mark: the bottom one under the
+                   top at the point, the left one over the top at its corner and
+                   under the bottom at its foot. -->
+              <g fill="none" stroke-linecap="round" stroke-width="17">
+                <path d="M77 52 27 80" stroke="url(#drive-logo-1-bottom)"/>
+                <path d="M27 20 77 48" stroke="url(#drive-logo-1-top)"/>
+                <path d="M27 20v60" stroke="url(#drive-logo-1-left)"/>
+                <path d="M27 80 41 72.2" stroke="url(#drive-logo-1-bottom)"/>
+              </g>
+            </svg>
         <span class="brand-text">MoviPlayer</span>
         <span class="brand-sub">for Drive</span>
       </div>
@@ -235,10 +266,21 @@
       <div class="topbar">
         <div class="brand">
           <svg class="brand-logo" viewBox="0 0 100 100" aria-hidden="true">
-            <defs><linearGradient id="brand-grad-t" x1="0%" y1="0%" x2="100%" y2="100%"><stop offset="0%" stop-color="#8a7cf2"/><stop offset="100%" stop-color="#6c5dd3"/></linearGradient></defs>
-            <circle cx="50" cy="50" r="46" fill="url(#brand-grad-t)"/>
-            <polygon points="40,29 40,71 73,50" fill="#ffffff"/>
-          </svg>
+              <defs>
+                <linearGradient id="drive-logo-2-left" gradientUnits="userSpaceOnUse" x1="27" y1="18" x2="27" y2="84"><stop offset="0" stop-color="#6366ff"/><stop offset=".5" stop-color="#3d4dff"/><stop offset="1" stop-color="#1638d2"/></linearGradient>
+                <linearGradient id="drive-logo-2-top" gradientUnits="userSpaceOnUse" x1="27" y1="20" x2="80" y2="50"><stop offset="0" stop-color="#86b6ff"/><stop offset=".55" stop-color="#4f86ff"/><stop offset="1" stop-color="#14aaff"/></linearGradient>
+                <linearGradient id="drive-logo-2-bottom" gradientUnits="userSpaceOnUse" x1="27" y1="80" x2="80" y2="50"><stop offset="0" stop-color="#5a4dff"/><stop offset=".5" stop-color="#8e72ff"/><stop offset="1" stop-color="#7cb9ff"/></linearGradient>
+              </defs>
+              <!-- Three ribbons folded into a play mark: the bottom one under the
+                   top at the point, the left one over the top at its corner and
+                   under the bottom at its foot. -->
+              <g fill="none" stroke-linecap="round" stroke-width="17">
+                <path d="M77 52 27 80" stroke="url(#drive-logo-2-bottom)"/>
+                <path d="M27 20 77 48" stroke="url(#drive-logo-2-top)"/>
+                <path d="M27 20v60" stroke="url(#drive-logo-2-left)"/>
+                <path d="M27 80 41 72.2" stroke="url(#drive-logo-2-bottom)"/>
+              </g>
+            </svg>
           <span class="brand-text">MoviPlayer</span>
           <span class="brand-sub">for Drive</span>
         </div>
@@ -285,15 +327,21 @@
       <div class="site-footer-brand">
         <a href="/" class="brand" aria-label="MoviPlayer — home">
           <svg class="brand-logo" viewBox="0 0 100 100" aria-hidden="true">
-            <defs>
-              <linearGradient id="footer-logo-grad" x1="0%" y1="0%" x2="100%" y2="100%">
-                <stop offset="0%" stop-color="#8a7cf2"/>
-                <stop offset="100%" stop-color="#6c5dd3"/>
-              </linearGradient>
-            </defs>
-            <circle cx="50" cy="50" r="46" fill="url(#footer-logo-grad)"/>
-            <polygon points="40,29 40,71 73,50" fill="#ffffff"/>
-          </svg>
+              <defs>
+                <linearGradient id="drive-logo-3-left" gradientUnits="userSpaceOnUse" x1="27" y1="18" x2="27" y2="84"><stop offset="0" stop-color="#6366ff"/><stop offset=".5" stop-color="#3d4dff"/><stop offset="1" stop-color="#1638d2"/></linearGradient>
+                <linearGradient id="drive-logo-3-top" gradientUnits="userSpaceOnUse" x1="27" y1="20" x2="80" y2="50"><stop offset="0" stop-color="#86b6ff"/><stop offset=".55" stop-color="#4f86ff"/><stop offset="1" stop-color="#14aaff"/></linearGradient>
+                <linearGradient id="drive-logo-3-bottom" gradientUnits="userSpaceOnUse" x1="27" y1="80" x2="80" y2="50"><stop offset="0" stop-color="#5a4dff"/><stop offset=".5" stop-color="#8e72ff"/><stop offset="1" stop-color="#7cb9ff"/></linearGradient>
+              </defs>
+              <!-- Three ribbons folded into a play mark: the bottom one under the
+                   top at the point, the left one over the top at its corner and
+                   under the bottom at its foot. -->
+              <g fill="none" stroke-linecap="round" stroke-width="17">
+                <path d="M77 52 27 80" stroke="url(#drive-logo-3-bottom)"/>
+                <path d="M27 20 77 48" stroke="url(#drive-logo-3-top)"/>
+                <path d="M27 20v60" stroke="url(#drive-logo-3-left)"/>
+                <path d="M27 80 41 72.2" stroke="url(#drive-logo-3-bottom)"/>
+              </g>
+            </svg>
           <span class="brand-text">MoviPlayer</span>
         </a>
         <p>Not affiliated with Google. Your Drive files are streamed read-only and decoded on your device.</p>
