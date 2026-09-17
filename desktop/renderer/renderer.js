@@ -46,7 +46,21 @@ function showToast(msg) {
   toastTimer = setTimeout(() => (toast.hidden = true), 4000);
 }
 
+// The welcome screen is held down from the head script when this window was
+// opened with a file — see index.html. Once something is playing it is hidden
+// on its own; if the file never arrives, give the screen back rather than
+// leaving a black window with nothing in it.
+function revealWelcome() {
+  document.documentElement.classList.remove("opening-file");
+}
+if (window.movi.pendingOpen) {
+  setTimeout(() => {
+    if (player.hidden) revealWelcome();
+  }, 20000);
+}
+
 function prime() {
+  revealWelcome();
   welcome.style.display = "none";
   player.hidden = false;
   player.setAttribute("autoplay", "");
@@ -374,6 +388,13 @@ player.addEventListener("loadedmetadata", fitWindowToVideo);
 player.addEventListener("error", (e) => {
   const msg = (e && e.detail && (e.detail.message || e.detail)) || "Couldn't play that file";
   showToast(String(msg));
+  // Nothing is playing and nothing will: the welcome screen is the only thing
+  // left to show, even if this window was opened with a file.
+  if (!player.duration) {
+    revealWelcome();
+    welcome.style.display = "";
+    player.hidden = true;
+  }
 });
 
 // ---------- Wires from main ----------

@@ -258,6 +258,16 @@ movi-player[hidden] {
   display: none !important;
 }
 
+/* Opened with a file: hold the welcome screen down until we know the media
+   is not coming (renderer.js takes the class off if it fails to load), and
+   sit on the player's own black so the window reads as the video starting. */
+html.opening-file body {
+  background: #000;
+}
+html.opening-file .welcome {
+  display: none;
+}
+
 /* ---------- Welcome ---------- */
 .welcome {
   flex: 1;

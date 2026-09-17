@@ -5,6 +5,15 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>MoviPlayer</title>
     <link rel="stylesheet" href="/styles.css" />
+    <!-- Opened with a file? Then the welcome screen is not where this window is
+         going, and painting it for the second the media takes to open reads as
+         a flash of the wrong screen. Classic script, before the body: the
+         preload bridge is there by now and this has to run before first paint. -->
+    <script>
+      if (window.movi && window.movi.pendingOpen) {
+        document.documentElement.classList.add("opening-file");
+      }
+    </script>
     <!-- Player web component (WASM embedded); registers <movi-player> on load -->
     <script type="module" src="/vendor/element.js"></script>
   </head>

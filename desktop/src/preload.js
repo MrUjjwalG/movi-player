@@ -7,6 +7,17 @@ const { contextBridge, ipcRenderer, webUtils } = require("electron");
 contextBridge.exposeInMainWorld("movi", {
   platform: process.platform,
 
+  // True when this window was launched with a file to play ("open with", a
+  // double-clicked file, a file argument). Read before the first paint, so it
+  // is synchronous on purpose.
+  pendingOpen: (() => {
+    try {
+      return ipcRenderer.sendSync("boot:pending-open") === true;
+    } catch {
+      return false;
+    }
+  })(),
+
   // Tell main we've wired our listeners and the player is defined; flushes
   // any files the OS asked us to open before we were ready.
   ready: () => ipcRenderer.send("renderer-ready"),

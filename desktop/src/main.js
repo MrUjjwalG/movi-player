@@ -216,6 +216,12 @@ function createWindow() {
 }
 
 // --- IPC from renderer ---
+// Asked before the first paint: was this window opened with a file? The
+// welcome screen must not flash up for the second the media takes to open —
+// see the head script in index.html.
+ipcMain.on("boot:pending-open", (e) => {
+  e.returnValue = pendingPaths.length > 0;
+});
 ipcMain.on("renderer-ready", () => {
   rendererReady = true;
   if (pendingPaths.length && mainWindow) {
