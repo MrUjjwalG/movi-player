@@ -192,6 +192,30 @@ export class AudioRenderer {
   private _pendingAnchor: { atContextTime: number; mediaOrigin: number } | null =
     null;
 
+  /**
+   * A loop pass the player has started reading, whose first buffer has not
+   * arrived yet.
+   *
+   * The seam used to be armed at `scheduledTime` the moment the pass began.
+   * That is only where the old pass ends when nothing of it is still waiting —
+   * and buffers DO wait: they sit in `_pending` as data until they come within
+   * the lookahead, so on a file with a soundtrack a second of the old pass was
+   * still to be scheduled behind that point, and the clock wrapped to zero a
+   * second before the sound did.
+   *
+   * So the seam is found in the audio itself. The first buffer whose timestamp
+   * jumps back is where the new pass begins; it is marked on the way in, and
+   * the anchor is armed with the context time it is actually started at.
+   */
+  private _loopArm: { lastAudioTime: number; found: boolean } | null = null;
+  /**
+   * The furthest media time scheduled for the NEXT pass while the old one is
+   * still being heard. Kept apart because the clock clamps to
+   * maxScheduledMediaTime, and letting the new pass's small numbers in early
+   * would pin the old pass's clock at them.
+   */
+  private _nextPassMaxMediaTime = 0;
+
   /** Called by the player when the demuxer has no more audio to give. */
   endOfStream(): void {
     this._streamEnded = true;
@@ -786,7 +810,21 @@ export class AudioRenderer {
    * decode headroom the deep buffer was for is still there.
    */
   private scheduleAudioBuffer(audioBuffer: AudioBuffer, audioTime: number): void {
-    this._pending.push({ buffer: audioBuffer, audioTime });
+    // The first buffer of the next loop pass: its timestamp goes BACK. Anything
+    // short of a clear step back is the old pass (or ordinary PTS jitter).
+    let loopStart = false;
+    const arm = this._loopArm;
+    if (arm && !arm.found) {
+      // Stays armed (found) until that buffer is STARTED — it can wait a
+      // second in _pending, and the seam must read as pending all that time.
+      if (arm.lastAudioTime >= 0 && audioTime < arm.lastAudioTime - 0.25) {
+        loopStart = true;
+        arm.found = true;
+      } else {
+        arm.lastAudioTime = Math.max(arm.lastAudioTime, audioTime);
+      }
+    }
+    this._pending.push({ buffer: audioBuffer, audioTime, loopStart });
     this._pendingDuration += audioBuffer.duration;
     this.pumpSchedule();
   }
@@ -812,7 +850,7 @@ export class AudioRenderer {
         0,
         this._pendingDuration - next.buffer.duration,
       );
-      this.commitAudioBuffer(next.buffer, next.audioTime);
+      this.commitAudioBuffer(next.buffer, next.audioTime, next.loopStart);
     }
     if (this._pending.length > 0) {
       if (this._pumpTimer === null) {
@@ -827,7 +865,11 @@ export class AudioRenderer {
     }
   }
 
-  private commitAudioBuffer(audioBuffer: AudioBuffer, audioTime: number): void {
+  private commitAudioBuffer(
+    audioBuffer: AudioBuffer,
+    audioTime: number,
+    loopStart = false,
+  ): void {
     if (!this.audioContext || !this.gainNode) return;
 
     // Track when we receive decoded audio
@@ -1040,6 +1082,18 @@ export class AudioRenderer {
     }
     source.start(when);
 
+    // The next loop pass starts sounding at `when` — that is the seam, exact
+    // at any rate, and the clock takes the new origin once output reaches it.
+    if (loopStart && this.hasFirstBuffer) {
+      this._loopArm = null;
+      this._pendingAnchor = { atContextTime: when, mediaOrigin: audioTime };
+      this._nextPassMaxMediaTime = 0;
+      Logger.debug(
+        TAG,
+        `Loop seam at context ${when.toFixed(3)}s → media ${audioTime.toFixed(3)}s`,
+      );
+    }
+
     if (!this.hasFirstBuffer) {
       this.firstBufferScheduledAt = when;
       this.firstBufferMediaTime = audioTime;
@@ -1116,7 +1170,11 @@ export class AudioRenderer {
     outputEverFed = true;
 
     const endMediaTime = audioTime + audioBuffer.duration;
-    if (endMediaTime > this.maxScheduledMediaTime) {
+    if (this._pendingAnchor) {
+      if (endMediaTime > this._nextPassMaxMediaTime) {
+        this._nextPassMaxMediaTime = endMediaTime;
+      }
+    } else if (endMediaTime > this.maxScheduledMediaTime) {
       this.maxScheduledMediaTime = endMediaTime;
     }
 
@@ -1824,6 +1882,8 @@ export class AudioRenderer {
     this._streamEnded = false;
     // Whatever loop seam was armed belonged to the run being thrown away.
     this._pendingAnchor = null;
+    this._loopArm = null;
+    this._nextPassMaxMediaTime = 0;
     // Silence first, always — not only under stable audio.
     //
     // Stopping a source ends it mid-waveform, which is a click, and it does
@@ -2105,6 +2165,9 @@ export class AudioRenderer {
     this.firstBufferScheduledAt = p.atContextTime;
     this.firstBufferMediaTime = p.mediaOrigin;
     this._pendingAnchor = null;
+    // The clamp's horizon now belongs to the pass being heard.
+    this.maxScheduledMediaTime = this._nextPassMaxMediaTime;
+    this._nextPassMaxMediaTime = 0;
     Logger.debug(
       TAG,
       `Loop seam reached — media clock now counts from ${p.mediaOrigin.toFixed(3)}s`,
@@ -2121,34 +2184,44 @@ export class AudioRenderer {
    * with wraps back to the start of the file, and the clock has to wrap with
    * them, but not until they are heard.
    *
-   * Returns the context time the new pass begins at, which is the point the
-   * armed anchor will be adopted at.
+   * Call BEFORE the new pass is read. Its first buffer is recognised by its
+   * timestamp stepping back (see _loopArm) and the seam is armed when that
+   * buffer is started.
    */
-  beginLoopPass(mediaOrigin: number): number {
-    const seam = Math.max(
-      this.scheduledTime,
-      this.audioContext?.currentTime ?? 0,
-    );
-    this._pendingAnchor = { atContextTime: seam, mediaOrigin };
-    // The clamp that keeps a runaway clock inside what has been scheduled is
-    // measured against the OLD pass's media times; left as it was it would
-    // pin the new pass to the end of the old one. The scheduler rebuilds it
-    // from the buffers that follow.
-    this.maxScheduledMediaTime = 0;
+  beginLoopPass(): void {
+    const last = this._pending[this._pending.length - 1];
+    this._loopArm = {
+      found: false,
+      lastAudioTime: last ? last.audioTime : this.hasFirstBuffer ? this.currentMediaTime : -1,
+    };
+    this._pendingAnchor = null;
+    this._nextPassMaxMediaTime = 0;
     // Fresh audio is on its way, so the sound is not over — the same reason
     // reset() clears this, without any of reset()'s teardown.
     this._streamEnded = false;
-    Logger.debug(
-      TAG,
-      `Loop pass armed at context ${seam.toFixed(3)}s → media ${mediaOrigin.toFixed(3)}s`,
-    );
-    return seam;
+    Logger.debug(TAG, "Loop pass armed — waiting for its first buffer");
+  }
+
+  /**
+   * True from beginLoopPass until the output has reached the new pass. The
+   * player turns the picture over when this goes false, so both halves of the
+   * loop share one boundary.
+   */
+  isLoopSeamPending(): boolean {
+    this.adoptPendingAnchor();
+    return this._loopArm !== null || this._pendingAnchor !== null;
   }
 
   /** Drop an armed loop seam that is not going to happen after all. */
   cancelLoopPass(): void {
-    if (this._pendingAnchor) {
+    if (this._pendingAnchor || this._loopArm) {
       this._pendingAnchor = null;
+      this._loopArm = null;
+      for (const p of this._pending) p.loopStart = false;
+      if (this._nextPassMaxMediaTime > this.maxScheduledMediaTime) {
+        this.maxScheduledMediaTime = this._nextPassMaxMediaTime;
+      }
+      this._nextPassMaxMediaTime = 0;
       Logger.debug(TAG, "Loop pass cancelled");
     }
   }
@@ -2414,7 +2487,12 @@ export class AudioRenderer {
 
   /** Decoded audio waiting for its turn to become a node — see
    *  scheduleAudioBuffer. Plain data; costs nothing until committed. */
-  private _pending: Array<{ buffer: AudioBuffer; audioTime: number }> = [];
+  private _pending: Array<{
+    buffer: AudioBuffer;
+    audioTime: number;
+    /** First buffer of the next loop pass — see _loopArm. */
+    loopStart?: boolean;
+  }> = [];
   private _pendingDuration = 0;
   private _pumpTimer: number | null = null;
   /** How far ahead of the output a buffer may be turned into a node. Wide

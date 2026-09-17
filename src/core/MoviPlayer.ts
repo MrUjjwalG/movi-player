@@ -2296,6 +2296,11 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
   private static readonly RATE_PREPARE_MAX_MS = 1500;
   /** One-shot: the decoder is asked for its reorder tail once per EOF. */
   private _eofFlushRequested = false;
+  /** Which EOF flush has finished emitting — see maybeStartLoopPreroll. A
+   *  counter, not a flag, so a flush from before a seek cannot vouch for one
+   *  asked for after it. */
+  private _eofFlushSeq = 0;
+  private _eofFlushSettledSeq = -1;
   /** When the video-only ending was armed (timeDone first true), so the drain
    *  wait above is measured from then and not from a much earlier EOF. */
   private _eofPictureDrainSince = 0;
@@ -6202,6 +6207,14 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
   private _loopCount = 0;
   private _loopPrerolling = false;
   private _loopPrerollFrames: VideoFrame[] = [];
+  /** This pass turns over on the SOUND's seam, not the picture's — see
+   *  maybeCompleteLoopWrap. */
+  private _loopWithSound = false;
+  /** When the sound first ran dry with the seam still not reached, or 0. */
+  private _loopSeamDrySince = 0;
+  /** How long the sound may sit empty with no new pass in it before the
+   *  picture turns over without it. */
+  private static readonly LOOP_SEAM_DRY_MS = 500;
   /** Enough to cover the handover; a cap because these are DECODED frames and
    *  an 8K one is tens of megabytes of VRAM apiece. */
   private static readonly LOOP_PREROLL_MAX_FRAMES = 60;
@@ -7828,7 +7841,12 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
     // frames, so getAudioClock() stays clamped and this would falsely trip. A
     // muted-but-running context schedules audio normally and can desync just
     // like an audible one.
-    if (this.stateManager.getState() === "playing" && !this.disableAudio && !this.audioRenderer.isDroppingAudio() && !inPlayGrace && Math.abs(this.clock.getPlaybackRate() - 1.0) < 0.01) {
+    //
+    // Not across a loop turn: the sound wraps to the start a moment before the
+    // picture does, and the gap between them is the whole file long. Chasing
+    // it pulled the sound back to the END and restarted the loop through a
+    // seek — the very trip the turn exists to avoid.
+    if (this.stateManager.getState() === "playing" && !this.disableAudio && !this.audioRenderer.isDroppingAudio() && !inPlayGrace && !this._loopPrerolling && Math.abs(this.clock.getPlaybackRate() - 1.0) < 0.01) {
       const audioTime = this.audioRenderer.getAudioClock();
       const videoTime = this.videoRenderer
         ? (this.videoRenderer as any).currentTime ?? -1
@@ -8066,9 +8084,15 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
         this.pendingPrebufferPackets.length === 0
       ) {
         this._eofFlushRequested = true;
-        this.videoDecoder.flush().catch(() => {
-          /* a decoder that cannot flush has nothing left to give */
-        });
+        const seq = ++this._eofFlushSeq;
+        this.videoDecoder
+          .flush()
+          .catch(() => {
+            /* a decoder that cannot flush has nothing left to give */
+          })
+          .finally(() => {
+            this._eofFlushSettledSeq = seq;
+          });
       }
       // A looping file does not end here — it primes the next pass while the
       // tail is still on screen. Only from EOF, and only once the tail is out
@@ -10018,17 +10042,33 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
     if (!this.videoRenderer || !this.trackManager.getActiveVideoTrack()) {
       return false;
     }
-    // Only where the picture is the ONLY thing that has to turn over.
-    //
     // With sound there are two seams, not one: the audio wraps when the
     // outgoing samples run out, the picture when the outgoing queue empties,
-    // and those are not the same moment. The clock follows the audio, so the
-    // primed frames end up either behind it or well ahead — measured on a
-    // muxed 8s file, 2x went from 88ms to 225ms and 0.5x to over a second.
-    // Making that one boundary is the next piece of work; until then a file
-    // with a soundtrack keeps the restart it has always had.
-    if (this.trackManager.getActiveAudioTrack() && !this.disableAudio) {
-      return false;
+    // and those are not the same moment. Turning the picture over on its own
+    // seam left the clock (which follows the audio) either behind the primed
+    // frames or well ahead — measured on a muxed 8s file, 2x went from 88ms to
+    // 225ms and 0.5x to over a second. So a file with a soundtrack turns over
+    // on the SOUND's seam instead, and the picture follows it.
+    //
+    // Without this, such a file restarted through `ended`: the context was
+    // suspended, the schedule torn down and a seek waited for its cushion —
+    // an audible trip at every turn of a looping beep.
+    const withSound =
+      !!this.trackManager.getActiveAudioTrack() && !this.disableAudio;
+    if (withSound) {
+      // A soundtrack that stops before the picture has no seam at the end of
+      // the file to turn on. Those keep the restart.
+      if (
+        this._audioTailStart !== Number.POSITIVE_INFINITY ||
+        this.isInVideoOnlyTail()
+      ) {
+        return false;
+      }
+      // Every sample of the outgoing pass has to be out of the decoder first:
+      // the seam is recognised by the timestamps stepping back, and a straggler
+      // from the old pass arriving after the new pass's first buffer would be
+      // scheduled after it.
+      if (this.audioDecoder.queueSize > 0) return false;
     }
     if (this.audioDemuxer) return false;
     if (!this.stateManager.is("playing")) return false;
@@ -10036,11 +10076,25 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
     // passes share one decoder, and a picture still being reordered must not
     // be interleaved with the opening IDR.
     if (!this._eofFlushRequested) return false;
+    // Requested is not the same as done. The flush emits the reorder tail
+    // asynchronously, after the decode queue already reads empty — and once
+    // priming starts every frame that comes out is taken as the NEXT pass.
+    // The last two frames of the file went into the primed array that way,
+    // sorted behind the clock at the turn and were dropped: a 117ms hold on
+    // the first turn of a 30fps clip, where later turns showed 33ms.
+    if (this._eofFlushSettledSeq !== this._eofFlushSeq) return false;
     if (this.videoDecoder.queueSize > 0) return false;
-    // Nothing left on screen to cover the work.
-    if (this.videoRenderer.getQueueSize() === 0) return false;
+    // Nothing left on screen to cover the work — or, with sound, in the ears.
+    if (
+      this.videoRenderer.getQueueSize() === 0 &&
+      !(withSound && this.audioRenderer.getBufferedDuration() > 0.1)
+    ) {
+      return false;
+    }
 
     this._loopPrerolling = true;
+    this._loopWithSound = withSound;
+    this._loopSeamDrySince = 0;
     void this.startLoopPreroll();
     return true;
   }
@@ -10061,7 +10115,7 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
       // at the turn put the first buffer 26ms late — "Gap filled: 26.1ms
       // silence" — and the underrun that caused took the player into buffering
       // 200ms later.
-      if (!this.disableAudio) this.audioRenderer.beginLoopPass(this.startTime);
+      if (!this.disableAudio) this.audioRenderer.beginLoopPass();
       await this.demuxer.seek(this.startTime);
       // Reading stopped because of EOF; the file starts again from here.
       this.eofReached = false;
@@ -10092,14 +10146,46 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
    * no hole, no overlap, nothing to hear.
    */
   private maybeCompleteLoopWrap(): boolean {
-    if ((this.videoRenderer?.getQueueSize() ?? 0) > 0) return false;
+    const outgoingFrames = this.videoRenderer?.getQueueSize() ?? 0;
+    let clockTime = this.startTime;
+    if (this._loopWithSound) {
+      // One boundary: the picture turns when the sound does. Whatever of the
+      // old picture is still queued at that moment is behind the new clock
+      // for good, and goes; if the picture ran out first it simply holds its
+      // last frame until the sound gets there.
+      if (this.audioRenderer.isLoopSeamPending()) {
+        // The new pass's sound never arrived (nothing decoded, or no audio in
+        // its opening). Don't hold the picture hostage to it forever — but
+        // measure that from the sound running OUT, not from priming. How much
+        // of the old pass is still to be heard depends on how deep the audio
+        // was buffered: an 8s MP4 still had more than three seconds of it, and
+        // a fixed wait from priming gave up on a seam that was on its way.
+        if (outgoingFrames > 0 || this.audioRenderer.getBufferedDuration() > 0.05) {
+          this._loopSeamDrySince = 0;
+          return false;
+        }
+        const now = performance.now();
+        if (this._loopSeamDrySince === 0) this._loopSeamDrySince = now;
+        if (now - this._loopSeamDrySince < MoviPlayer.LOOP_SEAM_DRY_MS) {
+          return false;
+        }
+        Logger.warn(TAG, "Loop: the sound never reached its seam — turning the picture over without it");
+        this.audioRenderer.cancelLoopPass();
+      } else {
+        const heard = this.audioRenderer.getAudioClock();
+        if (heard >= 0) clockTime = heard;
+      }
+    } else if (outgoingFrames > 0) {
+      return false;
+    }
 
     const frames = this._loopPrerollFrames;
     this._loopPrerollFrames = [];
     this._loopPrerolling = false;
 
-    // The queue is empty by definition here, so this empties nothing — what it
-    // is for is the guards it resets alongside. lastPresentedPts above all:
+    // Without sound the queue is empty by definition here; with it, anything
+    // left is old picture the clock has already wrapped past. What this is
+    // mostly for is the guards it resets alongside. lastPresentedPts above all:
     // left at the end of the file it would refuse every frame of a pass that
     // starts at zero, which is the same monotonic guard that keeps a stale
     // pre-seek frame off the screen.
@@ -10132,8 +10218,13 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
     // Safe to say from here: the spinner follows the player STATE, which this
     // turn never moves out of "playing", so these are announcements and
     // nothing more.
+    // Everything that forgives a seek's settling — the desync and lag
+    // detectors, the self-inflicted stall test — should forgive this too: the
+    // picture restarts a frame or two behind a sound that never stopped.
+    this._lastSeekResumeAt = performance.now();
+
     this.emit("seeking", 0);
-    this.clock.seek(this.startTime);
+    this.clock.seek(clockTime);
     this.emit("timeUpdate", 0);
     this.emit("seeked", 0);
     this.noteLoopTurn();
