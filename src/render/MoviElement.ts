@@ -21427,7 +21427,7 @@ export class MoviElement extends HTMLElement {
         }
         .movi-center-icon-play {
            margin-left: 0 !important;
-           transform: translateX(4px) scale(1.15) !important;
+           transform: translateX(2.75px) scale(1.15) !important;
         }
         .movi-progress-handle {
             /* Handle needs transform for centering and positioning */
@@ -22614,9 +22614,14 @@ export class MoviElement extends HTMLElement {
          small optical-centre nudge — 5px read as too far right in
          practice, so 2px is enough to take the visual edge off the
          left-leaning mass without making the tip look pushed. */
+      /* A triangle centred by its box reads as sitting left, so it is nudged
+         right — by an eighth of its own width, the same proportion the bar's
+         play icon uses. The nudge was 4px when the icon was a bare triangle;
+         rounding the tip pushed its outline a further 1.2px right and the two
+         together put it visibly off centre against the pause icon. */
       .movi-center-icon-play {
         display: block;
-        transform: translateX(4px) scale(1.15);
+        transform: translateX(2.75px) scale(1.15);
       }
 
       .movi-center-play-pause:focus {
