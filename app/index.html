@@ -4295,7 +4295,6 @@
         overflow: hidden;
       }
       .player-stage { background: #030404; }
-      .player-ambient { opacity: 0.58; }
       movi-player {
         --movi-accent: var(--accent);
         --movi-progress-color: var(--accent);
@@ -4963,7 +4962,6 @@
       .player-wrapper > .player-stage {
         border-radius: max(0px, calc(var(--frame-radius) - var(--frame-width)));
       }
-      .player-ambient { opacity: 0.2; }
 
       .watch-cards { grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 1rem; }
       .watch-card {
@@ -5485,11 +5483,51 @@
 
       /* What people are saying: the real visitor wall, as cards */
       .comments-head { align-items: flex-end; }
+      /* Two stacked columns rather than a grid: a grid row is as tall as its
+         tallest card, which left a hole under every short comment. Each card
+         now sits directly under the one above it in its own column. */
       .comment-list {
-        display: grid;
-        grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
-        gap: 1rem;
-        align-items: start;
+        display: block;
+        columns: 2 320px;
+        column-gap: 1rem;
+      }
+      .comment-list > * {
+        break-inside: avoid;
+        margin-bottom: 1rem;
+      }
+      /* Same left edge as every other section: the heading, its note, the form
+         and the wall all start at the content edge instead of the heading
+         and wall sitting in a centred 820px column beside a left-aligned note. */
+      .comments-section .comments-head,
+      .comments-section .section-desc,
+      .comments-section .comment-list,
+      .comments-section .comment-more {
+        max-width: none;
+        margin-left: 0;
+        margin-right: 0;
+      }
+      .comments-section .section-desc { max-width: 62ch; }
+      .comments-section .comment-form {
+        max-width: none;
+        margin-left: 0;
+        margin-right: 0;
+      }
+      /* Heading and its note on the left, the form beside them on the right,
+         the wall across the full width below — the form no longer stands alone
+         with an empty half-page next to it. */
+      @media (min-width: 981px) {
+        .comments-section:not([hidden]) {
+          display: grid;
+          grid-template-columns: minmax(0, 0.9fr) minmax(0, 1.1fr);
+          grid-template-rows: auto 1fr auto auto;
+          column-gap: 3.5rem;
+          align-items: start;
+        }
+        .comments-section .comments-head { grid-column: 1; grid-row: 1; flex-direction: column; align-items: flex-start; gap: 1rem; }
+        .comments-section .section-desc { grid-column: 1; grid-row: 2; margin-top: 0; }
+        .comments-section .comment-form { grid-column: 2; grid-row: 1 / 3; margin: 0; }
+        .comments-section .comment-list { grid-column: 1 / -1; grid-row: 3; margin-top: 2.5rem; }
+        .comments-section .comment-more { grid-column: 1 / -1; grid-row: 4; justify-self: center; }
       }
       .comment-card {
         border: 1px solid #e3e9f3;
@@ -5818,7 +5856,40 @@
         /* Tabs as wide as the URL bar beneath them. */
         .hero--split .hero-mode-tabs { width: 100%; }
       }
-      .player-section { padding-top: 3.4rem; }
+      /* Room for the ambient halo: it spills 90px past the player and the
+         section clips, so the padding is grown by that much and handed back
+         with an equal negative margin — nothing on the page moves. */
+      /* The halo is wider than the page gutter, so clipping at the section
+         cut it off in a hard vertical line either side. Let it reach the
+         window edge instead; the page itself stops horizontal scroll. */
+      html { overflow-x: clip; }
+      .player-section {
+        overflow: visible;
+        padding-top: calc(3.4rem + 100px);
+        padding-bottom: calc(3.4rem + 100px);
+        margin-top: -100px;
+        margin-bottom: -100px;
+      }
+      /* The player paints a dim wash sized for the letterbox bars; out here it
+         sits behind a 10px frame and fades out before it clears it, so it read
+         as black. Lift it into a real glow around the frame, and let the frame
+         itself be a tint rather than a wall between the picture and its light. */
+      .player-ambient {
+        --movi-ambient-strength: 2.4;
+        inset: -140px !important;
+        filter: saturate(1.8) brightness(2.4) blur(30px) !important;
+        opacity: 1 !important;
+      }
+      [data-theme="light"] .player-ambient {
+        --movi-ambient-strength: 1.2;
+        filter: saturate(1.6) brightness(3.4) blur(30px) !important;
+        opacity: 0.85 !important;
+      }
+      body.playing-video .player-ambient { filter: saturate(1.8) brightness(2.4) !important; }
+      [data-theme="light"] body.playing-video .player-ambient { filter: saturate(1.6) brightness(3.4) !important; }
+      .player-wrapper { background-clip: padding-box; }
+      :root:not([data-theme="light"]) .player-wrapper { border-color: rgba(255, 255, 255, 0.07); }
+      [data-theme="light"] .player-wrapper { border-color: rgba(255, 255, 255, 0.6); }
       @media (max-width: 1100px) {
         .hero-format-strip { flex-direction: row; flex-wrap: wrap; align-items: center; }
       }
