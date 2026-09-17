@@ -993,6 +993,208 @@
       .playlist-panel { display: none; }
     }
   </style>
+
+  <!-- Site theme: the web app's dark navy and blue-violet, in Manrope. Last in
+       the head so it re-skins the rules above without rewriting them. The
+       font ships inside the extension — no request leaves the page for it. -->
+  <style id="site-theme">
+    @font-face {
+      font-family: "Manrope";
+      src: url("fonts/manrope-latin.woff2") format("woff2");
+      font-weight: 400 800;
+      font-display: swap;
+    }
+    :root {
+      --bg: #0a0f1e;
+      --bg-surface: #141d31;
+      --border-subtle: rgba(255, 255, 255, 0.08);
+      --border-hover: rgba(124, 117, 255, 0.55);
+      --text-primary: #eef2ff;
+      --text-secondary: #aab4cc;
+      --text-muted: #7c88a3;
+      --accent: #7c75ff;
+      --accent-soft: rgba(124, 117, 255, 0.16);
+      --accent-grad: linear-gradient(110deg, #674cff, #3c6df5);
+    }
+    html, body { font-family: "Manrope", system-ui, -apple-system, "Segoe UI", sans-serif; }
+    .playlist-panel,
+    .drop-zone,
+    .file-overlay,
+    .loading-overlay,
+    .playlist-toggle { font-family: inherit; }
+
+    /* Picker */
+    .file-overlay {
+      background:
+        radial-gradient(ellipse 60% 50% at 50% 30%, rgba(80, 110, 255, 0.16), transparent 70%),
+        radial-gradient(ellipse 40% 40% at 85% 90%, rgba(140, 95, 255, 0.1), transparent 70%),
+        #0a0f1e;
+    }
+    .drop-zone.dragover::before { box-shadow: inset 0 0 90px -24px rgba(99, 110, 255, 0.45); }
+    .brand-logo img { box-shadow: 0 18px 54px -14px rgba(70, 90, 255, 0.55); }
+    .brand-logo::after { background: radial-gradient(circle, rgba(80, 110, 255, 0.3), transparent 70%); }
+    .brand-name {
+      font-weight: 800;
+      letter-spacing: -0.04em;
+      background: linear-gradient(92deg, #f4f6ff 0%, #b9c3ff 60%, #9cc0ff 100%);
+      -webkit-background-clip: text;
+      background-clip: text;
+    }
+    .brand-tagline { color: var(--text-secondary); }
+    .browse-btn {
+      border: 0;
+      border-radius: 999px;
+      background: var(--accent-grad);
+      box-shadow: 0 10px 24px rgba(73, 85, 245, 0.25);
+    }
+    .browse-btn:hover { background: var(--accent-grad); box-shadow: 0 13px 28px rgba(73, 85, 245, 0.35); filter: brightness(1.06); }
+    .browse-btn.secondary {
+      border: 1px solid rgba(255, 255, 255, 0.1);
+      background: rgba(255, 255, 255, 0.05);
+      box-shadow: none;
+      color: var(--text-primary);
+    }
+    .browse-btn.secondary:hover { background: rgba(255, 255, 255, 0.08); filter: none; box-shadow: none; }
+    .drop-link {
+      border: 1px solid rgba(255, 255, 255, 0.12);
+      border-radius: 14px;
+      background: #10172a;
+    }
+    .drop-link:focus-within { border-color: #8f95f7; background: #121a2e; box-shadow: 0 0 0 4px rgba(99, 91, 255, 0.14); }
+    .drop-link .link-go { border-radius: 10px; background: var(--accent-grad); }
+    .drop-link .link-go:hover { background: var(--accent-grad); filter: brightness(1.08); }
+    .drop-formats span::before { background: var(--accent); }
+    .drop-tip { border-color: rgba(124, 117, 255, 0.2); background: rgba(124, 117, 255, 0.06); color: var(--text-secondary); }
+    .setting { border-color: rgba(255, 255, 255, 0.08); background: rgba(255, 255, 255, 0.03); }
+    .setting:hover { border-color: rgba(124, 117, 255, 0.4); }
+    .switch .slider { background: rgba(255, 255, 255, 0.14); }
+    .setting-btn { border-color: rgba(124, 117, 255, 0.35); background: rgba(124, 117, 255, 0.14); color: #c3beff; }
+    .setting-btn:hover { background: rgba(124, 117, 255, 0.22); }
+    .promo-links a { color: #5d6985; }
+    .overlay-close { border-color: rgba(255, 255, 255, 0.1); background: rgba(255, 255, 255, 0.05); }
+    .cache-info { color: #5d6985; }
+    .cache-info .cache-size svg { color: #5d6985; }
+    .cache-info .cache-clear { border-color: rgba(255, 255, 255, 0.12); color: #aab4cc; }
+
+    /* Playlist */
+    .playlist-panel { background: #0c1224; border-left-color: rgba(255, 255, 255, 0.07); }
+    .playlist-panel:focus-within { border-left-color: rgba(124, 117, 255, 0.4); }
+    .playlist-toolbar button { border-radius: 999px; }
+    .playlist-toolbar button.playlist-icon-btn { border-radius: 50%; }
+    .playlist-toolbar button[aria-pressed="true"] { background: var(--accent-grad); border-color: transparent; }
+    .autoplay-switch[aria-checked="true"] .autoplay-switch-track { background: var(--accent-grad); }
+    .playlist-search input { border-radius: 999px; background: rgba(255, 255, 255, 0.05); }
+    .playlist-search input:focus { background: #121a2e; border-color: #8f95f7; }
+    .playlist-search-clear:hover { background: #182238; }
+    .playlist-item:hover,
+    .playlist-folder:hover { background: rgba(255, 255, 255, 0.045); }
+    .playlist-item.active { background: linear-gradient(90deg, rgba(124, 117, 255, 0.18) 0%, rgba(80, 110, 255, 0.06) 100%); }
+    .playlist-item.highlighted:not(.active) { background: rgba(124, 117, 255, 0.1); }
+    .playlist-item.active .playlist-thumb { box-shadow: 0 0 0 1px rgba(124, 117, 255, 0.55), 0 4px 14px rgba(80, 110, 255, 0.25); }
+    .playlist-item.highlighted { box-shadow: inset 0 0 0 2px var(--accent); }
+    .playlist-folder-children:hover { border-left-color: rgba(124, 117, 255, 0.35); }
+    .playlist-thumb { background: linear-gradient(135deg, #182238 0%, #0e1528 100%); }
+    .playlist-toggle { border-radius: 999px; background: rgba(12, 18, 36, 0.8); }
+    .playlist-toggle:hover { background: rgba(20, 29, 49, 0.92); }
+    .loading-overlay { background: #0a0f1e; }
+
+    movi-player {
+      --movi-accent: #7c75ff;
+      --movi-progress-color: #7c75ff;
+      --movi-btn-hover-bg: rgba(124, 117, 255, 0.2);
+    }
+
+    /* ── Picker laid out like the web app's hero ── */
+    .file-overlay { display: block; overflow-y: auto; }
+    .file-overlay .drop-zone {
+      display: block;
+      height: auto;
+      min-height: 100%;
+      overflow: visible;
+      width: min(100%, calc(1180px + 2 * var(--xpad)));
+      margin: 0 auto;
+      padding: 118px var(--xpad) 64px;
+    }
+    :root { --xpad: clamp(18px, 4.4vw, 56px); }
+    .xnav {
+      position: sticky;
+      top: 0;
+      z-index: 5;
+      height: 68px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      margin-bottom: -68px;
+      padding: 0 max(var(--xpad), calc((100vw - 1180px) / 2));
+      background: rgba(10, 15, 30, 0.82);
+      border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+      backdrop-filter: blur(20px) saturate(1.2);
+    }
+    .xnav-brand { display: inline-flex; align-items: center; gap: 10px; color: #f2f5ff; text-decoration: none; font-size: 19px; font-weight: 800; letter-spacing: -0.05em; }
+    .xnav-logo { width: 30px; height: 30px; }
+    .file-overlay .xnav-links { position: static; display: flex; align-items: center; gap: 6px; }
+    .file-overlay .xnav-links a { display: inline-flex; align-items: center; padding: 8px 11px; border-radius: 9px; color: #aab4cc; font-size: 13px; font-weight: 600; text-decoration: none; }
+    .file-overlay .xnav-links a:hover { color: #f2f5ff; background: rgba(255, 255, 255, 0.07); }
+    .file-overlay .xnav-links a.xnav-icon { width: 36px; height: 36px; justify-content: center; padding: 0; border: 1px solid rgba(255, 255, 255, 0.1); border-radius: 50%; background: rgba(255, 255, 255, 0.05); color: #c9d2e6; }
+    .xnav-icon svg { width: 17px; height: 17px; }
+    .file-overlay .overlay-close { position: static; width: 36px; height: 36px; margin-left: 4px; border-radius: 50%; }
+
+    .xhero { display: grid; grid-template-columns: minmax(0, 1fr) 360px; gap: 48px; align-items: start; }
+    .xhero-main { min-width: 0; }
+    .xhero .drop-text { text-align: left; }
+    .xkicker { color: #8e9bb8; font: 600 11px/1 ui-monospace, SFMono-Regular, Menlo, monospace; letter-spacing: 0.19em; text-transform: uppercase; }
+    .xtitle { margin-top: 14px; color: #f4f6ff; font-size: clamp(38px, 5vw, 60px); font-weight: 800; line-height: 1.04; letter-spacing: -0.04em; }
+    .xtitle em { font-style: normal; background: linear-gradient(92deg, #7d8dff 0%, #a47dff 48%, #6fb0ff 100%); -webkit-background-clip: text; background-clip: text; color: transparent; padding-bottom: 0.12em; }
+    .xtagline { max-width: 56ch; margin-top: 16px; color: #aab4cc; font-size: 15.5px; line-height: 1.55; }
+
+    .xtabs { display: inline-grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 4px; width: min(100%, 400px); margin-top: 28px; padding: 4px; border-radius: 12px; background: rgba(255, 255, 255, 0.05); }
+    .xtab { display: inline-flex; align-items: center; justify-content: center; gap: 7px; min-height: 42px; border: 1px solid transparent; border-radius: 9px; color: #aab4cc; background: transparent; font: 600 13px/1 inherit; font-family: inherit; cursor: pointer; }
+    .xtab svg { width: 16px; height: 16px; }
+    .xtab:hover { color: #d9dcff; background: rgba(255, 255, 255, 0.06); }
+    .xtab.is-active { color: #c3beff; border-color: rgba(255, 255, 255, 0.1); background: #182238; box-shadow: 0 6px 18px rgba(0, 0, 0, 0.3); }
+
+    .file-overlay .drop-link { width: 100%; max-width: 640px; min-height: 58px; margin-top: 14px; padding: 5px 5px 5px 18px; }
+    .file-overlay .drop-link input { font-size: 14px; }
+    .file-overlay .drop-link .link-go { display: inline-flex; align-items: center; gap: 7px; min-width: 104px; min-height: 46px; justify-content: center; font-size: 15px; font-weight: 700; }
+    .file-overlay .drop-link .link-go svg { width: 16px; height: 16px; }
+    .xdrop-hint { max-width: 640px; margin-top: 12px; color: #7c88a3; font-size: 12.5px; text-align: center; }
+
+    .xtrust { display: flex; flex-wrap: wrap; gap: 8px 22px; margin: 22px 0 0; padding: 0; list-style: none; color: #aab4cc; font-size: 13px; }
+    .xtrust li { display: inline-flex; align-items: center; gap: 7px; }
+    .xtrust svg { width: 15px; height: 15px; color: #8e9bb8; }
+    .xtrust b { color: #d9dcff; font-weight: 600; }
+
+    .xside { padding: 20px; border: 1px solid rgba(255, 255, 255, 0.08); border-radius: 18px; background: rgba(255, 255, 255, 0.03); }
+    .xside-title { margin-bottom: 12px; color: #8e9bb8; font: 600 11px/1 ui-monospace, SFMono-Regular, Menlo, monospace; letter-spacing: 0.16em; text-transform: uppercase; }
+    .file-overlay .drop-settings { width: 100%; max-width: none; margin: 0; }
+
+    .xproof { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 20px; margin-top: 48px; padding-top: 26px; border-top: 1px solid rgba(255, 255, 255, 0.08); }
+    .xproof > div { display: flex; align-items: center; gap: 12px; min-width: 0; }
+    .xproof p { margin: 0; min-width: 0; }
+    .xproof strong { display: block; color: #eef2ff; font-size: 13.5px; font-weight: 700; }
+    .xproof small { display: block; margin-top: 3px; color: #8390ab; font-size: 12px; }
+    .xproof-icon { width: 36px; height: 36px; flex: 0 0 auto; display: grid; place-items: center; border-radius: 10px; color: #a9a4ff; background: rgba(255, 255, 255, 0.05); }
+    .xproof-icon.is-warm { color: #ffb347; }
+    .xproof-icon svg { width: 19px; height: 19px; }
+    .xformats { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; margin-top: 22px; }
+    .xformats-label { margin-right: 10px; color: #7c88a3; font: 700 10.5px/1 ui-monospace, SFMono-Regular, Menlo, monospace; letter-spacing: 0.14em; text-transform: uppercase; }
+    .xchip { padding: 5px 10px; border: 1px solid rgba(255, 255, 255, 0.09); border-radius: 7px; color: #aab4cc; background: rgba(255, 255, 255, 0.03); font-size: 12px; font-weight: 600; }
+
+    .file-overlay .cache-info { position: fixed; right: 16px; bottom: 14px; }
+
+    @media (max-width: 980px) {
+      .xhero { grid-template-columns: 1fr; gap: 32px; }
+      .xproof { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+    }
+    @media (max-width: 560px) {
+      .file-overlay .xnav-links a:not(.xnav-icon) { display: none; }
+      .xtabs { width: 100%; }
+      .xproof { grid-template-columns: 1fr; }
+      .file-overlay .drop-link .link-go span { display: none; }
+      .file-overlay .drop-link .link-go { min-width: 58px; }
+      .file-overlay .cache-info { position: static; margin: 24px auto 0; }
+    }
+  </style>
 </head>
 <body>
   <div class="player-shell" id="playerShell">
@@ -1106,98 +1308,96 @@
   </div>
 
   <div class="file-overlay hidden" id="fileOverlay">
-    <button type="button" class="overlay-close" id="overlayClose" title="Back to the video" aria-label="Back to the video">
-      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
-        <line x1="6" y1="6" x2="18" y2="18"/><line x1="6" y1="18" x2="18" y2="6"/>
-      </svg>
-    </button>
-    <div class="promo-links">
-      <a href="https://github.com/MrUjjwalG/movi-player" target="_blank">
-        <svg viewBox="0 0 24 24" fill="currentColor"><path d="M12 .3a12 12 0 00-3.8 23.4c.6.1.8-.3.8-.6v-2c-3.3.7-4-1.6-4-1.6-.6-1.4-1.4-1.8-1.4-1.8-1-.7.1-.7.1-.7 1.2.1 1.8 1.2 1.8 1.2 1 1.8 2.8 1.3 3.5 1 .1-.8.4-1.3.7-1.6-2.7-.3-5.5-1.3-5.5-6 0-1.2.5-2.3 1.3-3.1-.2-.4-.6-1.6.1-3.2 0 0 1-.3 3.4 1.2a11.5 11.5 0 016 0c2.3-1.5 3.3-1.2 3.3-1.2.7 1.6.3 2.8.2 3.2.7.8 1.2 1.9 1.2 3.1 0 4.6-2.8 5.6-5.5 5.9.5.4.9 1.2.9 2.4v3.5c0 .3.2.7.8.6A12 12 0 0012 .3"/></svg>
-        GitHub
-      </a>
-      <a href="https://www.npmjs.com/package/movi-player" target="_blank">
-        <svg viewBox="0 0 24 24" fill="currentColor"><path d="M0 7.334v8h6.666v1.332H12v-1.332h12v-8H0zm6.666 6.664H5.334v-4H3.999v4H1.335V8.667h5.331v5.331zm4 0v1.336H8.001V8.667h5.334v5.331h-2.669zm12.001 0h-1.33v-4h-1.336v4h-1.335v-4h-1.33v4h-2.671V8.667h8.002v5.331z"/></svg>
-        npm
-      </a>
-      <a href="https://mrujjwalg.github.io/movi-player/" target="_blank">
-        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M2 3h6a4 4 0 0 1 4 4v14a3 3 0 0 0-3-3H2z"/><path d="M22 3h-6a4 4 0 0 0-4 4v14a3 3 0 0 1 3-3h7z"/></svg>
-        Docs
-      </a>
-    </div>
-    <div class="drop-zone" id="dropZone">
-      <div class="brand">
-        <div class="brand-logo">
-          <img src="icons/logo.svg" alt="Movi Player">
-        </div>
-        <div class="drop-text">
-          <h2 class="brand-name">Movi Player</h2>
-          <p class="brand-tagline">Play any video format — drop a file or pick from your device</p>
-        </div>
-      </div>
-      <div class="drop-actions">
-        <label class="browse-btn">
-          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-            <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/>
-          </svg>
-          Choose Files
-          <input type="file" id="filePicker" accept="video/*,audio/*,.mkv,.ts,.m2ts,.mts,.evo,.avi,.flv,.wmv,.mov,.mka,.m4b,.opus,.oga,.dts,.ac3,.ec3,.eac3" multiple style="display:none">
-        </label>
-        <label class="browse-btn secondary">
-          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-            <path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/>
-          </svg>
-          Choose Folder
-          <input type="file" id="folderPicker" webkitdirectory multiple style="display:none">
-        </label>
-      </div>
-      <div class="drop-or"><span>or paste a link</span></div>
-
-      <!-- The popup's "Paste Link" tile read the clipboard and failed with a
-           two-second red hint when permission was denied. A real field works
-           either way; the clipboard button is a shortcut, not the only door. -->
-      <form class="drop-link" id="linkForm">
-        <input type="url" id="linkInput" placeholder="https://…  paste any video link" aria-label="Video link" autocomplete="off" spellcheck="false">
-        <button type="button" class="link-paste" id="linkPaste" title="Paste from clipboard" aria-label="Paste from clipboard">
-          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-            <rect x="8" y="2" width="8" height="4" rx="1"/><path d="M16 4h2a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h2"/>
-          </svg>
+    <!-- The picker is the web app's hero, in the same parts and order: nav,
+         claim, the three ways in, trust line, then what it plays. Every id
+         player.js reaches for is kept. -->
+    <header class="xnav">
+      <a class="xnav-brand" href="https://moviplayer.com" target="_blank" rel="noopener"><svg class="xnav-logo" viewBox="0 0 100 100" aria-hidden="true"><defs>
+<linearGradient id="xl-l" gradientUnits="userSpaceOnUse" x1="27" y1="18" x2="27" y2="84"><stop offset="0" stop-color="#6366ff"/><stop offset=".5" stop-color="#3d4dff"/><stop offset="1" stop-color="#1638d2"/></linearGradient>
+<linearGradient id="xl-t" gradientUnits="userSpaceOnUse" x1="27" y1="20" x2="80" y2="50"><stop offset="0" stop-color="#86b6ff"/><stop offset=".55" stop-color="#4f86ff"/><stop offset="1" stop-color="#14aaff"/></linearGradient>
+<linearGradient id="xl-b" gradientUnits="userSpaceOnUse" x1="27" y1="80" x2="80" y2="50"><stop offset="0" stop-color="#5a4dff"/><stop offset=".5" stop-color="#8e72ff"/><stop offset="1" stop-color="#7cb9ff"/></linearGradient>
+</defs><g fill="none" stroke-linecap="round" stroke-width="17"><path d="M77 52 27 80" stroke="url(#xl-b)"/><path d="M27 20 77 48" stroke="url(#xl-t)"/><path d="M27 20v60" stroke="url(#xl-l)"/><path d="M27 80 41 72.2" stroke="url(#xl-b)"/></g></svg><span>MoviPlayer</span></a>
+      <nav class="xnav-links promo-links">
+        <a href="https://moviplayer.com/docs" target="_blank" rel="noopener">Docs</a>
+        <a href="https://www.npmjs.com/package/movi-player" target="_blank" rel="noopener">npm</a>
+        <a class="xnav-icon" href="https://github.com/MrUjjwalG/movi-player" target="_blank" rel="noopener" aria-label="GitHub" title="GitHub"><svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M12 .3a12 12 0 00-3.8 23.4c.6.1.8-.3.8-.6v-2c-3.3.7-4-1.6-4-1.6-.6-1.4-1.4-1.8-1.4-1.8-1-.7.1-.7.1-.7 1.2.1 1.8 1.2 1.8 1.2 1 1.8 2.8 1.3 3.5 1 .1-.8.4-1.3.7-1.6-2.7-.3-5.5-1.3-5.5-6 0-1.2.5-2.3 1.3-3.1-.2-.4-.6-1.6.1-3.2 0 0 1-.3 3.4 1.2a11.5 11.5 0 016 0c2.3-1.5 3.3-1.2 3.3-1.2.7 1.6.3 2.8.2 3.2.7.8 1.2 1.9 1.2 3.1 0 4.6-2.8 5.6-5.5 5.9.5.4.9 1.2.9 2.4v3.5c0 .3.2.7.8.6A12 12 0 0012 .3"/></svg></a>
+        <button type="button" class="overlay-close" id="overlayClose" title="Back to the video" aria-label="Back to the video">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><line x1="6" y1="6" x2="18" y2="18"/><line x1="6" y1="18" x2="18" y2="6"/></svg>
         </button>
-        <button type="submit" class="link-go">Play</button>
-      </form>
+      </nav>
+    </header>
 
-      <div class="drop-formats">
-        <span>100% Local</span><span>HDR &amp; 4K</span><span>HEVC · AV1</span><span>MKV · TS</span>
-      </div>
-
-      <div class="drop-tip">
-        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
-          <circle cx="12" cy="12" r="10"/><path d="M12 16v-4M12 8h.01"/>
-        </svg>
-        <span>Right-click any video link on the web and choose <b>Open with Movi Player</b></span>
-      </div>
-
-      <div class="drop-settings">
-        <div class="setting">
-          <div class="setting-text">
-            <div class="setting-label">Detect download links</div>
-            <div class="setting-sub" id="probe-sub">Scan CDN / no-extension links for video</div>
+    <div class="drop-zone" id="dropZone">
+      <section class="xhero">
+        <div class="xhero-main">
+          <div class="drop-text">
+            <p class="xkicker">Your videos. Your way.</p>
+            <h1 class="xtitle">Play any video<br><em>right in your browser</em></h1>
+            <p class="xtagline">Open a local file, a folder, or any video link. Nothing is uploaded &mdash; it all plays right here.</p>
           </div>
-          <label class="switch">
-            <input type="checkbox" id="probe-toggle" aria-label="Detect download links">
-            <span class="slider"></span>
-          </label>
+
+          <div class="xtabs" role="group" aria-label="Choose how to open a video">
+            <button type="button" class="xtab is-active" id="xtabUrl"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M10 13a5 5 0 0 0 7.1.1l2-2a5 5 0 0 0-7.1-7.1l-1.1 1.1"/><path d="M14 11a5 5 0 0 0-7.1-.1l-2 2a5 5 0 0 0 7.1 7.1l1.1-1.1"/></svg> URL</button>
+            <label class="xtab"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><path d="M14 2v6h6"/></svg> Files
+              <input type="file" id="filePicker" accept="video/*,audio/*,.mkv,.ts,.m2ts,.mts,.evo,.avi,.flv,.wmv,.mov,.mka,.m4b,.opus,.oga,.dts,.ac3,.ec3,.eac3" multiple style="display:none">
+            </label>
+            <label class="xtab"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/></svg> Folder
+              <input type="file" id="folderPicker" webkitdirectory multiple style="display:none">
+            </label>
+          </div>
+
+          <form class="drop-link" id="linkForm">
+            <input type="url" id="linkInput" placeholder="Paste a direct video link" aria-label="Video link" autocomplete="off" spellcheck="false">
+            <button type="button" class="link-paste" id="linkPaste" title="Paste from clipboard" aria-label="Paste from clipboard">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="8" y="2" width="8" height="4" rx="1"/><path d="M16 4h2a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h2"/></svg>
+            </button>
+            <button type="submit" class="link-go"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polygon points="6 4 20 12 6 20 6 4"/></svg><span>Play</span></button>
+          </form>
+          <p class="xdrop-hint">or drop your files anywhere on this page</p>
+
+          <ul class="xtrust">
+            <li><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/></svg>Stays on your device</li>
+            <li><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="20 6 9 17 4 12"/></svg>Free, no sign-up</li>
+            <li><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="10"/><path d="M12 16v-4M12 8h.01"/></svg>Right-click a video link &rarr; <b>Open with Movi Player</b></li>
+          </ul>
         </div>
 
-        <div class="setting">
-          <div class="setting-text">
-            <div class="setting-label">Experimental features</div>
-            <div class="setting-sub" id="flags-sub">Better codec &amp; HDR support in Chrome</div>
+        <aside class="xside">
+          <p class="xside-title">Extension settings</p>
+          <div class="drop-settings">
+            <div class="setting">
+              <div class="setting-text">
+                <div class="setting-label">Detect download links</div>
+                <div class="setting-sub" id="probe-sub">Scan CDN / no-extension links for video</div>
+              </div>
+              <label class="switch">
+                <input type="checkbox" id="probe-toggle" aria-label="Detect download links">
+                <span class="slider"></span>
+              </label>
+            </div>
+            <div class="setting">
+              <div class="setting-text">
+                <div class="setting-label">Experimental features</div>
+                <div class="setting-sub" id="flags-sub">Better codec &amp; HDR support in Chrome</div>
+              </div>
+              <button type="button" class="setting-btn" id="open-flags">Enable</button>
+            </div>
           </div>
-          <button type="button" class="setting-btn" id="open-flags">Enable</button>
-        </div>
+        </aside>
+      </section>
+
+      <section class="xproof" aria-label="MoviPlayer benefits">
+        <div><span class="xproof-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="4.5" y="10.5" width="15" height="10" rx="2.5"/><path d="M8 10.5V7.5a4 4 0 0 1 8 0v3"/></svg></span><p><strong>100% Private</strong><small>Nothing leaves your device.</small></p></div>
+        <div><span class="xproof-icon is-warm"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M13 2.5 5 13.5h6l-1 8 8-11h-6z"/></svg></span><p><strong>Plays Instantly</strong><small>No conversion needed.</small></p></div>
+        <div><span class="xproof-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 7.5h18M3 16.5h18"/><rect x="3" y="3.5" width="18" height="17" rx="2.5"/></svg></span><p><strong>HDR &amp; 4K</strong><small>Hardware decoding where it can.</small></p></div>
+        <div><span class="xproof-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M14 3H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8z"/><path d="M14 3v5h5"/></svg></span><p><strong>Any Format</strong><small>MKV, HEVC, AV1 and more.</small></p></div>
+      </section>
+      <div class="xformats" aria-label="Supported formats">
+        <span class="xformats-label">Plays every format</span>
+        <span class="xchip">MKV</span><span class="xchip">MP4</span><span class="xchip">HEVC</span><span class="xchip">AV1</span><span class="xchip">VP9</span><span class="xchip">MOV</span><span class="xchip">WebM</span><span class="xchip">TS</span><span class="xchip">FLAC</span><span class="xchip">SRT</span>
       </div>
     </div>
+
     <div class="cache-info" id="cacheInfo">
       <span class="cache-size" id="cacheSize" title="Cached thumbnails">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
@@ -1208,6 +1408,7 @@
       <button class="cache-clear" id="cacheClearBtn" title="Clear thumbnail cache">Clear cache</button>
     </div>
   </div>
+
 
   <script type="module" src="player.js"></script>
 </body>

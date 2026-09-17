@@ -2,6 +2,7 @@
 # chrome-extension/ by build.sh — see that script for why.
 dist/
 icons/
+fonts/
 background.js
 content.js
 content.css

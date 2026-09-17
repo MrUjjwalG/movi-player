@@ -18,6 +18,11 @@ const loadingOverlay = document.getElementById("loadingOverlay");
 // Declared up here because loadFile() sets it well above the block that reads it.
 let hasMedia = false;
 const loadingName = document.getElementById("loadingName");
+// The picker's URL tab: focus the link field. Files and Folder are labels
+// around their inputs, so they open the picker by themselves.
+document.getElementById("xtabUrl")?.addEventListener("click", () => {
+  document.getElementById("linkInput")?.focus();
+});
 
 const playlistPanel = document.getElementById("playlistPanel");
 const playlistItemsEl = document.getElementById("playlistItems");

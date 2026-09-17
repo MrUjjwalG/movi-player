@@ -36,13 +36,14 @@ for f in element.slim.js movi.wasm; do
 done
 
 echo "Copying shared files from chrome-extension/..."
-rm -rf "$DIR/dist" "$DIR/icons"
-mkdir -p "$DIR/dist" "$DIR/icons"
+rm -rf "$DIR/dist" "$DIR/icons" "$DIR/fonts"
+mkdir -p "$DIR/dist" "$DIR/icons" "$DIR/fonts"
 
 for f in $SHARED; do
   cp "$SRC/$f" "$DIR/$f"
 done
 cp "$SRC"/icons/*.png "$SRC"/icons/*.svg "$DIR/icons/"
+cp "$SRC"/fonts/*.woff2 "$DIR/fonts/"
 # The slim bundle plus its engine — see the note in chrome-extension/build.sh.
 # AMO refuses a JS file over 5MB; the all-in-one build is 11.8MB.
 cp "$ROOT/dist/element.slim.js" "$ROOT/dist/movi.wasm" "$DIR/dist/"
