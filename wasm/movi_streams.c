@@ -897,28 +897,7 @@ int movi_seek_to(MoviContext *ctx, double timestamp, int stream_index,
       ctx->fmt_ctx->pb->eof_reached = 0;
     }
 
-    // For Matroska/WebM format, we need to ensure resync position is set
-    // This helps avoid EBML parsing errors after seek
-    const char *format_name =
-        ctx->fmt_ctx->iformat ? ctx->fmt_ctx->iformat->name : NULL;
-    if (format_name && (strcmp(format_name, "matroska,webm") == 0 ||
-                        strcmp(format_name, "webm") == 0 ||
-                        strcmp(format_name, "matroska") == 0)) {
-      // Reset internal format state by flushing and ensuring clean position
-      // The format demuxer will handle resync on next read
-      // IMPORTANT: Use int64_t for position to handle files >= 2GB
-      if (ctx->fmt_ctx->pb) {
-        int64_t current_pos = avio_tell(ctx->fmt_ctx->pb);
-        // Ensure position tracking uses 64-bit arithmetic for large files
-        ctx->position = current_pos;
-        // Small backward seek to ensure we're at a valid EBML boundary
-        // This helps Matroska resync properly after seek for large files
-        if (current_pos > 0 && current_pos < ctx->file_size) {
-          avio_seek(ctx->fmt_ctx->pb, current_pos, SEEK_SET);
-        }
-      }
-    }
-    // For non-Matroska formats, do NOT overwrite ctx->position here.
+    // Do NOT overwrite ctx->position here — for any format, Matroska included.
     // ctx->position is the source-side *physical* read cursor; FFmpeg already
     // keeps it in sync via avio_seek_callback / avio_read_callback during the
     // seek. avio_tell() returns the *logical consume* position, which trails
@@ -926,6 +905,15 @@ int movi_seek_to(MoviContext *ctx, double timestamp, int stream_index,
     // next sync frame (raw eac3/ac3/mp3 etc.). Clobbering the cursor with that
     // smaller value makes the source replay buffered bytes and hit EOF early
     // by ~the read-ahead amount — duration appears to shrink near the end.
+    //
+    // Matroska used to be excepted and got exactly that bug in its worst form.
+    // A file smaller than the 512KB AVIO buffer sits in it whole, so after a
+    // seek to the first cluster avio_tell() said 759 while the cursor was at
+    // the end of the file. The buffer ran dry, the refill appended the file
+    // again from 759, and the demuxer played it twice over with no seek asked
+    // for; the buffer's offsets were then past the end, so every later seek
+    // read at EOF. Seen as a 4s MKV sticking in "buffering" when it looped or
+    // replayed.
   }
 
   return ret;
