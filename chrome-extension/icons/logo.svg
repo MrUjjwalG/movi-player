@@ -1,10 +1,13 @@
-<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100">
   <defs>
-    <linearGradient id='g' x1='0%' y1='0%' x2='100%' y2='100%'>
-      <stop offset='0%' stop-color='#6c5dd3'/>
-      <stop offset='100%' stop-color='#4a3bba'/>
-    </linearGradient>
+    <linearGradient id="left" gradientUnits="userSpaceOnUse" x1="27" y1="18" x2="27" y2="84"><stop offset="0" stop-color="#6366ff"/><stop offset=".5" stop-color="#3d4dff"/><stop offset="1" stop-color="#1638d2"/></linearGradient>
+    <linearGradient id="top" gradientUnits="userSpaceOnUse" x1="27" y1="20" x2="80" y2="50"><stop offset="0" stop-color="#86b6ff"/><stop offset=".55" stop-color="#4f86ff"/><stop offset="1" stop-color="#14aaff"/></linearGradient>
+    <linearGradient id="bottom" gradientUnits="userSpaceOnUse" x1="27" y1="80" x2="80" y2="50"><stop offset="0" stop-color="#5a4dff"/><stop offset=".5" stop-color="#8e72ff"/><stop offset="1" stop-color="#7cb9ff"/></linearGradient>
   </defs>
-  <circle cx='50' cy='50' r='45' fill='url(#g)'/>
-  <polygon points='39,29 39,71 74,50' fill='white'/>
+  <g fill="none" stroke-linecap="round" stroke-width="17">
+    <path d="M77 52 27 80" stroke="url(#bottom)"/>
+    <path d="M27 20 77 48" stroke="url(#top)"/>
+    <path d="M27 20v60" stroke="url(#left)"/>
+    <path d="M27 80 41 72.2" stroke="url(#bottom)"/>
+  </g>
 </svg>

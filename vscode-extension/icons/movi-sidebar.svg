@@ -1,4 +1,6 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
-  <circle cx="12" cy="12" r="9.25"/>
-  <path d="M10 8.5 L16 12 L10 15.5 Z" fill="currentColor" stroke="none"/>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round">
+  <!-- The ribbon play mark, one colour: the three folds as three strokes. -->
+  <path d="M6.5 5v14"/>
+  <path d="M6.5 5 18 11.5"/>
+  <path d="M18 12.5 6.5 19"/>
 </svg>

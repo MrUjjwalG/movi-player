@@ -5,7 +5,13 @@
   transform: translateY(-50%);
   width: 28px;
   height: 28px;
-  background: transparent;
+  box-sizing: border-box;
+  padding: 3px;
+  /* The ribbon mark has no disc of its own; a white one keeps it readable
+     over any page's colours. */
+  background: #fff;
+  border-radius: 50%;
+  box-shadow: 0 2px 8px rgba(20, 24, 60, 0.28);
   display: flex;
   align-items: center;
   justify-content: center;

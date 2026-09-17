@@ -31,7 +31,7 @@ function createPlayButton(link) {
 
   const btn = document.createElement("div");
   btn.className = "movi-ext-play-btn";
-  btn.innerHTML = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100" width="24" height="24"><defs><linearGradient id="moviExtG" x1="0%" y1="0%" x2="100%" y2="100%"><stop offset="0%" stop-color="#6c5dd3"/><stop offset="100%" stop-color="#4a3bba"/></linearGradient></defs><circle cx="50" cy="50" r="45" fill="url(#moviExtG)"/><polygon points="39,29 39,71 74,50" fill="white"/></svg>`;
+  btn.innerHTML = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100" width="24" height="24" aria-hidden="true"><defs><linearGradient id="moviExtGL" gradientUnits="userSpaceOnUse" x1="27" y1="18" x2="27" y2="84"><stop offset="0" stop-color="#6366ff"/><stop offset=".5" stop-color="#3d4dff"/><stop offset="1" stop-color="#1638d2"/></linearGradient><linearGradient id="moviExtGT" gradientUnits="userSpaceOnUse" x1="27" y1="20" x2="80" y2="50"><stop offset="0" stop-color="#86b6ff"/><stop offset=".55" stop-color="#4f86ff"/><stop offset="1" stop-color="#14aaff"/></linearGradient><linearGradient id="moviExtGB" gradientUnits="userSpaceOnUse" x1="27" y1="80" x2="80" y2="50"><stop offset="0" stop-color="#5a4dff"/><stop offset=".5" stop-color="#8e72ff"/><stop offset="1" stop-color="#7cb9ff"/></linearGradient></defs><g fill="none" stroke-linecap="round" stroke-width="17"><path d="M77 52 27 80" stroke="url(#moviExtGB)"/><path d="M27 20 77 48" stroke="url(#moviExtGT)"/><path d="M27 20v60" stroke="url(#moviExtGL)"/><path d="M27 80 41 72.2" stroke="url(#moviExtGB)"/></g></svg>`;
   btn.title = "Play with Movi Player";
 
   btn.addEventListener("click", (e) => {
@@ -176,16 +176,7 @@ function injectDirectVideoOverlay() {
   overlay.innerHTML = `
     <div class="movi-ext-card">
       <div class="movi-ext-icon">
-        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100" width="56" height="56">
-          <defs>
-            <linearGradient id="moviExtOverlayG" x1="0%" y1="0%" x2="100%" y2="100%">
-              <stop offset="0%" stop-color="#6c5dd3"/>
-              <stop offset="100%" stop-color="#4a3bba"/>
-            </linearGradient>
-          </defs>
-          <circle cx="50" cy="50" r="45" fill="url(#moviExtOverlayG)"/>
-          <polygon points="39,29 39,71 74,50" fill="white"/>
-        </svg>
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100" width="56" height="56" aria-hidden="true"><defs><linearGradient id="moviExtOverlayGL" gradientUnits="userSpaceOnUse" x1="27" y1="18" x2="27" y2="84"><stop offset="0" stop-color="#6366ff"/><stop offset=".5" stop-color="#3d4dff"/><stop offset="1" stop-color="#1638d2"/></linearGradient><linearGradient id="moviExtOverlayGT" gradientUnits="userSpaceOnUse" x1="27" y1="20" x2="80" y2="50"><stop offset="0" stop-color="#86b6ff"/><stop offset=".55" stop-color="#4f86ff"/><stop offset="1" stop-color="#14aaff"/></linearGradient><linearGradient id="moviExtOverlayGB" gradientUnits="userSpaceOnUse" x1="27" y1="80" x2="80" y2="50"><stop offset="0" stop-color="#5a4dff"/><stop offset=".5" stop-color="#8e72ff"/><stop offset="1" stop-color="#7cb9ff"/></linearGradient></defs><g fill="none" stroke-linecap="round" stroke-width="17"><path d="M77 52 27 80" stroke="url(#moviExtOverlayGB)"/><path d="M27 20 77 48" stroke="url(#moviExtOverlayGT)"/><path d="M27 20v60" stroke="url(#moviExtOverlayGL)"/><path d="M27 80 41 72.2" stroke="url(#moviExtOverlayGB)"/></g></svg>
       </div>
       <div class="movi-ext-title">Open with Movi Player</div>
       <div class="movi-ext-desc">Play this video with advanced codec support, subtitles, and more.</div>
