@@ -316,7 +316,10 @@ export default {
     // http half was not, so http://moviplayer.com/ answered 200 with the page
     // and Search Console filed it as a second copy that happened to carry the
     // right canonical. A redirect says it once, at the door.
-    if (url.hostname === "www.moviplayer.com" || url.protocol === "http:") {
+    if (
+      url.hostname === "www.moviplayer.com" ||
+      (url.hostname === "moviplayer.com" && url.protocol === "http:")
+    ) {
       return Response.redirect(`https://moviplayer.com${path}${url.search}`, 301);
     }
 
