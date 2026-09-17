@@ -254,7 +254,7 @@
     </script>
     <link rel="preconnect" href="https://fonts.googleapis.com" />
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
-    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500;700&display=swap" rel="stylesheet" />
+    <link href="https://fonts.googleapis.com/css2?family=DM+Mono:wght@400;500&family=Manrope:wght@400;500;600;700;800&display=swap" rel="stylesheet" />
     <style>
       :root {
         --accent: #7c6cf0;
@@ -3891,6 +3891,598 @@
   </head>
 
   <body>
+    <a class="skip-link" href="#watch">Skip to player</a>
+    <style id="ott-redesign">
+      :root {
+        --accent: #e85b4d;
+        --accent-hover: #f06b5d;
+        --accent-glow: rgba(232, 91, 77, 0.26);
+        --font-family: "Manrope", system-ui, -apple-system, sans-serif;
+        --bg-base: #080b0c;
+        --bg-elevated: #111516;
+        --bg-card: #121718;
+        --bg-surface: rgba(255, 255, 255, 0.045);
+        --text-primary: #f5f7f5;
+        --text-secondary: #a8b0ad;
+        --text-muted: #69716f;
+        --border-subtle: rgba(255, 255, 255, 0.09);
+        --border-hover: rgba(255, 255, 255, 0.2);
+        --input-bg: rgba(5, 8, 9, 0.78);
+        --input-focus-bg: rgba(5, 8, 9, 0.94);
+        --input-border: rgba(255, 255, 255, 0.15);
+        --badge-bg: rgba(232, 91, 77, 0.13);
+        --badge-text: #ff8c80;
+        --shadow-heavy: 0 32px 90px rgba(0, 0, 0, 0.46);
+      }
+
+      [data-theme="light"] {
+        --bg-base: #f0f1ed;
+        --bg-elevated: #fbfcf8;
+        --bg-card: #ffffff;
+        --bg-surface: rgba(17, 23, 22, 0.045);
+        --text-primary: #111514;
+        --text-secondary: #59605e;
+        --text-muted: #858c89;
+        --border-subtle: rgba(17, 23, 22, 0.11);
+        --border-hover: rgba(17, 23, 22, 0.24);
+        --input-bg: rgba(255, 255, 255, 0.92);
+        --input-focus-bg: #ffffff;
+        --badge-bg: rgba(205, 62, 49, 0.1);
+        --badge-text: #b83429;
+      }
+
+      body {
+        background:
+          radial-gradient(circle at 15% 25%, rgba(38, 59, 57, 0.14), transparent 28rem),
+          var(--bg-base);
+      }
+
+      body::after {
+        content: "";
+        position: fixed;
+        inset: 0;
+        z-index: 900;
+        pointer-events: none;
+        opacity: 0.025;
+        background-image: url("data:image/svg+xml,%3Csvg viewBox='0 0 180 180' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='.92' numOctaves='3' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)' opacity='.7'/%3E%3C/svg%3E");
+      }
+
+      .skip-link {
+        position: fixed;
+        top: 0.75rem;
+        left: 0.75rem;
+        z-index: 1000;
+        padding: 0.7rem 1rem;
+        border-radius: 0.5rem;
+        color: #fff;
+        background: var(--accent);
+        transform: translateY(-160%);
+        transition: transform 180ms ease;
+      }
+      .skip-link:focus { transform: translateY(0); }
+
+      .navbar {
+        height: 76px;
+        padding: 0 clamp(1.25rem, 4vw, 4rem);
+        background: linear-gradient(180deg, rgba(5, 8, 9, 0.92), rgba(5, 8, 9, 0));
+        border-bottom: 0;
+        backdrop-filter: none;
+      }
+      .navbar.scrolled {
+        height: 64px;
+        background: rgba(8, 11, 12, 0.86);
+        border-bottom: 1px solid var(--border-subtle);
+        backdrop-filter: blur(22px) saturate(1.2);
+      }
+      [data-theme="light"] .navbar,
+      [data-theme="light"] .navbar.scrolled {
+        background: rgba(240, 241, 237, 0.88);
+        border-bottom-color: var(--border-subtle);
+      }
+      .brand-logo {
+        width: 31px;
+        height: 31px;
+        filter: none;
+      }
+      .brand-logo circle { fill: var(--accent); }
+      .brand-text,
+      [data-theme="light"] .brand-text {
+        color: var(--text-primary);
+        background: none;
+        -webkit-text-fill-color: currentColor;
+        font-size: 1.15rem;
+        font-weight: 800;
+        letter-spacing: -0.045em;
+      }
+      .nav-left { gap: clamp(1.5rem, 3vw, 3rem); }
+      .nav-links { gap: 0.4rem; }
+      .nav-links a {
+        display: block;
+        padding: 0.55rem 0.8rem;
+        border-radius: 0.45rem;
+        font-size: 0.76rem;
+        font-weight: 700;
+        letter-spacing: 0.02em;
+      }
+      .nav-links a:hover { background: rgba(255, 255, 255, 0.07); }
+      .nav-links a.active { color: #fff; background: rgba(255, 255, 255, 0.11); }
+      [data-theme="light"] .nav-links a.active { color: #111514; background: rgba(17, 23, 22, 0.08); }
+      .nav-icon-btn,
+      .nav-icon-link { border-radius: 50%; }
+
+      .hero {
+        min-height: min(880px, 92dvh);
+        padding: 7rem clamp(1.25rem, 4vw, 4rem) 5.25rem;
+        align-items: flex-end;
+        justify-content: stretch;
+        text-align: left;
+        isolation: isolate;
+      }
+      .hero-bg {
+        background-image:
+          linear-gradient(90deg, rgba(5, 8, 9, 0.98) 0%, rgba(5, 8, 9, 0.72) 35%, rgba(5, 8, 9, 0.1) 70%),
+          linear-gradient(0deg, var(--bg-base) 0%, transparent 35%),
+          url("/cinematic-hero.webp");
+        background-position: center;
+        background-size: cover;
+        transform: scale(1.01);
+      }
+      .hero-bg::after {
+        content: "";
+        position: absolute;
+        inset: 0;
+        background: radial-gradient(circle at 76% 22%, transparent 0 13%, rgba(5, 8, 9, 0.12) 42%, rgba(5, 8, 9, 0.42) 100%);
+      }
+      .hero::after {
+        background: linear-gradient(to bottom, transparent 55%, var(--bg-base) 100%);
+      }
+      .hero-particles { display: none; }
+      .hero-content {
+        position: relative;
+        z-index: 2;
+        width: min(100%, 1440px);
+        margin: 0 auto;
+        display: grid;
+        grid-template-columns: minmax(0, 1.15fr) minmax(330px, 0.72fr);
+        align-items: end;
+        gap: clamp(3rem, 8vw, 9rem);
+      }
+      .hero-copy { min-width: 0; }
+      .hero-kicker,
+      .section-eyebrow {
+        display: inline-flex;
+        align-items: center;
+        gap: 0.65rem;
+        margin: 0 0 1rem;
+        color: #d7dedb;
+        font: 500 0.7rem/1 "DM Mono", monospace;
+        letter-spacing: 0.14em;
+        text-transform: uppercase;
+      }
+      .hero-kicker span {
+        width: 1.8rem;
+        height: 1px;
+        background: var(--accent);
+      }
+      .hero h1 {
+        max-width: 9.5ch;
+        margin: 0;
+        color: #f7f8f6;
+        font-size: clamp(3.7rem, 6.8vw, 7.2rem);
+        font-weight: 700;
+        line-height: 0.88;
+        letter-spacing: -0.072em;
+        text-wrap: balance;
+      }
+      .hero h1 .highlight {
+        color: #f7f8f6;
+        background: none;
+        -webkit-text-fill-color: currentColor;
+      }
+      .hero-tagline {
+        max-width: 56ch;
+        margin: 1.6rem 0 0;
+        color: rgba(238, 242, 239, 0.72);
+        font-size: clamp(0.94rem, 1.2vw, 1.08rem);
+        line-height: 1.7;
+        text-align: left;
+      }
+      .hero-meta {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 0.55rem;
+        margin-top: 1.3rem;
+      }
+      .hero-meta span {
+        padding: 0.38rem 0.56rem;
+        border: 1px solid rgba(255, 255, 255, 0.16);
+        border-radius: 0.35rem;
+        color: rgba(255, 255, 255, 0.68);
+        font: 500 0.64rem/1 "DM Mono", monospace;
+        letter-spacing: 0.04em;
+      }
+      .hero-trust {
+        justify-content: flex-start;
+        margin-top: 1.45rem;
+        color: rgba(255, 255, 255, 0.58);
+      }
+      .hero-badges,
+      .hero-formats { display: none; }
+
+      .hero-panel {
+        width: 100%;
+        padding: clamp(1.15rem, 2vw, 1.6rem);
+        border: 1px solid rgba(255, 255, 255, 0.13);
+        border-radius: 1.15rem;
+        background: rgba(11, 15, 16, 0.72);
+        box-shadow: 0 32px 80px rgba(0, 0, 0, 0.38), inset 0 1px rgba(255, 255, 255, 0.05);
+        backdrop-filter: blur(26px) saturate(1.18);
+      }
+      .hero-panel-heading {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 1rem;
+        margin-bottom: 0.9rem;
+      }
+      .hero-panel-label {
+        color: #f3f5f3;
+        font-size: 0.98rem;
+        font-weight: 700;
+        letter-spacing: -0.025em;
+      }
+      .hero-panel-status {
+        display: inline-flex;
+        align-items: center;
+        gap: 0.4rem;
+        color: rgba(255, 255, 255, 0.48);
+        font: 500 0.62rem/1 "DM Mono", monospace;
+      }
+      .hero-panel-status i {
+        width: 0.38rem;
+        height: 0.38rem;
+        border-radius: 50%;
+        background: #72c690;
+        box-shadow: 0 0 0 3px rgba(114, 198, 144, 0.12);
+      }
+      .url-bar.hero-url-bar {
+        width: 100%;
+        min-width: 0;
+        max-width: none;
+        min-height: 54px;
+        margin: 0;
+        border-color: rgba(255, 255, 255, 0.13);
+        border-radius: 0.68rem;
+        background: rgba(0, 0, 0, 0.34);
+        box-shadow: none;
+      }
+      .url-bar.hero-url-bar:focus-within {
+        border-color: rgba(255, 255, 255, 0.35);
+        box-shadow: 0 0 0 3px rgba(255, 255, 255, 0.06);
+      }
+      .url-bar.hero-url-bar input {
+        color: #fff;
+        font-size: 0.84rem;
+      }
+      .url-bar.hero-url-bar input::placeholder { color: rgba(255, 255, 255, 0.35); }
+      .url-bar.hero-url-bar .url-bar-btn {
+        align-self: stretch;
+        margin: 4px;
+        min-height: 44px;
+        padding: 0 1rem;
+        border-radius: 0.48rem;
+        background: var(--accent);
+        box-shadow: none;
+      }
+      .url-bar.hero-url-bar .url-bar-btn:hover {
+        background: var(--accent-hover);
+        transform: none;
+      }
+      .hero-or { margin: 0.9rem 0; }
+      .hero-or::before,
+      .hero-or::after { background: rgba(255, 255, 255, 0.09); }
+      .hero-or span {
+        color: rgba(255, 255, 255, 0.35);
+        font: 500 0.62rem/1 "DM Mono", monospace;
+        letter-spacing: 0.05em;
+      }
+      .hero-cta-primary {
+        width: 100%;
+        min-height: 66px;
+        justify-content: flex-start;
+        padding: 0.55rem 0.8rem;
+        border: 1px solid rgba(255, 255, 255, 0.11);
+        border-radius: 0.7rem;
+        background: rgba(255, 255, 255, 0.07);
+        box-shadow: none;
+      }
+      .hero-cta-primary::after {
+        content: "Browse";
+        margin-left: auto;
+        padding-right: 0.35rem;
+        color: rgba(255, 255, 255, 0.55);
+        font: 500 0.66rem/1 "DM Mono", monospace;
+      }
+      .hero-cta-primary:hover {
+        background: rgba(255, 255, 255, 0.12);
+        border-color: rgba(255, 255, 255, 0.22);
+        transform: translateY(-1px);
+      }
+      .hero-cta-icon {
+        width: 46px;
+        height: 46px;
+        border-radius: 50%;
+        color: #0b0d0d;
+        background: #f4f5f2;
+        box-shadow: none;
+      }
+      .hero-cta-text strong { color: #fff; font-size: 0.88rem; }
+      .hero-cta-text small { color: rgba(255, 255, 255, 0.42); font-size: 0.68rem; }
+      .hero-secondary {
+        justify-content: flex-start;
+        margin-top: 0.9rem;
+      }
+      .hero-link-btn {
+        color: rgba(255, 255, 255, 0.5);
+        font-size: 0.68rem;
+      }
+      .hero-link-btn:hover { color: #fff; background: rgba(255, 255, 255, 0.08); }
+
+      .player-section {
+        width: min(100%, 1440px);
+        margin: 0 auto;
+        padding: clamp(2rem, 5vw, 5rem) clamp(1.25rem, 4vw, 4rem) 3rem;
+      }
+      .player-section-head,
+      .rail-heading {
+        display: flex;
+        align-items: end;
+        justify-content: space-between;
+        gap: 2rem;
+        margin-bottom: 1.5rem;
+      }
+      .section-eyebrow {
+        margin-bottom: 0.45rem;
+        color: var(--accent);
+      }
+      .player-section-head h2,
+      .rail-heading h2 {
+        font-size: clamp(1.8rem, 3vw, 2.6rem);
+        line-height: 1;
+        letter-spacing: -0.055em;
+      }
+      .player-section-head p,
+      .rail-heading p {
+        max-width: 38ch;
+        color: var(--text-muted);
+        font-size: 0.78rem;
+        line-height: 1.55;
+        text-align: right;
+      }
+      .player-layout { max-width: none; }
+      .player-wrapper {
+        border: 1px solid rgba(255, 255, 255, 0.1);
+        border-radius: 1rem;
+        box-shadow: 0 36px 100px rgba(0, 0, 0, 0.42);
+        overflow: hidden;
+      }
+      .player-stage { background: #030404; }
+      .player-ambient { opacity: 0.58; }
+      movi-player {
+        --movi-accent: var(--accent);
+        --movi-progress-color: var(--accent);
+        --movi-btn-hover-bg: rgba(232, 91, 77, 0.18);
+      }
+
+      .watch-rail {
+        width: min(100%, 1440px);
+        margin: 0 auto;
+        padding: 3.5rem clamp(1.25rem, 4vw, 4rem) 4.5rem;
+      }
+      .watch-cards {
+        display: grid;
+        grid-template-columns: 1.1fr 0.95fr 0.95fr;
+        gap: 0.8rem;
+      }
+      .watch-card {
+        position: relative;
+        min-height: 270px;
+        padding: 1.15rem;
+        overflow: hidden;
+        border: 1px solid rgba(255, 255, 255, 0.08);
+        border-radius: 0.8rem;
+        color: #f7f8f6;
+        text-align: left;
+        cursor: pointer;
+        isolation: isolate;
+        transition: transform 260ms cubic-bezier(.2,.8,.2,1), border-color 260ms ease;
+      }
+      .watch-card::before,
+      .watch-card::after {
+        content: "";
+        position: absolute;
+        inset: 0;
+        z-index: -2;
+      }
+      .watch-card::after {
+        z-index: -1;
+        background: linear-gradient(180deg, transparent 25%, rgba(4, 6, 7, 0.86) 100%);
+      }
+      .watch-card--file::before {
+        background: radial-gradient(circle at 70% 28%, rgba(216, 113, 74, 0.7), transparent 9%), radial-gradient(circle at 64% 34%, rgba(82, 116, 110, 0.7), transparent 28%), linear-gradient(145deg, #1c2828, #0d1112 70%);
+      }
+      .watch-card--link::before {
+        background: radial-gradient(circle at 73% 30%, rgba(184, 202, 194, 0.58), transparent 7%), linear-gradient(125deg, #253433, #111717 58%, #0c0e0f);
+      }
+      .watch-card--folder::before {
+        background: radial-gradient(circle at 72% 32%, rgba(232, 91, 77, 0.55), transparent 13%), linear-gradient(145deg, #3a2522, #171211 62%, #0e0f0f);
+      }
+      .watch-card:hover {
+        transform: translateY(-5px) scale(1.012);
+        border-color: rgba(255, 255, 255, 0.25);
+      }
+      .watch-card:active { transform: translateY(-1px) scale(0.995); }
+      .watch-card:focus-visible { outline: 2px solid #fff; outline-offset: 3px; }
+      .watch-card-index {
+        color: rgba(255, 255, 255, 0.46);
+        font: 500 0.65rem/1 "DM Mono", monospace;
+      }
+      .watch-card-art {
+        position: absolute;
+        top: 2rem;
+        right: 1.6rem;
+        width: 7rem;
+        height: 7rem;
+        color: rgba(255, 255, 255, 0.28);
+        transform: rotate(-5deg);
+      }
+      .watch-card-art svg { width: 100%; height: 100%; fill: none; stroke: currentColor; stroke-width: 1.6; }
+      .watch-card-copy {
+        position: absolute;
+        right: 1.15rem;
+        bottom: 1.1rem;
+        left: 1.15rem;
+        display: flex;
+        flex-direction: column;
+        gap: 0.3rem;
+      }
+      .watch-card-copy strong { font-size: 1rem; letter-spacing: -0.03em; }
+      .watch-card-copy small { color: rgba(255, 255, 255, 0.5); font-size: 0.69rem; }
+      .watch-card-arrow { position: absolute; right: 1.1rem; top: 1rem; opacity: 0.5; }
+
+      .features-section {
+        max-width: 1440px;
+        padding: 4.75rem clamp(1.25rem, 4vw, 4rem) 3rem;
+      }
+      .features-section > h2,
+      .comments-head h2 {
+        max-width: 18ch;
+        font-size: clamp(1.75rem, 3vw, 2.55rem);
+        line-height: 1.08;
+        letter-spacing: -0.055em;
+      }
+      .features-section .section-desc {
+        max-width: 68ch;
+        color: var(--text-secondary);
+        font-size: 0.88rem;
+        line-height: 1.75;
+      }
+      .features-grid { gap: 0.75rem; }
+      .feature-card {
+        min-height: 210px;
+        padding: clamp(1.35rem, 2.3vw, 2rem);
+        border-color: transparent;
+        border-radius: 0.75rem;
+        background: #111617;
+      }
+      [data-theme="light"] .feature-card { background: #e4e7e2; }
+      .feature-card::before {
+        inset: auto -20% -50% auto;
+        width: 15rem;
+        height: 15rem;
+        border-radius: 50%;
+        background: radial-gradient(circle, rgba(232, 91, 77, 0.15), transparent 68%);
+        opacity: 1;
+      }
+      .feature-card:hover {
+        border-color: var(--border-hover);
+        box-shadow: none;
+        transform: translateY(-3px);
+      }
+      .feature-icon {
+        width: 2.4rem;
+        height: 2.4rem;
+        border-radius: 50%;
+        background: rgba(255, 255, 255, 0.07);
+      }
+      .feature-icon svg { width: 1.05rem; height: 1.05rem; stroke: var(--accent); }
+      .feature-card h3 { margin-top: 2rem; font-size: 1rem; letter-spacing: -0.025em; }
+      .feature-card p { max-width: 52ch; font-size: 0.78rem; line-height: 1.65; }
+      .spec-panel {
+        overflow: hidden;
+        border-radius: 0.8rem;
+        border-color: var(--border-subtle);
+        background: #101516;
+      }
+      [data-theme="light"] .spec-panel { background: #e4e7e2; }
+      .spec-grid { gap: 1px; background: var(--border-subtle); }
+      .spec-chip { border: 0; border-radius: 0; background: var(--bg-card); }
+      .faq-item { border-radius: 0; border-width: 0 0 1px; background: transparent; }
+      .faq-item summary { padding: 1.3rem 0; }
+      .faq-item > div { padding: 0 0 1.25rem; }
+
+      .drop-overlay {
+        background: rgba(5, 8, 9, 0.92);
+        backdrop-filter: blur(18px);
+      }
+      .drop-overlay-content {
+        border: 1px solid rgba(255, 255, 255, 0.2);
+        border-radius: 0.9rem;
+        background: rgba(255, 255, 255, 0.06);
+      }
+      .drop-overlay-content svg { stroke: var(--accent); }
+      .to-player { border-radius: 0.65rem; background: var(--accent); }
+
+      .site-footer { margin-top: 5rem; background: #050708; }
+      [data-theme="light"] .site-footer { background: #dde0db; }
+
+      @media (max-width: 980px) {
+        .hero { min-height: auto; padding-top: 8rem; }
+        .hero-content { grid-template-columns: 1fr; gap: 2.5rem; }
+        .hero-copy { max-width: 680px; }
+        .hero-panel { max-width: 620px; }
+        .hero-bg { background-position: 64% center; }
+        .watch-cards { grid-template-columns: 1fr 1fr; }
+        .watch-card:first-child { grid-column: 1 / -1; }
+      }
+
+      @media (max-width: 768px) {
+        .navbar { height: 58px; }
+        .navbar.scrolled { height: 58px; }
+        .hero {
+          min-height: 100dvh;
+          padding: 6.7rem 1.25rem 2.5rem;
+        }
+        .hero-bg {
+          background-image:
+            linear-gradient(90deg, rgba(5, 8, 9, 0.68), rgba(5, 8, 9, 0.12)),
+            linear-gradient(0deg, var(--bg-base) 0%, rgba(5, 8, 9, 0.12) 60%),
+            url("/cinematic-hero.webp");
+          background-position: 68% top;
+        }
+        .hero-content { gap: 2rem; }
+        .hero h1 { font-size: clamp(3.3rem, 15vw, 5.2rem); }
+        .hero-tagline { max-width: 44ch; }
+        .hero-trust { display: none; }
+        .hero-panel { padding: 1rem; }
+        .player-section { padding-top: 3.5rem; }
+        .player-section-head,
+        .rail-heading { align-items: flex-start; flex-direction: column; gap: 0.6rem; }
+        .player-section-head p,
+        .rail-heading p { text-align: left; }
+        .watch-rail { padding-top: 2.5rem; }
+      }
+
+      @media (max-width: 600px) {
+        .hero-panel-status { display: none; }
+        .hero-meta span:nth-child(3) { display: none; }
+        .hero-cta-primary::after { display: none; }
+        .hero-secondary .btn-embed,
+        .hero-secondary a.hero-link-btn { display: none; }
+        .watch-cards { display: flex; overflow-x: auto; scroll-snap-type: x mandatory; scrollbar-width: none; }
+        .watch-cards::-webkit-scrollbar { display: none; }
+        .watch-card,
+        .watch-card:first-child { flex: 0 0 min(82vw, 320px); min-height: 225px; grid-column: auto; scroll-snap-align: start; }
+        .features-section { padding-top: 3.5rem; }
+        .features-grid--2up { grid-template-columns: 1fr; }
+      }
+
+      @media (prefers-reduced-motion: reduce) {
+        .watch-card,
+        .hero-cta-primary,
+        .navbar { transition: none; }
+      }
+    </style>
     <!-- Drop Zone Overlay -->
     <div class="drop-overlay" id="drop-overlay">
       <div class="drop-overlay-content">
@@ -4092,12 +4684,17 @@
              vertical centre, and puts a real control above the fold on a
              laptop instead of below it. -->
         <div class="hero-copy">
+          <p class="hero-kicker"><span></span> Your private screening room</p>
           <h1 aria-label="MoviPlayer — Free online video player. Play any video without download.">
-            Play any video<br><span class="highlight">without download.</span>
+            Your media.<br><span class="highlight">Now showing.</span>
           </h1>
           <p class="hero-tagline">
-            Movies, shows, downloads — open them right here in your browser. No app to install, no uploads, nothing leaves your device.
+            Turn any file or link into a cinema-ready stream. MKV, HEVC, AV1 and 4K HDR play right here, with no upload and no account.
           </p>
+
+          <div class="hero-meta" aria-label="Playback highlights">
+            <span>2026</span><span>4K HDR</span><span>Spatial audio</span><span>All formats</span>
+          </div>
 
           <!-- Subtle trust strip -->
           <div class="hero-trust">
@@ -4148,14 +4745,17 @@
           </div>
         </div>
 
-        <div class="hero-panel">
+        <div class="hero-panel" aria-label="Start watching">
           <!-- Primary action: paste a video URL. The big, prominent input. -->
-          <span class="hero-panel-label">Play from a link</span>
+          <div class="hero-panel-heading">
+            <span class="hero-panel-label">Start watching</span>
+            <span class="hero-panel-status"><i></i> Ready on this device</span>
+          </div>
           <div class="url-bar hero-url-bar">
             <input
               type="text"
               id="url-input"
-              placeholder="https://…  paste any video link"
+              placeholder="Paste a direct video link"
               aria-label="Video URL"
             />
             <!-- One-tap paste — the whole point of this bar is a link the
@@ -4225,7 +4825,7 @@
           </script>
 
           <!-- "or pick a file" divider -->
-          <div class="hero-or" aria-hidden="true"><span>or pick a video file</span></div>
+          <div class="hero-or" aria-hidden="true"><span>or play from your device</span></div>
 
           <!-- Secondary action: opens the file picker. Drag &amp; drop also works anywhere on the page. -->
           <label class="hero-cta-primary" tabindex="0" draggable="false" aria-label="Pick a video file to play">
@@ -4239,8 +4839,8 @@
               </svg>
             </span>
             <span class="hero-cta-text">
-              <strong>Pick a video file</strong>
-              <small>or just drop one anywhere on the page</small>
+              <strong>Open from device</strong>
+              <small>Choose a video or drop it anywhere</small>
             </span>
             <input type="file" id="file-input" accept="video/*,audio/*,.mkv,.ts,.m2ts,.mts,.evo,.avi,.flv,.wmv,.mov,.mka,.m4b,.opus,.oga,.dts,.ac3,.ec3,.eac3" multiple />
           </label>
@@ -4308,7 +4908,14 @@
     </section>
 
     <!-- ===== PLAYER ===== -->
-    <section class="player-section">
+    <section class="player-section" id="watch">
+      <div class="player-section-head">
+        <div>
+          <span class="section-eyebrow">Now playing</span>
+          <h2>Your screen</h2>
+        </div>
+        <p>Drop in a title and MoviPlayer handles the rest.</p>
+      </div>
       <div class="player-layout" id="player-layout">
         <div class="player-frame">
           <!-- Ambient glow target — the player paints a blurred sample of
@@ -4414,6 +5021,56 @@
         </div>
       </aside>
     </section>
+
+    <!-- ===== WATCH MODES ===== -->
+    <section class="watch-rail" aria-labelledby="watch-rail-title">
+      <div class="rail-heading">
+        <div>
+          <span class="section-eyebrow">Choose your source</span>
+          <h2 id="watch-rail-title">Watch it your way</h2>
+        </div>
+        <p>Your media stays yours. Every option runs locally in this tab.</p>
+      </div>
+      <div class="watch-cards">
+        <button class="watch-card watch-card--file" type="button" data-watch-action="file">
+          <span class="watch-card-index">01</span>
+          <span class="watch-card-art" aria-hidden="true">
+            <svg viewBox="0 0 64 64"><path d="M14 8h23l13 13v35H14z"/><path d="M37 8v14h13"/><circle cx="31" cy="38" r="10"/><path d="m28 33 9 5-9 5z"/></svg>
+          </span>
+          <span class="watch-card-copy"><strong>From your device</strong><small>Movies, episodes and audio</small></span>
+          <span class="watch-card-arrow" aria-hidden="true">&#8599;</span>
+        </button>
+        <button class="watch-card watch-card--link" type="button" data-watch-action="link">
+          <span class="watch-card-index">02</span>
+          <span class="watch-card-art" aria-hidden="true">
+            <svg viewBox="0 0 64 64"><path d="M26 38 38 26"/><path d="M21 44h-3a10 10 0 0 1 0-20h11"/><path d="M43 20h3a10 10 0 0 1 0 20H35"/></svg>
+          </span>
+          <span class="watch-card-copy"><strong>From a link</strong><small>Direct URLs and streams</small></span>
+          <span class="watch-card-arrow" aria-hidden="true">&#8599;</span>
+        </button>
+        <button class="watch-card watch-card--folder" type="button" data-watch-action="folder">
+          <span class="watch-card-index">03</span>
+          <span class="watch-card-art" aria-hidden="true">
+            <svg viewBox="0 0 64 64"><path d="M8 18h19l6 7h23v27H8z"/><path d="M17 37h30M17 44h22"/></svg>
+          </span>
+          <span class="watch-card-copy"><strong>Build a playlist</strong><small>Open a whole folder at once</small></span>
+          <span class="watch-card-arrow" aria-hidden="true">&#8599;</span>
+        </button>
+      </div>
+    </section>
+    <script>
+      document.querySelectorAll("[data-watch-action]").forEach(function (card) {
+        card.addEventListener("click", function () {
+          var action = card.getAttribute("data-watch-action");
+          if (action === "file") document.getElementById("file-input")?.click();
+          if (action === "folder") document.getElementById("folder-btn")?.click();
+          if (action === "link") {
+            document.getElementById("url-input")?.focus({ preventScroll: true });
+            document.querySelector(".hero-panel")?.scrollIntoView({ behavior: "smooth", block: "center" });
+          }
+        });
+      });
+    </script>
 
     <!-- ===== FEATURES ===== -->
     <section class="features-section">
