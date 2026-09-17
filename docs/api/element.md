@@ -670,7 +670,7 @@ Switches built-in controls off, as `no<name>` tokens — the same shape
 `noprogress`, `noaudio`, `nocc`, `noquality`, `nospeed`, `nostableaudio`,
 `nohdr`, `noloop`, `nosettings`, `noaspect`, `nopip`, `nofullscreen`, `nomore`,
 `nostats`, `noshortcuts`, `noambient`, `nocrop`, `nosnapshot`, `norotate`,
-`notimeline`
+`notimeline`, `nodivider`
 — plus the `id` of any control added with
 [`addControl()`](#addcontrol-spec), which is simply not added.
 
@@ -2567,7 +2567,7 @@ player.addControl({
 | `icon` | Inline SVG markup or an element to clone. Without one the label is drawn as text |
 | `title` | Tooltip override; `null` for none. Drawn by the player over the bar, like every built-in's, with the `hotkey` beside it — not the browser's native tooltip |
 | `side` | `"left"` / `"right"` (default) end of the bar |
-| `before` / `after` | Position against a built-in — `"play"`, `"cc"`, `"settings"`, `"pip"`, `"fullscreen"`, `"dots"` (the corner's three-dots), … — or against another of your controls by its id |
+| `before` / `after` | Position against a built-in — `"play"`, `"cc"`, `"settings"`, `"divider"`, `"pip"`, `"fullscreen"`, `"dots"` (the corner's three-dots), … — or against another of your controls by its id |
 | `placement` | `"bar"` (default), `"center"`, `"top"`, `"menu"`, `"both"` — or a list, e.g. `["top", "menu"]`. See below |
 | `media` | `"video"`, `"audio"`, or `"both"` (default) — see below |
 | `screen` | `"fullscreen"`, `"windowed"`, or `"both"` (default) — see below |
@@ -2578,6 +2578,41 @@ player.addControl({
 | `persist` | Remember a toggle's state under the element's `persistkey` |
 | `osd` | Set `false` to stay silent when used by its hotkey |
 | `onSelect` | Called with the state AFTER the toggle flipped; also emitted as a `movi-control` event |
+| `divider` | `true` makes it a divider instead of a button — see below |
+
+**Dividers.** The bar draws a thin line between the track controls (audio,
+subtitles) and the viewing controls. You can put the same line between your
+own controls: pass `divider: true` and an `id`, and place it the way you place
+a control — `before` / `after`, `side`, `placement`, `media`, `screen`, and
+`group`, so it can sit **inside a capsule**:
+
+```js
+player.addControl({ id: "a", label: "A", icon: aSvg, side: "left", group: "extras" });
+player.addControl({ id: "sep", divider: true, side: "left", group: "extras", after: "a" });
+player.addControl({ id: "b", label: "B", icon: bSvg, side: "left", group: "extras", after: "sep" });
+
+player.addControl({ id: "menu-sep", divider: true, placement: "menu", after: "loop-toggle" });
+```
+
+On the bar, the centre and the corner it is a vertical line; in the context
+menu it is the menu's own horizontal rule. A divider with nothing visible on one
+side of it inside its capsule — its neighbour unavailable for this source, or
+removed — hides itself, so no line is left at the end of a pill. It is removed
+with `removeControl(id)` and switched off with `controlslist="no<id>"`, like any
+control. `controlslist="nodivider"` removes the player's own divider;
+`after: "divider"` places a control next to it.
+
+Style every divider on the bar, the built-in one included, from the page:
+
+```css
+movi-player {
+  --movi-divider-color: rgba(255, 255, 255, 0.14); /* default */
+  --movi-divider-width: 1px;
+  --movi-divider-height: 20px;
+  --movi-divider-gap: 4px;                         /* margin either side */
+}
+movi-player::part(controls-divider) { border-radius: 0; }
+```
 
 **`placement` — which surface.** `"bar"` is the control bar along the bottom,
 `"menu"` a row in the right-click menu, and `"both"` means those two, as it

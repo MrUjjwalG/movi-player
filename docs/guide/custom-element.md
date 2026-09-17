@@ -309,8 +309,16 @@ movi-player {
   --movi-text-color: #ffffff;
   --movi-progress-color: #646cff;
   --movi-buffer-color: rgba(255, 255, 255, 0.3);
+  /* Dividers between control groups on the bar */
+  --movi-divider-color: rgba(255, 255, 255, 0.14);
+  --movi-divider-height: 20px;
 }
 ```
+
+Add a divider of your own between controls with
+`player.addControl({ id: "sep", divider: true, after: "cc" })`, or hide the
+built-in one with `controlslist="nodivider"` — see
+[`addControl`](../api/element.md#addcontrol-spec).
 
 ### Full Width Responsive
 

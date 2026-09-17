@@ -665,6 +665,32 @@
       ]
     },
     {
+      "name": "--movi-motion-out",
+      "description": {
+        "kind": "markdown",
+        "value": "Movi Player theme variable.\n\nDefault: `cubic-bezier(0.16, 1, 0.3, 1)`"
+      },
+      "references": [
+        {
+          "name": "Documentation",
+          "url": "https://moviplayer.com/docs/api/element"
+        }
+      ]
+    },
+    {
+      "name": "--movi-motion-spring",
+      "description": {
+        "kind": "markdown",
+        "value": "Movi Player theme variable.\n\nDefault: `cubic-bezier(0.2, 0.9, 0.25, 1.18)`"
+      },
+      "references": [
+        {
+          "name": "Documentation",
+          "url": "https://moviplayer.com/docs/api/element"
+        }
+      ]
+    },
+    {
       "name": "--movi-controls-bg",
       "description": {
         "kind": "markdown",

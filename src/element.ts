@@ -108,7 +108,7 @@ export { MoviPlayer } from './core/MoviPlayer';
 // Main export: MoviElement (custom HTML element)
 export { MoviElement } from './render/MoviElement';
 // Host-supplied bar buttons / context-menu rows — see MoviElement.addControl.
-export type { MoviControlSpec, MoviControlItem } from './render/MoviElement';
+export type { MoviControlSpec, MoviControlItem, MoviDividerSpec } from './render/MoviElement';
 // One entry in the queue — see MoviElement.playlist.
 export type { MoviPlaylistItem } from './render/MoviElement';
 import type { MoviElement as MoviElementType } from './render/MoviElement';

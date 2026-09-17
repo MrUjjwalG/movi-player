@@ -67,28 +67,91 @@ const TAG = "MoviElement";
 const ENGINE_NAMES = ["wasm", "shaka", "dashjs", "hlsjs", "native"] as const;
 type EngineName = (typeof ENGINE_NAMES)[number];
 
-// OSD icon constants — shared across keyboard, button, and context menu handlers
+// The controls use one custom symbol family rather than mixing filled Material
+// marks with sharp Feather-style outlines. 1.65px is deliberately between the
+// two old weights: it stays crisp at 16px in menus and calm at 24px in the bar.
+const SYMBOLS = {
+  play: `<path d="M6.4 5.6 17.6 12 6.4 18.4Z"/>`,
+  pause: `<rect x="6.4" y="4.75" width="3.8" height="14.5" rx="1.45"/><rect x="13.8" y="4.75" width="3.8" height="14.5" rx="1.45"/>`,
+  previous: `<rect x="5.25" y="5" width="2.4" height="14" rx="1.2"/><path d="M18.25 6.1v11.8a1 1 0 0 1-1.55.84l-8.85-5.9a1 1 0 0 1 0-1.68l8.85-5.9a1 1 0 0 1 1.55.84Z"/>`,
+  next: `<rect x="16.35" y="5" width="2.4" height="14" rx="1.2"/><path d="M5.75 6.1v11.8a1 1 0 0 0 1.55.84l8.85-5.9a1 1 0 0 0 0-1.68L7.3 5.26a1 1 0 0 0-1.55.84Z"/>`,
+  volume: `<path d="M4.25 9.2h3.2l4.3-3.55v12.7l-4.3-3.55h-3.2a1.5 1.5 0 0 1-1.5-1.5v-2.6a1.5 1.5 0 0 1 1.5-1.5Z"/>`,
+  volumeLow: `<path d="M15.15 9.05a4.2 4.2 0 0 1 0 5.9"/>`,
+  volumeHigh: `<path d="M15.15 9.05a4.2 4.2 0 0 1 0 5.9M18.15 6.15a8.25 8.25 0 0 1 0 11.7"/>`,
+  mute: `<path d="m16.2 9 5.1 5.1m0-5.1-5.1 5.1"/>`,
+  volumeFull: `<path d="M4.25 9.2h3.2l4.3-3.55v12.7l-4.3-3.55h-3.2a1.5 1.5 0 0 1-1.5-1.5v-2.6a1.5 1.5 0 0 1 1.5-1.5ZM15.15 9.05a4.2 4.2 0 0 1 0 5.9M18.15 6.15a8.25 8.25 0 0 1 0 11.7"/>`,
+  volumeMuted: `<path d="M4.25 9.2h3.2l4.3-3.55v12.7l-4.3-3.55h-3.2a1.5 1.5 0 0 1-1.5-1.5v-2.6a1.5 1.5 0 0 1 1.5-1.5Zm11.95-.2 5.1 5.1m0-5.1-5.1 5.1"/>`,
+  audio: `<path d="M9 17.4V6.7l10.5-2.15v10.7"/><ellipse cx="6.15" cy="18" rx="2.85" ry="2.35"/><ellipse cx="16.65" cy="15.85" rx="2.85" ry="2.35"/>`,
+  subtitles: `<rect x="2.75" y="4.75" width="18.5" height="14.5" rx="3"/><path d="M6.75 13.25h4.5m2.5 0h3.5M6.75 16.25h3m2.5 0h5"/>`,
+  subtitlesOff: `<rect x="2.75" y="4.75" width="18.5" height="14.5" rx="3"/><path d="M6.75 13.25h4.5m2.5 0h3.5M6.75 16.25h3m2.5 0h5M4.25 3.25l15.5 17.5"/>`,
+  speed: `<path d="M4.7 18.1a9 9 0 1 1 14.6 0"/><path d="m12 12 4.65-3.35"/><circle cx="12" cy="12" r="1.15" fill="currentColor" stroke="none"/>`,
+  stable: `<rect x="2.75" y="4.75" width="18.5" height="14.5" rx="3"/><path d="M6.25 13.5v-3m3 5v-7m3 5.5v-4m3 6v-8m3 5.5v-3"/>`,
+  loop: `<path d="M17.4 5.25H8a4.75 4.75 0 0 0-4.75 4.75v.65M17 2.75l2.75 2.5L17 7.75M6.6 18.75H16A4.75 4.75 0 0 0 20.75 14v-.65M7 21.25l-2.75-2.5L7 16.25"/>`,
+  shuffle: `<path d="M3.5 6.25h2.2c4.8 0 7.05 11.5 12.6 11.5h2.2M17.35 14.6l3.15 3.15-3.15 3.15M3.5 17.75h2.2c2.05 0 3.6-2.1 5.1-4.45M14.1 8.1c1.2-1.1 2.55-1.85 4.2-1.85h2.2M17.35 3.1l3.15 3.15-3.15 3.15"/>`,
+  settings: `<path d="M4 7.25h5m3 0h8M4 16.75h8m3 0h5"/><circle cx="10.5" cy="7.25" r="1.75"/><circle cx="13.5" cy="16.75" r="1.75"/>`,
+  quality: `<rect x="2.75" y="4.25" width="18.5" height="13.5" rx="2.75"/><path d="M8.25 21h7.5M12 17.75V21"/>`,
+  qualityUp: `<rect x="2.75" y="4.25" width="18.5" height="13.5" rx="2.75"/><path d="M8.25 21h7.5M12 17.75V21m0-4.75V8m-2.5 2.5L12 8l2.5 2.5"/>`,
+  aspect: `<rect x="2.75" y="4.25" width="18.5" height="15.5" rx="3"/><rect class="movi-aspect-inner" x="6" y="8" width="12" height="8" rx="1.75"/>`,
+  aspectCover: `<rect x="2.75" y="4.25" width="18.5" height="15.5" rx="3"/><path d="M1.75 8.25h20.5v7.5H1.75z"/>`,
+  aspectFill: `<rect x="2.75" y="4.25" width="18.5" height="15.5" rx="3"/><path d="M6.25 8v8m11.5-8v8"/>`,
+  zoom: `<circle cx="10.75" cy="10.75" r="6.75"/><path d="m15.7 15.7 4.55 4.55M10.75 7.75v6m-3-3h6"/>`,
+  pip: `<rect x="2.75" y="4.25" width="18.5" height="15.5" rx="3"/><rect x="11.5" y="10.5" width="7.25" height="6.25" rx="1.5" fill="currentColor" stroke="none"/>`,
+  chevronLeft: `<path d="m14.5 5.75-6 6.25 6 6.25"/>`,
+  chevronRight: `<path d="m9.5 5.75 6 6.25-6 6.25"/>`,
+  fullscreen: `<path d="M9 3.75H5.75a2 2 0 0 0-2 2V9m11-5.25H18.25a2 2 0 0 1 2 2V9M15 20.25h3.25a2 2 0 0 0 2-2V15m-11 5.25H5.75a2 2 0 0 1-2-2V15"/>`,
+  fullscreenExit: `<path d="M9.25 3.75V8a1.25 1.25 0 0 1-1.25 1.25H3.75m16.5 0H16A1.25 1.25 0 0 1 14.75 8V3.75m0 16.5V16A1.25 1.25 0 0 1 16 14.75h4.25m-16.5 0H8A1.25 1.25 0 0 1 9.25 16v4.25"/>`,
+  more: `<circle cx="12" cy="12" r="9.25"/><circle cx="8" cy="12" r="1.1" fill="currentColor" stroke="none"/><circle cx="12" cy="12" r="1.1" fill="currentColor" stroke="none"/><circle cx="16" cy="12" r="1.1" fill="currentColor" stroke="none"/>`,
+  close: `<path d="m7 7 10 10M17 7 7 17"/>`,
+  crop: `<path d="M6.25 3.25v13a1.5 1.5 0 0 0 1.5 1.5h13M17.75 20.75v-13a1.5 1.5 0 0 0-1.5-1.5h-13"/>`,
+  ambient: `<circle cx="12" cy="12" r="4.25"/><path d="M12 2.5v2M12 19.5v2M5.3 5.3l1.4 1.4m10.6 10.6 1.4 1.4M2.5 12h2m15 0h2M5.3 18.7l1.4-1.4M17.3 6.7l1.4-1.4"/>`,
+  snapshot: `<path d="M4.75 7.25h2.5l1.4-2h6.7l1.4 2h2.5a2 2 0 0 1 2 2v8.5a2 2 0 0 1-2 2H4.75a2 2 0 0 1-2-2v-8.5a2 2 0 0 1 2-2Z"/><circle cx="12" cy="13" r="3.75"/>`,
+  audioOutput: `<rect x="4.25" y="2.75" width="15.5" height="18.5" rx="3"/><circle cx="12" cy="14" r="3.5"/><circle cx="12" cy="7" r="1" fill="currentColor" stroke="none"/>`,
+  timeline: `<rect x="2.75" y="4" width="5.25" height="4.25" rx="1.25"/><rect x="9.4" y="4" width="5.25" height="4.25" rx="1.25"/><rect x="16" y="4" width="5.25" height="4.25" rx="1.25"/><path d="M3 12h18M3 16h12m-12 4h17"/>`,
+  stats: `<path d="M4.5 20V15m5 5V9.5m5 10.5V12m5 8V4"/>`,
+  keyboard: `<rect x="2.25" y="5.75" width="19.5" height="12.5" rx="2.75"/><path d="M6 10h.01M10 10h.01M14 10h.01M18 10h.01M6.25 14h11.5"/>`,
+  transcript: `<path d="M8 6.5h12m-12 5.5h12M8 17.5h12"/><circle cx="3.75" cy="6.5" r="1" fill="currentColor" stroke="none"/><circle cx="3.75" cy="12" r="1" fill="currentColor" stroke="none"/><circle cx="3.75" cy="17.5" r="1" fill="currentColor" stroke="none"/>`,
+  backToTab: `<path d="M14.75 3.75h5.5v5.5m-11 11h-5.5v-5.5m16.5-11-7 7m-9.5 9.5 7-7"/>`,
+  rotate: `<path d="M20.25 8.5A8.75 8.75 0 1 0 20 16M20.25 3.75V8.5H15.5"/>`,
+  seekBackward: `<path d="M5.9 7.15A8.4 8.4 0 1 1 3.6 12M5.9 3.85 2.4 7.15l3.5 3.3"/><text x="12" y="14.5" font-size="6.3" font-family="-apple-system, BlinkMacSystemFont, sans-serif" font-weight="650" fill="currentColor" text-anchor="middle" stroke="none">10</text>`,
+  seekForward: `<path d="M18.1 7.15A8.4 8.4 0 1 0 20.4 12M18.1 3.85l3.5 3.3-3.5 3.3"/><text x="12" y="14.5" font-size="6.3" font-family="-apple-system, BlinkMacSystemFont, sans-serif" font-weight="650" fill="currentColor" text-anchor="middle" stroke="none">10</text>`,
+} as const;
+
+type SymbolName = keyof typeof SYMBOLS;
+
+const symbolSvg = (
+  name: SymbolName,
+  className = "",
+  options: { filled?: boolean; hidden?: boolean } = {},
+): string => {
+  const classes = ["movi-symbol", className].filter(Boolean).join(" ");
+  const paint = options.filled
+    ? `fill="currentColor" stroke="none"`
+    : `fill="none" stroke="currentColor" stroke-width="1.65" stroke-linecap="round" stroke-linejoin="round"`;
+  const hidden = options.hidden ? ` style="display: none;"` : "";
+  return `<svg class="${classes}" viewBox="0 0 24 24" ${paint} aria-hidden="true"${hidden}>${SYMBOLS[name]}</svg>`;
+};
+
+// OSD icons share the exact geometry used by the controls, so a keyboard
+// action and the button that represents it never appear to be different tools.
 const OSD = {
-  loop: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><path d="M17 2l4 4-4 4"/><path d="M3 11v-1a4 4 0 0 1 4-4h14"/><path d="M7 22l-4-4 4-4"/><path d="M21 13v1a4 4 0 0 1-4 4H3"/></svg>`,
-  shuffle: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><polyline points="16 3 21 3 21 8"/><line x1="4" y1="20" x2="21" y2="3"/><polyline points="21 16 21 21 16 21"/><line x1="15" y1="15" x2="21" y2="21"/><line x1="4" y1="4" x2="9" y2="9"/></svg>`,
-  stableAudio: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75"><rect x="2" y="4" width="20" height="16" rx="2"/><path d="M6 15v-2M9 15v-4M12 15v-6M15 15v-4M18 15v-2"/></svg>`,
-  hdr: `<span style="font-weight:700;font-size:14px;letter-spacing:1px;padding:4px 10px;border:2px solid currentColor;border-radius:var(--movi-radius-tile,6px);">HDR</span>`,
-  speed: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><path d="M5.64 18.36a9 9 0 1 1 12.72 0"/><path d="m12 12 4-4"/></svg>`,
-  audio: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75"><path d="M9 18V5l12-2v13"/><circle cx="6" cy="18" r="3"/><circle cx="18" cy="16" r="3"/></svg>`,
-  subOn: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75"><rect width="18" height="14" x="3" y="5" rx="2"/><path d="M7 15h4M13 15h4"/></svg>`,
-  subOff: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75"><rect width="18" height="14" x="3" y="5" rx="2"/><path d="M7 15h4M13 15h4"/><line x1="3" y1="5" x2="21" y2="19" stroke-width="2.2"/></svg>`,
-  snapshot: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><path d="M23 19a2 2 0 0 1-2 2H3a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h4l2-3h6l2 3h4a2 2 0 0 1 2 2z"></path><circle cx="12" cy="13" r="4"></circle></svg>`,
-  rotate: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75"><path d="M21 12a9 9 0 0 0-9-9 9.75 9.75 0 0 0-6.74 2.74L3 8"/><path d="M3 3v5h5"/></svg>`,
-  muted: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75"><polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5"/><line x1="23" y1="9" x2="17" y2="15"/><line x1="17" y1="9" x2="23" y2="15"/></svg>`,
-  unmuted: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75"><polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5"/><path d="M19.07 4.93a10 10 0 0 1 0 14.14"/><path d="M15.54 8.46a5 5 0 0 1 0 7.07"/></svg>`,
-  crop: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><path d="M6 2v14a2 2 0 0 0 2 2h14"/><path d="M18 22V8a2 2 0 0 0-2-2H2"/></svg>`,
-  ambient: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="5"/><path d="M12 1v2M12 21v2M4.22 4.22l1.42 1.42M18.36 18.36l1.42 1.42M1 12h2M21 12h2M4.22 19.78l1.42-1.42M18.36 5.64l1.42-1.42"/></svg>`,
-  seekBackward: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><path d="M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8" /><path d="M3 3v5h5" /><text x="50%" y="54%" font-size="7" font-family="sans-serif" font-weight="bold" fill="currentColor" text-anchor="middle" dominant-baseline="middle" stroke="none">10</text></svg>`,
-  // Plain monitor: the picture's quality changed, without claiming a direction.
-  quality: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="4" width="20" height="13" rx="2"/><path d="M8 21h8"/><path d="M12 17v4"/></svg>`,
-  // The same monitor with the arrow reversed: the picture, stepped back up.
-  qualityUp: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="4" width="20" height="13" rx="2"/><path d="M8 21h8"/><path d="M12 13V7"/><path d="m9.5 9.5 2.5-2.5 2.5 2.5"/></svg>`,
-  seekForward: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12a9 9 0 1 1-9-9 9.75 9.75 0 0 1 6.74 2.74L21 8" /><path d="M21 3v5h-5" /><text x="50%" y="54%" font-size="7" font-family="sans-serif" font-weight="bold" fill="currentColor" text-anchor="middle" dominant-baseline="middle" stroke="none">10</text></svg>`,
+  loop: symbolSvg("loop"),
+  shuffle: symbolSvg("shuffle"),
+  stableAudio: symbolSvg("stable"),
+  hdr: `<span style="font-weight:650;font-size:13px;letter-spacing:.08em;padding:4px 9px;border:1.65px solid currentColor;border-radius:7px;">HDR</span>`,
+  speed: symbolSvg("speed"),
+  audio: symbolSvg("audio"),
+  subOn: symbolSvg("subtitles"),
+  subOff: symbolSvg("subtitlesOff"),
+  snapshot: symbolSvg("snapshot"),
+  rotate: symbolSvg("rotate"),
+  muted: symbolSvg("volumeMuted"),
+  unmuted: symbolSvg("volumeFull"),
+  crop: symbolSvg("crop"),
+  ambient: symbolSvg("ambient"),
+  seekBackward: symbolSvg("seekBackward"),
+  quality: symbolSvg("quality"),
+  qualityUp: symbolSvg("qualityUp"),
+  seekForward: symbolSvg("seekForward"),
 } as const;
 
 /**
@@ -389,6 +452,39 @@ export interface MoviControlSpec {
   // and get a state-aware icon in the bar and in the menu with no help from
   // the player.
   onSelect?: (active: boolean, player: MoviElement) => void;
+}
+
+/**
+ * A divider the HOST adds — the same quiet line the player draws between its
+ * track controls and its viewing controls, put wherever the host's own
+ * controls want one. Passed to addControl like any control:
+ *
+ * ```ts
+ *   player.addControl({ id: "sep", divider: true, after: "cc" });
+ *   player.addControl({ id: "sep2", divider: true, group: "extras" });
+ * ```
+ *
+ * Placed, grouped, scoped and removed exactly as a control is — same anchors,
+ * same `group` (so it can sit INSIDE a capsule), same `controlslist` token by
+ * its id. On the bar, the centre or the corner it is a vertical line; in the
+ * context menu, the menu's own horizontal rule. A divider left with nothing
+ * visible on one side of it inside its row or capsule hides itself, so a
+ * control that is unavailable for this source doesn't strand a line at the
+ * end of a pill. Styled by --movi-divider-color / -width / -height / -gap and
+ * ::part(controls-divider), which reach the built-in one too.
+ */
+export interface MoviDividerSpec {
+  /** Unique; the handle for removeControl and the controlslist token. */
+  id: string;
+  divider: true;
+  side?: MoviControlSpec["side"];
+  before?: MoviControlSpec["before"];
+  after?: MoviControlSpec["after"];
+  anchors?: MoviControlSpec["anchors"];
+  group?: MoviControlSpec["group"];
+  placement?: MoviControlSpec["placement"];
+  media?: MoviControlSpec["media"];
+  screen?: MoviControlSpec["screen"];
 }
 
 /** How bright the ambient colour is allowed to READ, in luminance. Low on
@@ -2115,16 +2211,8 @@ export class MoviElement extends HTMLElement {
     centerPlayPause.className = "movi-center-play-pause";
     centerPlayPause.setAttribute("aria-label", "Play/Pause");
     centerPlayPause.innerHTML = `
-      <!-- Filled AND stroked with a round linejoin: that is what softens the
-           three corners, and it costs nothing next to hand-authoring the arcs.
-           The triangle is drawn inset by half the stroke so the painted shape
-           lands where the sharp one did instead of growing by 1.3px a side. -->
-      <svg class="movi-center-icon-play" viewBox="0 0 24 24" fill="currentColor" stroke="currentColor" stroke-width="2.3" stroke-linejoin="round">
-        <path d="M6.4 5.6L17.6 12L6.4 18.4Z"></path>
-      </svg>
-      <svg class="movi-center-icon-pause" viewBox="0 0 24 24" fill="currentColor" style="display: none;">
-        <path d="M6 19h4V5H6v14zm8-14v14h4V5h-4z"></path>
-      </svg>
+      ${symbolSvg("play", "movi-center-icon-play", { filled: true })}
+      ${symbolSvg("pause", "movi-center-icon-pause", { filled: true, hidden: true })}
     `;
     shadowRoot.appendChild(centerPlayPause);
 
@@ -2200,40 +2288,17 @@ export class MoviElement extends HTMLElement {
     this.emptyStateIndicator.innerHTML = `
       <div class="movi-empty-container">
         <div class="movi-empty-icon-wrapper">
-          <!-- An open, empty box.
-               Three marks were tried before this and the first two were
-               pressed: a play triangle inside a frame, then a dashed slot.
-               Anything shaped like the player invites someone to operate it,
-               and there is nothing here to operate — so this one is not a
-               control at all, it is a small picture of nothing being there.
-               An open carton with its flaps up and nothing inside is the one
-               illustration everybody already reads as "empty", and the specks
-               above it are what just left.
-
-               Monochrome, painted in the chrome's own foreground via the
-               classes below: this sits on an otherwise empty stage, where a
-               saturated badge reads as an error rather than a resting state,
-               and a hardcoded white would vanish under the light theme. -->
-          <svg viewBox="0 0 100 100" fill="none" aria-hidden="true">
-            <!-- What left. Smallest and faintest at the top, so the eye starts
-                 at the box and drifts up rather than the other way round. -->
-            <circle class="movi-empty-logo-fill" cx="50" cy="16" r="2.6" opacity="0.22"/>
-            <circle class="movi-empty-logo-fill" cx="37" cy="24" r="2.1" opacity="0.15"/>
-            <circle class="movi-empty-logo-fill" cx="63" cy="24" r="2.1" opacity="0.15"/>
-            <!-- The flaps. Each one hinges along a real stretch of the top
-                 edge — not a corner — and folds outward, which is what makes
-                 them read as flaps rather than as antennae. They stop short of
-                 each other: the gap between them is the way in, and it is why
-                 the box is OPEN rather than a crate with a lid. -->
-            <path class="movi-empty-logo-frame" d="M21 48 L6 34 L33 31 L48 48 Z" stroke-width="3" stroke-linejoin="round" opacity="0.45"/>
-            <path class="movi-empty-logo-frame" d="M79 48 L94 34 L67 31 L52 48 Z" stroke-width="3" stroke-linejoin="round" opacity="0.45"/>
-            <!-- The body, with the inside of its far wall showing just under
-                 the rim. That dark band is the whole point of the drawing: you
-                 can see in, and there is nothing in there. Inset from the
-                 corners so it never fights the body's rounding. -->
-            <rect class="movi-empty-logo-fill" x="21" y="48" width="58" height="32" rx="6" opacity="0.05"/>
-            <rect class="movi-empty-logo-fill" x="25" y="51" width="50" height="6" rx="3" opacity="0.18"/>
-            <rect class="movi-empty-logo-frame" x="21" y="48" width="58" height="32" rx="6" stroke-width="3.5" opacity="0.65"/>
+          <!-- A soft stack of media cards makes the absence feel intentional
+               without turning the placeholder into a literal box or tray. -->
+          <svg viewBox="0 0 140 100" fill="none" aria-hidden="true">
+            <rect class="movi-empty-card-back" x="22" y="10" width="94" height="66" rx="14" transform="rotate(-13 69 43)"/>
+            <rect class="movi-empty-card-front" x="28" y="25" width="100" height="66" rx="15"/>
+            <rect class="movi-empty-card-detail" x="42" y="39" width="19" height="17" rx="4.5"/>
+            <path class="movi-empty-card-play" d="M49 43.5v8l6.5-4-6.5-4Z"/>
+            <rect class="movi-empty-card-detail" x="42" y="73" width="17" height="5" rx="2.5"/>
+            <rect class="movi-empty-card-detail" x="65" y="73" width="17" height="5" rx="2.5"/>
+            <rect class="movi-empty-card-detail" x="88" y="73" width="17" height="5" rx="2.5"/>
+            <rect class="movi-empty-card-detail" x="111" y="73" width="9" height="5" rx="2.5"/>
           </svg>
         </div>
         <div class="movi-empty-text">
@@ -2318,30 +2383,20 @@ export class MoviElement extends HTMLElement {
     shadowRoot.appendChild(backdrop);
     contextMenu.innerHTML = `
       <div class="movi-context-menu-item" data-action="play-pause">
-        <svg class="movi-context-menu-icon movi-context-menu-play-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round">
-          <polygon points="5 3 19 12 5 21 5 3"></polygon>
-        </svg>
-        <svg class="movi-context-menu-icon movi-context-menu-pause-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" style="display: none;">
-          <rect x="6" y="4" width="4" height="16"></rect>
-          <rect x="14" y="4" width="4" height="16"></rect>
-        </svg>
+        ${symbolSvg("play", "movi-context-menu-icon movi-context-menu-play-icon", { filled: true })}
+        ${symbolSvg("pause", "movi-context-menu-icon movi-context-menu-pause-icon", { filled: true, hidden: true })}
         <span class="movi-context-menu-label">Play</span>
         <span class="movi-context-menu-shortcut" data-shortcut-action="playpause">Space</span>
       </div>
       <div class="movi-context-menu-item" data-action="speed">
-        <svg class="movi-context-menu-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round">
-          <path d="M5.64 18.36a9 9 0 1 1 12.72 0"></path>
-          <path d="m12 12 4-4"></path>
-        </svg>
+        ${symbolSvg("speed", "movi-context-menu-icon")}
         <span class="movi-context-menu-label">Playback Speed</span>
         <span class="movi-context-menu-shortcut" data-shortcut-pair="speedup,speeddown">+/-</span>
         <span class="movi-context-menu-arrow">▶</span>
       </div>
       <div class="movi-context-menu-submenu" data-submenu="speed">
         <div class="movi-context-menu-item movi-context-menu-back" data-action="back">
-          <svg class="movi-context-menu-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round">
-            <path d="M15 18l-6-6 6-6"/>
-          </svg>
+          ${symbolSvg("chevronLeft", "movi-context-menu-icon")}
           <span class="movi-context-menu-label">Back</span>
         </div>
         <div class="movi-context-menu-item" data-speed="0.25">0.25x</div>
@@ -2354,44 +2409,36 @@ export class MoviElement extends HTMLElement {
         <div class="movi-context-menu-item" data-speed="2">2x</div>
       </div>
       <div class="movi-context-menu-item" data-action="fit">
-        <svg class="movi-context-menu-icon movi-icon-aspect-ratio-ctx" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round">
-          <rect x="3" y="3" width="18" height="18" rx="2"/><rect x="6" y="8" width="12" height="8" rx="1"/>
-        </svg>
+        ${symbolSvg("aspect", "movi-context-menu-icon movi-icon-aspect-ratio-ctx")}
         <span class="movi-context-menu-label">Aspect Ratio</span>
         <span class="movi-context-menu-shortcut" data-shortcut-action="aspect">A</span>
         <span class="movi-context-menu-arrow">▶</span>
       </div>
       <div class="movi-context-menu-submenu" data-submenu="fit">
         <div class="movi-context-menu-item movi-context-menu-back" data-action="back">
-          <svg class="movi-context-menu-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round">
-            <path d="M15 18l-6-6 6-6"/>
-          </svg>
+          ${symbolSvg("chevronLeft", "movi-context-menu-icon")}
           <span class="movi-context-menu-label">Back</span>
         </div>
         <div class="movi-context-menu-item" data-fit="contain">
-          <svg class="movi-context-menu-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="18" height="18" rx="2"/><rect x="6" y="8" width="12" height="8" rx="1"/></svg>
+          ${symbolSvg("aspect", "movi-context-menu-icon")}
           <span class="movi-context-menu-label">Contain</span>
         </div>
         <div class="movi-context-menu-item" data-fit="cover">
-          <svg class="movi-context-menu-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="18" height="18" rx="2"/><rect x="1" y="7" width="22" height="10" rx="1"/></svg>
+          ${symbolSvg("aspectCover", "movi-context-menu-icon")}
           <span class="movi-context-menu-label">Cover</span>
         </div>
         <div class="movi-context-menu-item" data-fit="fill">
-          <svg class="movi-context-menu-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="18" height="18" rx="2"/><path d="M3 3h18v18H3z"/></svg>
+          ${symbolSvg("aspectFill", "movi-context-menu-icon")}
           <span class="movi-context-menu-label">Stretch</span>
         </div>
         <div class="movi-context-menu-item" data-fit="zoom">
-          <svg class="movi-context-menu-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="8"/><path d="M21 21l-4.35-4.35"/><path d="M11 8v6M8 11h6"/></svg>
+          ${symbolSvg("zoom", "movi-context-menu-icon")}
           <span class="movi-context-menu-label">Zoom</span>
         </div>
       </div>
       <div class="movi-context-menu-divider movi-context-menu-divider-audio" style="display: none;"></div>
       <div class="movi-context-menu-item movi-context-menu-item-audio" data-action="audio-track" style="display: none;">
-        <svg class="movi-context-menu-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round">
-          <path d="M9 18V5l12-2v13"></path>
-          <circle cx="6" cy="18" r="3"></circle>
-          <circle cx="18" cy="16" r="3"></circle>
-        </svg>
+        ${symbolSvg("audio", "movi-context-menu-icon")}
         <span class="movi-context-menu-label">Audio Track</span>
         <span class="movi-context-menu-shortcut" data-shortcut-action="audiotrack">B</span>
         <span class="movi-context-menu-arrow">▶</span>
@@ -2399,24 +2446,15 @@ export class MoviElement extends HTMLElement {
       <div class="movi-context-menu-submenu movi-context-menu-submenu-audio" data-submenu="audio-track" style="display: none;"></div>
       <div class="movi-context-menu-divider movi-context-menu-divider-audiodevice" style="display: none;"></div>
       <div class="movi-context-menu-item movi-context-menu-item-audiodevice" data-action="audio-output" style="display: none;">
-        <svg class="movi-context-menu-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round">
-          <rect x="4" y="2" width="16" height="20" rx="2"></rect>
-          <circle cx="12" cy="14" r="4"></circle>
-          <line x1="12" y1="6" x2="12.01" y2="6"></line>
-        </svg>
+        ${symbolSvg("audioOutput", "movi-context-menu-icon")}
         <span class="movi-context-menu-label">Audio Output</span>
         <span class="movi-context-menu-arrow">▶</span>
       </div>
       <div class="movi-context-menu-submenu movi-context-menu-submenu-audiodevice" data-submenu="audio-output" style="display: none;"></div>
       <div class="movi-context-menu-divider movi-context-menu-divider-subtitle" style="display: none;"></div>
       <div class="movi-context-menu-item movi-context-menu-item-subtitle" data-action="subtitle-track" style="display: none;">
-        <svg class="movi-context-menu-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round">
-          <rect width="18" height="14" x="3" y="5" rx="2" ry="2"></rect>
-          <path d="M11 9H9a2 2 0 0 0-2 2v2a2 2 0 0 0 2 2h2 M17 9h-2a2 2 0 0 0-2 2v2a2 2 0 0 0 2 2h2"></path>
-        </svg>
-        <svg class="movi-context-menu-icon movi-context-menu-subtitle-filled" viewBox="0 0 24 24" fill="currentColor" style="display: none;">
-           <path fill-rule="evenodd" clip-rule="evenodd" d="M19 4H5c-1.11 0-2 .9-2 2v12c0 1.1.89 2 2 2h14c1.1 0 2-.9 2-2V6c0-1.1-.9-2-2-2z M11 11 H9.5 V10.5 H7.5 V13.5 H9.5 V13 H11 V14 C11 14.55 10.55 15 10 15 H7 C6.45 15 6 14.55 6 14 V10 C6 9.45 6.45 9 7 9 H10 C10.55 9 11 9.45 11 10 V11 Z M18 11 H16.5 V10.5 H14.5 V13.5 H16.5 V13 H18 V14 C18 14.55 17.55 15 17 15 H14 C13.45 15 13 14.55 13 14 V10 C13 9.45 13.45 9 14 9 H17 C17.55 9 18 9.45 18 10 V11 Z"></path>
-        </svg>
+        ${symbolSvg("subtitles", "movi-context-menu-icon")}
+        ${symbolSvg("subtitles", "movi-context-menu-icon movi-context-menu-subtitle-filled", { hidden: true })}
         <span class="movi-context-menu-label">Subtitle Track</span>
         <span class="movi-context-menu-shortcut" data-shortcut-action="subtitles">V</span>
         <span class="movi-context-menu-arrow">▶</span>
@@ -2430,38 +2468,24 @@ export class MoviElement extends HTMLElement {
       </div>
       <div class="movi-context-menu-divider movi-hdr-divider" style="display: none;"></div>
       <div class="movi-context-menu-item movi-context-menu-pip" data-action="pip" style="display: none;">
-        <svg class="movi-context-menu-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round">
-          <rect x="2" y="3" width="20" height="14" rx="2"/><rect x="12" y="9" width="8" height="6" rx="1"/>
-        </svg>
+        ${symbolSvg("pip", "movi-context-menu-icon")}
         <span class="movi-context-menu-label">Picture in Picture</span>
         <span class="movi-context-menu-shortcut" data-shortcut-action="pip">P</span>
       </div>
       <div class="movi-context-menu-item" data-action="fullscreen">
-        <svg class="movi-context-menu-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round">
-          <path d="M8 3H5a2 2 0 0 0-2 2v3m18 0V5a2 2 0 0 0-2-2h-3m0 18h3a2 2 0 0 0 2-2v-3M3 16v3a2 2 0 0 0 2 2h3"></path>
-        </svg>
+        ${symbolSvg("fullscreen", "movi-context-menu-icon")}
         <span class="movi-context-menu-label">Fullscreen</span>
         <span class="movi-context-menu-shortcut" data-shortcut-action="fullscreen">F</span>
       </div>
       <div class="movi-context-menu-item" data-action="rotate-video">
-        <svg class="movi-context-menu-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round">
-          <path d="M21 12a9 9 0 1 1-9-9 9.75 9.75 0 0 1 6.74 2.74L21 8"></path>
-          <path d="M21 3v5h-5"></path>
-        </svg>
+        ${symbolSvg("rotate", "movi-context-menu-icon")}
         <span class="movi-context-menu-label">Rotate Video</span>
         <span class="movi-context-menu-status movi-rotate-status">0°</span>
         <span class="movi-context-menu-shortcut" data-shortcut-action="rotate">R</span>
       </div>
       <div class="movi-context-menu-item" data-action="loop-toggle">
-        <svg class="movi-context-menu-icon movi-context-menu-loop-outline" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round">
-           <path d="M17 2l4 4-4 4"></path>
-           <path d="M3 11v-1a4 4 0 0 1 4-4h14"></path>
-           <path d="M7 22l-4-4 4-4"></path>
-           <path d="M21 13v1a4 4 0 0 1-4 4H3"></path>
-        </svg>
-        <svg class="movi-context-menu-icon movi-context-menu-loop-filled" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round" style="display: none;">
-          <path d="M17 2l4 4-4 4"></path><path d="M3 11v-1a4 4 0 0 1 4-4h14"></path><path d="M7 22l-4-4 4-4"></path><path d="M21 13v1a4 4 0 0 1-4 4H3"></path>
-        </svg>
+        ${symbolSvg("loop", "movi-context-menu-icon movi-context-menu-loop-outline")}
+        ${symbolSvg("loop", "movi-context-menu-icon movi-context-menu-loop-filled", { hidden: true })}
         <span class="movi-context-menu-label">Loop</span>
         <span class="movi-context-menu-status movi-loop-status">Off</span>
         <span class="movi-context-menu-shortcut" data-shortcut-action="loop">L</span>
@@ -2471,100 +2495,49 @@ export class MoviElement extends HTMLElement {
            queue (updateShuffleUI) — the same rule the Next button and the
            settings row follow. -->
       <div class="movi-context-menu-item" data-action="shuffle-toggle" style="display: none;">
-        <svg class="movi-context-menu-icon movi-context-menu-shuffle-outline" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round">
-          <polyline points="16 3 21 3 21 8"/><line x1="4" y1="20" x2="21" y2="3"/><polyline points="21 16 21 21 16 21"/><line x1="15" y1="15" x2="21" y2="21"/><line x1="4" y1="4" x2="9" y2="9"/>
-        </svg>
-        <svg class="movi-context-menu-icon movi-context-menu-shuffle-filled" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round" style="display: none;">
-          <polyline points="16 3 21 3 21 8"/><line x1="4" y1="20" x2="21" y2="3"/><polyline points="21 16 21 21 16 21"/><line x1="15" y1="15" x2="21" y2="21"/><line x1="4" y1="4" x2="9" y2="9"/>
-        </svg>
+        ${symbolSvg("shuffle", "movi-context-menu-icon movi-context-menu-shuffle-outline")}
+        ${symbolSvg("shuffle", "movi-context-menu-icon movi-context-menu-shuffle-filled", { hidden: true })}
         <span class="movi-context-menu-label">Shuffle</span>
         <span class="movi-context-menu-status movi-shuffle-status">Off</span>
       </div>
       <div class="movi-context-menu-item" data-action="stable-audio-toggle">
-        <svg class="movi-context-menu-icon movi-context-menu-stable-outline" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">
-          <rect x="2" y="4" width="20" height="16" rx="2"></rect>
-          <path d="M6 15v-2"></path>
-          <path d="M9 15v-4"></path>
-          <path d="M12 15v-6"></path>
-          <path d="M15 15v-4"></path>
-          <path d="M18 15v-2"></path>
-        </svg>
-        <svg class="movi-context-menu-icon movi-context-menu-stable-filled" viewBox="0 0 24 24" fill="currentColor" style="display: none;">
-          <path d="M4 4h16a2 2 0 0 1 2 2v12a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2zm1 9v2h2v-2H5zm3-2v4h2v-4H8zm3-2v6h2V9h-2zm3 2v4h2v-4h-2zm3 2v2h2v-2h-2z"></path>
-        </svg>
+        ${symbolSvg("stable", "movi-context-menu-icon movi-context-menu-stable-outline")}
+        ${symbolSvg("stable", "movi-context-menu-icon movi-context-menu-stable-filled", { hidden: true })}
         <span class="movi-context-menu-label">Stable Volume</span>
         <span class="movi-context-menu-status movi-stable-audio-status">Off</span>
         <span class="movi-context-menu-shortcut" data-shortcut-action="stableaudio">U</span>
       </div>
       <div class="movi-context-menu-item" data-action="crop-toggle">
-        <svg class="movi-context-menu-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round">
-          <path d="M6 2v14a2 2 0 0 0 2 2h14"></path>
-          <path d="M18 22V8a2 2 0 0 0-2-2H2"></path>
-        </svg>
+        ${symbolSvg("crop", "movi-context-menu-icon")}
         <span class="movi-context-menu-label">Crop Black Bars</span>
         <span class="movi-context-menu-status movi-crop-status">Off</span>
         <span class="movi-context-menu-shortcut" data-shortcut-action="crop">C</span>
       </div>
       <div class="movi-context-menu-item" data-action="ambient-toggle">
-        <svg class="movi-context-menu-icon movi-context-menu-ambient-outline" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round">
-          <circle cx="12" cy="12" r="5"></circle>
-          <path d="M12 1v2"></path><path d="M12 21v2"></path>
-          <path d="M4.22 4.22l1.42 1.42"></path><path d="M18.36 18.36l1.42 1.42"></path>
-          <path d="M1 12h2"></path><path d="M21 12h2"></path>
-          <path d="M4.22 19.78l1.42-1.42"></path><path d="M18.36 5.64l1.42-1.42"></path>
-        </svg>
-        <svg class="movi-context-menu-icon movi-context-menu-ambient-filled" viewBox="0 0 24 24" fill="currentColor" style="display: none;">
-          <circle cx="12" cy="12" r="5"></circle>
-          <path d="M12 1v2" stroke="currentColor" stroke-width="1.75" stroke-linecap="round"></path>
-          <path d="M12 21v2" stroke="currentColor" stroke-width="1.75" stroke-linecap="round"></path>
-          <path d="M4.22 4.22l1.42 1.42" stroke="currentColor" stroke-width="1.75" stroke-linecap="round"></path>
-          <path d="M18.36 18.36l1.42 1.42" stroke="currentColor" stroke-width="1.75" stroke-linecap="round"></path>
-          <path d="M1 12h2" stroke="currentColor" stroke-width="1.75" stroke-linecap="round"></path>
-          <path d="M21 12h2" stroke="currentColor" stroke-width="1.75" stroke-linecap="round"></path>
-          <path d="M4.22 19.78l1.42-1.42" stroke="currentColor" stroke-width="1.75" stroke-linecap="round"></path>
-          <path d="M18.36 5.64l1.42-1.42" stroke="currentColor" stroke-width="1.75" stroke-linecap="round"></path>
-        </svg>
+        ${symbolSvg("ambient", "movi-context-menu-icon movi-context-menu-ambient-outline")}
+        ${symbolSvg("ambient", "movi-context-menu-icon movi-context-menu-ambient-filled", { hidden: true })}
         <span class="movi-context-menu-label">Ambient Mode</span>
         <span class="movi-context-menu-status movi-ambient-status">Off</span>
         <span class="movi-context-menu-shortcut" data-shortcut-action="ambient">G</span>
       </div>
       <div class="movi-context-menu-divider"></div>
       <div class="movi-context-menu-item" data-action="snapshot">
-        <svg class="movi-context-menu-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round">
-          <path d="M23 19a2 2 0 0 1-2 2H3a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h4l2-3h6l2 3h4a2 2 0 0 1 2 2z"></path>
-          <circle cx="12" cy="13" r="4"></circle>
-        </svg>
+        ${symbolSvg("snapshot", "movi-context-menu-icon")}
         <span class="movi-context-menu-label">Snapshot</span>
         <span class="movi-context-menu-shortcut" data-shortcut-action="snapshot">S</span>
       </div>
       <div class="movi-context-menu-item" data-action="timeline">
-        <svg class="movi-context-menu-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round">
-          <rect x="2" y="3" width="6" height="5" rx="1"></rect>
-          <rect x="9" y="3" width="6" height="5" rx="1"></rect>
-          <rect x="16" y="3" width="6" height="5" rx="1"></rect>
-          <rect x="2" y="10" width="6" height="5" rx="1"></rect>
-          <rect x="9" y="10" width="6" height="5" rx="1"></rect>
-          <rect x="16" y="10" width="6" height="5" rx="1"></rect>
-          <line x1="2" y1="19" x2="22" y2="19"></line>
-          <line x1="2" y1="21" x2="22" y2="21"></line>
-        </svg>
+        ${symbolSvg("timeline", "movi-context-menu-icon")}
         <span class="movi-context-menu-label">Timeline</span>
         <span class="movi-context-menu-shortcut" data-shortcut-action="timeline">T</span>
       </div>
       <div class="movi-context-menu-item" data-action="nerd-stats">
-        <svg class="movi-context-menu-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round">
-          <path d="M12 20V10"></path>
-          <path d="M18 20V4"></path>
-          <path d="M6 20v-4"></path>
-        </svg>
+        ${symbolSvg("stats", "movi-context-menu-icon")}
         <span class="movi-context-menu-label">Stats for nerds</span>
         <span class="movi-context-menu-shortcut" data-shortcut-action="stats">I</span>
       </div>
       <div class="movi-context-menu-item" data-action="keyboard-shortcuts">
-        <svg class="movi-context-menu-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round">
-          <rect x="2" y="6" width="20" height="12" rx="2"></rect>
-          <path d="M6 10h0M10 10h0M14 10h0M18 10h0M6 14h12"></path>
-        </svg>
+        ${symbolSvg("keyboard", "movi-context-menu-icon")}
         <span class="movi-context-menu-label">Keyboard Shortcuts</span>
         <span class="movi-context-menu-shortcut" data-shortcut-action="shortcuts">?</span>
       </div>
@@ -2659,25 +2632,16 @@ export class MoviElement extends HTMLElement {
                  can never do anything, and the commonest case by far is a
                  single video. Filled glyphs, like Play beside them. -->
             <button class="movi-btn movi-prev-btn" aria-label="Previous in queue">
-              <svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
-                <path d="M6 6h2.4v12H6V6zm12 0v12l-9-6 9-6z"></path>
-              </svg>
+              ${symbolSvg("previous", "", { filled: true })}
             </button>
 
             <button class="movi-btn movi-play-pause" aria-label="Play/Pause">
-              <!-- Rounded the same way as the centre one — see there. -->
-              <svg class="movi-icon-play" viewBox="0 0 24 24" fill="currentColor" stroke="currentColor" stroke-width="2.3" stroke-linejoin="round">
-                <path d="M6.4 5.6L17.6 12L6.4 18.4Z"></path>
-              </svg>
-              <svg class="movi-icon-pause" viewBox="0 0 24 24" fill="currentColor" style="display: none;">
-                <path d="M6 19h4V5H6v14zm8-14v14h4V5h-4z"></path>
-              </svg>
+              ${symbolSvg("play", "movi-icon-play", { filled: true })}
+              ${symbolSvg("pause", "movi-icon-pause", { filled: true, hidden: true })}
             </button>
 
             <button class="movi-btn movi-next-btn" aria-label="Next in queue">
-              <svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
-                <path d="M18 6h-2.4v12H18V6zM6 6v12l9-6-9-6z"></path>
-              </svg>
+              ${symbolSvg("next", "", { filled: true })}
             </button>
             </div>
 
@@ -2685,37 +2649,19 @@ export class MoviElement extends HTMLElement {
                  thing in opposite directions, and the bar groups them as one. -->
             <div class="movi-seek-group">
               <button class="movi-btn movi-seek-backward" aria-label="Skip Backward 10s">
-                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round">
-                  <path d="M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8" />
-                  <path d="M3 3v5h5" />
-                  <text x="50%" y="54%" font-size="7" font-family="sans-serif" font-weight="bold" fill="currentColor" text-anchor="middle" dominant-baseline="middle" stroke="none">10</text>
-                </svg>
+                ${symbolSvg("seekBackward")}
               </button>
 
               <button class="movi-btn movi-seek-forward" aria-label="Skip Forward 10s">
-                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round">
-                  <path d="M21 12a9 9 0 1 1-9-9 9.75 9.75 0 0 1 6.74 2.74L21 8" />
-                  <path d="M21 3v5h-5" />
-                  <text x="50%" y="54%" font-size="7" font-family="sans-serif" font-weight="bold" fill="currentColor" text-anchor="middle" dominant-baseline="middle" stroke="none">10</text>
-                </svg>
+                ${symbolSvg("seekForward")}
               </button>
             </div>
 
             <div class="movi-volume-container">
               <button class="movi-btn movi-volume-btn" aria-label="Mute/Unmute">
-                <svg class="movi-icon-volume-high" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round">
-                  <path d="M11 5L6 9H2v6h4l5 4V5z"></path>
-                  <path d="M19.07 4.93a10 10 0 0 1 0 14.14M15.54 8.46a5 5 0 0 1 0 7.07"></path>
-                </svg>
-                <svg class="movi-icon-volume-low" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" style="display: none;">
-                  <path d="M11 5L6 9H2v6h4l5 4V5z"></path>
-                  <path d="M15.54 8.46a5 5 0 0 1 0 7.07"></path>
-                </svg>
-                <svg class="movi-icon-volume-mute" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" style="display: none;">
-                  <path d="M11 5L6 9H2v6h4l5 4V5z"></path>
-                  <line x1="23" y1="9" x2="17" y2="15"></line>
-                  <line x1="17" y1="9" x2="23" y2="15"></line>
-                </svg>
+                ${symbolSvg("volumeFull", "movi-icon-volume-high")}
+                ${symbolSvg("volume", "movi-icon-volume-low", { hidden: true })}
+                ${symbolSvg("volumeMuted", "movi-icon-volume-mute", { hidden: true })}
               </button>
               <div class="movi-volume-slider-container">
                 <input type="range" class="movi-volume-slider" min="0" max="2" step="0.01" value="1" aria-label="Volume" aria-valuemin="0" aria-valuemax="200" aria-valuenow="100" aria-valuetext="Volume 100%">
@@ -2735,9 +2681,7 @@ export class MoviElement extends HTMLElement {
                  have chapters, which most do not. -->
             <button class="movi-chapter-pill" type="button" aria-label="Chapters" style="display: none;">
               <span class="movi-chapter-pill-text"></span>
-              <svg class="movi-chapter-pill-chevron" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
-                <path d="M9 18l6-6-6-6"/>
-              </svg>
+              ${symbolSvg("chevronRight", "movi-chapter-pill-chevron")}
             </button>
           </div>
 
@@ -2754,11 +2698,7 @@ export class MoviElement extends HTMLElement {
             <div class="movi-mobile-expandable">
               <div class="movi-audio-track-container">
                 <button class="movi-btn movi-audio-track-btn" aria-label="Audio Track">
-                  <svg class="movi-icon-audio-track" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round">
-                    <path d="M9 18V5l12-2v13"></path>
-                    <circle cx="6" cy="18" r="3"></circle>
-                    <circle cx="18" cy="16" r="3"></circle>
-                  </svg>
+                  ${symbolSvg("audio", "movi-icon-audio-track")}
                 </button>
                 <div class="movi-audio-track-menu" style="display: none;">
                   <div class="movi-track-menu-header">
@@ -2779,13 +2719,8 @@ export class MoviElement extends HTMLElement {
 
               <div class="movi-subtitle-track-container">
                 <button class="movi-btn movi-subtitle-track-btn" aria-label="Subtitles/Captions">
-                  <svg class="movi-icon-subtitle" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round">
-                    <rect width="20" height="16" x="2" y="4" rx="2" ry="2"></rect>
-                    <path d="M10 8.5H8a2 2 0 0 0-2 2v3a2 2 0 0 0 2 2h2 M18 8.5h-2a2 2 0 0 0-2 2v3a2 2 0 0 0 2 2h2"></path>
-                  </svg>
-                  <svg class="movi-icon-subtitle-filled" viewBox="0 0 24 24" fill="currentColor" style="display: none;">
-                    <path d="M20 4H4c-1.1 0-2 .9-2 2v12c0 1.1.9 2 2 2h16c1.1 0 2-.9 2-2V6c0-1.1-.9-2-2-2zM10 15H7c-.83 0-1.5-.67-1.5-1.5v-3c0-.83.67-1.5 1.5-1.5h3V11H7.5v2.5h2V13H10v2zm8 0h-3c-.83 0-1.5-.67-1.5-1.5v-3c0-.83.67-1.5 1.5-1.5h3V11h-2.5v2.5h2V13H18v2z"></path>
-                  </svg>
+                  ${symbolSvg("subtitles", "movi-icon-subtitle")}
+                  ${symbolSvg("subtitles", "movi-icon-subtitle-filled", { hidden: true })}
                 </button>
                 <div class="movi-subtitle-track-menu" style="display: none;">
                   <div class="movi-track-menu-header movi-subtitle-track-header">
@@ -2794,23 +2729,13 @@ export class MoviElement extends HTMLElement {
                             class="movi-subtitle-browse-btn"
                             aria-label="Open transcript"
                             title="Transcript">
-                      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" width="16" height="16">
-                        <line x1="8" y1="6" x2="21" y2="6"/>
-                        <line x1="8" y1="12" x2="21" y2="12"/>
-                        <line x1="8" y1="18" x2="21" y2="18"/>
-                        <circle cx="3.5" cy="6" r="1"/>
-                        <circle cx="3.5" cy="12" r="1"/>
-                        <circle cx="3.5" cy="18" r="1"/>
-                      </svg>
+                      ${symbolSvg("transcript")}
                     </button>
                     <button type="button"
                             class="movi-subtitle-customize-btn"
                             aria-label="Customize captions"
                             title="Customize captions">
-                      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" width="16" height="16">
-                        <circle cx="12" cy="12" r="3"></circle>
-                        <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"></path>
-                      </svg>
+                      ${symbolSvg("settings")}
                     </button>
                   </div>
                   <div class="movi-subtitle-track-list"></div>
@@ -2820,10 +2745,7 @@ export class MoviElement extends HTMLElement {
 
               <div class="movi-quality-container" style="display: none;">
                 <button class="movi-btn movi-quality-btn" aria-label="Quality">
-                  <svg class="movi-icon-quality" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round">
-                    <path d="M12.22 2h-.44a2 2 0 0 0-2 2v.18a2 2 0 0 1-1 1.73l-.43.25a2 2 0 0 1-2 0l-.15-.08a2 2 0 0 0-2.73.73l-.22.38a2 2 0 0 0 .73 2.73l.15.1a2 2 0 0 1 1 1.72v.51a2 2 0 0 1-1 1.74l-.15.09a2 2 0 0 0-.73 2.73l.22.38a2 2 0 0 0 2.73.73l.15-.08a2 2 0 0 1 2 0l.43.25a2 2 0 0 1 1 1.73V20a2 2 0 0 0 2 2h.44a2 2 0 0 0 2-2v-.18a2 2 0 0 1 1-1.73l.43-.25a2 2 0 0 1 2 0l.15.08a2 2 0 0 0 2.73-.73l.22-.38a2 2 0 0 0-.73-2.73l-.15-.1a2 2 0 0 1-1-1.72v-.51a2 2 0 0 1 1-1.74l.15-.09a2 2 0 0 0 .73-2.73l-.22-.38a2 2 0 0 0-2.73-.73l-.15.08a2 2 0 0 1-2 0l-.43-.25a2 2 0 0 1-1-1.73V4a2 2 0 0 0-2-2z"></path>
-                    <circle cx="12" cy="12" r="3"></circle>
-                  </svg>
+                  ${symbolSvg("quality", "movi-icon-quality")}
                   <span class="movi-quality-btn-badge" style="display: none;"></span>
                 </button>
                 <div class="movi-quality-menu" style="display: none;">
@@ -2833,10 +2755,7 @@ export class MoviElement extends HTMLElement {
 
               <div class="movi-speed-container">
                 <button class="movi-btn movi-speed-btn" aria-label="Playback Speed">
-                  <svg class="movi-icon-speed" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round">
-                    <path d="M5.64 18.36a9 9 0 1 1 12.72 0"></path>
-                    <path d="m12 12 4-4"></path>
-                  </svg>
+                  ${symbolSvg("speed", "movi-icon-speed")}
                 </button>
                 <div class="movi-speed-menu" style="display: none;">
                   <div class="movi-speed-list">
@@ -2854,33 +2773,22 @@ export class MoviElement extends HTMLElement {
 
               <div class="movi-stable-audio-container">
                 <button class="movi-btn movi-stable-audio-btn" aria-label="Toggle Stable Audio">
-                  <svg class="movi-icon-stable-audio-outline" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">
-                    <rect x="2" y="4" width="20" height="16" rx="2"></rect>
-                    <path d="M6 15v-2"></path>
-                    <path d="M9 15v-4"></path>
-                    <path d="M12 15v-6"></path>
-                    <path d="M15 15v-4"></path>
-                    <path d="M18 15v-2"></path>
-                  </svg>
-                  <svg class="movi-icon-stable-audio-filled" viewBox="0 0 24 24" fill="currentColor" style="display: none;">
-                    <path d="M4 4h16a2 2 0 0 1 2 2v12a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2zm1 9v2h2v-2H5zm3-2v4h2v-4H8zm3-2v6h2V9h-2zm3 2v4h2v-4h-2zm3 2v2h2v-2h-2z"></path>
-                  </svg>
+                  ${symbolSvg("stable", "movi-icon-stable-audio-outline")}
+                  ${symbolSvg("stable", "movi-icon-stable-audio-filled", { hidden: true })}
                 </button>
               </div>
 
               <button class="movi-btn movi-loop-btn" aria-label="Toggle Loop">
-                <svg class="movi-icon-loop-outline" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round">
-                  <path d="M17 2l4 4-4 4"></path>
-                  <path d="M3 11v-1a4 4 0 0 1 4-4h14"></path>
-                  <path d="M7 22l-4-4 4-4"></path>
-                  <path d="M21 13v1a4 4 0 0 1-4 4H3"></path>
-                </svg>
-                <svg class="movi-icon-loop-filled" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round" style="display: none;">
-                  <path d="M17 2l4 4-4 4"></path><path d="M3 11v-1a4 4 0 0 1 4-4h14"></path><path d="M7 22l-4-4 4-4"></path><path d="M21 13v1a4 4 0 0 1-4 4H3"></path>
-                </svg>
+                ${symbolSvg("loop", "movi-icon-loop-outline")}
+                ${symbolSvg("loop", "movi-icon-loop-filled", { hidden: true })}
               </button>
 
             </div>
+
+            <!-- Track controls and viewing controls share the right capsule,
+                 but they are different tasks. A quiet divider preserves the
+                 compact footprint while making the sequence scannable. -->
+            <span class="movi-controls-divider movi-controls-right-divider" part="controls-divider" aria-hidden="true"></span>
 
             <!-- Settings: the gear owns every playback setting now. The
                  per-setting buttons below still exist and still do all the
@@ -2888,17 +2796,15 @@ export class MoviElement extends HTMLElement {
                  time — but only this one is on the bar. -->
             <div class="movi-settings-container">
               <button class="movi-btn movi-settings-btn" aria-label="Settings">
-                <svg class="movi-icon-settings" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round">
-                  <path d="M12.22 2h-.44a2 2 0 0 0-2 2v.18a2 2 0 0 1-1 1.73l-.43.25a2 2 0 0 1-2 0l-.15-.08a2 2 0 0 0-2.73.73l-.22.38a2 2 0 0 0 .73 2.73l.15.1a2 2 0 0 1 1 1.72v.51a2 2 0 0 1-1 1.74l-.15.09a2 2 0 0 0-.73 2.73l.22.38a2 2 0 0 0 2.73.73l.15-.08a2 2 0 0 1 2 0l.43.25a2 2 0 0 1 1 1.73V20a2 2 0 0 0 2 2h.44a2 2 0 0 0 2-2v-.18a2 2 0 0 1 1-1.73l.43-.25a2 2 0 0 1 2 0l.15.08a2 2 0 0 0 2.73-.73l.22-.38a2 2 0 0 0-.73-2.73l-.15-.1a2 2 0 0 1-1-1.72v-.51a2 2 0 0 1 1-1.74l.15-.09a2 2 0 0 0 .73-2.73l-.22-.38a2 2 0 0 0-2.73-.73l-.15.08a2 2 0 0 1-2 0l-.43-.25a2 2 0 0 1-1-1.73V4a2 2 0 0 0-2-2z"></path>
-                  <circle cx="12" cy="12" r="3"></circle>
-                </svg>
+                ${symbolSvg("settings", "movi-icon-settings")}
                 <span class="movi-settings-btn-badge" style="display: none;"></span>
               </button>
               <div class="movi-settings-menu" style="display: none;">
+                <div class="movi-settings-grabber" aria-hidden="true"></div>
                 <div class="movi-settings-root"></div>
                 <div class="movi-settings-page" style="display: none;">
                   <button class="movi-settings-back" type="button">
-                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><path d="M15 18l-6-6 6-6"/></svg>
+                    ${symbolSvg("chevronLeft")}
                     <span class="movi-settings-page-title"></span>
                   </button>
                   <div class="movi-settings-page-body"></div>
@@ -2914,10 +2820,7 @@ export class MoviElement extends HTMLElement {
                  can only ever appear on the left); the narrow-width rules fold
                  it away with the tray instead. -->
             <button class="movi-btn movi-aspect-ratio-btn" aria-label="Aspect Ratio">
-              <svg class="movi-icon-aspect-ratio" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round">
-                <rect x="3" y="3" width="18" height="18" rx="2"/>
-                <rect class="movi-aspect-inner" x="6" y="8" width="12" height="8" rx="1"/>
-              </svg>
+              ${symbolSvg("aspect", "movi-icon-aspect-ratio")}
             </button>
 
             <!-- PiP sits beside the gear, outside the mobile "more" tray: the
@@ -2927,27 +2830,17 @@ export class MoviElement extends HTMLElement {
               <!-- Drawn to fill the 24x24 box like its neighbours. The old
                    20x14 frame sat inside the box with room to spare, so at the
                    same nominal size it read as a smaller button. -->
-              <svg class="movi-icon-pip" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round">
-                <rect x="2" y="4" width="20" height="16" rx="2"/><rect x="12" y="11" width="8" height="6" rx="1" fill="currentColor" opacity="0.35"/>
-              </svg>
+              ${symbolSvg("pip", "movi-icon-pip")}
             </button>
 
             <button class="movi-btn movi-more-btn" aria-label="More Settings">
-              <svg class="movi-icon-more" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round">
-                <polyline points="15 18 9 12 15 6"></polyline>
-              </svg>
-              <svg class="movi-icon-close" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" style="display: none;">
-                <polyline points="9 18 15 12 9 6"></polyline>
-              </svg>
+              ${symbolSvg("more", "movi-icon-more")}
+              ${symbolSvg("close", "movi-icon-close", { hidden: true })}
             </button>
 
             <button class="movi-btn movi-fullscreen-btn" aria-label="Fullscreen">
-              <svg class="movi-icon-fullscreen" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round">
-                <path d="M8 3H5a2 2 0 0 0-2 2v3m18 0V5a2 2 0 0 0-2-2h-3m0 18h3a2 2 0 0 0 2-2v-3M3 16v3a2 2 0 0 0 2 2h3"></path>
-              </svg>
-              <svg class="movi-icon-fullscreen-exit" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" style="display: none;">
-                <path d="M4 14h6v6m10-6h-6v6M4 10h6V4m10 6h-6V4"></path>
-              </svg>
+              ${symbolSvg("fullscreen", "movi-icon-fullscreen")}
+              ${symbolSvg("fullscreenExit", "movi-icon-fullscreen-exit", { hidden: true })}
             </button>
           </div>
         </div>
@@ -3040,7 +2933,7 @@ export class MoviElement extends HTMLElement {
     // The back arrow is always in the DOM and hidden by default — the bar is
     // rebuilt on nothing, so toggling a class beats re-writing markup whenever
     // `titlemode` changes.
-    titleBar.innerHTML = `<button class="movi-title-back" type="button" aria-label="Back" title="Back"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><path d="M22 12H3"/><path d="M10 19l-7-7 7-7"/></svg></button><span class="movi-title-text"></span>`;
+    titleBar.innerHTML = `<button class="movi-title-back" type="button" aria-label="Back" title="Back">${symbolSvg("chevronLeft")}</button><span class="movi-title-text"></span>`;
     (
       titleBar.querySelector(".movi-title-back") as HTMLButtonElement
     ).addEventListener("click", (e) => {
@@ -8786,16 +8679,16 @@ export class MoviElement extends HTMLElement {
         return btn;
       };
 
-      const seekBackBtn = makeBtn("seek-back", `<svg viewBox="0 0 24 24" fill="currentColor"><path d="M12.5 3C7.81 3 4.01 6.54 3.58 11H1l3.5 4L8 11H5.59c.42-3.35 3.33-6 6.91-6 3.87 0 7 3.13 7 7s-3.13 7-7 7c-1.93 0-3.68-.79-4.94-2.06l-1.42 1.42A8.96 8.96 0 0012.5 21c4.97 0 9-4.03 9-9s-4.03-9-9-9z"/><text x="12.5" y="15.5" text-anchor="middle" font-size="7.5" font-weight="700" font-family="-apple-system,sans-serif">10</text></svg>`);
+      const seekBackBtn = makeBtn("seek-back", symbolSvg("seekBackward"));
       const playPauseBtn = makeBtn("play-pause", this.player.getState() === "playing"
-        ? `<svg viewBox="0 0 24 24" fill="currentColor"><rect x="6" y="4" width="4" height="16" rx="1"/><rect x="14" y="4" width="4" height="16" rx="1"/></svg>`
-        : `<svg viewBox="0 0 24 24" fill="currentColor" stroke="currentColor" stroke-width="2.1" stroke-linejoin="round"><path d="M9.3 6.6L17.7 12L9.3 17.4Z"/></svg>`);
-      const seekFwdBtn = makeBtn("seek-fwd", `<svg viewBox="0 0 24 24" fill="currentColor"><path d="M11.5 3c4.69 0 8.49 3.54 8.92 8H23l-3.5 4L16 11h2.41c-.42-3.35-3.33-6-6.91-6-3.87 0-7 3.13-7 7s3.13 7 7 7c1.93 0 3.68-.79 4.94-2.06l1.42 1.42A8.96 8.96 0 0111.5 21c-4.97 0-9-4.03-9-9s4.03-9 9-9z"/><text x="11.5" y="15.5" text-anchor="middle" font-size="7.5" font-weight="700" font-family="-apple-system,sans-serif">10</text></svg>`);
-      const backToTabBtn = makeBtn("back-to-tab", `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><polyline points="15 3 21 3 21 9"/><polyline points="9 21 3 21 3 15"/><line x1="21" y1="3" x2="14" y2="10"/><line x1="3" y1="21" x2="10" y2="14"/></svg>`);
+        ? symbolSvg("pause", "", { filled: true })
+        : symbolSvg("play", "", { filled: true }));
+      const seekFwdBtn = makeBtn("seek-fwd", symbolSvg("seekForward"));
+      const backToTabBtn = makeBtn("back-to-tab", symbolSvg("backToTab"));
       const isMuted = this._muted;
       const muteBtn = makeBtn("mute-toggle", isMuted
-        ? `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><path d="M11 5L6 9H2v6h4l5 4V5z"/><line x1="23" y1="9" x2="17" y2="15"/><line x1="17" y1="9" x2="23" y2="15"/></svg>`
-        : `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><path d="M11 5L6 9H2v6h4l5 4V5z"/><path d="M19.07 4.93a10 10 0 0 1 0 14.14"/><path d="M15.54 8.46a5 5 0 0 1 0 7.07"/></svg>`);
+        ? symbolSvg("volumeMuted")
+        : symbolSvg("volumeFull"));
 
       btnRow.appendChild(muteBtn);
       btnRow.appendChild(seekBackBtn);
@@ -8812,8 +8705,8 @@ export class MoviElement extends HTMLElement {
         if (!this.player) return;
         const isPlaying = this.player.getState() === "playing";
         playPauseBtn.innerHTML = isPlaying
-          ? `<svg viewBox="0 0 24 24" fill="currentColor"><rect x="6" y="4" width="4" height="16" rx="1"/><rect x="14" y="4" width="4" height="16" rx="1"/></svg>`
-          : `<svg viewBox="0 0 24 24" fill="currentColor" stroke="currentColor" stroke-width="2.1" stroke-linejoin="round"><path d="M9.3 6.6L17.7 12L9.3 17.4Z"/></svg>`;
+          ? symbolSvg("pause", "", { filled: true })
+          : symbolSvg("play", "", { filled: true });
       };
 
       playPauseBtn.addEventListener("click", () => {
@@ -8840,9 +8733,7 @@ export class MoviElement extends HTMLElement {
       muteBtn.addEventListener("click", () => {
         this.muted = !this.muted;
         this.showOSD(
-          this.muted
-            ? `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75"><polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5"/><line x1="23" y1="9" x2="17" y2="15"/><line x1="17" y1="9" x2="23" y2="15"/></svg>`
-            : `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75"><polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5"/><path d="M19.07 4.93a10 10 0 0 1 0 14.14"/><path d="M15.54 8.46a5 5 0 0 1 0 7.07"/></svg>`,
+          this.muted ? OSD.muted : OSD.unmuted,
           this.muted ? "Muted" : "Unmuted",
         );
       });
@@ -8887,8 +8778,8 @@ export class MoviElement extends HTMLElement {
         updatePlayPauseIcon();
         const muted = this._muted;
         muteBtn.innerHTML = muted
-          ? `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><path d="M11 5L6 9H2v6h4l5 4V5z"/><line x1="23" y1="9" x2="17" y2="15"/><line x1="17" y1="9" x2="23" y2="15"/></svg>`
-          : `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><path d="M11 5L6 9H2v6h4l5 4V5z"/><path d="M19.07 4.93a10 10 0 0 1 0 14.14"/><path d="M15.54 8.46a5 5 0 0 1 0 7.07"/></svg>`;
+          ? symbolSvg("volumeMuted")
+          : symbolSvg("volumeFull");
       }, 250);
 
       // The spinner lives outside the controls, which fade out — a load that
@@ -9213,10 +9104,10 @@ export class MoviElement extends HTMLElement {
   }
 
   private static readonly ASPECT_ICONS: Record<string, string> = {
-    contain: `<rect x="3" y="3" width="18" height="18" rx="2"/><rect x="6" y="8" width="12" height="8" rx="1"/>`,
-    cover: `<rect x="3" y="3" width="18" height="18" rx="2"/><rect x="1" y="7" width="22" height="10" rx="1"/>`,
-    fill: `<rect x="3" y="3" width="18" height="18" rx="2"/><path d="M3 3h18v18H3z"/>`,
-    zoom: `<circle cx="11" cy="11" r="8"/><path d="M21 21l-4.35-4.35"/><path d="M11 8v6M8 11h6"/>`,
+    contain: SYMBOLS.aspect,
+    cover: SYMBOLS.aspectCover,
+    fill: SYMBOLS.aspectFill,
+    zoom: SYMBOLS.zoom,
   };
 
   private updateAspectRatioIcon(): void {
@@ -9242,8 +9133,14 @@ export class MoviElement extends HTMLElement {
     this.refreshOpenSettingsSurfaces();
   }
 
-  private static readonly TRACK_ICON_AUDIO = `<svg class="movi-track-item-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><path d="M11 5L6 9H2v6h4l5 4V5z"/><path d="M15.54 8.46a5 5 0 0 1 0 7.07"/><path d="M19.07 4.93a10 10 0 0 1 0 14.14"/></svg>`;
-  private static readonly TRACK_ICON_SUBTITLE = `<svg class="movi-track-item-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><rect width="20" height="16" x="2" y="4" rx="2" ry="2"/><path d="M10 8.5H8a2 2 0 0 0-2 2v3a2 2 0 0 0 2 2h2 M18 8.5h-2a2 2 0 0 0-2 2v3a2 2 0 0 0 2 2h2"/></svg>`;
+  private static readonly TRACK_ICON_AUDIO = symbolSvg(
+    "volumeFull",
+    "movi-track-item-icon",
+  );
+  private static readonly TRACK_ICON_SUBTITLE = symbolSvg(
+    "subtitles",
+    "movi-track-item-icon",
+  );
   /** Stands in for a generated subtitle track's language badge until its
    *  first cue arrives: a small turning ring, in the bar's list and the
    *  context menu alike. */
@@ -9257,8 +9154,12 @@ export class MoviElement extends HTMLElement {
     if (ctx) this.updateContextMenuContent(ctx);
   }
 
-  private static readonly TRACK_ICON_OFF = `<svg class="movi-track-item-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><line x1="6" y1="12" x2="18" y2="12"/></svg>`;
-  private static readonly TRACK_ICON_CHECK = `<svg class="movi-track-item-check" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg>`;
+  /** Below this height the settings panel packs its rows closer — see
+   *  publishPlayerWidth. */
+  private static readonly SHORT_PLAYER_PX = 400;
+
+  private static readonly TRACK_ICON_OFF = `<svg class="movi-symbol movi-track-item-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.65" stroke-linecap="round"><circle cx="12" cy="12" r="8.75"/><path d="M7.75 12h8.5"/></svg>`;
+  private static readonly TRACK_ICON_CHECK = `<svg class="movi-symbol movi-track-item-check" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.1" stroke-linecap="round" stroke-linejoin="round"><path d="m5.25 12.25 4.15 4.15 9.35-9.35"/></svg>`;
 
   private formatAudioBadge(track: AudioTrack): string {
     const codec = (track.codec || "").toUpperCase();
@@ -9647,8 +9548,8 @@ export class MoviElement extends HTMLElement {
             ${
               isActive
                 ? `
-            <svg class="movi-quality-check" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round">
-              <polyline points="20 6 9 17 4 12"></polyline>
+            <svg class="movi-quality-check" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.1" stroke-linecap="round" stroke-linejoin="round">
+              <path d="m5.25 12.25 4.15 4.15 9.35-9.35"></path>
             </svg>`
                 : ""
             }
@@ -11403,7 +11304,7 @@ export class MoviElement extends HTMLElement {
       activeQuality?.badge || this._rungBadge(activeQuality?.height || 0),
     );
 
-    const check = `<svg class="movi-quality-check" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"></polyline></svg>`;
+    const check = `<svg class="movi-quality-check" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.1" stroke-linecap="round" stroke-linejoin="round"><path d="m5.25 12.25 4.15 4.15 9.35-9.35"></path></svg>`;
     const rows: string[] = [];
     if (abrCapable) {
       // "Auto (1080p)" — show the rung Auto is currently serving (Shaka/YouTube).
@@ -11517,7 +11418,7 @@ export class MoviElement extends HTMLElement {
     const checkSvg = () =>
       document.importNode(
         new DOMParser().parseFromString(
-          '<svg xmlns="http://www.w3.org/2000/svg" class="movi-quality-check" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"></polyline></svg>',
+          '<svg xmlns="http://www.w3.org/2000/svg" class="movi-quality-check" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.1" stroke-linecap="round" stroke-linejoin="round"><path d="m5.25 12.25 4.15 4.15 9.35-9.35"></path></svg>',
           "image/svg+xml",
         ).documentElement,
         true,
@@ -14025,7 +13926,15 @@ export class MoviElement extends HTMLElement {
       // scrollTop 0 keeps the first row (0.25x / Audio 1 / first subtitle)
       // visible; the rest is reachable by scrolling. The mobile menu CSS sets
       // max-height with !important, so the inline override must also carry it.
-      if (!this.classList.contains("movi-audio-strip")) {
+      // Not for a menu the stylesheet has made a centred popup (the settings
+      // panel on a small player, position: fixed): it does not open upward
+      // from the bar, so the room above the bar is not its room. Capped here
+      // anyway it came out 168px tall in a 263px player — two and a half rows
+      // — against the 247px its own rule allows.
+      if (
+        !this.classList.contains("movi-audio-strip") &&
+        getComputedStyle(el).position !== "fixed"
+      ) {
         // Cap the upward-opening menu to the room between the player's top and
         // the controls bar, measured from STABLE elements — the bar and the
         // host — NOT the menu's own rect, which on a very short player is
@@ -14588,20 +14497,20 @@ export class MoviElement extends HTMLElement {
    *  of bare words is slower to scan than a list with marks against it — and
    *  these are the same marks the context menu already trained people on. */
   private static readonly SETTINGS_ICONS: Record<string, string> = {
-    quality: `<svg class="movi-settings-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="4" width="20" height="14" rx="2"/><path d="M8 21h8M12 18v3"/></svg>`,
-    speed: `<svg class="movi-settings-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><path d="M5.64 18.36a9 9 0 1 1 12.72 0"/><path d="m12 12 4-4"/></svg>`,
-    audio: `<svg class="movi-settings-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><path d="M9 18V5l12-2v13"/><circle cx="6" cy="18" r="3"/><circle cx="18" cy="16" r="3"/></svg>`,
-    subtitles: `<svg class="movi-settings-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><rect width="18" height="14" x="3" y="5" rx="2"/><path d="M7 15h4M13 15h4"/></svg>`,
+    quality: symbolSvg("quality", "movi-settings-icon"),
+    speed: symbolSvg("speed", "movi-settings-icon"),
+    audio: symbolSvg("audio", "movi-settings-icon"),
+    subtitles: symbolSvg("subtitles", "movi-settings-icon"),
     hdr: `<span class="movi-settings-icon movi-settings-icon-text">HDR</span>`,
-    stable: `<svg class="movi-settings-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="4" width="20" height="16" rx="2"/><path d="M6 15v-2M9 15v-4M12 15v-6M15 15v-4M18 15v-2"/></svg>`,
-    loop: `<svg class="movi-settings-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><path d="M17 2l4 4-4 4"/><path d="M3 11v-1a4 4 0 0 1 4-4h14"/><path d="M7 22l-4-4 4-4"/><path d="M21 13v1a4 4 0 0 1-4 4H3"/></svg>`,
-    shuffle: `<svg class="movi-settings-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><polyline points="16 3 21 3 21 8"/><line x1="4" y1="20" x2="21" y2="3"/><polyline points="21 16 21 21 16 21"/><line x1="15" y1="15" x2="21" y2="21"/><line x1="4" y1="4" x2="9" y2="9"/></svg>`,
-    aspect: `<svg class="movi-settings-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="18" height="18" rx="2"/><rect x="6" y="8" width="12" height="8" rx="1"/></svg>`,
-    ambient: `<svg class="movi-settings-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="5"/><path d="M12 1v2M12 21v2M4.22 4.22l1.42 1.42M18.36 18.36l1.42 1.42M1 12h2M21 12h2M4.22 19.78l1.42-1.42M18.36 5.64l1.42-1.42"/></svg>`,
+    stable: symbolSvg("stable", "movi-settings-icon"),
+    loop: symbolSvg("loop", "movi-settings-icon"),
+    shuffle: symbolSvg("shuffle", "movi-settings-icon"),
+    aspect: symbolSvg("aspect", "movi-settings-icon"),
+    ambient: symbolSvg("ambient", "movi-settings-icon"),
     // Crop marks — the two overhanging L's of the crop tool. A framed
     // rectangle was tried and it was indistinguishable from Aspect's, which is
     // half of why that row moved away from this one.
-    crop: `<svg class="movi-settings-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><path d="M6 2v14a2 2 0 0 0 2 2h14"/><path d="M18 22V8a2 2 0 0 0-2-2H2"/></svg>`,
+    crop: symbolSvg("crop", "movi-settings-icon"),
   };
 
   private static readonly ASPECT_CHOICES: ReadonlyArray<
@@ -14887,6 +14796,9 @@ export class MoviElement extends HTMLElement {
     // the thing this panel was getting wrong in the first place.
     const deadIf = (actionKey: string) =>
       liveNow(actionKey) ? "" : ' disabled aria-disabled="true"';
+    rows.push(
+      `<div class="movi-settings-section-label">Playback</div>`,
+    );
     // Every row here is a remembered preference, and all of them can be set
     // before there is anything to apply them to — the same list
     // worksBeforePlayback keeps live in the context menu.
@@ -14903,7 +14815,7 @@ export class MoviElement extends HTMLElement {
       const label = this.singleQualityLabel();
       if (label) {
         rows.push(
-          `<div class="movi-settings-row is-static" aria-disabled="true">${MoviElement.SETTINGS_ICONS.quality}<span class="movi-settings-row-label">Quality</span><span class="movi-settings-row-value">${MoviElement.escapeSettingsText(label)}</span></div>`,
+          `<div class="movi-settings-row is-static" data-page="quality" aria-disabled="true">${MoviElement.SETTINGS_ICONS.quality}<span class="movi-settings-row-label">Quality</span><span class="movi-settings-row-value">${MoviElement.escapeSettingsText(label)}</span></div>`,
         );
       }
     }
@@ -14942,12 +14854,12 @@ export class MoviElement extends HTMLElement {
     };
     const toggle = (toggleKey: string, label: string, on: boolean) =>
       `<button type="button"${deadIf(TOGGLE_ACTION[toggleKey] ?? toggleKey)} class="movi-settings-row" data-toggle="${toggleKey}" aria-pressed="${on}">${MoviElement.SETTINGS_ICONS[toggleKey] || ""}<span class="movi-settings-row-label">${label}</span><span class="movi-settings-switch ${on ? "is-on" : ""}"><span class="movi-settings-knob"></span></span></button>`;
-    // The divider earns its keep by separating the two KINDS of row: above it
-    // everything opens a list and shows what is currently chosen, below it
-    // everything is a switch. Aspect used to sit alone at the bottom, a
-    // chevron stranded after four toggles — which read as an afterthought and
-    // left the divider separating nothing in particular.
-    rows.push(`<div class="movi-settings-divider"></div>`);
+    // A quiet label separates navigation rows from switches without drawing a
+    // rule across the glass surface. The words aid scanning; spacing carries
+    // the hierarchy.
+    rows.push(
+      `<div class="movi-settings-section-label movi-settings-section-label-secondary">Enhancements</div>`,
+    );
     // HDR: defer to the decision the bar's own logic already made.
     // updateHdrVisibility writes "flex" on the container only when HDR is
     // genuinely on offer (Chromium + canvas + an HDR source), so requiring that
@@ -15037,7 +14949,24 @@ export class MoviElement extends HTMLElement {
     if (title) title.textContent = def.title;
     root.style.display = "none";
     page.style.display = "block";
+    this.animateSettingsView(page, "forward");
     this._settingsPage = key;
+  }
+
+  private animateSettingsView(
+    view: HTMLElement,
+    direction: "forward" | "back",
+  ): void {
+    const cls = direction === "forward"
+      ? "movi-settings-view-forward"
+      : "movi-settings-view-back";
+    view.classList.remove(
+      "movi-settings-view-forward",
+      "movi-settings-view-back",
+    );
+    void view.offsetWidth;
+    view.classList.add(cls);
+    window.setTimeout(() => view.classList.remove(cls), 280);
   }
 
   /** Put a borrowed list back where its own menu expects it. */
@@ -15048,10 +14977,10 @@ export class MoviElement extends HTMLElement {
     ) as HTMLElement | null;
     if (!menu || !this.isBottomMenuOpen(menu)) return;
     this.setBottomMenuOpen(menu, false);
-    this.closeSettingsPage();
+    this.closeSettingsPage(false);
   }
 
-  private closeSettingsPage(): void {
+  private closeSettingsPage(animate = true): void {
     const sr = this.shadowRoot;
     if (!sr || !this._settingsPage) return;
     const def = MoviElement.SETTINGS_PAGES[this._settingsPage];
@@ -15077,7 +15006,16 @@ export class MoviElement extends HTMLElement {
     const page = sr.querySelector(".movi-settings-page") as HTMLElement | null;
     const root = sr.querySelector(".movi-settings-root") as HTMLElement | null;
     if (page) page.style.display = "none";
-    if (root) root.style.display = "block";
+    if (root) {
+      root.style.display = "block";
+      if (animate) this.animateSettingsView(root, "back");
+      else {
+        root.classList.remove(
+          "movi-settings-view-forward",
+          "movi-settings-view-back",
+        );
+      }
+    }
     this._settingsPage = null;
   }
 
@@ -15086,7 +15024,7 @@ export class MoviElement extends HTMLElement {
     if (key !== "aspect") return "";
     const current =
       this._objectFit === "control" ? this._currentFit : this._objectFit;
-    const check = `<svg class="movi-settings-check" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg>`;
+    const check = `<svg class="movi-settings-check" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.1" stroke-linecap="round" stroke-linejoin="round"><path d="m5.25 12.25 4.15 4.15 9.35-9.35"/></svg>`;
     return MoviElement.ASPECT_CHOICES.map(([fit, label]) => {
       // Each fit already HAS a drawing — the bar button cycled through exactly
       // these to show which was active. Reuse them here: for a spatial setting,
@@ -15277,12 +15215,133 @@ export class MoviElement extends HTMLElement {
       true,
     );
 
+    // Swipe down to dismiss, on a touch popup (the panel on a small player).
+    //
+    // The panel follows the finger down and fades as it goes; let go past
+    // SWIPE_CLOSE_PX, or flick, and it carries on out and closes, otherwise it
+    // settles back. From the handle it always drags; from the list only when the
+    // list is at its top and the finger moves down, so scrolling the rows is
+    // still scrolling. Moved with the `translate` property, which composes with
+    // the centring the stylesheet keeps in `transform`.
+    const SWIPE_CLOSE_PX = 90;
+    const SWIPE_FLICK_PX_PER_MS = 0.4;
+    let swipe: {
+      y0: number;
+      dy: number;
+      fromHandle: boolean;
+      dragging: boolean;
+      // Recent positions, for the speed at release: a flick is fast at the
+      // end, and averaged over the whole drag it read as slow.
+      trail: Array<[number, number]>;
+    } | null = null;
+    let swallowClickUntil = 0;
+    const isTouchPopup = () =>
+      this.isBottomMenuOpen(menu) &&
+      !this.classList.contains("movi-audio-strip") &&
+      getComputedStyle(menu).position === "fixed";
+    const settle = (close: boolean) => {
+      menu.style.transition = "translate 180ms ease, opacity 180ms ease";
+      if (close) {
+        menu.style.translate = `0 ${Math.max(swipe?.dy ?? 0, 0) + menu.offsetHeight * 0.5}px`;
+        menu.style.opacity = "0";
+      } else {
+        menu.style.translate = "0 0";
+        menu.style.opacity = "";
+      }
+      window.setTimeout(() => {
+        if (close) this.closeSettingsMenu();
+        // Once the close has taken the panel away (or the snap-back has
+        // landed), leave nothing inline for the next open to inherit.
+        window.setTimeout(
+          () => {
+            menu.style.transition = "";
+            menu.style.translate = "";
+            menu.style.opacity = "";
+          },
+          close ? 260 : 0,
+        );
+      }, 180);
+    };
+    menu.addEventListener(
+      "touchstart",
+      (e) => {
+        if (e.touches.length !== 1 || !isTouchPopup()) {
+          swipe = null;
+          return;
+        }
+        const fromHandle = !!(e.target as HTMLElement).closest(
+          ".movi-settings-grabber",
+        );
+        swipe = {
+          y0: e.touches[0].clientY,
+          dy: 0,
+          fromHandle,
+          dragging: false,
+          trail: [[performance.now(), e.touches[0].clientY]],
+        };
+      },
+      { passive: true },
+    );
+    menu.addEventListener(
+      "touchmove",
+      (e) => {
+        if (!swipe) return;
+        const y = e.touches[0].clientY;
+        const dy = y - swipe.y0;
+        const now = performance.now();
+        swipe.trail.push([now, y]);
+        while (swipe.trail.length > 2 && now - swipe.trail[0][0] > 100) {
+          swipe.trail.shift();
+        }
+        if (!swipe.dragging) {
+          if (dy > 6 && (swipe.fromHandle || menu.scrollTop <= 0)) {
+            swipe.dragging = true;
+            menu.style.transition = "none";
+          } else if (dy < -6 || (dy > 6 && menu.scrollTop > 0)) {
+            swipe = null; // the list is being scrolled
+          }
+          return;
+        }
+        e.preventDefault();
+        // Upward past the resting place gives a little, then stops.
+        swipe.dy = dy >= 0 ? dy : -Math.min(12, Math.sqrt(-dy) * 2);
+        menu.style.translate = `0 ${swipe.dy}px`;
+        menu.style.opacity = `${Math.max(0.35, 1 - Math.max(0, swipe.dy) / 320)}`;
+      },
+      { passive: false },
+    );
+    const endSwipe = () => {
+      if (!swipe) return;
+      if (swipe.dragging) {
+        const [t1, y1] = swipe.trail[0];
+        const [t2, y2] = swipe.trail[swipe.trail.length - 1];
+        const speed = (y2 - y1) / Math.max(1, t2 - t1);
+        const flick = swipe.dy > 24 && speed > SWIPE_FLICK_PX_PER_MS;
+        // A drag is not a tap: the row it ended on must not toggle.
+        swallowClickUntil = performance.now() + 400;
+        settle(swipe.dy > SWIPE_CLOSE_PX || flick);
+      }
+      swipe = null;
+    };
+    menu.addEventListener("touchend", endSwipe);
+    menu.addEventListener("touchcancel", endSwipe);
+    menu.addEventListener(
+      "click",
+      (e) => {
+        if (performance.now() < swallowClickUntil) {
+          e.stopPropagation();
+          e.preventDefault();
+        }
+      },
+      true,
+    );
+
     btn.addEventListener("click", (e) => {
       e.stopPropagation();
       const open = this.isBottomMenuOpen(menu);
       if (open) {
         this.setBottomMenuOpen(menu, false);
-        this.closeSettingsPage();
+        this.closeSettingsPage(false);
         // The clamp's inline right/max-width are deliberately NOT cleared here.
         // Clearing them starts the close by snapping the panel back to right:0
         // — a visible jump to the right while it is still fading out. The next
@@ -15290,7 +15349,7 @@ export class MoviElement extends HTMLElement {
         return;
       }
       this.closeAllBottomMenus(".movi-settings-menu");
-      this.closeSettingsPage();
+      this.closeSettingsPage(false);
       this.buildSettingsRoot();
       this.setBottomMenuOpen(menu, true);
       this.clampSettingsPanel(menu);
@@ -15318,41 +15377,55 @@ export class MoviElement extends HTMLElement {
         // Each toggle puts up the same toast its old bar button did. A
         // setting changed from a list still deserves the confirmation — the
         // panel covers the picture, so the switch alone is easy to miss.
-        if (row.dataset.toggle === "hdr") {
+        const toggleKey = row.dataset.toggle;
+        if (toggleKey === "hdr") {
           this.hdr = !this.hdr;
           this.showOSD(OSD.hdr, this.hdr ? "HDR On" : "HDR Off");
-        } else if (row.dataset.toggle === "stable") {
+        } else if (toggleKey === "stable") {
           this.stableVolume = !this._stableVolume;
           this.showOSD(
             OSD.stableAudio,
             this._stableVolume ? "Stable Volume On" : "Stable Volume Off",
           );
-        } else if (row.dataset.toggle === "loop") {
+        } else if (toggleKey === "loop") {
           this.loop = !this._loop;
           this.showOSD(OSD.loop, this._loop ? "Loop On" : "Loop Off");
-        } else if (row.dataset.toggle === "shuffle") {
+        } else if (toggleKey === "shuffle") {
           this.shuffle = !this._shuffle;
           this.showOSD(
             OSD.shuffle,
             this._shuffle ? "Shuffle On" : "Shuffle Off",
           );
-        } else if (row.dataset.toggle === "ambient") {
+        } else if (toggleKey === "ambient") {
           this.ambientMode = !this._ambientMode;
           this.updateAmbientUI();
           this.showOSD(
             OSD.ambient,
             this._ambientMode ? "Ambient Mode On" : "Ambient Mode Off",
           );
-        } else if (row.dataset.toggle === "crop") {
+        } else if (toggleKey === "crop") {
           this.cropbars = !this._cropBars;
           this.showOSD(
             OSD.crop,
             this._cropBars ? "Black Bars Cropped" : "Black Bars Kept",
           );
         }
-        // Toggles stay on the panel — the point of a settings list is flipping
-        // a couple of things without it closing under you.
-        this.buildSettingsRoot();
+        // Toggles stay on the panel, and the rows themselves stay mounted.
+        // Their setters normally sync this already; the direct call also
+        // covers a future toggle whose updater does not refresh surfaces yet.
+        this.syncSettingsRootState(shadowRoot);
+        if (toggleKey) {
+          const toggle = row.querySelector(
+            ".movi-settings-switch",
+          ) as HTMLElement | null;
+          toggle?.classList.remove("movi-settings-switch-confirmed");
+          if (toggle) void toggle.offsetWidth;
+          toggle?.classList.add("movi-settings-switch-confirmed");
+          window.setTimeout(
+            () => toggle?.classList.remove("movi-settings-switch-confirmed"),
+            420,
+          );
+        }
         return;
       }
       const choice = target.closest(
@@ -15368,7 +15441,7 @@ export class MoviElement extends HTMLElement {
           Logger.warn(TAG, "aspect choice failed", err);
         }
         this.setBottomMenuOpen(menu, false);
-        this.closeSettingsPage();
+        this.closeSettingsPage(false);
         this.showControls();
         return;
       }
@@ -15393,7 +15466,7 @@ export class MoviElement extends HTMLElement {
         // After the list's own handler has run, not before it.
         setTimeout(() => {
           this.setBottomMenuOpen(menu, false);
-          this.closeSettingsPage();
+          this.closeSettingsPage(false);
           this.showControls();
         }, 0);
       },
@@ -15835,6 +15908,53 @@ export class MoviElement extends HTMLElement {
    * setting goes through it without each one having to remember.
    */
   private _refreshingSurfaces = false;
+
+  /** Update the open root panel without replacing its rows.
+   *
+   * A toggle changes state, not structure. Rebuilding root.innerHTML for it
+   * discarded hover/focus and restarted every entrance animation, making the
+   * whole panel look as though it had reopened. */
+  private syncSettingsRootState(sr: ShadowRoot): void {
+    const root = sr.querySelector(".movi-settings-root") as HTMLElement | null;
+    if (!root) return;
+
+    root.querySelectorAll<HTMLElement>(".movi-settings-row[data-page]").forEach(
+      (row) => {
+        const key = row.dataset.page;
+        if (!key) return;
+        const value = row.querySelector(".movi-settings-row-value");
+        if (value) {
+          value.textContent =
+            key === "quality" && row.classList.contains("is-static")
+              ? this.singleQualityLabel() || this.settingsRowValue(key)
+              : this.settingsRowValue(key);
+        }
+        if (key === "aspect") {
+          const icon = row.querySelector(".movi-settings-icon") as HTMLElement | null;
+          if (icon) icon.outerHTML = this.aspectRowIcon();
+        }
+      },
+    );
+
+    const toggleState: Record<string, boolean> = {
+      hdr: this._hdr,
+      ambient: this._ambientMode,
+      stable: this._stableVolume,
+      crop: this._cropBars,
+      loop: this._loop,
+      shuffle: this._shuffle,
+    };
+    root.querySelectorAll<HTMLElement>(".movi-settings-row[data-toggle]").forEach(
+      (row) => {
+        const key = row.dataset.toggle;
+        if (!key || !(key in toggleState)) return;
+        const on = toggleState[key];
+        row.setAttribute("aria-pressed", String(on));
+        row.querySelector(".movi-settings-switch")?.classList.toggle("is-on", on);
+      },
+    );
+  }
+
   private refreshOpenSettingsSurfaces(): void {
     const sr = this.shadowRoot;
     if (!sr) return;
@@ -15866,7 +15986,7 @@ export class MoviElement extends HTMLElement {
           if (body) body.innerHTML = this.renderSettingsChoices("aspect");
         }
       } else {
-        this.buildSettingsRoot();
+        this.syncSettingsRootState(sr);
       }
     }
     if (this._contextMenuVisible) {
@@ -16644,6 +16764,36 @@ export class MoviElement extends HTMLElement {
         appearance: none;
       }
 
+      /* One rendering contract for every 24px control glyph, including the
+         older secondary menus that still author their SVG inline. This keeps
+         cap shape, joins and weight identical without changing their meaning
+         or any of the selectors integrations use to find them. */
+      svg[viewBox="0 0 24 24"][stroke="currentColor"] {
+        stroke-width: 1.65;
+        stroke-linecap: round;
+        stroke-linejoin: round;
+        shape-rendering: geometricPrecision;
+      }
+      .movi-symbol {
+        overflow: visible;
+        shape-rendering: geometricPrecision;
+      }
+      .movi-quality-check,
+      .movi-settings-check,
+      .movi-track-item-check {
+        stroke-width: 2.1;
+      }
+      .movi-icon-subtitle-filled,
+      .movi-icon-stable-audio-filled,
+      .movi-icon-loop-filled,
+      .movi-context-menu-subtitle-filled,
+      .movi-context-menu-stable-filled,
+      .movi-context-menu-loop-filled,
+      .movi-context-menu-shuffle-filled,
+      .movi-context-menu-ambient-filled {
+        stroke-width: 2.05;
+      }
+
       :host {
         /* Treat the host as a query container so the responsive
            breakpoints below trigger off the PLAYER's own width
@@ -16829,6 +16979,14 @@ export class MoviElement extends HTMLElement {
         --movi-transition-normal: 0.25s cubic-bezier(0.4, 0, 0.2, 1);
         --movi-transition-slow: 0.4s cubic-bezier(0.4, 0, 0.2, 1);
         --movi-transition-bounce: 0.5s cubic-bezier(0.34, 1.56, 0.64, 1);
+        --movi-motion-out: cubic-bezier(0.16, 1, 0.3, 1);
+        --movi-motion-spring: cubic-bezier(0.2, 0.9, 0.25, 1.18);
+
+        /* Dividers on the bar — the built-in one and any a host adds. */
+        --movi-divider-color: rgba(255, 255, 255, 0.14);
+        --movi-divider-width: 1px;
+        --movi-divider-height: 20px;
+        --movi-divider-gap: 4px;
         
         /* Legacy variables for compatibility */
         --movi-controls-bg: var(--movi-glass-bg);
@@ -17157,6 +17315,9 @@ export class MoviElement extends HTMLElement {
       :host([theme="light"]) .movi-settings-row-value {
         color: rgba(17, 20, 45, 0.6) !important;
       }
+      :host([theme="light"]) .movi-settings-section-label {
+        color: rgba(17, 20, 45, 0.46) !important;
+      }
       :host([theme="light"]) .movi-settings-divider,
       :host([theme="light"]) .movi-settings-back {
         border-color: rgba(0, 0, 0, 0.12) !important;
@@ -17251,7 +17412,9 @@ export class MoviElement extends HTMLElement {
         right: 0;
         z-index: 10;
         pointer-events: none;
-        transition: opacity var(--movi-transition-normal), transform var(--movi-transition-normal);
+        transition:
+          opacity 180ms ease,
+          transform 280ms var(--movi-motion-out);
         transform: translateY(0);
       }
 
@@ -18013,6 +18176,44 @@ export class MoviElement extends HTMLElement {
         flex-shrink: 0;
       }
 
+      .movi-controls-divider {
+        flex: 0 0 auto;
+        align-self: center;
+        width: var(--movi-divider-width);
+        height: var(--movi-divider-height);
+        margin: 0 var(--movi-divider-gap);
+        border-radius: 999px;
+        background: var(--movi-divider-color);
+        pointer-events: none;
+      }
+
+      /* The player's own shows only when there is a track control to divide
+         off — see the container rule below. */
+      .movi-controls-right-divider {
+        display: none;
+      }
+
+      /* A host's shows unless it has been left with nothing to divide: see
+         syncEmptyCapsules. */
+      .movi-custom-divider {
+        display: block;
+      }
+      .movi-custom-divider.movi-divider-stranded {
+        display: none;
+      }
+
+      @container movi-host (min-width: 721px) {
+        .movi-controls-right:has(.movi-audio-track-container[style*="display: flex"]) .movi-controls-right-divider,
+        .movi-controls-right:has(.movi-subtitle-track-container[style*="display: flex"]) .movi-controls-right-divider {
+          display: block;
+        }
+      }
+
+      :host([controlslist~="noaudio"][controlslist~="nocc"]) .movi-controls-right-divider,
+      :host([controlslist~="nodivider"]) .movi-controls-right-divider {
+        display: none !important;
+      }
+
       /* The right group reads wider than the left at the same spacing, because
          the left is broken up by the volume slider and the clock while these
          sit in an unbroken run — 26px between glyphs across five icons is a row
@@ -18124,7 +18325,11 @@ export class MoviElement extends HTMLElement {
         width: var(--movi-btn-size);
         height: var(--movi-btn-size);
         border-radius: 50%;
-        transition: all var(--movi-transition-fast);
+        transition:
+          background-color 160ms ease,
+          color 160ms ease,
+          transform 220ms var(--movi-motion-spring),
+          opacity 160ms ease;
         pointer-events: auto !important;
         outline: none !important;
       }
@@ -18605,7 +18810,10 @@ export class MoviElement extends HTMLElement {
         background: var(--movi-controls-color);
         border-radius: 50%;
         opacity: 0;
-        transition: all var(--movi-transition-fast);
+        transition:
+          opacity 140ms ease,
+          transform 220ms var(--movi-motion-spring),
+          box-shadow 180ms ease;
         box-shadow: 0 2px 8px rgba(0, 0, 0, 0.3), 0 0 0 3px color-mix(in srgb, var(--movi-primary) 30%, transparent);
         z-index: 5;
       }
@@ -22656,7 +22864,10 @@ export class MoviElement extends HTMLElement {
         padding: 9px 16px;
         cursor: pointer;
         user-select: none;
-        transition: all 0.2s cubic-bezier(0.4, 0, 0.2, 1);
+        transition:
+          background-color 160ms ease,
+          color 160ms ease,
+          transform 220ms var(--movi-motion-out);
         position: relative;
         margin: 4px 6px;
         border-radius: var(--movi-radius-row);
@@ -23140,10 +23351,11 @@ export class MoviElement extends HTMLElement {
          class changes on the descendant, so the turn was skipped on open and
          then unwound on close. */
       .movi-settings-container.is-open .movi-settings-btn svg {
-        transform: rotate(30deg);
+        transform: rotate(90deg);
       }
       .movi-settings-btn svg {
-        transition: transform 0.2s ease;
+        transform-origin: center;
+        transition: transform 0.24s cubic-bezier(0.22, 1, 0.36, 1);
       }
 
       /* Anchored to the button ROW, so its right edge lands on the frame's
@@ -23186,6 +23398,24 @@ export class MoviElement extends HTMLElement {
       .movi-settings-menu.is-open {
         opacity: 1;
         transform: translateY(0);
+      }
+
+      @keyframes movi-settings-view-forward {
+        from { opacity: 0; transform: translateX(18px); }
+        to { opacity: 1; transform: translateX(0); }
+      }
+
+      @keyframes movi-settings-view-back {
+        from { opacity: 0; transform: translateX(-18px); }
+        to { opacity: 1; transform: translateX(0); }
+      }
+
+      .movi-settings-view-forward {
+        animation: movi-settings-view-forward 240ms var(--movi-motion-out) both;
+      }
+
+      .movi-settings-view-back {
+        animation: movi-settings-view-back 240ms var(--movi-motion-out) both;
       }
 
       /* On a small player the panel stops being a dropdown and becomes a
@@ -23241,6 +23471,88 @@ export class MoviElement extends HTMLElement {
         :host(:not(.movi-audio-strip)) .movi-settings-row {
           padding: 13px 12px;
         }
+        /* The popup is centred in the frame, so on a short player it may take
+           nearly all of it rather than leaving 16px of picture above and below. */
+        :host(.movi-short:not(.movi-audio-strip)) .movi-settings-menu {
+          max-height: min(calc(var(--movi-player-height, 70vh) - 16px), 460px);
+        }
+      }
+
+      /* A short player (see SHORT_PLAYER_PX): the panel is capped at the
+         frame's height, so the rows give up spacing rather than the list giving
+         up rows. On a 263px-tall phone player this is five rows in view instead
+         of two and a half. Rows stay ~37px, still a thumb's width. */
+      :host(.movi-short:not(.movi-audio-strip)) .movi-settings-menu {
+        padding: 6px;
+      }
+      :host(.movi-short:not(.movi-audio-strip)) .movi-settings-row,
+      :host(.movi-short:not(.movi-audio-strip)) .movi-settings-choice,
+      :host(.movi-short:not(.movi-audio-strip)) .movi-settings-page-body .movi-quality-item,
+      :host(.movi-short:not(.movi-audio-strip)) .movi-settings-page-body .movi-speed-item,
+      :host(.movi-short:not(.movi-audio-strip)) .movi-settings-page-body .movi-audio-track-item,
+      :host(.movi-short:not(.movi-audio-strip)) .movi-settings-page-body .movi-subtitle-track-item {
+        padding-top: 9px;
+        padding-bottom: 9px;
+      }
+      :host(.movi-short:not(.movi-audio-strip)) .movi-settings-section-label {
+        padding: 5px 12px 3px;
+      }
+      :host(.movi-short:not(.movi-audio-strip)) .movi-settings-section-label-secondary {
+        padding-top: 9px;
+      }
+      :host(.movi-short:not(.movi-audio-strip)) .movi-settings-back {
+        padding-top: 7px;
+        padding-bottom: 7px;
+        margin-bottom: 4px;
+      }
+
+      /* The drag handle on a touch popup — see setupSettingsPanel's swipe. A
+         16px strip to put a thumb on, the pill drawn in the middle of it. */
+      .movi-settings-grabber {
+        display: none;
+      }
+      @container movi-host (max-width: 480px) {
+        @media (pointer: coarse) {
+          :host(:not(.movi-audio-strip)) .movi-settings-grabber {
+            display: block;
+            position: relative;
+            height: 16px;
+            margin: -4px 0 2px;
+            touch-action: none;
+            cursor: grab;
+          }
+          :host(:not(.movi-audio-strip)) .movi-settings-grabber::before {
+            content: "";
+            position: absolute;
+            left: 50%;
+            top: 6px;
+            width: 36px;
+            height: 4px;
+            margin-left: -18px;
+            border-radius: 2px;
+            background: currentColor;
+            opacity: 0.28;
+          }
+          /* A pull past the top of the list is the swipe, not the page. */
+          :host(:not(.movi-audio-strip)) .movi-settings-menu {
+            overscroll-behavior: contain;
+          }
+        }
+      }
+
+      .movi-settings-section-label {
+        padding: 7px 12px 5px;
+        color: var(--movi-text-mute, rgba(255, 255, 255, 0.48));
+        font-size: 10px;
+        font-weight: 650;
+        line-height: 1.2;
+        letter-spacing: 0.08em;
+        text-transform: uppercase;
+        pointer-events: none;
+      }
+
+      .movi-settings-section-label-secondary {
+        padding-top: 13px;
       }
 
       .movi-settings-row {
@@ -23261,7 +23573,9 @@ export class MoviElement extends HTMLElement {
         /* Every other control in the player fades its hover; these rows
            switched instantly, which on a list you run the pointer down reads
            as a block snapping from row to row. */
-        transition: background var(--movi-transition-fast);
+        transition:
+          background-color 160ms ease,
+          transform 220ms var(--movi-motion-out);
       }
 
       /* A row that is offered but cannot be operated yet — before a source
@@ -23274,6 +23588,10 @@ export class MoviElement extends HTMLElement {
       }
       .movi-settings-row:hover {
         background: rgba(255, 255, 255, 0.08);
+        transform: translateX(2px);
+      }
+      .movi-settings-row:active {
+        transform: translateX(1px) scale(0.985);
       }
       /* Informational, not interactive: same type, quieter, no affordances. */
       .movi-settings-row.is-static,
@@ -23281,6 +23599,7 @@ export class MoviElement extends HTMLElement {
         background: transparent;
         cursor: default;
         opacity: 0.62;
+        transform: none;
       }
       .movi-settings-icon {
         flex: 0 0 auto;
@@ -23370,7 +23689,7 @@ export class MoviElement extends HTMLElement {
         /* A groove, not a lighter patch of the panel — at 0.22 over a
            translucent surface the off state read as nothing at all. */
         background: rgba(255, 255, 255, 0.3);
-        transition: background 0.16s ease;
+        transition: background-color 180ms ease;
       }
       .movi-settings-switch.is-on {
         background: var(--movi-primary);
@@ -23381,10 +23700,19 @@ export class MoviElement extends HTMLElement {
         height: 14px;
         border-radius: 50%;
         background: #fff;
-        transition: transform 0.16s ease;
+        transition: transform 260ms var(--movi-motion-spring);
       }
       .movi-settings-switch.is-on .movi-settings-knob {
         transform: translateX(14px);
+      }
+
+      @keyframes movi-settings-switch-confirm {
+        0%, 100% { scale: 1; }
+        48% { scale: 1.12; }
+      }
+
+      .movi-settings-switch-confirmed {
+        animation: movi-settings-switch-confirm 380ms var(--movi-motion-spring);
       }
 
       .movi-settings-choice {
@@ -23402,9 +23730,16 @@ export class MoviElement extends HTMLElement {
         font-size: 14.5px;
         text-align: left;
         cursor: pointer;
+        transition:
+          background-color 160ms ease,
+          transform 220ms var(--movi-motion-out);
       }
       .movi-settings-choice:hover {
         background: rgba(255, 255, 255, 0.1);
+        transform: translateX(2px);
+      }
+      .movi-settings-choice:active {
+        transform: translateX(1px) scale(0.985);
       }
       .movi-settings-choice-main {
         display: inline-flex;
@@ -24173,9 +24508,19 @@ export class MoviElement extends HTMLElement {
         .movi-empty-container {
           gap: 8px !important;
         }
+        /* Scaled to the frame rather than one size for everything under
+           720px: at 148px it was more than half the height of a 232px phone
+           player, the mark towering over the two lines it introduces. The
+           lesser of a fifth of the width and three tenths of the height, kept
+           in the artwork's 140:100 shape. */
         .movi-empty-icon-wrapper {
-          width: 56px !important;
-          height: 56px !important;
+          width: clamp(
+            64px,
+            min(22cqw, calc(var(--movi-player-height, 400px) * 0.3)),
+            148px
+          ) !important;
+          height: auto !important;
+          aspect-ratio: 140 / 100;
         }
         .movi-empty-title {
           font-size: 14px !important;
@@ -24193,8 +24538,8 @@ export class MoviElement extends HTMLElement {
       }
 
       .movi-empty-icon-wrapper {
-        width: 96px;
-        height: 96px;
+        width: 176px;
+        height: 126px;
         display: flex;
         align-items: center;
         justify-content: center;
@@ -24211,6 +24556,26 @@ export class MoviElement extends HTMLElement {
       }
       .movi-empty-logo-fill {
         fill: var(--movi-chrome-fg, #fff);
+      }
+
+      .movi-empty-card-back {
+        fill: var(--movi-chrome-fg, #fff);
+        opacity: 0.1;
+      }
+
+      .movi-empty-card-front {
+        fill: var(--movi-chrome-fg, #fff);
+        opacity: 0.16;
+      }
+
+      .movi-empty-card-detail {
+        fill: var(--movi-chrome-fg, #fff);
+        opacity: 0.22;
+      }
+
+      .movi-empty-card-play {
+        fill: var(--movi-chrome-fg, #fff);
+        opacity: 0.48;
       }
 
       .movi-empty-icon-wrapper svg {
@@ -24245,6 +24610,181 @@ export class MoviElement extends HTMLElement {
         text-wrap: balance;
         max-width: 40ch;
         hyphens: none;
+      }
+
+      /* Motion is concentrated on compositor-friendly opacity and transforms.
+         Keeping the travel under eight pixels gives the interface a physical
+         response without making frequent control reveals feel theatrical. */
+      .movi-controls-container .movi-progress-container,
+      .movi-controls-container .movi-controls-left,
+      .movi-controls-container .movi-controls-center,
+      .movi-controls-container .movi-controls-right {
+        opacity: 1;
+        /* none, not translateY(0): any transform — an identity one included —
+           makes the element the containing block for position: fixed inside
+           it, and the gear's panel is fixed to the viewport on a phone. With
+           translateY(0) resting here the bottom sheet was laid out against the
+           right-hand control group instead: shifted right, off the screen and
+           clipped to three rows. */
+        transform: none;
+        transition:
+          opacity 160ms ease,
+          transform 260ms var(--movi-motion-out);
+      }
+
+      .movi-controls-container.movi-controls-hidden .movi-progress-container,
+      .movi-controls-container.movi-controls-hidden .movi-controls-left,
+      .movi-controls-container.movi-controls-hidden .movi-controls-center,
+      .movi-controls-container.movi-controls-hidden .movi-controls-right {
+        opacity: 0;
+        transform: translateY(6px);
+        transition-delay: 0ms;
+      }
+
+      .movi-controls-container.movi-controls-visible .movi-progress-container {
+        transition-delay: 20ms;
+      }
+      .movi-controls-container.movi-controls-visible .movi-controls-left {
+        transition-delay: 45ms;
+      }
+      .movi-controls-container.movi-controls-visible .movi-controls-center {
+        transition-delay: 65ms;
+      }
+      .movi-controls-container.movi-controls-visible .movi-controls-right {
+        transition-delay: 85ms;
+      }
+
+      @keyframes movi-surface-arrive {
+        from {
+          opacity: 0;
+          transform: translateY(8px) scale(0.985);
+        }
+        to {
+          opacity: 1;
+          transform: translateY(0) scale(1);
+        }
+      }
+
+      @keyframes movi-row-arrive {
+        from {
+          opacity: 0;
+          transform: translateY(5px);
+        }
+        to {
+          opacity: 1;
+          transform: translateY(0);
+        }
+      }
+
+      @keyframes movi-empty-arrive {
+        from {
+          opacity: 0;
+          transform: translateY(10px) scale(0.97);
+        }
+        to {
+          opacity: 1;
+          transform: translateY(0) scale(1);
+        }
+      }
+
+      @keyframes movi-empty-drift {
+        0%, 100% { transform: translateY(0); }
+        50% { transform: translateY(-4px); }
+      }
+
+      .movi-empty-container {
+        animation: movi-empty-arrive 520ms var(--movi-motion-out) backwards;
+      }
+
+      .movi-empty-icon-wrapper svg {
+        animation: movi-empty-drift 5.2s ease-in-out 700ms infinite;
+      }
+
+      .movi-context-menu[style*="display: block"],
+      .movi-context-menu[style*="display: flex"],
+      .movi-timeline-panel[style*="display: flex"],
+      .movi-pip-placeholder[style*="display: flex"],
+      .movi-broken-indicator[style*="display: flex"] {
+        /* backwards, not both: a fill that outlives the animation leaves a
+           transform on the surface for good, and a transform turns the
+           surface into the containing block for anything fixed inside it
+           (see the controls rule above). Before and during, the from-frame
+           and the keyframes apply exactly as they did. */
+        animation: movi-surface-arrive 260ms var(--movi-motion-out) backwards;
+      }
+
+      .movi-settings-menu.is-open .movi-settings-root > * {
+        animation: movi-row-arrive 220ms var(--movi-motion-out) backwards;
+      }
+
+      .movi-settings-menu.is-open .movi-settings-root > :nth-child(2) {
+        animation-delay: 20ms;
+      }
+      .movi-settings-menu.is-open .movi-settings-root > :nth-child(3) {
+        animation-delay: 40ms;
+      }
+      .movi-settings-menu.is-open .movi-settings-root > :nth-child(4) {
+        animation-delay: 60ms;
+      }
+      .movi-settings-menu.is-open .movi-settings-root > :nth-child(n + 5) {
+        animation-delay: 80ms;
+      }
+
+      @media (hover: hover) and (pointer: fine) {
+        .movi-timeline-arrow svg {
+          transition: transform 220ms var(--movi-motion-spring);
+        }
+        .movi-timeline-arrow:hover svg {
+          transform: scale(1.08);
+        }
+        .movi-btn:hover svg,
+        .movi-top-controls .movi-btn:hover svg {
+          transform: translateY(-1px) scale(1.035);
+        }
+        .movi-btn:active svg,
+        .movi-top-controls .movi-btn:active svg {
+          transform: translateY(0) scale(0.96);
+        }
+      }
+
+      /* Reduced motion keeps every state change and affordance, but removes
+         travel, stagger and decorative looping rather than merely slowing it. */
+      @media (prefers-reduced-motion: reduce) {
+        :host {
+          --movi-transition-fast: 1ms linear;
+          --movi-transition-normal: 1ms linear;
+          --movi-transition-slow: 1ms linear;
+          --movi-transition-bounce: 1ms linear;
+        }
+
+        .movi-empty-container,
+        .movi-empty-icon-wrapper svg,
+        .movi-context-menu,
+        .movi-timeline-panel,
+        .movi-pip-placeholder,
+        .movi-broken-indicator,
+        .movi-settings-view-forward,
+        .movi-settings-view-back,
+        .movi-settings-switch-confirmed,
+        .movi-settings-menu.is-open .movi-settings-root > * {
+          animation: none !important;
+        }
+
+        .movi-controls-container,
+        .movi-controls-container .movi-progress-container,
+        .movi-controls-container .movi-controls-left,
+        .movi-controls-container .movi-controls-center,
+        .movi-controls-container .movi-controls-right,
+        .movi-btn,
+        .movi-btn svg,
+        .movi-settings-row,
+        .movi-settings-choice,
+        .movi-settings-knob,
+        .movi-progress-handle,
+        .movi-timeline-arrow svg {
+          transition-duration: 1ms !important;
+          transition-delay: 0ms !important;
+        }
       }
 
       /* Mobile Responsiveness for Context Menu - Side Panel Mode */
@@ -25430,6 +25970,12 @@ export class MoviElement extends HTMLElement {
       // Track menus (subtitle / audio / quality) cap themselves at this
       // height so the panel never grows taller than the player itself.
       if (h > 0) this.style.setProperty("--movi-player-height", `${h}px`);
+      // A player too short for the settings panel's full rows: the panel is
+      // capped at the frame's height, and on a 260px phone player that left
+      // two and a half rows showing. The class tightens its spacing instead —
+      // a height the @container query on this host cannot see, being
+      // inline-size only.
+      if (h > 0) this.classList.toggle("movi-short", h < MoviElement.SHORT_PLAYER_PX);
       this.syncPictureRounding();
     };
     publishPlayerWidth();
@@ -26579,12 +27125,60 @@ export class MoviElement extends HTMLElement {
         capsule.classList.toggle("movi-capsule-empty", was[i]);
         return;
       }
+      // A divider is not content: a capsule holding only a line is empty.
       const filled = Array.from(capsule.children).some(
-        (child) => (child as HTMLElement).offsetWidth > 0,
+        (child) =>
+          !child.classList.contains("movi-controls-divider") &&
+          (child as HTMLElement).offsetWidth > 0,
       );
       capsule.classList.toggle("movi-capsule-empty", !filled);
     });
+    this.syncStrandedDividers();
   }
+
+  /**
+   * Hide a host's divider that has nothing visible on one side of it, or only
+   * another divider — its neighbour is unavailable for this source, or was
+   * removed. A line at the end of a pill divides nothing and reads as a
+   * rendering fault.
+   *
+   * Neighbours are found by where things ARE, not by DOM siblings: the bar
+   * nests controls in display: contents wrappers (the mobile tray), so the
+   * control drawn beside a divider is often not its sibling. Only what shares
+   * the divider's own capsule counts — a control in the next capsule is on the
+   * other side of a gap already. Left alone while the row isn't laid out.
+   */
+  private syncStrandedDividers(): void {
+    const sr = this.shadowRoot;
+    if (!sr) return;
+    const CAPSULE =
+      ".movi-control-group, .movi-seek-group, .movi-controls-left, .movi-controls-right, .movi-controls-center, .movi-top-controls";
+    const ITEM =
+      ".movi-btn, .movi-controls-divider, .movi-time, .movi-volume-slider-container";
+    const dividers = Array.from(
+      sr.querySelectorAll<HTMLElement>(".movi-custom-divider"),
+    );
+    for (const d of dividers) {
+      const capsule = d.parentElement?.closest(CAPSULE);
+      if (!capsule || capsule.getClientRects().length === 0) continue;
+      d.classList.remove("movi-divider-stranded");
+    }
+    for (const d of dividers) {
+      const capsule = d.parentElement?.closest(CAPSULE);
+      if (!capsule || capsule.getClientRects().length === 0) continue;
+      const items = Array.from(capsule.querySelectorAll<HTMLElement>(ITEM))
+        .filter((n) => n.offsetWidth > 0 && n.closest(CAPSULE) === capsule)
+        .map((n) => ({ n, r: n.getBoundingClientRect() }))
+        .filter(({ r }) => r.width > 0)
+        .sort((x, y) => x.r.left - y.r.left);
+      const at = items.findIndex(({ n }) => n === d);
+      const side = (i: number) =>
+        i >= 0 && i < items.length &&
+        !items[i].n.classList.contains("movi-controls-divider");
+      d.classList.toggle("movi-divider-stranded", !(side(at - 1) && side(at + 1)));
+    }
+  }
+
 
   private fitControlsRow(): void {
     const sr = this.shadowRoot;
@@ -29759,7 +30353,7 @@ export class MoviElement extends HTMLElement {
     // goes straight to initializePlayer() and never touches load(). dispose()
     // is the one thing every route runs through.
     this.closeAllBottomMenus();
-    this.closeSettingsPage();
+    this.closeSettingsPage(false);
 
     // Cancel any queued play intent — and any queued NEXT ITEM with it. The
     // advance was scheduled by the source being torn down here; whatever
@@ -34788,7 +35382,7 @@ export class MoviElement extends HTMLElement {
     // does all three. Writing "On" and leaving the row grey read as a row that
     // had not taken the click.
     row?.classList.toggle("movi-context-menu-active", this._cropBars);
-    this.buildSettingsRoot();
+    this.refreshOpenSettingsSurfaces();
   }
 
   private updateAmbientUI(): void {
@@ -34827,7 +35421,7 @@ export class MoviElement extends HTMLElement {
     }
     // The gear panel carries the same switch, so it has to hear about this
     // however the mode was changed — the row, the panel, or G.
-    this.buildSettingsRoot();
+    this.refreshOpenSettingsSurfaces();
   }
 
   // ---------------------------------------------------------------------------
@@ -35341,6 +35935,8 @@ export class MoviElement extends HTMLElement {
     hdr: ".movi-hdr-container",
     loop: ".movi-loop-btn",
     settings: ".movi-settings-container",
+    /* The player's own divider, between the track controls and the gear. */
+    divider: ".movi-controls-right-divider",
     aspect: ".movi-aspect-ratio-btn",
     pip: ".movi-pip-btn",
     fullscreen: ".movi-fullscreen-btn",
@@ -35386,7 +35982,31 @@ export class MoviElement extends HTMLElement {
    * Adding the same id twice replaces the first — so a host that re-runs its
    * setup (a framework re-render, a source change) does not end up with two.
    */
-  addControl(spec: MoviControlSpec): void {
+  addControl(spec: MoviControlSpec | MoviDividerSpec): void {
+    if ((spec as MoviDividerSpec)?.divider === true) {
+      this.addDivider(spec as MoviDividerSpec);
+      return;
+    }
+    this.addButtonControl(spec as MoviControlSpec);
+  }
+
+  /** A divider is a control with nothing to press: registered in the same map
+   *  so removeControl, controlslist and re-registration all treat it alike. */
+  private addDivider(spec: MoviDividerSpec): void {
+    if (!spec.id) {
+      Logger.warn(TAG, "addControl: a divider needs an id");
+      return;
+    }
+    if (this.isControlDisabled(spec.id)) return;
+    this.teardownCustomControl(spec.id);
+    this._customControls.set(spec.id, {
+      spec: { ...spec, label: "" } as MoviControlSpec,
+      active: false,
+    });
+    this.renderCustomControl(spec.id);
+  }
+
+  private addButtonControl(spec: MoviControlSpec): void {
     if (!spec?.id) {
       Logger.warn(TAG, "addControl: a control needs an id");
       return;
@@ -35585,6 +36205,8 @@ export class MoviElement extends HTMLElement {
   removeControl(id: string): void {
     this.teardownCustomControl(id);
     this._customControls.delete(id);
+    // A divider beside it may have just lost the thing it divided.
+    this.syncStrandedDividers();
     // The capsule it asked for goes with it, and anything of the player's own
     // that was wrapped to make room goes back to standing on its own.
     this.pruneControlGroups();
@@ -35781,7 +36403,11 @@ export class MoviElement extends HTMLElement {
     for (const action of Object.keys(SHORTCUT_ACTIONS)) {
       out[action] = this.getShortcut(action);
     }
-    for (const id of this._customControls.keys()) out[id] = this.getShortcut(id);
+    for (const [id, entry] of this._customControls) {
+      // A divider has nothing to press, so nothing to bind.
+      if ((entry.spec as unknown as MoviDividerSpec).divider === true) continue;
+      out[id] = this.getShortcut(id);
+    }
     return out;
   }
 
@@ -36101,6 +36727,11 @@ export class MoviElement extends HTMLElement {
     const wantsTop = on.has("top");
     const wantsCenter = on.has("center");
 
+    if ((spec as unknown as MoviDividerSpec).divider === true) {
+      this.renderCustomDivider(id, spec, { wantsBar, wantsMenu, wantsTop, wantsCenter });
+      return;
+    }
+
     if (wantsTop) {
       const corner = sr.querySelector(".movi-top-controls");
       if (corner) {
@@ -36239,6 +36870,64 @@ export class MoviElement extends HTMLElement {
         this.insertAtAnchor(menu, item, spec, true);
       }
     }
+  }
+
+  /** The divider flavour of renderCustomControl: same surfaces, same anchors,
+   *  same groups, a line instead of a button. */
+  private renderCustomDivider(
+    id: string,
+    spec: MoviControlSpec,
+    where: { wantsBar: boolean; wantsMenu: boolean; wantsTop: boolean; wantsCenter: boolean },
+  ): void {
+    const sr = this.shadowRoot;
+    if (!sr) return;
+    const line = () => {
+      const node = document.createElement("span");
+      node.className = "movi-controls-divider movi-custom-divider";
+      node.setAttribute("part", "controls-divider");
+      node.setAttribute("aria-hidden", "true");
+      node.dataset.customControl = id;
+      this.markCustomScopes(node, spec);
+      return node;
+    };
+    if (where.wantsTop) {
+      const corner = sr.querySelector(".movi-top-controls");
+      if (corner) {
+        this.insertAtAnchor(corner, line(), spec, false, {
+          defaultBefore: corner.querySelector(".movi-gear-btn"),
+        });
+      }
+    }
+    if (where.wantsBar) {
+      const row = sr.querySelector(
+        spec.side === "left" ? ".movi-controls-left" : ".movi-controls-right",
+      );
+      if (row) {
+        const target = spec.group
+          ? this.controlGroupTarget(row, spec.group, id)
+          : row;
+        this.insertAtAnchor(target, line(), spec);
+        this.fitControlsRow();
+      }
+    }
+    if (where.wantsCenter) {
+      const centre = sr.querySelector(".movi-controls-center");
+      if (centre) {
+        this.insertAtAnchor(centre, line(), spec, false, undefined, "center");
+        this.fitControlsRow();
+      }
+    }
+    if (where.wantsMenu) {
+      const menu = this.contextMenuRoot().querySelector(".movi-context-menu");
+      if (menu) {
+        const rule = document.createElement("div");
+        rule.className = "movi-context-menu-divider";
+        rule.dataset.customControl = id;
+        this.markCustomScopes(rule, spec);
+        this.insertAtAnchor(menu, rule, spec, true);
+      }
+    }
+    this.syncEmptyCapsules();
   }
 
   /** Stamp a control's scopes onto the node the CSS reads.
