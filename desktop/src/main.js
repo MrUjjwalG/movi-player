@@ -167,7 +167,7 @@ function chromeOptions() {
   if (process.platform === "win32") {
     return {
       titleBarStyle: "hidden",
-      titleBarOverlay: { color: "#0c0c11", symbolColor: "#cfcfe0", height: 40 },
+      titleBarOverlay: { color: "#0a0f1e", symbolColor: "#c9d2e6", height: 40 },
     };
   }
   return {}; // Linux: keep the standard frame
@@ -179,7 +179,7 @@ function createWindow() {
     height: 760,
     minWidth: 680,
     minHeight: 460,
-    backgroundColor: "#0c0c11",
+    backgroundColor: "#0a0f1e",
     title: "MoviPlayer",
     icon: process.platform === "linux" ? path.join(__dirname, "..", "build", "icon.png") : undefined,
     ...chromeOptions(),

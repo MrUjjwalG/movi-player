@@ -14,68 +14,95 @@
 
     <main class="stage">
       <section class="welcome" id="welcome">
+        <!-- The welcome screen is the web app's hero, in the same parts and
+             order: nav, claim, the ways in, trust line, then what it plays.
+             Every id renderer.js reaches for is kept. The nav doubles as the
+             window's drag handle. -->
+        <header class="xnav">
+          <span class="xnav-brand"><svg class="xnav-logo" viewBox="0 0 100 100" aria-hidden="true"><defs>
+<linearGradient id="xl-l" gradientUnits="userSpaceOnUse" x1="27" y1="18" x2="27" y2="84"><stop offset="0" stop-color="#6366ff"/><stop offset=".5" stop-color="#3d4dff"/><stop offset="1" stop-color="#1638d2"/></linearGradient>
+<linearGradient id="xl-t" gradientUnits="userSpaceOnUse" x1="27" y1="20" x2="80" y2="50"><stop offset="0" stop-color="#86b6ff"/><stop offset=".55" stop-color="#4f86ff"/><stop offset="1" stop-color="#14aaff"/></linearGradient>
+<linearGradient id="xl-b" gradientUnits="userSpaceOnUse" x1="27" y1="80" x2="80" y2="50"><stop offset="0" stop-color="#5a4dff"/><stop offset=".5" stop-color="#8e72ff"/><stop offset="1" stop-color="#7cb9ff"/></linearGradient>
+</defs><g fill="none" stroke-linecap="round" stroke-width="17"><path d="M77 52 27 80" stroke="url(#xl-b)"/><path d="M27 20 77 48" stroke="url(#xl-t)"/><path d="M27 20v60" stroke="url(#xl-l)"/><path d="M27 80 41 72.2" stroke="url(#xl-b)"/></g></svg><span>MoviPlayer</span></span>
+          <nav class="xnav-links">
+            <a href="https://moviplayer.com/docs" target="_blank" rel="noopener">Docs</a>
+            <a class="xnav-icon" href="https://github.com/MrUjjwalG/movi-player" target="_blank" rel="noopener" aria-label="GitHub" title="GitHub"><svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M12 .3a12 12 0 00-3.8 23.4c.6.1.8-.3.8-.6v-2c-3.3.7-4-1.6-4-1.6-.6-1.4-1.4-1.8-1.4-1.8-1-.7.1-.7.1-.7 1.2.1 1.8 1.2 1.8 1.2 1 1.8 2.8 1.3 3.5 1 .1-.8.4-1.3.7-1.6-2.7-.3-5.5-1.3-5.5-6 0-1.2.5-2.3 1.3-3.1-.2-.4-.6-1.6.1-3.2 0 0 1-.3 3.4 1.2a11.5 11.5 0 016 0c2.3-1.5 3.3-1.2 3.3-1.2.7 1.6.3 2.8.2 3.2.7.8 1.2 1.9 1.2 3.1 0 4.6-2.8 5.6-5.5 5.9.5.4.9 1.2.9 2.4v3.5c0 .3.2.7.8.6A12 12 0 0012 .3"/></svg></a>
+          </nav>
+        </header>
+
         <div class="welcome-inner">
-          <p class="eyebrow">Plays what others can't</p>
+          <section class="xhero">
+            <div class="xhero-main">
+              <p class="xkicker">Your videos. Your way.</p>
+              <h1 class="xtitle">Play any video<br /><em>right on your desktop</em></h1>
+              <p class="xtagline">
+                MKV, HEVC, AV1, VP9 and 4K&nbsp;HDR &mdash; decoded right here on your
+                machine. Nothing is uploaded.
+              </p>
 
-          <h1 class="title">Play anything.</h1>
-          <span class="spectrum" aria-hidden="true"></span>
+              <!-- Primary action: the file picker (also the drop target's twin) -->
+              <div class="xopen">
+                <button class="dropzone" id="dropzone" type="button" aria-label="Open a video file">
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z" /><path d="M14 2v6h6" /></svg>
+                  Open files
+                </button>
+                <span class="xopen-or">or drop videos anywhere in this window</span>
+              </div>
 
-          <p class="lede">
-            MKV, HEVC, AV1, VP9 and 4K&nbsp;HDR — decoded right here on your
-            machine. Nothing's uploaded.
-          </p>
+              <!-- Secondary action: a URL -->
+              <form class="urlbar" id="url-form" autocomplete="off">
+                <svg class="urlbar-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M10 13a5 5 0 0 0 7.1.1l2-2a5 5 0 0 0-7.1-7.1l-1.1 1.1" /><path d="M14 11a5 5 0 0 0-7.1-.1l-2 2a5 5 0 0 0 7.1 7.1l1.1-1.1" /></svg>
+                <input
+                  id="url-input"
+                  type="text"
+                  inputmode="url"
+                  spellcheck="false"
+                  placeholder="Paste a direct video link"
+                  aria-label="Video link"
+                />
+                <button class="url-paste" id="url-paste" type="button" title="Paste link from clipboard" aria-label="Paste link from clipboard">
+                  <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                    <rect x="8" y="2" width="8" height="4" rx="1" />
+                    <path d="M16 4h2a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h2" />
+                  </svg>
+                </button>
+                <button class="play" type="submit"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polygon points="6 4 20 12 6 20 6 4" /></svg><span>Play</span></button>
+              </form>
 
-          <ul class="codec-strip" aria-label="Formats this player decodes">
-            <li>MKV</li>
-            <li>HEVC</li>
-            <li>AV1</li>
-            <li>VP9</li>
-            <li>HDR10</li>
-            <li>10-bit</li>
-          </ul>
+              <ul class="xtrust">
+                <li><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z" /></svg>Stays on your device</li>
+                <li><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="20 6 9 17 4 12" /></svg>Free and open source</li>
+                <li><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="10" /><path d="M12 16v-4M12 8h.01" /></svg><b>Cmd/Ctrl+L</b> opens a link any time</li>
+              </ul>
+            </div>
 
-          <!-- Primary action: the drop target -->
-          <div class="dropzone" id="dropzone" tabindex="0" role="button" aria-label="Open a video file">
-            <span class="dropzone-glow" aria-hidden="true"></span>
-            <span class="dropzone-icon" aria-hidden="true">
-              <svg viewBox="0 0 24 24" width="26" height="26">
-                <path fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"
-                  d="M12 3v11m0 0 4-4m-4 4-4-4M4 17v2a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-2" />
-              </svg>
-            </span>
-            <span class="dropzone-text">
-              <strong>Drop a video to play</strong>
-              <small>or <span class="link">choose a file</span></small>
-            </span>
-          </div>
-
-          <!-- Secondary action: a URL -->
-          <form class="urlbar" id="url-form" autocomplete="off">
-            <span class="urlbar-label">URL</span>
-            <input
-              id="url-input"
-              type="text"
-              inputmode="url"
-              spellcheck="false"
-              placeholder="https://…  paste a direct video link"
-            />
-            <button class="url-paste" id="url-paste" type="button" title="Paste link from clipboard" aria-label="Paste link from clipboard">
-              <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
-                <rect x="8" y="3" width="8" height="4" rx="1" />
-                <path d="M16 5h2a2 2 0 0 1 2 2v12a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V7a2 2 0 0 1 2-2h2" />
-              </svg>
-            </button>
-            <button class="play" type="submit">Play</button>
-          </form>
-
-          <!-- Recent files (populated from main) -->
-          <section class="recents" id="recents" hidden>
-            <header class="recents-head">
-              <span class="section-label">Recent</span>
-              <button class="link link-dim" id="recents-clear" type="button">Clear</button>
-            </header>
-            <ul class="recents-list" id="recents-list"></ul>
+            <!-- Recent files (populated from main) -->
+            <aside class="xside">
+              <section class="recents" id="recents" hidden>
+                <header class="recents-head">
+                  <span class="section-label">Recent</span>
+                  <button class="link link-dim" id="recents-clear" type="button">Clear</button>
+                </header>
+                <ul class="recents-list" id="recents-list"></ul>
+              </section>
+              <div class="xside-empty">
+                <span class="section-label">Recent</span>
+                <span class="xside-empty-icon" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9" /><path d="M12 7v5l3 2" /></svg></span>
+                <p>Files you open show up here, ready to play again.</p>
+              </div>
+            </aside>
           </section>
+
+          <section class="xproof" aria-label="MoviPlayer benefits">
+            <div><span class="xproof-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="4.5" y="10.5" width="15" height="10" rx="2.5" /><path d="M8 10.5V7.5a4 4 0 0 1 8 0v3" /></svg></span><p><strong>100% Private</strong><small>Nothing leaves your machine.</small></p></div>
+            <div><span class="xproof-icon is-warm"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M13 2.5 5 13.5h6l-1 8 8-11h-6z" /></svg></span><p><strong>Plays Instantly</strong><small>No conversion needed.</small></p></div>
+            <div><span class="xproof-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 7.5h18M3 16.5h18" /><rect x="3" y="3.5" width="18" height="17" rx="2.5" /></svg></span><p><strong>HDR &amp; 4K</strong><small>Hardware decoding where it can.</small></p></div>
+            <div><span class="xproof-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M14 3H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8z" /><path d="M14 3v5h5" /></svg></span><p><strong>Any Format</strong><small>MKV, HEVC, AV1 and more.</small></p></div>
+          </section>
+          <div class="xformats" aria-label="Formats this player decodes">
+            <span class="xformats-label">Plays every format</span>
+            <span class="xchip">MKV</span><span class="xchip">MP4</span><span class="xchip">HEVC</span><span class="xchip">AV1</span><span class="xchip">VP9</span><span class="xchip">MOV</span><span class="xchip">WebM</span><span class="xchip">TS</span><span class="xchip">HDR10</span><span class="xchip">FLAC</span>
+          </div>
         </div>
       </section>
 
@@ -123,7 +150,7 @@
     <!-- Full-window drag overlay -->
     <div class="drop-overlay" id="drop-overlay" aria-hidden="true">
       <div class="drop-card">
-        <span class="spectrum spectrum-wide" aria-hidden="true"></span>
+        <span class="drop-card-icon" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3v11m0 0 4-4m-4 4-4-4M4 17v2a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-2" /></svg></span>
         Release to play
       </div>
     </div>
@@ -133,8 +160,8 @@
       <form class="url-modal-card" id="url-modal-form" autocomplete="off">
         <p class="url-modal-title">Open URL</p>
         <div class="urlbar">
-          <span class="urlbar-label">URL</span>
-          <input id="modal-url-input" type="text" inputmode="url" spellcheck="false" placeholder="https://…  paste a video link" />
+          <svg class="urlbar-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M10 13a5 5 0 0 0 7.1.1l2-2a5 5 0 0 0-7.1-7.1l-1.1 1.1" /><path d="M14 11a5 5 0 0 0-7.1-.1l-2 2a5 5 0 0 0 7.1 7.1l1.1-1.1" /></svg>
+          <input id="modal-url-input" type="text" inputmode="url" spellcheck="false" placeholder="Paste a video link" aria-label="Video link" />
           <button class="url-paste" id="modal-url-paste" type="button" title="Paste link from clipboard" aria-label="Paste from clipboard">
             <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
               <rect x="8" y="3" width="8" height="4" rx="1" />
