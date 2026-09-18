@@ -7545,6 +7545,52 @@
         setTimeout(run, 420);
       };
 
+      // …and say so while it happens. The URL path already does this: an empty
+      // frame with a sweep over it says less than one that says what it is
+      // waiting for, and between the scroll starting and the first picture
+      // there is a beat where the player would otherwise read "nothing
+      // loaded" — which stops being true the moment a file is picked. Same
+      // copy rules as the placeholder: don't say "video" (audio lands here
+      // too) and don't instruct. Returns the undo.
+      const showPreparing = (message) => {
+        const title = player.shadowRoot?.querySelector(".movi-empty-title");
+        const body = player.shadowRoot?.querySelector(".movi-empty-message");
+        const priorTitle = title?.textContent;
+        const priorBody = body?.textContent;
+        if (title) title.textContent = "Preparing";
+        if (body) body.textContent = message;
+        return () => {
+          playerLoading?.classList.remove("visible");
+          if (title && priorTitle != null) title.textContent = priorTitle;
+          if (body && priorBody != null) body.textContent = priorBody;
+        };
+      };
+
+      // The sweep is an animated gradient across the whole frame, and running
+      // it through the scroll cost a frame on every run. The words are free;
+      // the animation waits until the page has arrived.
+      const startPreparingSweep = () => playerLoading?.classList.add("visible");
+
+      // The placeholder goes back to its own words once there is a picture to
+      // replace it — or once the source has failed and the player has its own
+      // error to show.
+      const clearPreparingWhenReady = (undo) => {
+        let done = false;
+        const finish = () => {
+          if (done) return;
+          done = true;
+          clearTimeout(timer);
+          for (const type of ["loadeddata", "canplay", "error"]) {
+            player.removeEventListener(type, finish);
+          }
+          undo();
+        };
+        for (const type of ["loadeddata", "canplay", "error"]) {
+          player.addEventListener(type, finish);
+        }
+        const timer = setTimeout(finish, 12000);
+      };
+
       // --- Navbar scroll effect ---
       window.addEventListener("scroll", () => {
         navbar.classList.toggle("scrolled", window.scrollY > 20);
@@ -7801,9 +7847,12 @@
           clearPlaylist();
           urlInput.value = "";
           scrollToPlayer();
+          const undo = showPreparing("Opening your file");
           afterScrollSettles(() => {
+            startPreparingSweep();
             if (player.setFile) player.setFile(files[0]);
             else player.src = files[0];
+            clearPreparingWhenReady(undo);
           });
         } else {
           setPlaylist(files);
@@ -8609,7 +8658,12 @@
         renderPlaylist();
         syncPlayerQueue();
         scrollToPlayer();
-        afterScrollSettles(() => playPlaylistItem(0));
+        const undo = showPreparing("Opening the first file");
+        afterScrollSettles(() => {
+          startPreparingSweep();
+          playPlaylistItem(0);
+          clearPreparingWhenReady(undo);
+        });
       };
 
       async function collectFilesFromDirHandle(dirHandle, path = "") {
