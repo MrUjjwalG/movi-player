@@ -133,6 +133,7 @@
     "app:deploy": "cd app && cp worker.js worker.js.bak && sed -i '' \"s|\\\"__BUILD_VERSION__\\\"|\\\"$(date +%s)\\\"|\" worker.js && npx wrangler deploy; mv worker.js.bak worker.js",
     "app:harden": "node scripts/harden-element.js",
     "app:upload": "npm run app:harden && wrangler r2 object put movi-assets/element.js --file dist/element.js --remote && wrangler r2 object put movi-assets/element.slim.js --file dist/element.slim.js --remote && wrangler r2 object put movi-assets/movi.wasm --file dist/movi.wasm --content-type application/wasm --remote",
+    "app:upload:icons": "node scripts/upload-app-icons.mjs",
     "app:upload:local": "wrangler r2 object put movi-assets/element.js --file dist/element.js --local --persist-to app/.wrangler/state",
     "app:release": "npm run build:ts && npm run app:upload && npm run app:deploy"
   },
