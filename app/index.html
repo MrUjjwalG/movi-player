@@ -7578,6 +7578,48 @@
       // announces itself by the picture changing.
       const playerHasPicture = () => (player.duration || 0) > 0;
 
+      // A swap has to stop the outgoing film at the click, not when the new
+      // source is finally ready. Authorising a URL is a round trip and a file
+      // waits for the scroll to settle, so the old video carried on playing
+      // for a second or two under a page that had already moved on — the
+      // viewer sees the thing they just replaced still running. Pausing leaves
+      // its last frame up, which is quieter than blanking the frame, and the
+      // picture changing is still what announces the replacement. Nothing to
+      // pause when there is no picture yet.
+      // The pause is about the film being replaced, not the one arriving: the
+      // player carries its paused state across a swap, so a source that was
+      // playing hands its play back to whatever lands next — otherwise the
+      // replacement sits there waiting for a click it never needed before.
+      const stopOutgoing = () => {
+        if (!playerHasPicture()) return;
+        const wasPlaying = !player.paused;
+        try {
+          player.pause?.();
+        } catch (err) {
+          console.error("Could not pause the outgoing source:", err);
+        }
+        if (!wasPlaying) return;
+        // On `loadstart`, not on the first frame: a paused player does not
+        // decode one, so waiting for `loadeddata`/`canplay` waits forever and
+        // the replacement never starts. Handing the play back the moment the
+        // new source begins loading leaves the player in exactly the state it
+        // would have been in had nothing been paused.
+        const unhook = () => {
+          clearTimeout(timer);
+          player.removeEventListener("loadstart", resume);
+          player.removeEventListener("error", unhook);
+        };
+        const resume = () => {
+          unhook();
+          try {
+            player.play?.()?.catch?.(() => {});
+          } catch {}
+        };
+        player.addEventListener("loadstart", resume);
+        player.addEventListener("error", unhook);
+        const timer = setTimeout(unhook, 20000);
+      };
+
       // The placeholder goes back to its own words once there is a picture to
       // replace it — or once the source has failed and the player has its own
       // error to show.
@@ -7791,6 +7833,8 @@
         }
         if (!player) return;
 
+        stopOutgoing();
+
         if (encryptToggle?.checked) {
           loadUrlEncrypted(url);
           return;
@@ -7852,6 +7896,7 @@
           urlInput.value = "";
           scrollToPlayer();
           const undo = playerHasPicture() ? null : showPreparing("Opening your file");
+          stopOutgoing();
           afterScrollSettles(() => {
             if (undo) startPreparingSweep();
             if (player.setFile) player.setFile(files[0]);
@@ -8663,6 +8708,7 @@
         syncPlayerQueue();
         scrollToPlayer();
         const undo = playerHasPicture() ? null : showPreparing("Opening the first file");
+        stopOutgoing();
         afterScrollSettles(() => {
           if (undo) startPreparingSweep();
           playPlaylistItem(0);
