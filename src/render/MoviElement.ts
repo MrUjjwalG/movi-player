@@ -17068,6 +17068,10 @@ export class MoviElement extends HTMLElement {
            on is allowed to. (Not --movi-overlay-bg: that name is taken by the
            controls overlay's gradient, further down.) */
         --movi-osd-bg: rgba(0, 0, 0, 0.55);
+        /* The same capsule with the pointer on it. It deepens rather than
+           lightening: these sit over the picture, so they stay dark in both
+           themes — the panel surface (--movi-glass-bg) is the one that flips. */
+        --movi-osd-bg-strong: rgba(0, 0, 0, 0.78);
         --movi-glass-blur: 20px;
 
         /* Corners. Two values for the whole chrome: the SURFACE a menu is
@@ -17756,7 +17760,12 @@ export class MoviElement extends HTMLElement {
         font-family: inherit;
       }
       .movi-unmute-overlay:hover {
-        background: var(--movi-glass-bg);
+        /* Not --movi-glass-bg. That token is the floating-PANEL surface, and
+           the light theme flips it to white — while this pill keeps its white
+           text, because it sits over the picture rather than over the page.
+           Pointing at it turned the label invisible. Hover deepens the pill's
+           own OSD shade instead, which is the same in both themes. */
+        background: var(--movi-osd-bg-strong, rgba(0, 0, 0, 0.78));
         transform: scale(1.03);
       }
       .movi-unmute-overlay svg {
