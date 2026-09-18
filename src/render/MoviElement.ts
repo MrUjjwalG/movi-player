@@ -19309,6 +19309,12 @@ export class MoviElement extends HTMLElement {
       .movi-subtitle-track-list {
         padding: 6px;
         overflow-y: auto;
+        /* Never sideways. These are vertical lists, and once the content is
+           tall enough for a vertical scrollbar that bar eats into the width —
+           which on a menu with a fixed min-width is enough to put a HORIZONTAL
+           scrollbar under it for a second. overflow-y alone computes overflow-x
+           to auto, so it has to be said. */
+        overflow-x: hidden;
         overscroll-behavior: contain;
         /* Bound the list directly off the player's own height (minus
            ~180px of chrome: header + footer + the controls-bar reserve
@@ -20044,6 +20050,12 @@ export class MoviElement extends HTMLElement {
            longer clip because opening lifts the host clip (movi-menu-overflow). */
         max-height: min(70vh, 380px);
         overflow-y: auto;
+        /* Never sideways. These are vertical lists, and once the content is
+           tall enough for a vertical scrollbar that bar eats into the width —
+           which on a menu with a fixed min-width is enough to put a HORIZONTAL
+           scrollbar under it for a second. overflow-y alone computes overflow-x
+           to auto, so it has to be said. */
+        overflow-x: hidden;
         box-shadow: var(--movi-shadow-lg);
         z-index: 1000;
         pointer-events: auto !important;
@@ -22934,6 +22946,12 @@ export class MoviElement extends HTMLElement {
         font-size: 14px;
         color: var(--movi-controls-color);
         overflow-y: auto;
+        /* Never sideways. These are vertical lists, and once the content is
+           tall enough for a vertical scrollbar that bar eats into the width —
+           which on a menu with a fixed min-width is enough to put a HORIZONTAL
+           scrollbar under it for a second. overflow-y alone computes overflow-x
+           to auto, so it has to be said. */
+        overflow-x: hidden;
         overflow-x: hidden;
         overscroll-behavior: contain;
         scrollbar-width: thin;
@@ -23134,6 +23152,12 @@ export class MoviElement extends HTMLElement {
         pointer-events: none;
         max-height: 250px;
         overflow-y: auto;
+        /* Never sideways. These are vertical lists, and once the content is
+           tall enough for a vertical scrollbar that bar eats into the width —
+           which on a menu with a fixed min-width is enough to put a HORIZONTAL
+           scrollbar under it for a second. overflow-y alone computes overflow-x
+           to auto, so it has to be said. */
+        overflow-x: hidden;
         font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
         font-size: 14px;
         color: var(--movi-controls-color);
@@ -23164,6 +23188,12 @@ export class MoviElement extends HTMLElement {
         pointer-events: none;
         max-height: 250px;
         overflow-y: auto;
+        /* Never sideways. These are vertical lists, and once the content is
+           tall enough for a vertical scrollbar that bar eats into the width —
+           which on a menu with a fixed min-width is enough to put a HORIZONTAL
+           scrollbar under it for a second. overflow-y alone computes overflow-x
+           to auto, so it has to be said. */
+        overflow-x: hidden;
         font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
         font-size: 14px;
         color: var(--movi-controls-color);
@@ -23210,6 +23240,12 @@ export class MoviElement extends HTMLElement {
         min-width: 200px;
         max-height: 280px;
         overflow-y: auto;
+        /* Never sideways. These are vertical lists, and once the content is
+           tall enough for a vertical scrollbar that bar eats into the width —
+           which on a menu with a fixed min-width is enough to put a HORIZONTAL
+           scrollbar under it for a second. overflow-y alone computes overflow-x
+           to auto, so it has to be said. */
+        overflow-x: hidden;
         box-shadow: var(--movi-shadow-lg);
         z-index: 1001;
         pointer-events: auto !important;
@@ -23515,6 +23551,12 @@ export class MoviElement extends HTMLElement {
         color: var(--movi-chrome-fg, #fff);
         z-index: 40;
         overflow-y: auto;
+        /* Never sideways. These are vertical lists, and once the content is
+           tall enough for a vertical scrollbar that bar eats into the width —
+           which on a menu with a fixed min-width is enough to put a HORIZONTAL
+           scrollbar under it for a second. overflow-y alone computes overflow-x
+           to auto, so it has to be said. */
+        overflow-x: hidden;
         opacity: 0;
         /* Fade + a few pixels of rise, and NO scale. Scaling from a corner
            origin moves the opposite edge sideways — on a 268px panel that 2%
