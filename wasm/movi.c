@@ -402,6 +402,29 @@ int movi_get_format_name(MoviContext *ctx, char *buffer, int buffer_size) {
 
 
 EMSCRIPTEN_KEEPALIVE
+/**
+ * Any container tag, by name — artist, album, date, whatever the file carries.
+ *
+ * The title had a getter of its own and nothing else did, so a cover-art view
+ * could name the track and never the artist. Same shape as the title getter,
+ * with the key passed in.
+ */
+EMSCRIPTEN_KEEPALIVE
+int movi_get_metadata_tag(MoviContext *ctx, const char *key, char *buffer,
+                          int buffer_size) {
+  if (!ctx || !ctx->fmt_ctx || !key || !buffer || buffer_size <= 0)
+    return -1;
+
+  const AVDictionaryEntry *tag =
+      av_dict_get(ctx->fmt_ctx->metadata, key, NULL, AV_DICT_IGNORE_SUFFIX);
+  if (!tag || !tag->value)
+    return -2;
+
+  strncpy(buffer, tag->value, buffer_size - 1);
+  buffer[buffer_size - 1] = '\0';
+  return strlen(buffer);
+}
+
 int movi_get_metadata_title(MoviContext *ctx, char *buffer, int buffer_size) {
   if (!ctx || !ctx->fmt_ctx || !buffer || buffer_size <= 0)
     return -1;

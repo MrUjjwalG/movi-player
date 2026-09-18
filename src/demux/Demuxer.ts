@@ -165,6 +165,20 @@ export class Demuxer {
     const title = this.bindings.getMetadataTitle();
     const metadata: Record<string, string> = {};
     if (title) metadata.title = title;
+    // The rest of what the container says about the recording. Only the title
+    // was ever read, so a cover-art view could name the track and not the
+    // artist. Cheap: a dictionary lookup each, once per open.
+    for (const key of [
+      "artist",
+      "album",
+      "album_artist",
+      "composer",
+      "date",
+      "genre",
+    ]) {
+      const value = this.bindings.getMetadataTag?.(key);
+      if (value) metadata[key] = value;
+    }
 
     // Get chapters
     const chapters = this.bindings.getChapters();

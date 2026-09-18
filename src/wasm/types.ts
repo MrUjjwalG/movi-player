@@ -83,6 +83,12 @@ export interface MoviWasmModule {
     buffer: number,
     size: number,
   ) => number;
+  _movi_get_metadata_tag: (
+    ctx: number,
+    key: number,
+    buffer: number,
+    size: number,
+  ) => number;
 
   // Decoding
   _movi_enable_decoder: (ctx: number, stream_index: number, extradata: number, extradata_size: number) => number;

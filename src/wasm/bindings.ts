@@ -581,6 +581,34 @@ export class WasmBindings {
   /**
    * Get title from metadata
    */
+  /**
+   * A container tag by name — artist, album, date. The title has its own
+   * getter (above this one historically, and kept for its callers); this is
+   * for everything else a file carries, which a cover-art view wants.
+   */
+  getMetadataTag(key: string): string {
+    if (!this.contextPtr || !key) return "";
+    const bufferSize = 256;
+    const buffer = this.module._malloc(bufferSize);
+    const keyBytes = new TextEncoder().encode(key + "\0");
+    const keyPtr = this.module._malloc(keyBytes.length);
+    try {
+      this.module.HEAPU8.set(keyBytes, keyPtr);
+      const ret = this.module._movi_get_metadata_tag(
+        this.contextPtr,
+        keyPtr,
+        buffer,
+        bufferSize,
+      );
+      return ret > 0 ? this.module.UTF8ToString(buffer) : "";
+    } catch {
+      return "";
+    } finally {
+      this.module._free(buffer);
+      this.module._free(keyPtr);
+    }
+  }
+
   getMetadataTitle(): string {
     if (!this.contextPtr) return "";
 

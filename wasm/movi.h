@@ -206,6 +206,7 @@ EMSCRIPTEN_KEEPALIVE int movi_receive_frame(MoviContext *ctx, int stream_index);
 EMSCRIPTEN_KEEPALIVE double movi_get_start_time(MoviContext *ctx);
 EMSCRIPTEN_KEEPALIVE int movi_get_format_name(MoviContext *ctx, char *buffer, int buffer_size);
 EMSCRIPTEN_KEEPALIVE int movi_get_metadata_title(MoviContext *ctx, char *buffer, int buffer_size);
+EMSCRIPTEN_KEEPALIVE int movi_get_metadata_tag(MoviContext *ctx, const char *key, char *buffer, int buffer_size);
 
 // JS-WASM Bridge (defined in movi.c or other files with EM_JS)
 extern int js_read_async(uint8_t *buffer, int offset_low, int offset_high,
