@@ -16119,6 +16119,7 @@ export class MoviElement extends HTMLElement {
     for (const name of [
       "--movi-primary",
       "--movi-secondary",
+      "--movi-accent",
       "--movi-chrome-fg",
       "--movi-controls-color",
     ]) {
@@ -16130,6 +16131,7 @@ export class MoviElement extends HTMLElement {
   private applyThemeColor(raw: string | null): void {
     this.style.removeProperty("--movi-primary");
     this.style.removeProperty("--movi-secondary");
+    this.style.removeProperty("--movi-accent");
     this.style.removeProperty("--movi-brand-fill");
     const trimmed = raw?.trim();
     if (!trimmed) return;
@@ -16164,7 +16166,13 @@ export class MoviElement extends HTMLElement {
         `linear-gradient(${primary}, ${primary})`,
       );
     }
-    if (secondary) this.style.setProperty("--movi-secondary", secondary);
+    if (secondary) {
+      this.style.setProperty("--movi-secondary", secondary);
+      // The second colour IS the accent: it is what the centre play button
+      // wears, and primary is only that button's fallback for a themecolor
+      // that names one colour.
+      this.style.setProperty("--movi-accent", secondary);
+    }
     // A theme change while PiP is open has to reach that document too.
     this.syncPipTheme();
   }
@@ -17406,22 +17414,22 @@ export class MoviElement extends HTMLElement {
       /* Light Theme Center Play Button */
       :host([theme="light"]) .movi-center-play-pause {
         background: transparent !important;
-        border-color: color-mix(in srgb, var(--movi-secondary, var(--movi-primary)) 30%, transparent) !important;
-        box-shadow: 0 8px 32px color-mix(in srgb, var(--movi-secondary, var(--movi-primary)) 20%, transparent), inset 0 0 0 1px color-mix(in srgb, var(--movi-secondary, var(--movi-primary)) 10%, transparent) !important;
+        border-color: color-mix(in srgb, var(--movi-accent, var(--movi-primary)) 30%, transparent) !important;
+        box-shadow: 0 8px 32px color-mix(in srgb, var(--movi-accent, var(--movi-primary)) 20%, transparent), inset 0 0 0 1px color-mix(in srgb, var(--movi-accent, var(--movi-primary)) 10%, transparent) !important;
       }
 
       :host([theme="light"]) .movi-center-play-pause:hover {
-        background: color-mix(in srgb, var(--movi-secondary, var(--movi-primary)) 25%, transparent) !important;
-        border-color: color-mix(in srgb, var(--movi-secondary, var(--movi-primary)) 50%, transparent) !important;
-        box-shadow: 0 8px 40px color-mix(in srgb, var(--movi-secondary, var(--movi-primary)) 30%, transparent), inset 0 0 0 1px color-mix(in srgb, var(--movi-secondary, var(--movi-primary)) 15%, transparent) !important;
+        background: color-mix(in srgb, var(--movi-accent, var(--movi-primary)) 25%, transparent) !important;
+        border-color: color-mix(in srgb, var(--movi-accent, var(--movi-primary)) 50%, transparent) !important;
+        box-shadow: 0 8px 40px color-mix(in srgb, var(--movi-accent, var(--movi-primary)) 30%, transparent), inset 0 0 0 1px color-mix(in srgb, var(--movi-accent, var(--movi-primary)) 15%, transparent) !important;
       }
 
       :host([theme="light"]) .movi-center-play-pause svg {
-        filter: drop-shadow(0 0 4px color-mix(in srgb, var(--movi-secondary, var(--movi-primary)) 30%, transparent)) !important;
+        filter: drop-shadow(0 0 4px color-mix(in srgb, var(--movi-accent, var(--movi-primary)) 30%, transparent)) !important;
       }
 
       :host([theme="light"]) .movi-center-play-pause:hover svg {
-        filter: drop-shadow(0 0 8px color-mix(in srgb, var(--movi-secondary, var(--movi-primary)) 50%, transparent)) !important;
+        filter: drop-shadow(0 0 8px color-mix(in srgb, var(--movi-accent, var(--movi-primary)) 50%, transparent)) !important;
       }
 
       /* Light Theme Context Menu */
@@ -22382,8 +22390,8 @@ export class MoviElement extends HTMLElement {
         .movi-center-play-pause:focus,
         .movi-center-play-pause:active {
            background: transparent !important;
-           border-color: color-mix(in srgb, var(--movi-secondary, var(--movi-primary)) 60%, transparent) !important;
-           box-shadow: 0 8px 32px color-mix(in srgb, var(--movi-secondary, var(--movi-primary)) 40%, transparent) !important;
+           border-color: color-mix(in srgb, var(--movi-accent, var(--movi-primary)) 60%, transparent) !important;
+           box-shadow: 0 8px 32px color-mix(in srgb, var(--movi-accent, var(--movi-primary)) 40%, transparent) !important;
         }
 
         .movi-center-play-pause svg {
@@ -22406,7 +22414,7 @@ export class MoviElement extends HTMLElement {
            filter:
              drop-shadow(0 0 1px rgba(0, 0, 0, 0.5))
              drop-shadow(0 1px 1px rgba(0, 0, 0, 0.35))
-             drop-shadow(0 0 8px color-mix(in srgb, var(--movi-secondary, var(--movi-primary)) 60%, transparent)) !important;
+             drop-shadow(0 0 8px color-mix(in srgb, var(--movi-accent, var(--movi-primary)) 60%, transparent)) !important;
         }
 
         .movi-btn:hover svg,
@@ -22704,14 +22712,17 @@ export class MoviElement extends HTMLElement {
         width: clamp(96px, 10cqw, 112px);
         height: clamp(96px, 10cqw, 112px);
         border-radius: 50%;
-        /* The accent goes on a layer of its own (::before) at low opacity,
-           rather than through color-mix: color-mix takes colours, and the
-           brand fill is a gradient — the button is the largest thing wearing
-           it. A layer also keeps the picture showing through, which a scrim
-           over an opaque gradient would have ended. */
+        /* This button wears the ACCENT, not the brand colour: --movi-primary
+           is only what it falls back to when no accent was given. A themecolor
+           with two values sets the accent from the second one — see
+           applyThemeColor.
+
+           The tint goes on a layer of its own (::before) at low opacity rather
+           than into the background here, so the picture keeps showing through
+           and the ring, the glow and the fill all read the one colour. */
         background: transparent;
         padding: 0;
-        border: 2px solid color-mix(in srgb, var(--movi-secondary, var(--movi-primary)) 40%, transparent);
+        border: 2px solid color-mix(in srgb, var(--movi-accent, var(--movi-primary)) 40%, transparent);
         display: flex;
         align-items: center;
         justify-content: center;
@@ -22725,7 +22736,7 @@ export class MoviElement extends HTMLElement {
            backdrop, leaving the soft coloured glow as the only thing drawn —
            which reads as a smudge, not a button. Too dark to see over a
            picture, enough to hold the circle's edge over a blank page. */
-        box-shadow: 0 8px 32px color-mix(in srgb, var(--movi-secondary, var(--movi-primary)) 25%, transparent), 0 0 0 1px rgba(0, 0, 0, 0.18), inset 0 0 0 1px rgba(255, 255, 255, 0.1);
+        box-shadow: 0 8px 32px color-mix(in srgb, var(--movi-accent, var(--movi-primary)) 25%, transparent), 0 0 0 1px rgba(0, 0, 0, 0.18), inset 0 0 0 1px rgba(255, 255, 255, 0.1);
       }
 
       .movi-center-play-pause.movi-center-visible {
@@ -22790,7 +22801,7 @@ export class MoviElement extends HTMLElement {
         position: absolute;
         inset: 0;
         border-radius: inherit;
-        background: var(--movi-brand-fill, var(--movi-primary));
+        background: var(--movi-accent, var(--movi-primary));
         opacity: 0.3;
         pointer-events: none;
         transition: opacity var(--movi-transition-normal);
@@ -22800,8 +22811,8 @@ export class MoviElement extends HTMLElement {
       }
 
       .movi-center-play-pause:hover {
-        border-color: color-mix(in srgb, var(--movi-secondary, var(--movi-primary)) 60%, transparent);
-        box-shadow: 0 8px 40px color-mix(in srgb, var(--movi-secondary, var(--movi-primary)) 40%, transparent), inset 0 0 0 1px rgba(255, 255, 255, 0.15);
+        border-color: color-mix(in srgb, var(--movi-accent, var(--movi-primary)) 60%, transparent);
+        box-shadow: 0 8px 40px color-mix(in srgb, var(--movi-accent, var(--movi-primary)) 40%, transparent), inset 0 0 0 1px rgba(255, 255, 255, 0.15);
       }
 
       /* Toggle receipt: pop in, fade out, gone. Carries !important because the
@@ -22852,7 +22863,7 @@ export class MoviElement extends HTMLElement {
         filter:
           drop-shadow(0 0 1px rgba(0, 0, 0, 0.5))
           drop-shadow(0 1px 1px rgba(0, 0, 0, 0.35))
-          drop-shadow(0 0 8px color-mix(in srgb, var(--movi-secondary, var(--movi-primary)) 60%, transparent));
+          drop-shadow(0 0 8px color-mix(in srgb, var(--movi-accent, var(--movi-primary)) 60%, transparent));
       }
 
       /* Play icon — bumped up ~15% so the triangle isn't dwarfed by
@@ -22873,8 +22884,8 @@ export class MoviElement extends HTMLElement {
 
       .movi-center-play-pause:focus {
         outline: none !important;
-        border-color: color-mix(in srgb, var(--movi-secondary, var(--movi-primary)) 50%, transparent);
-        box-shadow: 0 0 0 3px color-mix(in srgb, var(--movi-secondary, var(--movi-primary)) 30%, transparent), 0 8px 32px rgba(0, 0, 0, 0.4);
+        border-color: color-mix(in srgb, var(--movi-accent, var(--movi-primary)) 50%, transparent);
+        box-shadow: 0 0 0 3px color-mix(in srgb, var(--movi-accent, var(--movi-primary)) 30%, transparent), 0 8px 32px rgba(0, 0, 0, 0.4);
       }
       
       /* Mobile center button — previously shrank to 72px here, but the

@@ -1159,7 +1159,11 @@ Sets the player's accent colors — one or two, separated by a space.
 
 **Value:** One or two valid CSS colors (hex, rgb, color name, `color-mix(...)`). Splitting is paren-aware, so `rgb(255 87 34) #000` is two colors, not four.
 
-Without a secondary, everything uses the primary — same as before.
+The secondary is the player's accent: it sets `--movi-accent`, which the centre
+play/pause button wears. Set that variable directly and you get the same thing
+without a `themecolor` at all. Without a secondary the button keeps whatever
+`--movi-accent` holds (the player's own `#4f86ff` unless the page says
+otherwise); everything else uses the primary.
 
 **Gradients.** The primary may be a gradient instead of a colour:
 
