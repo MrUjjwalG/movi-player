@@ -17436,6 +17436,16 @@ export class MoviElement extends HTMLElement {
         background-color: rgba(0, 0, 0, 0.05) !important;
       }
 
+      /* The active row's tint is the accent under a scrim, and the scrim is the
+         card's own shade — which on a white card is white, not the dark one the
+         default uses. Without this the current value sat as a dark band across
+         a light menu. */
+      :host([theme="light"]) .movi-context-menu-item.movi-context-menu-active {
+        background-image:
+          linear-gradient(rgba(255, 255, 255, 0.86), rgba(255, 255, 255, 0.86)),
+          var(--movi-brand-fill, linear-gradient(var(--movi-secondary, var(--movi-primary)), var(--movi-secondary, var(--movi-primary)))) !important;
+      }
+
       :host([theme="light"]) .movi-context-menu-divider {
         background: rgba(0, 0, 0, 0.1) !important;
       }
@@ -31570,6 +31580,9 @@ export class MoviElement extends HTMLElement {
       } else {
         this.removeAttribute("theme");
       }
+      // A menu that is open right now lives in the body portal, where the
+      // theme is read off the PORTAL host — keep that one in step too.
+      this.syncMenuPortalAudioClasses();
     }
   }
 
@@ -42432,10 +42445,19 @@ export class MoviElement extends HTMLElement {
     this.syncMenuPortalAudioClasses();
   }
 
-  /** Mirror the player's audio-mode / strip classes onto the menu-portal host so
-   *  the cloned `:host(.movi-audio-mode)` rules (which hide the video-only menu
-   *  items) keep matching while the menu lives in the body portal — including
-   *  when the audio mode flips while the menu is already open. */
+  /** Attributes the cloned styles select on through `:host([…])`, which must
+   *  therefore ride along to the portal host. `theme` is the one that showed:
+   *  every light-theme rule is written `:host([theme="light"]) …`, so a menu
+   *  that portaled without it stayed dark beside a light settings panel.
+   *  `controlslist` hides menu items the same way. `hidden` is deliberately NOT
+   *  here — mirroring it would hide the portal itself. */
+  private static readonly PORTAL_HOST_ATTRS = ["theme", "controlslist"];
+
+  /** Mirror the player's audio-mode / strip classes and the host attributes the
+   *  cloned rules match on onto the menu-portal host, so `:host(.movi-audio-mode)`
+   *  (which hides the video-only menu items) and `:host([theme="light"])` keep
+   *  matching while the menu lives in the body portal — including when the audio
+   *  mode or the theme flips while the menu is already open. */
   private syncMenuPortalAudioClasses(): void {
     const host = this._menuPortalHost;
     if (!host) return;
@@ -42451,6 +42473,11 @@ export class MoviElement extends HTMLElement {
       "movi-native-video",
       this.classList.contains("movi-native-video"),
     );
+    for (const attr of MoviElement.PORTAL_HOST_ATTRS) {
+      const value = this.getAttribute(attr);
+      if (value === null) host.removeAttribute(attr);
+      else host.setAttribute(attr, value);
+    }
   }
 
   /** Return the context menu (+ submenus) from the portal to the shadow root. */
