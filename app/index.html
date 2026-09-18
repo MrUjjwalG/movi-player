@@ -7525,6 +7525,26 @@
       // still works if this module's import of the bundle ever fails.
       const scrollToPlayer = () => window.moviScrollToPlayer?.();
 
+      // Opening a file is not free: the demuxer's WASM has to instantiate, the
+      // container has to be read and the first frame decoded, and all of that
+      // runs on this thread. Started at the same moment as the smooth scroll it
+      // lands in the middle of the animation — measured on a 1080p pick, one
+      // 250ms frame and two long tasks, which is the judder you see on the way
+      // down. So: scroll first, open the file when the page has arrived.
+      // scrollend is Chromium-only, hence the timeout — it is a fallback, not a
+      // delay, and it also covers the case where the page was already there.
+      const afterScrollSettles = (fn) => {
+        let ran = false;
+        const run = () => {
+          if (ran) return;
+          ran = true;
+          window.removeEventListener("scrollend", run);
+          fn();
+        };
+        window.addEventListener("scrollend", run);
+        setTimeout(run, 420);
+      };
+
       // --- Navbar scroll effect ---
       window.addEventListener("scroll", () => {
         navbar.classList.toggle("scrolled", window.scrollY > 20);
@@ -7779,10 +7799,12 @@
           // Matches pre-multi-select behavior so users picking one file
           // don't suddenly land in playlist mode.
           clearPlaylist();
-          if (player.setFile) player.setFile(files[0]);
-          else player.src = files[0];
           urlInput.value = "";
           scrollToPlayer();
+          afterScrollSettles(() => {
+            if (player.setFile) player.setFile(files[0]);
+            else player.src = files[0];
+          });
         } else {
           setPlaylist(files);
         }
@@ -8586,8 +8608,8 @@
         }
         renderPlaylist();
         syncPlayerQueue();
-        playPlaylistItem(0);
         scrollToPlayer();
+        afterScrollSettles(() => playPlaylistItem(0));
       };
 
       async function collectFilesFromDirHandle(dirHandle, path = "") {
