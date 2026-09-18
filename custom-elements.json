@@ -798,6 +798,10 @@
               "description": "Movi Player theme variable.\n\nDefault: `rgba(0, 0, 0, 0.55)`"
             },
             {
+              "name": "--movi-osd-bg-strong",
+              "description": "Movi Player theme variable.\n\nDefault: `rgba(0, 0, 0, 0.78)`"
+            },
+            {
               "name": "--movi-glass-blur",
               "description": "Movi Player theme variable.\n\nDefault: `20px`"
             },
