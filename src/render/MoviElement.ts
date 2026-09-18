@@ -896,6 +896,12 @@ export class MoviElement extends HTMLElement {
   /** Set when pause() lands before playback has started, so the pending
    *  autoplay/queued play doesn't fire once loading finishes. */
   private _startCancelled: boolean = false;
+  /** "The viewer asked for this pause." Set by pause(), cleared by play() and
+   *  by dispose(), which every source change runs through — so it never
+   *  carries a decision about one video over to the next. The unmute pill
+   *  reads it: unmuting must not restart a video someone stopped on purpose.
+   *  Separate from _startCancelled, which the autoplay path owns. */
+  private _pauseWasAskedFor: boolean = false;
   /**
    * Bumped by every initializePlayer(), and only there — a load() that bumps
    * on its own can invalidate a live init without starting one to replace it.
@@ -2947,13 +2953,19 @@ export class MoviElement extends HTMLElement {
       // Defensive — updateMuted() should hide it via updateUnmuteOverlay,
       // but if state is mid-flight this guarantees the click feels instant.
       unmuteOverlay.style.display = "none";
-      // The tap is a user gesture — if playback isn't running, start it too.
+      // The tap is a user gesture — if playback never got going, start it too.
       // An auto-advanced audio-only track that couldn't autoplay with sound
       // lands paused behind this pill; without this the user has to unmute AND
       // then hit play. Skipped when already playing (a muted-autoplay video is
       // rolling), so we only ever resume a genuinely stopped player.
+      //
+      // …and never against a pause the viewer asked for: unmuting a video you
+      // had deliberately stopped started it playing again, and the pill's job
+      // is the sound, not the picture. _pauseWasAskedFor says exactly that —
+      // someone called pause() and has not called play() since — and a new
+      // source clears it, so the auto-advanced track above still starts.
       const state = this.player?.getState();
-      if (state && state !== "playing" && state !== "buffering") {
+      if (state && state !== "playing" && state !== "buffering" && !this._pauseWasAskedFor) {
         this.play();
       }
     });
@@ -31017,6 +31029,7 @@ export class MoviElement extends HTMLElement {
   async play(): Promise<void> {
     if (this._isUnsupported) return;
     this._startCancelled = false;
+    this._pauseWasAskedFor = false;
     // `play` is the sound of the request, not of the picture moving: an
     // element fires it when play() is called and reports paused === false from
     // that instant, whether or not a single frame has decoded yet. Announcing
@@ -31067,6 +31080,7 @@ export class MoviElement extends HTMLElement {
     // while the spinner is up did nothing at all — the press was swallowed and
     // the video started by itself the moment the data arrived.
     this._startCancelled = true;
+    this._pauseWasAskedFor = true;
     this._autoplayStarting = false;
     // The viewer pressing pause during startup is the answer the timer was
     // waiting for; it must not fire later against a player they stopped.
@@ -31360,6 +31374,8 @@ export class MoviElement extends HTMLElement {
   dispose(): void {
     // Whatever the outgoing source still had in flight is waste now.
     this.abortSourceRequests();
+    // A pause belongs to the video it was asked for, and that one is leaving.
+    this._pauseWasAskedFor = false;
     // Every open panel belongs to the source that is going away. The track
     // menus emptied themselves by rebuilding, which is why they LOOKED like
     // they closed; the settings panel did not, and it was left standing over a
