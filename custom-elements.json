@@ -762,6 +762,10 @@
               "description": "Movi Player theme variable.\n\nDefault: `#7c75ff`"
             },
             {
+              "name": "--movi-brand-fill",
+              "description": "Movi Player theme variable.\n\nDefault: `linear-gradient(110deg, #674cff, #3c6df5)`"
+            },
+            {
               "name": "--movi-primary-light",
               "description": "Movi Player theme variable.\n\nDefault: `color-mix(in srgb, var(--movi-primary) 70%, white)`"
             },

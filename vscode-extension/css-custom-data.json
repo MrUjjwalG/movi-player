@@ -67,6 +67,19 @@
       ]
     },
     {
+      "name": "--movi-brand-fill",
+      "description": {
+        "kind": "markdown",
+        "value": "Movi Player theme variable.\n\nDefault: `linear-gradient(110deg, #674cff, #3c6df5)`"
+      },
+      "references": [
+        {
+          "name": "Documentation",
+          "url": "https://moviplayer.com/docs/api/element"
+        }
+      ]
+    },
+    {
       "name": "--movi-primary-light",
       "description": {
         "kind": "markdown",

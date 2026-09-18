@@ -1161,6 +1161,18 @@ Sets the player's accent colors — one or two, separated by a space.
 
 Without a secondary, everything uses the primary — same as before.
 
+**Gradients.** The primary may be a gradient instead of a colour:
+
+```html
+<movi-player src="video.mp4" themecolor="linear-gradient(110deg, #674cff, #3c6df5)"></movi-player>
+```
+
+A gradient is a background, and text, borders, focus rings and the shades
+derived from the accent cannot take one. So a gradient paints the surfaces that
+fill an area — the scrubber's fill, a switch that is on, the resume button —
+and everything else uses the gradient's first colour. The player ships with its
+own brand gradient in that slot; a plain colour replaces it everywhere.
+
 **Use Case:** Match player theme to your brand colors.
 
 ---

@@ -783,7 +783,7 @@ Every attribute can also be read and set as a JS property (`el.rotate = 90`). Gr
 | `postertime` | `postertime="10%"` | Generate a native-resolution poster frame from a timestamp (`"5"`, `"1:30"`, `"10%"`) |
 | `width` / `height` | `width="640"` | Element dimensions (CSS preferred) |
 | `theme` | `theme="dark"` | UI theme: `dark` \| `light` |
-| `themecolor` | `themecolor="#8B5CF6 #22D3EE"` | Accent colour — one or two, space-separated (secondary drives the centre play/pause flash) |
+| `themecolor` | `themecolor="#7c75ff #4f86ff"` | Accent — one or two, space-separated (secondary drives the centre play/pause flash). The primary may be a **gradient**: it then paints the scrubber's fill, switches and the resume button, while text and borders use its first colour |
 | `objectfit` | `objectfit="contain"` | `contain` \| `cover` \| `fill` \| `zoom` \| `control` |
 | `rotate` | `rotate="90"` | Rotate the video: `0` \| `90` \| `180` \| `270` degrees |
 | `cropbars` | `cropbars` | Crop letterbox/pillarbox bars baked into the picture, so `cover`/`fill`/`zoom` size the image, not its padding |

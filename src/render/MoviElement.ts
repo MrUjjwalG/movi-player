@@ -80,6 +80,9 @@ const SYMBOLS = {
   volumeHigh: `<path d="M15.15 9.05a4.2 4.2 0 0 1 0 5.9M18.15 6.15a8.25 8.25 0 0 1 0 11.7"/>`,
   mute: `<path d="m16.2 9 5.1 5.1m0-5.1-5.1 5.1"/>`,
   volumeFull: `<path d="M4.25 9.2h3.2l4.3-3.55v12.7l-4.3-3.55h-3.2a1.5 1.5 0 0 1-1.5-1.5v-2.6a1.5 1.5 0 0 1 1.5-1.5ZM15.15 9.05a4.2 4.2 0 0 1 0 5.9M18.15 6.15a8.25 8.25 0 0 1 0 11.7"/>`,
+  /** The middle step: speaker and ONE wave. Without it the icon jumped from
+   *  both waves to none, which says nothing about the volume in between. */
+  volumeOne: `<path d="M4.25 9.2h3.2l4.3-3.55v12.7l-4.3-3.55h-3.2a1.5 1.5 0 0 1-1.5-1.5v-2.6a1.5 1.5 0 0 1 1.5-1.5ZM15.15 9.05a4.2 4.2 0 0 1 0 5.9"/>`,
   volumeMuted: `<path d="M4.25 9.2h3.2l4.3-3.55v12.7l-4.3-3.55h-3.2a1.5 1.5 0 0 1-1.5-1.5v-2.6a1.5 1.5 0 0 1 1.5-1.5Zm11.95-.2 5.1 5.1m0-5.1-5.1 5.1"/>`,
   audio: `<path d="M9 17.4V6.7l10.5-2.15v10.7"/><ellipse cx="6.15" cy="18" rx="2.85" ry="2.35"/><ellipse cx="16.65" cy="15.85" rx="2.85" ry="2.35"/>`,
   subtitles: `<rect x="2.75" y="4.75" width="18.5" height="14.5" rx="3"/><path d="M6.75 13.25h4.5m2.5 0h3.5M6.75 16.25h3m2.5 0h5"/>`,
@@ -2690,6 +2693,7 @@ export class MoviElement extends HTMLElement {
             <div class="movi-volume-container">
               <button class="movi-btn movi-volume-btn" aria-label="Mute/Unmute">
                 ${symbolSvg("volumeFull", "movi-icon-volume-high")}
+                ${symbolSvg("volumeOne", "movi-icon-volume-mid", { hidden: true })}
                 ${symbolSvg("volume", "movi-icon-volume-low", { hidden: true })}
                 ${symbolSvg("volumeMuted", "movi-icon-volume-mute", { hidden: true })}
               </button>
@@ -16126,6 +16130,7 @@ export class MoviElement extends HTMLElement {
   private applyThemeColor(raw: string | null): void {
     this.style.removeProperty("--movi-primary");
     this.style.removeProperty("--movi-secondary");
+    this.style.removeProperty("--movi-brand-fill");
     const trimmed = raw?.trim();
     if (!trimmed) return;
 
@@ -16133,10 +16138,83 @@ export class MoviElement extends HTMLElement {
     const primary = parts.length === 2 ? parts[0] : trimmed;
     const secondary = parts.length === 2 ? parts[1] : null;
 
-    this.style.setProperty("--movi-primary", primary);
+    // A gradient is allowed, and it is a background — nothing else takes one.
+    // So it goes to the surfaces that PAINT the brand (the scrubber's fill, a
+    // switch that is on, the resume button), while everything that colours
+    // text, a border or a focus ring — and the color-mix() shades derived off
+    // it — gets the gradient's first colour instead. Handing those a gradient
+    // makes the whole declaration invalid and the accent silently disappears.
+    const gradient = /(^|\s)(repeating-)?(linear|radial|conic)-gradient\(/i.test(
+      primary,
+    );
+    if (gradient) {
+      this.style.setProperty("--movi-brand-fill", primary);
+      const solid = MoviElement.firstColorOf(primary);
+      if (solid) this.style.setProperty("--movi-primary", solid);
+    } else {
+      this.style.setProperty("--movi-primary", primary);
+      // The default fill is the brand's gradient, so a plain colour has to say
+      // so — otherwise a host that asked for one solid accent would keep the
+      // gradient on every surface that paints. Written as a gradient of one
+      // colour because this value is also layered UNDER a scrim as a
+      // background-image (the centre button, an active menu row), and a bare
+      // colour there is not an image: the whole declaration would be dropped.
+      this.style.setProperty(
+        "--movi-brand-fill",
+        `linear-gradient(${primary}, ${primary})`,
+      );
+    }
     if (secondary) this.style.setProperty("--movi-secondary", secondary);
     // A theme change while PiP is open has to reach that document too.
     this.syncPipTheme();
+  }
+
+  /**
+   * The first colour in a gradient, for everything that cannot take one.
+   *
+   * Reads the stops rather than the whole value: the first argument of a
+   * gradient is often a direction or an angle ("to right", "110deg", "in oklch
+   * longer hue"), and a stop itself may carry a position ("#674cff 20%"). What
+   * comes back is the colour alone, or null if nothing in there looks like one.
+   */
+  private static firstColorOf(value: string): string | null {
+    const open = value.indexOf("(");
+    const close = value.lastIndexOf(")");
+    if (open < 0 || close <= open) return null;
+    const args = MoviElement.splitTopLevelBy(value.slice(open + 1, close), ",");
+    for (const arg of args) {
+      const part = arg.trim();
+      if (!part) continue;
+      if (/^(to\b|[-\d.]+(deg|grad|rad|turn)\b|in\b|from\b|at\b)/i.test(part)) {
+        continue;
+      }
+      // A stop is "<colour> [position]" — take the colour, which is either a
+      // function call or the first bare token.
+      const fn = part.match(/^[a-z-]+\([^)]*\)/i);
+      if (fn) return fn[0];
+      const token = part.split(/\s+/)[0];
+      if (/^(#|[a-z])/i.test(token) && !/^\d/.test(token)) return token;
+    }
+    return null;
+  }
+
+  /** Split on a separator that sits outside parentheses. */
+  private static splitTopLevelBy(value: string, sep: string): string[] {
+    const out: string[] = [];
+    let depth = 0;
+    let current = "";
+    for (const ch of value) {
+      if (ch === "(") depth++;
+      else if (ch === ")") depth = Math.max(0, depth - 1);
+      if (ch === sep && depth === 0) {
+        out.push(current);
+        current = "";
+      } else {
+        current += ch;
+      }
+    }
+    if (current.trim()) out.push(current);
+    return out;
   }
 
   /** Split on whitespace that sits outside parentheses, so `rgb(255 0 51)` and
@@ -16931,6 +17009,14 @@ export class MoviElement extends HTMLElement {
            second — so the one surface carrying the brand was the one not
            wearing it. These are the site's accent tokens. */
         --movi-primary: #7c75ff;
+        /* What the brand PAINTS with — the mark's own gradient, the same one
+           the site and the extensions use. --movi-primary stays a solid
+           because text, borders, focus rings and the color-mix() shades below
+           cannot take a gradient; only the surfaces that fill an area read
+           this (the scrubber's fill, a switch that is on, the resume button).
+           A themecolor attribute replaces it, gradient or colour — see
+           applyThemeColor. */
+        --movi-brand-fill: linear-gradient(110deg, #674cff, #3c6df5);
         /* Derived so themecolor attribute cascades to light/dark variants */
         --movi-primary-light: color-mix(in srgb, var(--movi-primary) 70%, white);
         --movi-primary-dark: color-mix(in srgb, var(--movi-primary) 70%, black);
@@ -17173,6 +17259,7 @@ export class MoviElement extends HTMLElement {
         /* The site's light-theme accent — a touch deeper than the dark one,
            for the same reason it is there: contrast against a pale surface. */
         --movi-primary: #7c6cf0;
+        --movi-brand-fill: linear-gradient(110deg, #5f4ae8, #3560e0);
         --movi-glass-bg: rgba(255, 255, 255, 0.7);
         --movi-glass-border: rgba(0, 0, 0, 0.1);
         --movi-controls-color: #11142d;
@@ -17318,7 +17405,7 @@ export class MoviElement extends HTMLElement {
 
       /* Light Theme Center Play Button */
       :host([theme="light"]) .movi-center-play-pause {
-        background: color-mix(in srgb, var(--movi-secondary, var(--movi-primary)) 15%, transparent) !important;
+        background: transparent !important;
         border-color: color-mix(in srgb, var(--movi-secondary, var(--movi-primary)) 30%, transparent) !important;
         box-shadow: 0 8px 32px color-mix(in srgb, var(--movi-secondary, var(--movi-primary)) 20%, transparent), inset 0 0 0 1px color-mix(in srgb, var(--movi-secondary, var(--movi-primary)) 10%, transparent) !important;
       }
@@ -17429,7 +17516,7 @@ export class MoviElement extends HTMLElement {
         background: rgba(0, 0, 0, 0.22) !important;
       }
       :host([theme="light"]) .movi-settings-switch.is-on {
-        background: var(--movi-primary) !important;
+        background: var(--movi-brand-fill, var(--movi-primary)) !important;
       }
 
       :host([theme="light"]) .movi-quality-item.movi-quality-active {
@@ -18753,7 +18840,11 @@ export class MoviElement extends HTMLElement {
         top: 0;
         left: 0;
         height: 100%;
-        background: var(--movi-primary);
+        /* --movi-brand-fill is set only when the theme colour is a gradient
+           (see applyThemeColor): a gradient is a background and nothing else,
+           so the places that PAINT the brand read it, and the places that
+           colour text or a border keep reading --movi-primary. */
+        background: var(--movi-brand-fill, var(--movi-primary));
         /* Pill on the leading end only. The trailing end is where the buffered
            segment picks up, and a rounded edge there curves away from the
            buffer's own edge, leaving a visible pinch of bare track between the
@@ -21342,8 +21433,9 @@ export class MoviElement extends HTMLElement {
         }
       }
 
+      /* Same reading as the scrubber's fill — see --movi-brand-fill. */
       .movi-resume-yes {
-        background: var(--movi-primary);
+        background: var(--movi-brand-fill, var(--movi-primary));
         color: var(--movi-chrome-fg, #fff);
       }
 
@@ -22279,7 +22371,7 @@ export class MoviElement extends HTMLElement {
         .movi-center-play-pause:hover,
         .movi-center-play-pause:focus,
         .movi-center-play-pause:active {
-           background: color-mix(in srgb, var(--movi-secondary, var(--movi-primary)) 40%, transparent) !important;
+           background: transparent !important;
            border-color: color-mix(in srgb, var(--movi-secondary, var(--movi-primary)) 60%, transparent) !important;
            box-shadow: 0 8px 32px color-mix(in srgb, var(--movi-secondary, var(--movi-primary)) 40%, transparent) !important;
         }
@@ -22602,7 +22694,12 @@ export class MoviElement extends HTMLElement {
         width: clamp(96px, 10cqw, 112px);
         height: clamp(96px, 10cqw, 112px);
         border-radius: 50%;
-        background: color-mix(in srgb, var(--movi-secondary, var(--movi-primary)) 25%, transparent);
+        /* The accent goes on a layer of its own (::before) at low opacity,
+           rather than through color-mix: color-mix takes colours, and the
+           brand fill is a gradient — the button is the largest thing wearing
+           it. A layer also keeps the picture showing through, which a scrim
+           over an opaque gradient would have ended. */
+        background: transparent;
         padding: 0;
         border: 2px solid color-mix(in srgb, var(--movi-secondary, var(--movi-primary)) 40%, transparent);
         display: flex;
@@ -22678,8 +22775,21 @@ export class MoviElement extends HTMLElement {
         top: calc(50% - var(--movi-controls-height) / 4);
       }
 
+      .movi-center-play-pause::before {
+        content: "";
+        position: absolute;
+        inset: 0;
+        border-radius: inherit;
+        background: var(--movi-brand-fill, var(--movi-primary));
+        opacity: 0.3;
+        pointer-events: none;
+        transition: opacity var(--movi-transition-normal);
+      }
+      .movi-center-play-pause:hover::before {
+        opacity: 0.48;
+      }
+
       .movi-center-play-pause:hover {
-        background: color-mix(in srgb, var(--movi-secondary, var(--movi-primary)) 40%, transparent);
         border-color: color-mix(in srgb, var(--movi-secondary, var(--movi-primary)) 60%, transparent);
         box-shadow: 0 8px 40px color-mix(in srgb, var(--movi-secondary, var(--movi-primary)) 40%, transparent), inset 0 0 0 1px rgba(255, 255, 255, 0.15);
       }
@@ -23061,8 +23171,15 @@ export class MoviElement extends HTMLElement {
          side of it. The fill is the shape; the rail, the icon and the state
          word carry the accent. Falls back to primary where no secondary is
          set, so a single-colour theme is unaffected. */
+      /* The accent across the row. A gradient cannot go through color-mix, so
+         it is layered instead: the fill underneath, a scrim of the card's own
+         shade on top, which is what turns it into a tint. The card is opaque
+         anyway, so nothing is lost by painting rather than blending — and the
+         accent now runs along the row instead of collapsing to one colour. */
       .movi-context-menu-item.movi-context-menu-active {
-        background-color: color-mix(in srgb, var(--movi-secondary, var(--movi-primary)) 13%, transparent);
+        background-image:
+          linear-gradient(rgba(14, 16, 28, 0.86), rgba(14, 16, 28, 0.86)),
+          var(--movi-brand-fill, linear-gradient(var(--movi-secondary, var(--movi-primary)), var(--movi-secondary, var(--movi-primary))));
       }
 
       /* The rail: small, rounded, tucked inside the card's left edge.
@@ -23079,7 +23196,7 @@ export class MoviElement extends HTMLElement {
         transform: translateY(-50%);
         width: 3px;
         height: 20px;
-        background: var(--movi-primary-light, var(--movi-primary));
+        background: var(--movi-brand-fill, var(--movi-primary-light, var(--movi-primary)));
         border-radius: 999px;
       }
 
@@ -23870,7 +23987,7 @@ export class MoviElement extends HTMLElement {
         transition: background-color 180ms ease;
       }
       .movi-settings-switch.is-on {
-        background: var(--movi-primary);
+        background: var(--movi-brand-fill, var(--movi-primary));
       }
       .movi-settings-knob {
         display: block;
@@ -32845,6 +32962,9 @@ export class MoviElement extends HTMLElement {
     const volumeHigh = this.shadowRoot?.querySelector(
       ".movi-icon-volume-high",
     ) as HTMLElement;
+    const volumeMid = this.shadowRoot?.querySelector(
+      ".movi-icon-volume-mid",
+    ) as HTMLElement;
     const volumeLow = this.shadowRoot?.querySelector(
       ".movi-icon-volume-low",
     ) as HTMLElement;
@@ -32881,13 +33001,19 @@ export class MoviElement extends HTMLElement {
 
     // Reset all first
     volumeHigh?.style.setProperty("display", "none");
+    volumeMid?.style.setProperty("display", "none");
     volumeLow?.style.setProperty("display", "none");
     volumeMute?.style.setProperty("display", "none");
 
+    // Three steps of sound, not two: the icon used to show both waves or
+    // neither, so anything under half looked the same as almost-silent and
+    // anything over it looked the same as full.
     if (this._muted || this._volume === 0) {
       volumeMute?.style.setProperty("display", "block");
-    } else if (this._volume < 0.5) {
+    } else if (this._volume < 0.34) {
       volumeLow?.style.setProperty("display", "block");
+    } else if (this._volume < 0.67) {
+      volumeMid?.style.setProperty("display", "block");
     } else {
       volumeHigh?.style.setProperty("display", "block");
     }
