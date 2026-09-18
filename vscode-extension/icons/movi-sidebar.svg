@@ -1,6 +1,6 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round">
-  <!-- The ribbon play mark, one colour: the three folds as three strokes. -->
-  <path d="M6.5 5v14"/>
-  <path d="M6.5 5 18 11.5"/>
-  <path d="M18 12.5 6.5 19"/>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="323 49 930 930" fill="currentColor">
+  <!-- The ribbon play mark as one silhouette: same outline as the colour
+       logo, filled evenodd so the play triangle stays a hole. Activity-bar
+       icons are monochrome, so the gradients do not come along. -->
+  <path fill-rule="evenodd" d="M383.55 222 C383.55 152.172 440.026 97.5 512 97.5 C543.4 97.5 559.7 101.8 590 117.5 L1100 381.5 C1174.55 414.03 1191.47 471.49 1193 512.5 C1192.287 590.191 1134.299 634.057 1100 646.5 C930.833 737.989 761.667 826.041 592.5 909 C571.47 917.98 554.22 929.25 512 930.3 C455.971 929.901 384.465 889.545 383.55 802 Z M614 360 L913 520 C686.95 641.07 614 666.34 614 669 Z"/>
 </svg>
