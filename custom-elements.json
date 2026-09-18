@@ -759,7 +759,7 @@
             },
             {
               "name": "--movi-primary",
-              "description": "Movi Player theme variable.\n\nDefault: `#8B5CF6`"
+              "description": "Movi Player theme variable.\n\nDefault: `#7c75ff`"
             },
             {
               "name": "--movi-primary-light",
@@ -771,11 +771,11 @@
             },
             {
               "name": "--movi-accent",
-              "description": "Movi Player theme variable.\n\nDefault: `#06B6D4`"
+              "description": "Movi Player theme variable.\n\nDefault: `#4f86ff`"
             },
             {
               "name": "--movi-accent-light",
-              "description": "Movi Player theme variable.\n\nDefault: `#22D3EE`"
+              "description": "Movi Player theme variable.\n\nDefault: `#86b6ff`"
             },
             {
               "name": "--movi-gradient",

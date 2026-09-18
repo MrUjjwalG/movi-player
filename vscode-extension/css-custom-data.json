@@ -57,7 +57,7 @@
       "name": "--movi-primary",
       "description": {
         "kind": "markdown",
-        "value": "Movi Player theme variable.\n\nDefault: `#8B5CF6`"
+        "value": "Movi Player theme variable.\n\nDefault: `#7c75ff`"
       },
       "references": [
         {
@@ -96,7 +96,7 @@
       "name": "--movi-accent",
       "description": {
         "kind": "markdown",
-        "value": "Movi Player theme variable.\n\nDefault: `#06B6D4`"
+        "value": "Movi Player theme variable.\n\nDefault: `#4f86ff`"
       },
       "references": [
         {
@@ -109,7 +109,7 @@
       "name": "--movi-accent-light",
       "description": {
         "kind": "markdown",
-        "value": "Movi Player theme variable.\n\nDefault: `#22D3EE`"
+        "value": "Movi Player theme variable.\n\nDefault: `#86b6ff`"
       },
       "references": [
         {

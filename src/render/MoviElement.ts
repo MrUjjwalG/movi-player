@@ -16925,13 +16925,17 @@ export class MoviElement extends HTMLElement {
         --movi-title-line: calc(var(--movi-title-font) * 1.4);
         --movi-title-pad-top: 16px;
 
-        /* Premium Color Palette */
-        --movi-primary: #8B5CF6;
+        /* The mark's own colours.
+           The player used a generic violet and a cyan partner while the logo,
+           the site and the extensions had settled on a blue-violet with a blue
+           second — so the one surface carrying the brand was the one not
+           wearing it. These are the site's accent tokens. */
+        --movi-primary: #7c75ff;
         /* Derived so themecolor attribute cascades to light/dark variants */
         --movi-primary-light: color-mix(in srgb, var(--movi-primary) 70%, white);
         --movi-primary-dark: color-mix(in srgb, var(--movi-primary) 70%, black);
-        --movi-accent: #06B6D4;
-        --movi-accent-light: #22D3EE;
+        --movi-accent: #4f86ff;
+        --movi-accent-light: #86b6ff;
         /* Use solid color instead of gradient */
         --movi-gradient: var(--movi-primary);
         
@@ -17166,7 +17170,9 @@ export class MoviElement extends HTMLElement {
 
       /* Light Theme Override */
       :host([theme="light"]) {
-        --movi-primary: #7c3aed; /* Vibrancy boost for light theme */
+        /* The site's light-theme accent — a touch deeper than the dark one,
+           for the same reason it is there: contrast against a pale surface. */
+        --movi-primary: #7c6cf0;
         --movi-glass-bg: rgba(255, 255, 255, 0.7);
         --movi-glass-border: rgba(0, 0, 0, 0.1);
         --movi-controls-color: #11142d;
