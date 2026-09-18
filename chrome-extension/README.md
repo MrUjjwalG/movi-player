@@ -2,6 +2,9 @@
 
 Play any video URL with Movi Player directly in Chrome.
 
+For real Chrome Web Store screenshots, promotional tiles, and the repeatable
+capture workflow, see [STORE-ASSETS.md](./STORE-ASSETS.md).
+
 This folder is also the **source of truth for the Firefox add-on** — everything
 except `manifest.json` is copied into [`../firefox-extension/`](../firefox-extension/)
 by its `build.sh`. Keep changes here browser-agnostic (no bare `window.chrome`

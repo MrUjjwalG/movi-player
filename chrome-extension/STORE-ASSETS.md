@@ -1,0 +1,90 @@
+# Chrome Web Store assets
+
+The current store set is captured from the unpacked Chrome extension running
+in Chromium. The player is decoding real local media. No controls, playback
+metadata, subtitles, or playlist rows are painted into the screenshots.
+Promotional tiles use the real playback capture with the existing Movi logo
+and promotional text. The small tile places a large logo and the wordmark on
+one line at the left, with a real player preview on the right. The large tile places
+the capture beside the text.
+
+## Upload files
+
+All generated files are in `chrome-extension/screenshots/` (gitignored).
+
+| File | Size | Contents |
+| --- | --- | --- |
+| `1-home.png` | 1280 × 800 | Current file, folder, and URL picker |
+| `2-playback.png` | 1280 × 800 | MKV video with actual playback controls |
+| `3-playlist.png` | 1280 × 800 | Three local MKV, MP4, and WebM excerpts |
+| `4-subtitles.png` | 1280 × 800 | Embedded credit captions and subtitle menu |
+| `5-audio-tracks.png` | 1280 × 800 | Real stereo and mono AAC tracks |
+| `movi-player-promo.png` | 440 × 280 | Small promotional tile |
+| `movi-player-promo-big.png` | 1400 × 560 | Marquee promotional tile |
+
+Use only these five screenshots. The obsolete popup/laptop mockups are kept
+under `screenshots/archive-previous/` for reference, outside the upload set.
+The small promo's existing `mov-` filename is retained for compatibility.
+Nothing in this workflow uploads or publishes to the store.
+
+[Chrome's image requirements](https://developer.chrome.com/docs/webstore/images)
+allow up to five screenshots. These exports are opaque PNGs at the preferred
+dimensions, with square corners and no device frames.
+
+## Reproduce
+
+Requires the repository's installed Playwright, a Playwright Chromium browser,
+`curl`, and an FFmpeg build with H.264, VP9, AAC, and Opus encoders. From the
+repository root:
+
+```sh
+# Build the current player, or reuse a dist/ build you have already verified.
+npm run build:ts
+SKIP_BUILD=1 bash chrome-extension/build.sh
+
+# Downloads the official trailer only when it is missing, then makes samples.
+node chrome-extension/scripts/prepare-store-media.mjs
+node chrome-extension/scripts/capture-store-assets.mjs
+node chrome-extension/scripts/render-promos.mjs
+```
+
+To regenerate just the 440 × 280 tile, run
+`node chrome-extension/scripts/render-promos.mjs --small`.
+
+`MOVI_CHROMIUM_PATH` optionally selects an existing Chromium executable instead
+of Playwright's default. Use Chromium/Chrome for Testing with unpacked-extension
+support. A temporary clean browser profile is created and removed for each run.
+`MOVI_CAPTURE_MEDIA` overrides the sample directory and `MOVI_CAPTURE_OUTPUT`
+overrides the capture output directory. For custom output locations, pass the
+playback PNG path and output directory to `render-promos.mjs` as arguments.
+
+The sample preparer writes to `test-media/chrome-store/` by default. Its main
+MKV contains the original trailer video, genuine stereo AAC and a mono
+downmix, plus newly authored film-credit captions. These are demonstration
+tracks, not alternative-language film dubs or a dialogue transcript. The
+playlist uses actual separately encoded excerpts, not renamed copies of one
+format. No source footage is bundled into the store-asset ZIP.
+
+The capture waits for playback to advance after each seek, checks the selected
+subtitle track, verifies loaded thumbnails, and restores the player's
+scroll position after browser automation focuses controls. It writes
+`capture-report.json` with source bundle hashes and decoded media metadata,
+and `capture-console.json` with browser messages. Decoder/page errors fail the
+capture; browser feature-policy warnings remain in the log for inspection.
+The subtitle capture uses the player's supported 75% subtitle size setting.
+Visually inspect all five captures after regeneration, including caption text
+and thumbnail contents, which may be rendered into canvases.
+
+## Media attribution
+
+**Sintel — © copyright Blender Foundation | durian.blender.org**
+
+Source: [official 720p trailer](https://download.blender.org/durian/trailer/sintel_trailer-720p.mp4).
+Licensed under [Creative Commons Attribution 3.0](https://creativecommons.org/licenses/by/3.0/);
+see the [Blender Foundation sharing terms](https://durian.blender.org/sharing/).
+
+The source was excerpted, remuxed/transcoded, given a mono audio downmix and
+demonstration credit subtitles, and captured during playback. Promo tiles
+scale a screenshot proportionally. No endorsement by Blender Foundation is
+implied. Retain this attribution with the distributed asset set and in the
+store listing's media credits; the promo tiles also include a visible credit.

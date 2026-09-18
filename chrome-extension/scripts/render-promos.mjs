@@ -55,6 +55,7 @@ function promoHtml({ screenshot, logo, font, size }) {
       box-shadow: 0 24px 68px #0007;
     }
     .footnote { position: absolute; color: #7f8da9; }
+    .credit { position: absolute; margin: 0; color: #9ba7bd; }
     .large .brand { top: 51px; left: 55px; gap: 12px; font-size: 27px; letter-spacing: -0.9px; }
     .large .brand img { width: 43px; height: 43px; }
     .large h1 { top: 151px; left: 56px; font-size: 56px; line-height: 1.17; letter-spacing: -2.6px; }
@@ -64,13 +65,24 @@ function promoHtml({ screenshot, logo, font, size }) {
     .large .formats li + li { border-left: 1px solid #35405b; padding-left: 29px; }
     .large .shot { left: 617px; top: 44px; width: 752px; }
     .large .footnote { bottom: 42px; left: 59px; font-size: 13px; letter-spacing: 0.15px; }
-    .small .brand { top: 16px; left: 17px; gap: 8px; font-size: 22px; letter-spacing: -0.65px; }
-    .small .brand img { width: 30px; height: 30px; }
-    .small h1 { top: 55px; left: 20px; font-size: 20px; line-height: 1.3; letter-spacing: -0.55px; }
-    .small .shot { top: 97px; left: 18px; width: 278px; }
-    .small .formats { top: 98px; left: 315px; flex-direction: column; gap: 8px; font-size: 18px; letter-spacing: 0.3px; }
-    .small .description { top: 197px; left: 315px; font-size: 10px; line-height: 1.8; }
-    .small .footnote { display: none; }
+    .large .credit { bottom: 20px; left: 617px; font-size: 10px; }
+    main.small::before {
+      background: radial-gradient(ellipse at 8% 25%, #33387938 0%, transparent 65%);
+    }
+    /* The name holds one line. nowrap so it can never break itself, and a size
+       measured to the column the player leaves beside it. */
+    .small .brand { top: 44px; left: 25px; flex-direction: column; align-items: center; gap: 15px; font-size: 22px; line-height: 1.06; letter-spacing: -0.7px; white-space: nowrap; }
+    .small .brand img { width: 84px; height: 84px; }
+    .small h1 { display: none; }
+    .small .shot { top: 52px; left: 153px; width: 268px; border-radius: 8px; outline: 1px solid #65749850; box-shadow: 0 15px 36px #0006; }
+    /* Under the lockup, on the same centre line as it: the formats belong to
+       the name, not to the screenshot. width + justify-content centres the row
+       without having to know how wide it measures. */
+    .small .formats { top: 191px; left: 0; width: 166px; justify-content: center; gap: 7px; font-size: 10px; letter-spacing: 0.9px; color: #b7c3ed; }
+    .small .formats li + li::before { content: '·'; padding-right: 7px; color: #657392; }
+    .small .description { display: none; }
+    .small .footnote { top: 230px; left: 36px; font-size: 10px; color: #9caac6; }
+    .small .credit { bottom: 7px; left: 25px; font-size: 7.5px; color: #77839a; }
   </style>
 </head>
 <body>
@@ -80,7 +92,8 @@ function promoHtml({ screenshot, logo, font, size }) {
     <p class="description">${size === 'large' ? 'Play local files with embedded subtitles.<br>More formats. Right inside Chrome.' : 'Local files.<br>Embedded<br>subtitles.'}</p>
     <ul class="formats" aria-label="Supported formats"><li>MKV</li><li>HEVC</li><li>AV1</li></ul>
     <img class="shot" src="${screenshot}" alt="Real Movi Player Chrome extension during video playback">
-    <div class="footnote">CHROME EXTENSION &nbsp; / &nbsp; moviplayer.com</div>
+    <div class="footnote">${size === 'small' ? 'Chrome extension' : 'CHROME EXTENSION &nbsp; / &nbsp; moviplayer.com'}</div>
+    <p class="credit">Sintel © Blender Foundation · durian.blender.org · CC BY 3.0</p>
   </main>
 </body>
 </html>`;
@@ -91,6 +104,7 @@ export async function renderPromos({
   outputDirectory = path.join(extensionDirectory, 'screenshots'),
   browser = null,
   launchOptions = {},
+  sizes = ['small', 'large'],
 } = {}) {
   const [screenshotBytes, logoBytes, fontBytes] = await Promise.all([
     readFile(screenshotPath),
@@ -109,9 +123,10 @@ export async function renderPromos({
   const outputs = [];
   try {
     for (const tile of [
-      { size: 'small', width: 440, height: 280, filename: 'mov-player-promo.png' },
+      { size: 'small', width: 440, height: 280, filename: 'movi-player-promo.png' },
       { size: 'large', width: 1400, height: 560, filename: 'movi-player-promo-big.png' },
     ]) {
+      if (!sizes.includes(tile.size)) continue;
       await page.setViewportSize({ width: tile.width, height: tile.height });
       await page.setContent(promoHtml({ ...assets, size: tile.size }));
       await page.evaluate(async () => {
@@ -140,9 +155,11 @@ export async function renderPromos({
 }
 
 if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
-  const [screenshotPath, outputDirectory] = process.argv.slice(2);
+  const args = process.argv.slice(2);
+  const [screenshotPath, outputDirectory] = args.filter(arg => arg !== '--small');
   try {
-    const outputs = await renderPromos({ screenshotPath, outputDirectory });
+    const launchOptions = process.env.MOVI_CHROMIUM_PATH ? { executablePath: process.env.MOVI_CHROMIUM_PATH } : { channel: 'chromium' };
+    const outputs = await renderPromos({ screenshotPath, outputDirectory, launchOptions, ...(args.includes('--small') ? { sizes: ['small'] } : {}) });
     for (const output of outputs) {
       process.stdout.write(`${output.width}×${output.height} ${output.path}\n`);
     }
