@@ -25474,6 +25474,11 @@ export class MoviElement extends HTMLElement {
       }
       :host(.movi-cover-art) .movi-controls-container.movi-controls-hidden .movi-buttons-row {
         max-height: 0 !important;
+        /* A flex item's automatic minimum is its content, and that minimum
+           BEATS max-height — the row kept its 42px on a phone and pushed the
+           meter that far off the bottom edge. */
+        min-height: 0 !important;
+        margin: 0 !important;
         opacity: 0 !important;
         pointer-events: none !important;
       }
