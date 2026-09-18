@@ -23216,11 +23216,13 @@ export class MoviElement extends HTMLElement {
         border-radius: 999px;
       }
 
-      /* The icon takes the accent and nothing else — no tinted square behind
-         it. The card already carries the row; a second patch of colour around
-         the glyph only muddied it. */
+      /* The glyph stays on the BRAND while everything else in the row wears the
+         accent: it is the same icon the row has when it is off, so it keeps the
+         player's own colour and the accent is left to say which row is on. No
+         tinted square behind it either — the card already carries the row, and
+         a second patch of colour around the glyph only muddied it. */
       .movi-context-menu-item.movi-context-menu-active .movi-context-menu-icon {
-        color: var(--movi-accent-light, var(--movi-primary-light, var(--movi-primary)));
+        color: var(--movi-primary-light, var(--movi-primary));
       }
 
       /* …and the value + its shortcut key pick up the accent, so the row reads
