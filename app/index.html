@@ -5942,7 +5942,7 @@
           <li><a href="/" class="active">Player</a></li>
           <li><a href="/examples">Examples</a></li>
           <li><a href="/compare">Compare</a></li>
-          <li class="nav-link-docs"><a href="/docs" target="_blank" rel="noopener">Docs</a></li>
+          <li class="nav-link-docs"><a href="/docs/" target="_blank" rel="noopener">Docs</a></li>
         </ul>
       </div>
       <div class="nav-right">
@@ -6967,7 +6967,7 @@
           <a href="/">Player</a>
           <a href="/examples">Examples</a>
           <a href="/compare">Compare</a>
-          <a href="/docs" target="_blank" rel="noopener">Docs</a>
+          <a href="/docs/" target="_blank" rel="noopener">Docs</a>
           <a href="https://chromewebstore.google.com/detail/movi-player/ckleeigcopjnpehkjokijokjegknfgej" rel="noopener" target="_blank">Chrome extension</a>
           <a href="https://marketplace.visualstudio.com/items?itemName=mrujjwalg.movi-player-vscode" rel="noopener" target="_blank">VS Code extension</a>
           <a href="https://www.npmjs.com/package/movi-player" rel="noopener" target="_blank">npm package</a>
@@ -6984,6 +6984,22 @@
           <a href="https://www.npmjs.com/package/movi-player" target="_blank" rel="noopener" aria-label="npm" title="npm"><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="1.5" y="6.5" width="21" height="11" rx="2.5" fill="currentColor"/><text x="12" y="15.2" text-anchor="middle" font-family="Arial, sans-serif" font-size="7.4" font-weight="700" fill="#f8fbff">npm</text></svg></a>
         </div>
       </div>
+      <!-- The docs' own pages were sitting in Search Console as "discovered,
+           currently not indexed": nothing on this site linked to any of them,
+           only to the docs home, so a crawler had one way in and no reason to
+           go deeper. These are that reason. -->
+      <nav class="site-footer-docs" aria-label="Documentation">
+        <span class="site-footer-docs-label">Docs</span>
+        <a href="/docs/guide/getting-started" target="_blank" rel="noopener">Getting started</a>
+        <a href="/docs/guide/custom-element" target="_blank" rel="noopener">Custom element</a>
+        <a href="/docs/api/player" target="_blank" rel="noopener">Player API</a>
+        <a href="/docs/api/events" target="_blank" rel="noopener">Events</a>
+        <a href="/docs/guide/multi-track" target="_blank" rel="noopener">Multi-track</a>
+        <a href="/docs/guide/hdr-support" target="_blank" rel="noopener">HDR</a>
+        <a href="/docs/guide/local-files" target="_blank" rel="noopener">Local files</a>
+        <a href="/docs/guide/troubleshooting" target="_blank" rel="noopener">Troubleshooting</a>
+        <a href="/docs/changelog" target="_blank" rel="noopener">Changelog</a>
+      </nav>
       <div class="site-footer-base">
         <p>You bring the videos &mdash; we don't host or store any media. Whatever you play is your own responsibility.</p>
         <p>&copy; MoviPlayer &middot; Engineered for high-fidelity playback.</p>
@@ -10644,7 +10660,7 @@
           { t: "Examples", d: "Live setups: MKV, HLS, DASH, 360°, audio, split sources", u: "/examples", k: "demo hls dash vr 360 audio embed code" },
           { t: "Compare to <video>", d: "Your file in MoviPlayer next to the native video tag", u: "/compare", k: "native video tag side by side mkv tracks subtitles" },
           { t: "Google Drive", d: "Play videos straight from your Drive", u: "/drive", k: "drive google cloud" },
-          { t: "Documentation", d: "Guides, attributes and API reference", u: "/docs", k: "docs guide help api", ext: true },
+          { t: "Documentation", d: "Guides, attributes and API reference", u: "/docs/", k: "docs guide help api", ext: true },
           { t: "<movi-player> element API", d: "Attributes, properties, methods and events", u: "/docs/api/element", k: "attributes controls addcontrol events", ext: true },
           { t: "MoviPlayer API", d: "Programmatic playback without the element", u: "/docs/api/player", k: "programmatic canvas typescript", ext: true },
           { t: "Chrome extension", d: "Open any video link with MoviPlayer", u: "https://chromewebstore.google.com/detail/movi-player/ckleeigcopjnpehkjokijokjegknfgej", k: "chrome extension install add browser", ext: true },
@@ -10760,7 +10776,7 @@
           if (!results.length) {
             var none = document.createElement("a");
             none.className = "nav-search-empty";
-            none.href = "/docs";
+            none.href = "/docs/";
             none.target = "_blank";
             none.rel = "noopener";
             none.textContent = "Nothing here for “" + input.value.trim() + "” — try the docs →";

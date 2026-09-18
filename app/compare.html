@@ -771,7 +771,7 @@
           <li><a href="/">Player</a></li>
           <li><a href="/examples">Examples</a></li>
           <li><a href="/compare" class="active">Compare</a></li>
-          <li class="nav-link-docs"><a href="/docs" target="_blank" rel="noopener">Docs</a></li>
+          <li class="nav-link-docs"><a href="/docs/" target="_blank" rel="noopener">Docs</a></li>
         </ul>
       </div>
       <div class="nav-right">
@@ -883,7 +883,7 @@
 
       <section class="footer-cta">
         <p>Want this in your own site? <code>npm install movi-player</code> and drop a <code>&lt;movi-player&gt;</code> tag.</p>
-        <a class="btn btn-primary" href="/docs" target="_blank" rel="noopener">Read the docs</a>
+        <a class="btn btn-primary" href="/docs/" target="_blank" rel="noopener">Read the docs</a>
         <a class="btn btn-secondary" href="https://github.com/mrujjwalg/movi-player" target="_blank" rel="noopener">View on GitHub</a>
       </section>
     </main>
@@ -1597,7 +1597,7 @@
           <a href="/">Player</a>
           <a href="/examples">Examples</a>
           <a href="/compare">Compare</a>
-          <a href="/docs" target="_blank" rel="noopener">Docs</a>
+          <a href="/docs/" target="_blank" rel="noopener">Docs</a>
           <a href="https://chromewebstore.google.com/detail/movi-player/ckleeigcopjnpehkjokijokjegknfgej" rel="noopener" target="_blank">Chrome extension</a>
           <a href="https://marketplace.visualstudio.com/items?itemName=mrujjwalg.movi-player-vscode" rel="noopener" target="_blank">VS Code extension</a>
           <a href="https://www.npmjs.com/package/movi-player" rel="noopener" target="_blank">npm package</a>
@@ -1637,7 +1637,7 @@
           { t: "Examples", d: "Live setups: MKV, HLS, DASH, 360°, audio, split sources", u: "/examples", k: "demo hls dash vr 360 audio embed code" },
           { t: "Compare to <video>", d: "Your file in MoviPlayer next to the native video tag", u: "/compare", k: "native video tag side by side mkv tracks subtitles" },
           { t: "Google Drive", d: "Play videos straight from your Drive", u: "/drive", k: "drive google cloud" },
-          { t: "Documentation", d: "Guides, attributes and API reference", u: "/docs", k: "docs guide help api", ext: true },
+          { t: "Documentation", d: "Guides, attributes and API reference", u: "/docs/", k: "docs guide help api", ext: true },
           { t: "<movi-player> element API", d: "Attributes, properties, methods and events", u: "/docs/api/element", k: "attributes controls addcontrol events", ext: true },
           { t: "MoviPlayer API", d: "Programmatic playback without the element", u: "/docs/api/player", k: "programmatic canvas typescript", ext: true },
           { t: "Chrome extension", d: "Open any video link with MoviPlayer", u: "https://chromewebstore.google.com/detail/movi-player/ckleeigcopjnpehkjokijokjegknfgej", k: "chrome extension install add browser", ext: true },
@@ -1753,7 +1753,7 @@
           if (!results.length) {
             var none = document.createElement("a");
             none.className = "nav-search-empty";
-            none.href = "/docs";
+            none.href = "/docs/";
             none.target = "_blank";
             none.rel = "noopener";
             none.textContent = "Nothing here for “" + input.value.trim() + "” — try the docs →";

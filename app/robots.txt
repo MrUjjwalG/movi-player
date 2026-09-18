@@ -1,7 +1,17 @@
 User-agent: *
 Allow: /
-Disallow: /proxy
-Disallow: /dist/
-Disallow: /api/
+
+# Nothing is disallowed here, on purpose.
+#
+# The plumbing — /api/*, /proxy, /eproxy, /dist/*, /test-native — answers with
+# `X-Robots-Tag: noindex`, which is the instruction that gets a URL DROPPED.
+# Blocking those paths instead did the opposite: Search Console had already
+# found /api/comments, /api/session, /api/token, /api/video and /proxy, and a
+# blocked URL can never be re-crawled, so the crawler could never see the
+# noindex (or the 404) that would have cleared them. They sat in the report
+# indefinitely.
+#
+# /dist/ was the costly one: the player bundle the home page loads lives
+# there, and Google asks not to block the JavaScript a page needs to render.
 
 Sitemap: https://moviplayer.com/sitemap.xml

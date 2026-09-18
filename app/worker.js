@@ -77,6 +77,15 @@ const DRIVE_HEADERS = {
 };
 
 const CORS_HEADERS = {
+  // None of what these headers ride on is a page: the API endpoints answer
+  // JSON and the proxy streams somebody else's video. Googlebot found
+  // /api/comments on its own and filed it under "crawled — currently not
+  // indexed", which is noise in a report that should only be about pages, and
+  // the proxy would put a viewer's video under this domain if it were ever
+  // indexed. robots.txt keeps the crawler off /api/ and /proxy; this is what
+  // answers anything that reaches them anyway — and unlike robots.txt, it is
+  // a signal to DROP what was already crawled.
+  "X-Robots-Tag": "noindex",
   "Access-Control-Allow-Origin": "*",
   "Access-Control-Allow-Methods": "GET, HEAD, POST, OPTIONS",
   // Encrypted-playback headers must be listed here so the CORS preflight
@@ -331,8 +340,32 @@ export default {
       return new Response(null, { headers: CORS_HEADERS });
     }
 
+    // One URL per page.
+    //
+    // Every page answered 200 at three or four spellings — /compare,
+    // /compare.html and /compare/ all served the same bytes — so a crawler
+    // fetched each page several times and had only rel=canonical to tell it
+    // which one counted. Say it in the response instead: the spellings 301 to
+    // the canonical path, which is the one in the sitemap and in every link.
+    const CANONICAL_PATH = {
+      "/index.html": "/",
+      "/compare.html": "/compare",
+      "/compare/": "/compare",
+      "/examples.html": "/examples",
+      "/examples/": "/examples",
+      "/drive.html": "/drive",
+      "/drive/": "/drive",
+      "/test-native.html": "/test-native",
+    };
+    if (CANONICAL_PATH[path]) {
+      return Response.redirect(
+        `${url.origin}${CANONICAL_PATH[path]}${url.search}`,
+        301,
+      );
+    }
+
     // --- Serve app ---
-    if (path === "/" || path === "/index.html") {
+    if (path === "/") {
       return new Response(buildHtml(env), {
         headers: {
           "Content-Type": "text/html;charset=UTF-8",
@@ -343,18 +376,22 @@ export default {
     }
 
     // --- Test page for isolating native <video> playback issues ---
-    if (path === "/test-native.html" || path === "/test-native") {
+    if (path === "/test-native") {
       return new Response(TEST_NATIVE_WITH_VERSION, {
         headers: {
           "Content-Type": "text/html;charset=UTF-8",
           "Cache-Control": "no-store",
+          // A debugging page for native <video>, of no use to anyone
+          // searching — keep it out of the index rather than let it rank for
+          // the player's own terms.
+          "X-Robots-Tag": "noindex, nofollow",
           ...SECURITY_HEADERS,
         },
       });
     }
 
     // --- Side-by-side comparison: native <video> vs <movi-player> ---
-    if (path === "/compare" || path === "/compare.html" || path === "/compare/") {
+    if (path === "/compare") {
       return new Response(COMPARE_WITH_VERSION, {
         headers: {
           "Content-Type": "text/html;charset=UTF-8",
@@ -369,7 +406,7 @@ export default {
     // require-corp would fight their opaque/CORS fetches. The player needs no
     // SharedArrayBuffer (single-threaded WASM + Asyncify I/O), so dropping
     // cross-origin isolation costs nothing here. ---
-    if (path === "/examples" || path === "/examples.html" || path === "/examples/") {
+    if (path === "/examples") {
       return new Response(EXAMPLES_WITH_VERSION, {
         headers: {
           "Content-Type": "text/html;charset=UTF-8",
@@ -384,7 +421,7 @@ export default {
     // Integration Open URL: Drive appends ?state={ids,action} and the page
     // signs in + streams the picked file. Uses DRIVE_HEADERS (popup-safe COOP,
     // no COEP) so the GIS OAuth popup can return the token — see the note there.
-    if (path === "/drive" || path === "/drive.html" || path === "/drive/") {
+    if (path === "/drive") {
       return new Response(buildDriveHtml(env), { headers: DRIVE_HEADERS });
     }
 
@@ -2820,12 +2857,7 @@ function jsonResponse(data, status = 200) {
     status,
     headers: {
       "Content-Type": "application/json",
-      // Not a page. Googlebot found /api/comments and /api/session by itself
-      // and filed them under "crawled - currently not indexed" and "not found"
-      // — noise in a report that should only be about pages. robots.txt now
-      // keeps the crawler off /api/ entirely; this covers anything that
-      // reaches one of these anyway.
-      "X-Robots-Tag": "noindex",
+      // X-Robots-Tag: noindex rides along in CORS_HEADERS.
       ...CORS_HEADERS,
     },
   });

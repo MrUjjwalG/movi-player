@@ -607,6 +607,34 @@ body { background-image: none; }
 }
 .site-footer-links a:hover { color: var(--accent); }
 
+/* One line of direct links into the documentation — see the note in the
+   footer markup. A quiet index, not a second nav: nothing on the site linked
+   into the docs beyond their home page, so a crawler had no way deeper. */
+.site-footer-docs {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 0.5rem 1.25rem;
+  margin-top: 1.5rem;
+  padding-top: 1.15rem;
+  border-top: 1px solid var(--border-subtle);
+}
+.site-footer-docs-label {
+  font-size: 0.7rem;
+  font-weight: 700;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--text-muted);
+}
+.site-footer-docs a {
+  font-size: 0.82rem;
+  color: var(--text-muted);
+  text-decoration: none;
+  transition: color 0.18s ease;
+}
+.site-footer-docs a:hover { color: var(--accent); }
+
+
 .site-footer-base {
   display: flex;
   flex-wrap: wrap;
@@ -1517,6 +1545,10 @@ html:not(.ext-installable) .way-card[href*="chromewebstore"] { display: none !im
 .site-footer-links { justify-content: center; gap: 0.35rem 1.3rem; font-size: 0.8rem; }
 .site-footer-links a { color: var(--site-ink); }
 .site-footer-links a:hover { color: var(--accent); }
+.site-footer-docs { justify-content: center; border-top-color: var(--site-nav-border); }
+.site-footer-docs-label { color: var(--site-ink-soft); }
+.site-footer-docs a { color: var(--site-ink); }
+.site-footer-docs a:hover { color: var(--accent); }
 .site-footer-social { display: flex; gap: 0.5rem; }
 .site-footer-social a {
   width: 38px;
