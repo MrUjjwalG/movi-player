@@ -17028,8 +17028,15 @@ export class MoviElement extends HTMLElement {
         /* Derived so themecolor attribute cascades to light/dark variants */
         --movi-primary-light: color-mix(in srgb, var(--movi-primary) 70%, white);
         --movi-primary-dark: color-mix(in srgb, var(--movi-primary) 70%, black);
+        /* The accent is its own colour, not a shade of the brand: the centre
+           play button and the context menu's selected rows wear it, and
+           --movi-primary is only what they fall back to when no accent was
+           given. A themecolor's second value sets it — see applyThemeColor. */
         --movi-accent: #4f86ff;
-        --movi-accent-light: #86b6ff;
+        /* Derived, for the same reason the primary's variants are: an accent
+           handed in through themecolor has to carry its lighter shade with it,
+           or the row's text stays the default blue while its fill turns. */
+        --movi-accent-light: color-mix(in srgb, var(--movi-accent) 70%, white);
         /* Use solid color instead of gradient */
         --movi-gradient: var(--movi-primary);
         
@@ -17442,16 +17449,6 @@ export class MoviElement extends HTMLElement {
 
       :host([theme="light"]) .movi-context-menu-item:hover {
         background-color: rgba(0, 0, 0, 0.05) !important;
-      }
-
-      /* The active row's tint is the accent under a scrim, and the scrim is the
-         card's own shade — which on a white card is white, not the dark one the
-         default uses. Without this the current value sat as a dark band across
-         a light menu. */
-      :host([theme="light"]) .movi-context-menu-item.movi-context-menu-active {
-        background-image:
-          linear-gradient(rgba(255, 255, 255, 0.86), rgba(255, 255, 255, 0.86)),
-          var(--movi-brand-fill, linear-gradient(var(--movi-secondary, var(--movi-primary)), var(--movi-secondary, var(--movi-primary)))) !important;
       }
 
       :host([theme="light"]) .movi-context-menu-divider {
@@ -19348,9 +19345,9 @@ export class MoviElement extends HTMLElement {
          the accent and a rule above it rather than reading as one more track
          you could select. */
       .movi-subtitle-pick-item {
-        /* --movi-primary, not --movi-accent: primary is the brand colour the
-           themecolor attribute cascades into, so a host that themes the
-           player themes this row with it. */
+        /* --movi-primary, not --movi-accent: the accent belongs to the
+           SELECTED state — the active row, the centre button. This is an
+           action, not a selection, so it wears the brand instead. */
         color: var(--movi-primary);
         border-top: 1px solid rgba(255, 255, 255, 0.08);
         margin-top: 4px;
@@ -23186,21 +23183,19 @@ export class MoviElement extends HTMLElement {
         pointer-events: none;
       }
 
-      /* An active row is drawn as a flat card — a tint of the theme's SECOND
-         colour, no outline and no bloom. The glow that used to sit under it
-         spread past the row and, on a light secondary, haloed the rows either
-         side of it. The fill is the shape; the rail, the icon and the state
-         word carry the accent. Falls back to primary where no secondary is
-         set, so a single-colour theme is unaffected. */
-      /* The accent across the row. A gradient cannot go through color-mix, so
-         it is layered instead: the fill underneath, a scrim of the card's own
-         shade on top, which is what turns it into a tint. The card is opaque
-         anyway, so nothing is lost by painting rather than blending — and the
-         accent now runs along the row instead of collapsing to one colour. */
+      /* An active row is drawn as a flat card — a tint of the ACCENT, no
+         outline and no bloom. The glow that used to sit under it spread past
+         the row and, on a light accent, haloed the rows either side of it. The
+         fill is the shape; the rail, the icon and the state word carry the
+         same colour. --movi-primary is only the fallback, for a player given
+         no accent.
+
+         A transparent tint rather than a scrim over an opaque fill: the tint
+         takes the card's own shade with it, so the light theme needs no rule
+         of its own — a white card gets a light wash where a dark one gets a
+         dark one. That is what the layered version had to special-case. */
       .movi-context-menu-item.movi-context-menu-active {
-        background-image:
-          linear-gradient(rgba(14, 16, 28, 0.86), rgba(14, 16, 28, 0.86)),
-          var(--movi-brand-fill, linear-gradient(var(--movi-secondary, var(--movi-primary)), var(--movi-secondary, var(--movi-primary))));
+        background-color: color-mix(in srgb, var(--movi-accent, var(--movi-primary)) 14%, transparent);
       }
 
       /* The rail: small, rounded, tucked inside the card's left edge.
@@ -23217,7 +23212,7 @@ export class MoviElement extends HTMLElement {
         transform: translateY(-50%);
         width: 3px;
         height: 20px;
-        background: var(--movi-brand-fill, var(--movi-primary-light, var(--movi-primary)));
+        background: var(--movi-accent-light, var(--movi-primary-light, var(--movi-primary)));
         border-radius: 999px;
       }
 
@@ -23225,18 +23220,18 @@ export class MoviElement extends HTMLElement {
          it. The card already carries the row; a second patch of colour around
          the glyph only muddied it. */
       .movi-context-menu-item.movi-context-menu-active .movi-context-menu-icon {
-        color: var(--movi-primary-light, var(--movi-primary));
+        color: var(--movi-accent-light, var(--movi-primary-light, var(--movi-primary)));
       }
 
       /* …and the value + its shortcut key pick up the accent, so the row reads
          as one object rather than a line with a highlight on it. */
       .movi-context-menu-item.movi-context-menu-active .movi-context-menu-status {
-        color: var(--movi-primary-light, var(--movi-primary));
+        color: var(--movi-accent-light, var(--movi-primary-light, var(--movi-primary)));
         font-weight: 600;
       }
       .movi-context-menu-item.movi-context-menu-active .movi-context-menu-shortcut {
-        color: var(--movi-primary-light, var(--movi-primary));
-        background: color-mix(in srgb, var(--movi-primary) 22%, transparent);
+        color: var(--movi-accent-light, var(--movi-primary-light, var(--movi-primary)));
+        background: color-mix(in srgb, var(--movi-accent, var(--movi-primary)) 22%, transparent);
       }
 
       /* The rail needs room, and the label has to clear the icon's new square.
@@ -23249,7 +23244,7 @@ export class MoviElement extends HTMLElement {
          itself — the card, rail and icon chip have nothing to sit on there. */
       .movi-context-menu-item.movi-context-menu-active[data-speed],
       .movi-context-menu-item.movi-context-menu-active[data-fit] .movi-context-menu-label {
-        color: var(--movi-primary-light, var(--movi-primary));
+        color: var(--movi-accent-light, var(--movi-primary-light, var(--movi-primary)));
         font-weight: 600;
       }
 
