@@ -2675,8 +2675,12 @@
         max-width: 880px;
         height: auto;
         flex: 0 0 auto;
-        /* No picture, no corners to cut — the strip carries its own shape. */
-        border-radius: 0;
+        /* The frame around a video is rounded, and the strip is the same frame
+           with a bar in it — squared off it read as a different component. The
+           element gives its own strip a small radius, but a rule out here beats
+           a :host rule inside the shadow root, so the 0 that used to sit here
+           won: the strip had no corners at all. Match the player frame. */
+        border-radius: 16px;
       }
       /* The wrapper clips rounded video corners with overflow:hidden — but in
          audio-strip mode there are no video corners, and that clip cut off the

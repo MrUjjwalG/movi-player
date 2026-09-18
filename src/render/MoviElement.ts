@@ -704,6 +704,10 @@ export class MoviElement extends HTMLElement {
   private coverArtOverlay: HTMLDivElement | null = null;
   private coverArtCanvas: HTMLCanvasElement | null = null;
   private coverArtBitmap: ImageBitmap | null = null;
+  /** The dotted level meter drawn along the scrubber in cover-art mode. */
+  private _eqCanvas: HTMLCanvasElement | null = null;
+  private _eqRaf: number | null = null;
+  private _eqSmoothed: Float32Array | null = null;
   // For an audio-only source with NO embedded album art but a `poster` URL, the
   // poster is loaded into a bitmap and painted through the same cover-art canvas
   // (blurred backdrop + centered) so it reads as album art instead of the bare
@@ -14022,11 +14026,25 @@ export class MoviElement extends HTMLElement {
   }
 
   /**
-   * Strip-mode menu positioning: place the menu just below the anchor
-   * button using viewport-relative position:fixed. The strip CSS drops
-   * the host's `contain: paint` + `container-type` so fixed coords are
-   * actually viewport-relative again (default behaviour) and paint
-   * extends outside the 56px strip box.
+   * Strip-mode menu positioning: place the menu against the anchor button
+   * using viewport-relative position:fixed. The strip CSS drops the host's
+   * `contain: paint` + `container-type` so fixed coords reach the viewport
+   * again and paint extends outside the 56px strip box.
+   *
+   * Two things the first version of this got wrong, both of which left the
+   * subtitle menu looking like it had not opened at all:
+   *
+   *  - Its height. The stylesheet caps these menus against the PLAYER's own
+   *    height, which in strip mode IS the bar: min(56px - 100px, 460px)
+   *    floors at zero, so the menu opened 2px tall. A strip's room is the
+   *    viewport's, so measure that instead.
+   *  - Its position. `fixed` is viewport-relative only while nothing up the
+   *    tree carries a transform, and the controls' right-hand cluster
+   *    animates with one — which makes IT the containing block. The menu
+   *    landed a cluster's width and a bar's height away from where it was
+   *    put (measured: asked for 771,476 and arrived at 1772,918, off-screen).
+   *    Rather than hunt for the transformed ancestor, put the menu down, see
+   *    where it actually went, and take the difference out.
    */
   private applyStripFixedMenuPosition(menu: HTMLElement): void {
     if (!this.classList.contains("movi-audio-strip")) return;
@@ -14034,23 +14052,70 @@ export class MoviElement extends HTMLElement {
       ".movi-btn",
     ) as HTMLElement | null;
     if (!anchor) return;
+    const GAP = 8;
+    const EDGE = 8;
     const btnRect = anchor.getBoundingClientRect();
-    // Measure intrinsic size by briefly placing the menu offscreen.
     menu.style.position = "fixed";
     menu.style.bottom = "auto";
     menu.style.right = "auto";
+    // The phone stylesheet centres these menus with a translate on their own
+    // --movi-menu-tx axis. Placed by hand it is not a centring any more, just
+    // an offset — on a 420px screen it carried the menu to x=614, off it.
+    menu.style.setProperty("--movi-menu-tx", "0px");
     menu.style.visibility = "hidden";
     menu.style.left = "0";
     menu.style.top = "0";
+
+    // Vertically the menu clears the whole BAR, not just the button inside
+    // it — anchored to the button it opened over the strip's own title row.
+    const barRect = this.getBoundingClientRect();
+    const below = window.innerHeight - barRect.bottom - GAP - EDGE;
+    const above = barRect.top - GAP - EDGE;
+    // Room is the VIEWPORT's, not the gap between the bar and the window edge.
+    // Measured against that gap the menu came out 120px tall with its own
+    // scrollbar whenever the strip sat high on the page — a list of subtitle
+    // tracks behind a scroll thumb, with the rest of the window empty. A menu
+    // may cover the bar it came from; that is what a pop-up does.
+    menu.style.setProperty(
+      "max-height",
+      `${Math.min(460, window.innerHeight - 2 * EDGE)}px`,
+      "important",
+    );
+
     const menuW = menu.offsetWidth || 200;
-    // Right-align with the button; clamp into viewport on both edges.
+    const menuH = menu.offsetHeight || 0;
+    // Below the bar when the page has room under it, above it when it does
+    // not — a strip sitting near the bottom of a page has neither by much,
+    // so take whichever side is roomier.
+    // Keep the bar clear when the menu fits beside it; otherwise let it
+    // overlap, clamped into the viewport below.
+    const openBelow = below >= menuH ? true : above >= menuH ? false : below >= above;
     let left = btnRect.right - menuW;
-    if (left < 8) left = 8;
-    if (left + menuW > window.innerWidth - 8) {
-      left = window.innerWidth - menuW - 8;
-    }
+    left = Math.min(
+      Math.max(left, EDGE),
+      Math.max(EDGE, window.innerWidth - menuW - EDGE),
+    );
+    let top = openBelow ? barRect.bottom + GAP : barRect.top - GAP - menuH;
+    top = Math.min(
+      Math.max(top, EDGE),
+      Math.max(EDGE, window.innerHeight - menuH - EDGE),
+    );
     menu.style.left = `${left}px`;
-    menu.style.top = `${btnRect.bottom + 8}px`;
+    menu.style.top = `${top}px`;
+
+    // Where did it actually land? Measured with the menu's own entrance
+    // transform off: that transform moves the rect too, and correcting for it
+    // would fight the animation rather than the containing block.
+    const inlineTransform = menu.style.transform;
+    menu.style.transform = "none";
+    const got = menu.getBoundingClientRect();
+    menu.style.transform = inlineTransform;
+    const dx = left - got.left;
+    const dy = top - got.top;
+    if (Math.abs(dx) > 0.5 || Math.abs(dy) > 0.5) {
+      menu.style.left = `${left + dx}px`;
+      menu.style.top = `${top + dy}px`;
+    }
     menu.style.visibility = "";
   }
 
@@ -21395,6 +21460,24 @@ export class MoviElement extends HTMLElement {
            opacity: 1 !important;
            transform: none !important;
         }
+
+        /* …and the slide back, which is what made the phone's bar read as
+           dropping away rather than blinking out. It was dropped wholesale
+           because a transformed container is the containing block for the
+           fixed-position sheets inside it — the settings panel was laid out
+           against the control group and went off-screen. That is only true
+           while a sheet is OPEN, and the bar does not auto-hide then, so the
+           transform is scoped to the rest of the time. The resting state stays
+           none (a transform of zero is still a containing block); a
+           transition from none animates all the same. */
+        :host(:not(.movi-bottom-menu-open)) .movi-controls-container {
+          transition:
+            opacity 0.2s ease,
+            transform 0.26s var(--movi-motion-out) !important;
+        }
+        :host(:not(.movi-bottom-menu-open)) .movi-controls-container.movi-controls-hidden {
+           transform: translateY(10px) !important;
+        }
         
         /* Sized to a finger-friendly tap target on phones (was 68×68 +
            32×32 svg, which read as undersized next to the bottom bar);
@@ -22133,11 +22216,27 @@ export class MoviElement extends HTMLElement {
            filter-induced white flash on some mobile GPUs that's no
            longer applicable since we don't use backdrop-filter. */
 
-        /* Remove the slide-up/down effect */
+        /* The slide-up/down, which the phone used to do without: the bar
+           blinked out where the desktop's drops away. It was removed here
+           wholesale because a transformed container is the containing block
+           for the fixed-position sheets inside it — the settings panel was
+           laid out against the control group and left the screen. That only
+           matters while a sheet is OPEN, and the bar does not auto-hide then.
+           So: no transform while one is open, the slide the rest of the time.
+           The visible state rests at none — a transform of zero is still a
+           containing block, and a transition out of none animates anyway. */
         .movi-controls-container,
-        .movi-controls-container.movi-controls-hidden,
-        .movi-controls-container.movi-controls-visible {
+        .movi-controls-container.movi-controls-visible,
+        :host(.movi-bottom-menu-open) .movi-controls-container.movi-controls-hidden {
           transform: none !important;
+        }
+        :host(:not(.movi-bottom-menu-open)) .movi-controls-container {
+          transition:
+            opacity 0.2s ease,
+            transform 0.26s var(--movi-motion-out) !important;
+        }
+        :host(:not(.movi-bottom-menu-open)) .movi-controls-container.movi-controls-hidden {
+          transform: translateY(10px) !important;
         }
 
         /* Ensure opacity toggle is instant */
@@ -25281,6 +25380,113 @@ export class MoviElement extends HTMLElement {
       }
       /* Controls live in the host's natural flow instead of floating above
          a video canvas — and stay visible regardless of hover state. */
+      /* The track lists cap themselves against the PLAYER's height, and in
+         strip mode that is the bar's own 78px: min(78 - 180, 360) floors at
+         zero, so the subtitle menu opened as a 12px scroll box with a
+         scrollbar beside it and the tracks hidden behind it. A strip's menus
+         are bounded by the viewport instead (the same reasoning the context
+         menu above already follows, and what applyStripFixedMenuPosition does
+         for the menu itself). */
+      :host(.movi-audio-strip) .movi-audio-track-list,
+      :host(.movi-audio-strip) .movi-subtitle-track-list {
+        max-height: min(calc(100vh - 160px), 360px);
+      }
+
+      /* ── Cover art: the scrubber is the level meter ──
+         The dots are painted over the real bar (see startCoverEqualizer) and
+         never take a click, so seeking, the handle and the keyboard work as
+         they always did — what changes is what the row LOOKS like: the plain
+         track would sit under the dots as a second, duller line. */
+      :host(.movi-cover-art) .movi-cover-eq {
+        position: absolute;
+        inset: 0;
+        width: 100%;
+        height: 100%;
+        pointer-events: none;
+        z-index: 1;
+      }
+      /* Only once the bar has gone: while the controls are up this is an
+         ordinary scrubber, and the meter would be a second, livelier line
+         drawn over it. */
+      :host(.movi-cover-art) .movi-controls-container.movi-controls-hidden .movi-progress-bar {
+        background: transparent !important;
+      }
+      :host(.movi-cover-art) .movi-controls-container.movi-controls-hidden .movi-progress-paint,
+      :host(.movi-cover-art) .movi-controls-container.movi-controls-hidden .movi-progress-buffer,
+      :host(.movi-cover-art) .movi-controls-container.movi-controls-hidden .movi-progress-handle {
+        opacity: 0 !important;
+      }
+      /* Idle cover art, the same shape the strip takes: the clock at the head
+         of the row and the total at its tail, with the meter between them and
+         nothing else. */
+      :host(.movi-cover-art) .movi-controls-container.movi-controls-hidden {
+        opacity: 1 !important;
+      }
+      :host(.movi-cover-art) .movi-controls-container.movi-controls-hidden .movi-controls-left,
+      :host(.movi-cover-art) .movi-controls-container.movi-controls-hidden .movi-progress-container,
+      :host(.movi-cover-art) .movi-controls-container.movi-controls-hidden .movi-time {
+        opacity: 1 !important;
+        transform: none !important;
+      }
+      :host(.movi-cover-art) .movi-controls-container.movi-controls-hidden .movi-time {
+        background: none !important;
+        padding-left: 0 !important;
+        padding-right: 0 !important;
+      }
+      :host(.movi-cover-art) .movi-controls-left > *:not(.movi-time),
+      :host(.movi-cover-art) .movi-controls-right,
+      :host(.movi-cover-art) .movi-controls-center {
+        max-width: 400px;
+        overflow: hidden;
+        transition:
+          max-width 260ms var(--movi-motion-out),
+          opacity 160ms ease;
+      }
+      :host(.movi-cover-art) .movi-controls-container.movi-controls-hidden .movi-controls-left > *:not(.movi-time),
+      :host(.movi-cover-art) .movi-controls-container.movi-controls-hidden .movi-controls-right,
+      :host(.movi-cover-art) .movi-controls-container.movi-controls-hidden .movi-controls-center {
+        max-width: 0 !important;
+        min-width: 0 !important;
+        padding-left: 0 !important;
+        padding-right: 0 !important;
+        margin-left: 0 !important;
+        margin-right: 0 !important;
+        opacity: 0 !important;
+        pointer-events: none !important;
+      }
+      /* The button row stands down entirely when the bar is idle — its clock
+         is drawn into the meter instead (see drawCoverEqualizer), on the same
+         line as the dots rather than a row below them. */
+      :host(.movi-cover-art) .movi-buttons-row {
+        transition: max-height 220ms var(--movi-motion-out), opacity 160ms ease;
+        max-height: 80px;
+        overflow: hidden;
+      }
+      :host(.movi-cover-art) .movi-controls-container.movi-controls-hidden .movi-buttons-row {
+        max-height: 0 !important;
+        opacity: 0 !important;
+        pointer-events: none !important;
+      }
+      :host(.movi-cover-art) .movi-controls-container.movi-controls-hidden .movi-progress-container {
+        /* Room for the meter to breathe once it is the only thing in the bar,
+           and clear of the very bottom edge. */
+        padding: 6px 0 20px !important;
+      }
+      :host(.movi-cover-art) .movi-controls-container.movi-controls-hidden .movi-time-separator {
+        max-width: 0 !important;
+        opacity: 0 !important;
+        overflow: hidden !important;
+      }
+      :host(.movi-cover-art) .movi-controls-container.movi-controls-hidden .movi-duration {
+        position: absolute;
+        right: 2px;
+        top: 50%;
+        transform: translateY(-50%);
+      }
+      :host(.movi-cover-art) .movi-controls-container.movi-controls-hidden .movi-progress-container {
+        padding-right: 58px !important;
+      }
+
       :host(.movi-audio-strip) .movi-controls-overlay {
         display: none !important;
       }
@@ -25345,6 +25551,79 @@ export class MoviElement extends HTMLElement {
       :host(.movi-audio-strip) .movi-controls-right {
         order: 2 !important;
         flex: 0 0 auto !important;
+      }
+
+      /* Idle strip: what is left when the pointer goes away.
+         The bar's groups fade out on the auto-hide but keep their space, so a
+         strip at rest showed a scrubber stranded in the middle of the row with
+         an empty gap either side of it — the play cluster and the buttons,
+         invisible but still laid out. Give the row to the two things worth
+         reading when nothing is being pointed at: the clock, and a progress
+         bar across the full width. Everything else stands down until the
+         pointer comes back. */
+      :host(.movi-audio-strip) .movi-controls-container.movi-controls-hidden .movi-controls-left {
+        opacity: 1 !important;
+        transform: none !important;
+      }
+      /* The clock's own capsule is drawn for a row that has buttons beside it;
+         alone in an idle bar it reads as a pill around the elapsed time while
+         the total at the other end sits bare. Drop it and let the two match. */
+      :host(.movi-audio-strip) .movi-controls-container.movi-controls-hidden .movi-time {
+        background: none !important;
+        padding-left: 0 !important;
+        padding-right: 0 !important;
+      }
+      :host(.movi-audio-strip) .movi-controls-container.movi-controls-hidden .movi-controls-left,
+      :host(.movi-audio-strip) .movi-controls-container.movi-controls-hidden .movi-controls-right {
+        gap: 0 !important;
+      }
+      /* Collapsed by MAX-WIDTH, which is a length either side of the change
+         and therefore animates — display:none cannot transition (the row
+         snapped from a scrubber in the middle to one across the whole bar),
+         and neither can a width of auto, which is what these are the rest of
+         the time. The scrubber is flex:1, so it takes the width back as the
+         buttons give it up. */
+      :host(.movi-audio-strip) .movi-controls-left > *:not(.movi-time),
+      :host(.movi-audio-strip) .movi-controls-right {
+        max-width: 400px;
+        overflow: hidden;
+        transition:
+          max-width 260ms var(--movi-motion-out),
+          opacity 160ms ease;
+      }
+      :host(.movi-audio-strip) .movi-controls-container.movi-controls-hidden .movi-controls-left > *:not(.movi-time),
+      :host(.movi-audio-strip) .movi-controls-container.movi-controls-hidden .movi-controls-right {
+        max-width: 0 !important;
+        min-width: 0 !important;
+        padding-left: 0 !important;
+        padding-right: 0 !important;
+        margin-left: 0 !important;
+        margin-right: 0 !important;
+        opacity: 0 !important;
+        pointer-events: none !important;
+      }
+      :host(.movi-audio-strip) .movi-controls-container.movi-controls-hidden .movi-progress-container {
+        opacity: 1 !important;
+        transform: none !important;
+      }
+
+      /* Idle strip, the clock: elapsed at the head of the scrubber and total at
+         its tail, the way a bar with nothing else on it reads. The separator
+         goes (there is nothing between them to separate any more) and the
+         scrubber leaves room at its right for the total. */
+      :host(.movi-audio-strip) .movi-controls-container.movi-controls-hidden .movi-time-separator {
+        max-width: 0 !important;
+        opacity: 0 !important;
+        overflow: hidden !important;
+      }
+      :host(.movi-audio-strip) .movi-controls-container.movi-controls-hidden .movi-duration {
+        position: absolute;
+        right: 2px;
+        top: 50%;
+        transform: translateY(-50%);
+      }
+      :host(.movi-audio-strip) .movi-controls-container.movi-controls-hidden .movi-progress-container {
+        padding-right: 58px !important;
       }
       /* Linear playback (no Range support, over-cap file): the scrubber and
          skip buttons stay — seeking is allowed but clamped in JS to the
@@ -27456,6 +27735,143 @@ export class MoviElement extends HTMLElement {
     img.src = url;
   }
 
+  /**
+   * The scrubber, drawn as a row of dots that move with the sound.
+   *
+   * Cover art leaves a whole surface with nothing happening on it: a plain
+   * line under a sleeve reads as a still image with a progress bar bolted on.
+   * The dots carry the position the same way — bright behind the playhead,
+   * dim ahead of it — and ripple with the level, so the picture is playing
+   * something. It is drawn over the real scrubber and never takes its clicks
+   * (pointer-events stay off), so seeking, keyboard and the handle are
+   * untouched.
+   */
+  private startCoverEqualizer(): void {
+    if (this._eqRaf !== null) return;
+    const container = this.shadowRoot?.querySelector(
+      ".movi-progress-container",
+    ) as HTMLElement | null;
+    if (!container) return;
+    if (!this._eqCanvas) {
+      const canvas = document.createElement("canvas");
+      canvas.className = "movi-cover-eq";
+      canvas.setAttribute("aria-hidden", "true");
+      this._eqCanvas = canvas;
+    }
+    if (this._eqCanvas.parentElement !== container) {
+      container.appendChild(this._eqCanvas);
+    }
+    const tick = (): void => {
+      this._eqRaf = requestAnimationFrame(tick);
+      this.drawCoverEqualizer();
+    };
+    this._eqRaf = requestAnimationFrame(tick);
+  }
+
+  private stopCoverEqualizer(): void {
+    if (this._eqRaf !== null) {
+      cancelAnimationFrame(this._eqRaf);
+      this._eqRaf = null;
+    }
+    this._eqCanvas?.remove();
+    this._eqSmoothed = null;
+  }
+
+  private drawCoverEqualizer(): void {
+    const canvas = this._eqCanvas;
+    if (!canvas || !this.classList.contains("movi-cover-art")) return;
+    const rect = canvas.getBoundingClientRect();
+    const cssW = Math.floor(rect.width);
+    const cssH = Math.floor(rect.height);
+    if (cssW < 8 || cssH < 4) return;
+    const dpr = Math.min(window.devicePixelRatio || 1, 2);
+    if (canvas.width !== Math.floor(cssW * dpr)) {
+      canvas.width = Math.floor(cssW * dpr);
+    }
+    if (canvas.height !== Math.floor(cssH * dpr)) {
+      canvas.height = Math.floor(cssH * dpr);
+    }
+    const ctx = canvas.getContext("2d");
+    if (!ctx) return;
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    ctx.clearRect(0, 0, cssW, cssH);
+
+    const spacing = 9;
+    const count = Math.max(4, Math.floor(cssW / spacing));
+    const levels = this.player?.getAudioLevels?.(count) ?? null;
+    // Ease each dot towards its level: the raw analyser output flickers, and a
+    // row of flickering dots reads as noise rather than as the music.
+    if (!this._eqSmoothed || this._eqSmoothed.length !== count) {
+      this._eqSmoothed = new Float32Array(count);
+    }
+    const smoothed = this._eqSmoothed;
+    for (let i = 0; i < count; i++) {
+      const target = levels ? levels[i] : 0;
+      smoothed[i] += (target - smoothed[i]) * (target > smoothed[i] ? 0.5 : 0.12);
+    }
+
+    const duration = this.duration || 0;
+    const played = duration > 0 ? Math.min(1, this.currentTime / duration) : 0;
+    const midY = cssH / 2;
+    const idle = !!this.controlsContainer?.classList.contains(
+      "movi-controls-hidden",
+    );
+    const idleDots = idle;
+    // The meter is the idle face of the bar. With the controls up the real
+    // scrubber is on screen and this would sit on top of it.
+    if (!idle) return;
+    const base = idleDots ? 2 : 1.5;
+    const swing = Math.min(cssH / 2 - base - 1, idleDots ? 9 : 7);
+
+    // With the bar idle the clock is drawn here instead of in the button row,
+    // so the elapsed time, the meter and the total read as one line — in the
+    // row itself they sit on separate rows with the meter above them.
+    let from = 0;
+    let to = cssW;
+    if (idle && duration > 0) {
+      const font = "500 12px 'Inter', -apple-system, BlinkMacSystemFont, sans-serif";
+      ctx.font = font;
+      ctx.textBaseline = "middle";
+      const elapsedText = this.formatTime(this.currentTime || 0);
+      const totalText = this.formatTime(duration);
+      const pad = 12;
+      ctx.fillStyle = "rgba(255,255,255,0.92)";
+      ctx.fillText(elapsedText, 0, midY);
+      const totalW = ctx.measureText(totalText).width;
+      ctx.fillStyle = "rgba(255,255,255,0.6)";
+      ctx.fillText(totalText, cssW - totalW, midY);
+      from = ctx.measureText(elapsedText).width + pad;
+      to = cssW - totalW - pad;
+    }
+    const span = Math.max(1, to - from);
+    const step = span / count;
+    for (let i = 0; i < count; i++) {
+      const x = from + (i + 0.5) * step;
+      const level = smoothed[i];
+      // The width never moves — only the height. Growing both turned a
+      // mid-level dot into a block as wide as it was tall, which read as a row
+      // of squares rather than a meter.
+      const h = Math.max(base * 2, level * swing * 2);
+      const isPlayed = i / count <= played;
+      ctx.beginPath();
+      ctx.fillStyle = isPlayed
+        ? "rgba(255, 255, 255, 0.96)"
+        : "rgba(255, 255, 255, 0.34)";
+      if (h > base * 2 + 0.5) {
+        // Taller than it is wide: a capsule, with the ends as round as the dot
+        // it grew out of.
+        if (typeof ctx.roundRect === "function") {
+          ctx.roundRect(x - base, midY - h / 2, base * 2, h, base);
+        } else {
+          ctx.rect(x - base, midY - h / 2, base * 2, h);
+        }
+      } else {
+        ctx.arc(x, midY, base, 0, Math.PI * 2);
+      }
+      ctx.fill();
+    }
+  }
+
   /** Downscale an album-art bitmap to a tiny JPEG data URL for the blurred
    *  backdrop. The backdrop is blurred to 40px, so ~96px is indistinguishable
    *  from full-res while keeping the URL small and the draw cheap. */
@@ -27638,6 +28054,8 @@ export class MoviElement extends HTMLElement {
     if (!bitmap || !audioMode) {
       overlay.style.display = "none";
       if (this._coverArtBgEl) this._coverArtBgEl.style.backgroundImage = "none";
+      this.classList.remove("movi-cover-art");
+      this.stopCoverEqualizer();
       return;
     }
 
@@ -27673,22 +28091,150 @@ export class MoviElement extends HTMLElement {
 
     const bitmapAR = bitmap.width / bitmap.height;
 
-    // Centred sharp artwork — square, 60% of the smaller dimension. The
-    // bitmap itself is rarely a perfect square, so contain it inside the
-    // square frame (no crop) and let the blur backdrop fill the surround.
-    const frameSize = Math.min(cssW, cssH) * 0.6;
+    // What the sleeve says about itself. A cover with no words beside it is a
+    // picture; with the track and the artist it is a record being played.
+    const meta = (this.player?.getMediaInfo?.()?.metadata ?? {}) as Record<
+      string,
+      string
+    >;
+    const readMeta = (...keys: string[]): string => {
+      for (const key of keys) {
+        for (const spelling of [key, key.toUpperCase(), key.toLowerCase()]) {
+          const value = meta[spelling];
+          if (value && value.trim()) return value.trim();
+        }
+      }
+      return "";
+    };
+    const trackTitle =
+      readMeta("title") ||
+      (
+        this.shadowRoot?.querySelector(".movi-title-text") as HTMLElement | null
+      )?.textContent?.trim() ||
+      "";
+    const artistName = readMeta("artist", "album_artist", "performer", "author");
+
+    // Side by side when there is room for both, the sleeve alone when there is
+    // not: a narrow or short player has nowhere to put a line of type without
+    // taking the picture apart.
+    const words = trackTitle || artistName;
+    const sideBySide = !!words && cssW >= 560 && cssW / cssH >= 1.1;
+
+    const frameSize = sideBySide
+      ? Math.min(cssH * 0.62, cssW * 0.34)
+      : Math.min(cssW, cssH) * 0.6;
     const artW = bitmapAR >= 1 ? frameSize : frameSize * bitmapAR;
     const artH = bitmapAR >= 1 ? frameSize / bitmapAR : frameSize;
-    const artX = (cssW - artW) / 2;
-    const artY = (cssH - artH) / 2;
-    // Subtle shadow so the art doesn't bleed into its own blur.
+
+    const gap = Math.round(frameSize * 0.16);
+    const titleSize = Math.max(18, Math.min(44, Math.round(frameSize * 0.13)));
+    const artistSize = Math.round(titleSize * 0.66);
+    // As much of the row as is left after the sleeve and the gutters — a
+    // narrower column than that cut "Vaaroon feat. Romy & Ginny" in half.
+    const sidePad = Math.max(24, Math.round(cssW * 0.04));
+    const textW = sideBySide
+      ? Math.max(120, cssW - artW - gap - sidePad * 2)
+      : 0;
+    const blockW = sideBySide ? artW + gap + textW : artW;
+    const artX = Math.round((cssW - blockW) / 2);
+    const artY = Math.round((cssH - artH) / 2);
+
+    // Rounded sleeve, and a shadow under it so it doesn't bleed into its own
+    // blurred backdrop.
+    const radius = Math.max(6, Math.round(frameSize * 0.045));
+    ctx.save();
     ctx.shadowColor = "rgba(0,0,0,0.55)";
-    ctx.shadowBlur = 30;
-    ctx.shadowOffsetY = 6;
+    ctx.shadowBlur = 34;
+    ctx.shadowOffsetY = 10;
+    ctx.beginPath();
+    if (typeof ctx.roundRect === "function") {
+      ctx.roundRect(artX, artY, artW, artH, radius);
+    } else {
+      ctx.rect(artX, artY, artW, artH);
+    }
+    ctx.fillStyle = "#000";
+    ctx.fill();
+    ctx.restore();
+    ctx.save();
+    ctx.beginPath();
+    if (typeof ctx.roundRect === "function") {
+      ctx.roundRect(artX, artY, artW, artH, radius);
+    } else {
+      ctx.rect(artX, artY, artW, artH);
+    }
+    ctx.clip();
     ctx.drawImage(bitmap, artX, artY, artW, artH);
     ctx.restore();
 
+    if (sideBySide) {
+      const textX = artX + artW + gap;
+      const setFont = (size: number, weight: string): void => {
+        ctx.font = `${weight} ${size}px 'Inter', -apple-system, BlinkMacSystemFont, sans-serif`;
+      };
+      // Titles are long ("… feat. …", a remix note, the year) and a single
+      // line of them is mostly ellipsis. Wrap to two, then give up.
+      const wrap = (text: string, size: number, weight: string, maxLines: number): string[] => {
+        setFont(size, weight);
+        if (ctx.measureText(text).width <= textW) return [text];
+        const words = text.split(/\s+/);
+        const lines: string[] = [];
+        let line = "";
+        for (const word of words) {
+          const next = line ? line + " " + word : word;
+          if (ctx.measureText(next).width <= textW || !line) {
+            line = next;
+          } else {
+            lines.push(line);
+            line = word;
+            if (lines.length === maxLines) break;
+          }
+        }
+        if (lines.length < maxLines && line) lines.push(line);
+        if (lines.length === maxLines) {
+          let last = lines[maxLines - 1];
+          const rest = text.slice(lines.join(" ").length).trim();
+          if (rest || ctx.measureText(last).width > textW) {
+            while (last.length > 1 && ctx.measureText(last + "…").width > textW) {
+              last = last.slice(0, -1);
+            }
+            lines[maxLines - 1] = last.trimEnd() + "…";
+          }
+        }
+        return lines;
+      };
+      // Set against the middle of the sleeve, not the middle of the player:
+      // the pair reads as one object that way.
+      const midY = artY + artH / 2;
+      const titleLines = trackTitle ? wrap(trackTitle, titleSize, "600", 2) : [];
+      const artistLines = artistName ? wrap(artistName, artistSize, "500", 1) : [];
+      const lineGap = Math.round(titleSize * 0.28);
+      const blockH =
+        titleLines.length * titleSize * 1.18 +
+        (artistLines.length ? lineGap + artistSize * 1.2 : 0);
+      let y = midY - blockH / 2 + titleSize * 0.6;
+      ctx.save();
+      ctx.textBaseline = "middle";
+      ctx.shadowColor = "rgba(0,0,0,0.45)";
+      ctx.shadowBlur = 18;
+      ctx.fillStyle = "rgba(255,255,255,0.97)";
+      setFont(titleSize, "600");
+      for (const line of titleLines) {
+        ctx.fillText(line, textX, y);
+        y += titleSize * 1.18;
+      }
+      if (artistLines.length) {
+        y += lineGap;
+        ctx.fillStyle = "rgba(255,255,255,0.72)";
+        setFont(artistSize, "500");
+        ctx.fillText(artistLines[0], textX, y);
+      }
+      ctx.restore();
+    }
+    ctx.restore();
+
     overlay.style.display = "block";
+    this.classList.add("movi-cover-art");
+    this.startCoverEqualizer();
   }
 
   /**

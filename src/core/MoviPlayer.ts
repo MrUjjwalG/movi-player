@@ -10024,6 +10024,16 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
     return this._loopEnabled;
   }
 
+  /**
+   * The sound as levels, for drawing — `bars` bands, each 0..1, or null when
+   * there is nothing playing to read. Used by the cover-art view's dotted
+   * meter; any host can draw its own from the same numbers.
+   */
+  getAudioLevels(bars: number): Float32Array | null {
+    if (this.disableAudio) return null;
+    return this.audioRenderer?.getLevels?.(bars) ?? null;
+  }
+
   /** How many times this source has looped, from 0. */
   getLoopCount(): number {
     return this._loopCount;

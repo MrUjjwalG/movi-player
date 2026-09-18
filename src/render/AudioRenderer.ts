@@ -77,6 +77,11 @@ export class AudioRenderer {
   // separate from the volume node lets us reorder the compressor/gain chain
   // (stable-audio toggle) without re-touching the live sources.
   private inputNode: GainNode | null = null;
+  /** A tap for drawing the sound, not for hearing it — see getLevels. Built
+   *  only when something asks, and hung off the gain node in parallel, so it
+   *  never sits between the audio and the speakers. */
+  private _analyser: AnalyserNode | null = null;
+  private _analyserBins: Uint8Array<ArrayBuffer> | null = null;
   private gainNode: GainNode | null = null;
   private compressorNode: DynamicsCompressorNode | null = null;
   private scheduledTime: number = 0;
@@ -515,6 +520,11 @@ export class AudioRenderer {
 
       // Apply muted state if set before initialization
       this.gainNode.gain.value = this._muted ? 0 : this.perceptualGain(this.volume);
+      // A tap built before this point would have been wired to the old graph.
+      if (this._analyser) {
+        this._analyser = null;
+        this._analyserBins = null;
+      }
 
       // Re-apply the chosen output device to the freshly-created context.
       // Non-blocking: a stale/removed deviceId just falls back to default.
@@ -2683,6 +2693,57 @@ export class AudioRenderer {
     } catch {
       Logger.warn(TAG, "Failed to (re)wire audio chain");
     }
+  }
+
+  /**
+   * The sound as levels, for drawing.
+   *
+   * `bars` bands from the spectrum, each 0..1, weighted so the low end does
+   * not swamp everything (music has most of its energy there and a plain
+   * average leaves every bar but the first two flat). Returns null when there
+   * is nothing to read — no context, no sound running — and the caller can
+   * draw its resting state.
+   */
+  getLevels(bars: number): Float32Array | null {
+    const ctx = this.audioContext;
+    if (!ctx || ctx.state !== "running" || !this.gainNode || bars <= 0) {
+      return null;
+    }
+    if (!this._analyser) {
+      try {
+        this._analyser = ctx.createAnalyser();
+        this._analyser.fftSize = 512;
+        this._analyser.smoothingTimeConstant = 0.72;
+        // In parallel with the output, not in series: an analyser passes audio
+        // through, but hanging it off the gain node keeps the path to the
+        // speakers exactly as it was.
+        this.gainNode.connect(this._analyser);
+        this._analyserBins = new Uint8Array(
+          new ArrayBuffer(this._analyser.frequencyBinCount),
+        );
+      } catch {
+        this._analyser = null;
+        return null;
+      }
+    }
+    const analyser = this._analyser;
+    const bins = this._analyserBins;
+    if (!analyser || !bins) return null;
+    analyser.getByteFrequencyData(bins);
+    const out = new Float32Array(bars);
+    // Logarithmic bands: the ear hears pitch that way, and it spreads a song
+    // across the whole row instead of the first handful of bars.
+    const top = Math.floor(bins.length * 0.72); // above this is mostly hiss
+    for (let i = 0; i < bars; i++) {
+      const from = Math.floor(Math.pow(i / bars, 1.7) * top);
+      const to = Math.max(from + 1, Math.floor(Math.pow((i + 1) / bars, 1.7) * top));
+      let sum = 0;
+      for (let b = from; b < to && b < bins.length; b++) sum += bins[b];
+      const avg = sum / Math.max(1, to - from) / 255;
+      // Lift the top end, which is quieter in almost every recording.
+      out[i] = Math.min(1, avg * (1 + (i / bars) * 1.6));
+    }
+    return out;
   }
 
   /**
