@@ -7571,6 +7571,13 @@
       // the animation waits until the page has arrived.
       const startPreparingSweep = () => playerLoading?.classList.add("visible");
 
+      // …and none of it applies when something is already playing. The sweep
+      // covers the FRAME, and on a swap the frame is the film the viewer is
+      // watching: a shimmer ran over the picture while the next file opened,
+      // and the words underneath it were never visible anyway. A replacement
+      // announces itself by the picture changing.
+      const playerHasPicture = () => (player.duration || 0) > 0;
+
       // The placeholder goes back to its own words once there is a picture to
       // replace it — or once the source has failed and the player has its own
       // error to show.
@@ -7801,19 +7808,18 @@
         embedBtn.classList.add("visible");
         scrollToPlayer();
         loadBtn.classList.add("is-loading");
-        playerLoading?.classList.add("visible");
         // The player's placeholder still reads "nothing loaded", which stops
         // being true the moment a source is given — and a transparent overlay
         // shows it straight through. Reword it rather than hide it: an empty
         // frame with a sweep over it says less than one that says what it is
-        // waiting for. Same copy rules as the placeholder itself — don't say
-        // "video" (audio sources land here too) and don't instruct.
-        const emptyTitle = player.shadowRoot?.querySelector(".movi-empty-title");
-        const emptyMessage = player.shadowRoot?.querySelector(".movi-empty-message");
-        const priorTitle = emptyTitle?.textContent;
-        const priorMessage = emptyMessage?.textContent;
-        if (emptyTitle) emptyTitle.textContent = "Preparing";
-        if (emptyMessage) emptyMessage.textContent = "Fetching the source";
+        // waiting for.
+        //
+        // …unless there IS a frame. Swapping a playing video for a URL ran the
+        // sweep over the picture the viewer was watching, and the words under
+        // it were never visible anyway. On a swap the Play button's own
+        // spinner is the feedback, and the picture changing is the rest.
+        const undo = playerHasPicture() ? null : showPreparing("Fetching the source");
+        if (undo) startPreparingSweep();
 
         try {
           player.src = await proxyUrl(url);
@@ -7823,9 +7829,7 @@
           embedBtn.classList.remove("visible");
         } finally {
           loadBtn.classList.remove("is-loading");
-          playerLoading?.classList.remove("visible");
-          if (emptyTitle && priorTitle != null) emptyTitle.textContent = priorTitle;
-          if (emptyMessage && priorMessage != null) emptyMessage.textContent = priorMessage;
+          if (undo) undo();
         }
       };
 
@@ -7847,12 +7851,12 @@
           clearPlaylist();
           urlInput.value = "";
           scrollToPlayer();
-          const undo = showPreparing("Opening your file");
+          const undo = playerHasPicture() ? null : showPreparing("Opening your file");
           afterScrollSettles(() => {
-            startPreparingSweep();
+            if (undo) startPreparingSweep();
             if (player.setFile) player.setFile(files[0]);
             else player.src = files[0];
-            clearPreparingWhenReady(undo);
+            if (undo) clearPreparingWhenReady(undo);
           });
         } else {
           setPlaylist(files);
@@ -8658,11 +8662,11 @@
         renderPlaylist();
         syncPlayerQueue();
         scrollToPlayer();
-        const undo = showPreparing("Opening the first file");
+        const undo = playerHasPicture() ? null : showPreparing("Opening the first file");
         afterScrollSettles(() => {
-          startPreparingSweep();
+          if (undo) startPreparingSweep();
           playPlaylistItem(0);
-          clearPreparingWhenReady(undo);
+          if (undo) clearPreparingWhenReady(undo);
         });
       };
 
