@@ -708,6 +708,8 @@ export class MoviElement extends HTMLElement {
   private _eqCanvas: HTMLCanvasElement | null = null;
   private _eqRaf: number | null = null;
   private _eqSmoothed: Float32Array | null = null;
+  /** The loudest band seen lately — the meter is drawn relative to it. */
+  private _eqPeak = 0;
   // For an audio-only source with NO embedded album art but a `poster` URL, the
   // poster is loaded into a bitmap and painted through the same cover-art canvas
   // (blurred backdrop + centered) so it reads as album art instead of the bare
@@ -718,6 +720,14 @@ export class MoviElement extends HTMLElement {
   // Blurred-backdrop element behind the sharp-art canvas — CSS filter:blur()
   // (cross-browser Gaussian, unlike canvas ctx.filter).
   private _coverArtBgEl: HTMLDivElement | null = null;
+  // Palette sampled from the current sleeve. It colours only the ambient
+  // lighting (never controls/text), so contrast stays predictable while each
+  // record still gives the player its own visual temperature.
+  private _coverPaletteBitmap: ImageBitmap | null = null;
+  private _coverPalette: {
+    accent: [number, number, number];
+    secondary: [number, number, number];
+  } | null = null;
   // A small data URL of the embedded album art, generated once per source, so
   // the CSS-blurred backdrop can point at it too (background-image needs a URL;
   // the embedded art arrives as an ImageBitmap with none).
@@ -25738,13 +25748,53 @@ export class MoviElement extends HTMLElement {
          blur's soft edges stay outside the (overflow:hidden) overlay. */
       .movi-cover-art-bg {
         position: absolute;
-        inset: -12%;
+        inset: -14%;
         background-size: cover;
         background-position: center;
         background-repeat: no-repeat;
-        filter: blur(40px) brightness(0.5);
-        transform: scale(1.18);
+        filter: blur(54px) brightness(0.42) saturate(1.22);
+        transform: scale(1.2);
         will-change: filter;
+      }
+      /* The blurred sleeve supplies the colour, while these scrims supply the
+         lighting. A single dark filter made pale artwork turn into one flat,
+         muddy rectangle; the offset glow keeps the surface dimensional and
+         the bottom vignette gives the waveform a reliably calm backdrop. */
+      .movi-cover-art-overlay::before {
+        content: "";
+        position: absolute;
+        inset: 0;
+        z-index: 1;
+        pointer-events: none;
+        background:
+          radial-gradient(ellipse 52% 62% at 26% 32%, rgba(var(--movi-cover-accent, 255, 255, 255), 0.24), transparent 72%),
+          radial-gradient(ellipse 50% 58% at 80% 24%, rgba(var(--movi-cover-secondary, 255, 255, 255), 0.14), transparent 70%),
+          linear-gradient(180deg, rgba(7, 7, 9, 0.04) 0%, rgba(7, 7, 9, 0.12) 58%, rgba(7, 7, 9, 0.58) 100%);
+      }
+      .movi-cover-art-overlay::after {
+        content: "";
+        position: absolute;
+        inset: 0;
+        z-index: 3;
+        pointer-events: none;
+        background-image: url("data:image/svg+xml,%3Csvg viewBox='0 0 180 180' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='.82' numOctaves='3' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)' opacity='.18'/%3E%3C/svg%3E");
+        background-size: 180px 180px;
+        mix-blend-mode: soft-light;
+        opacity: 0.34;
+        box-shadow:
+          inset 0 0 0 1px rgba(255, 255, 255, 0.035),
+          inset 0 -80px 110px rgba(0, 0, 0, 0.16);
+      }
+      .movi-cover-art-overlay > canvas {
+        z-index: 2;
+        animation: movi-cover-art-enter 520ms var(--movi-motion-out) both;
+      }
+      @keyframes movi-cover-art-enter {
+        from { opacity: 0; transform: translateY(8px) scale(0.992); }
+        to { opacity: 1; transform: translateY(0) scale(1); }
+      }
+      @media (prefers-reduced-motion: reduce) {
+        .movi-cover-art-overlay > canvas { animation: none; }
       }
       /* Strip-mode keyboard-shortcuts panel: the base CSS centres it
          inside the host via position:absolute + top:50%/left:50%, but
@@ -27796,7 +27846,9 @@ export class MoviElement extends HTMLElement {
     ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
     ctx.clearRect(0, 0, cssW, cssH);
 
-    const spacing = 9;
+    // A finer cadence reads as an audio waveform rather than a row of loading
+    // dots, especially across a wide desktop player.
+    const spacing = cssW < 520 ? 7 : 8;
     const count = Math.max(4, Math.floor(cssW / spacing));
     const levels = this.player?.getAudioLevels?.(count) ?? null;
     // Ease each dot towards its level: the raw analyser output flickers, and a
@@ -27805,10 +27857,18 @@ export class MoviElement extends HTMLElement {
       this._eqSmoothed = new Float32Array(count);
     }
     const smoothed = this._eqSmoothed;
+    let frameMax = 0;
     for (let i = 0; i < count; i++) {
       const target = levels ? levels[i] : 0;
       smoothed[i] += (target - smoothed[i]) * (target > smoothed[i] ? 0.5 : 0.12);
+      if (smoothed[i] > frameMax) frameMax = smoothed[i];
     }
+    // Scale the row against its own loudest band, and let that reference fall
+    // slowly. Absolute levels pin most of the row at the ceiling on anything
+    // loud — every dot the same height, which is a line, not a meter. Relative
+    // to the peak, the shape of the sound shows at any volume.
+    this._eqPeak = Math.max(frameMax, (this._eqPeak ?? 0) * 0.94);
+    const scale = 1 / Math.max(0.12, this._eqPeak);
 
     const duration = this.duration || 0;
     const played = duration > 0 ? Math.min(1, this.currentTime / duration) : 0;
@@ -27820,8 +27880,12 @@ export class MoviElement extends HTMLElement {
     // The meter is the idle face of the bar. With the controls up the real
     // scrubber is on screen and this would sit on top of it.
     if (!idle) return;
-    const base = idleDots ? 2 : 1.5;
-    const swing = Math.min(cssH / 2 - base - 1, idleDots ? 9 : 7);
+    const base = idleDots ? 1.45 : 1.25;
+    // How far a dot may rise. Kept short on purpose: this is a line that
+    // breathes with the music, not a spectrum analyser. At ten pixels a loud
+    // passage threw the whole row into tall bars and it stopped reading as a
+    // scrubber at all.
+    const swing = Math.min(cssH / 2 - base - 1, idleDots ? 6 : 5);
 
     // With the bar idle the clock is drawn here instead of in the button row,
     // so the elapsed time, the meter and the total read as one line — in the
@@ -27829,7 +27893,7 @@ export class MoviElement extends HTMLElement {
     let from = 0;
     let to = cssW;
     if (idle && duration > 0) {
-      const font = "500 12px 'Inter', -apple-system, BlinkMacSystemFont, sans-serif";
+      const font = "500 11px ui-monospace, SFMono-Regular, Menlo, monospace";
       ctx.font = font;
       ctx.textBaseline = "middle";
       const elapsedText = this.formatTime(this.currentTime || 0);
@@ -27847,11 +27911,16 @@ export class MoviElement extends HTMLElement {
     const step = span / count;
     for (let i = 0; i < count; i++) {
       const x = from + (i + 0.5) * step;
-      const level = smoothed[i];
+      const level = Math.min(1, smoothed[i] * scale);
       // The width never moves — only the height. Growing both turned a
       // mid-level dot into a block as wide as it was tall, which read as a row
       // of squares rather than a meter.
-      const h = Math.max(base * 2, level * swing * 2);
+      // Every dot keeps a third of the swing whatever the band is doing, and
+      // the rest is what the music adds. Left as a bare level the row came out
+      // in two camps — a few flat dots and a few spikes; this makes it one
+      // line that ripples.
+      const shaped = 0.18 + 0.82 * level;
+      const h = Math.max(base * 2, shaped * swing * 2);
       const isPlayed = i / count <= played;
       ctx.beginPath();
       ctx.fillStyle = isPlayed
@@ -27873,7 +27942,7 @@ export class MoviElement extends HTMLElement {
   }
 
   /** Downscale an album-art bitmap to a tiny JPEG data URL for the blurred
-   *  backdrop. The backdrop is blurred to 40px, so ~96px is indistinguishable
+   *  backdrop. The backdrop is blurred to 54px, so ~96px is indistinguishable
    *  from full-res while keeping the URL small and the draw cheap. */
   private makeCoverArtBgUrl(bitmap: ImageBitmap): string {
     try {
@@ -27891,6 +27960,83 @@ export class MoviElement extends HTMLElement {
     } catch {
       return "";
     }
+  }
+
+  /** Pull two restrained ambient colours from opposite halves of a sleeve.
+   *  Using a tiny downsample keeps this off the hot path; weighting colourful
+   *  midtones prevents a white title block or black border dominating it. */
+  private applyCoverArtPalette(
+    bitmap: ImageBitmap,
+  ): {
+    accent: [number, number, number];
+    secondary: [number, number, number];
+  } {
+    if (this._coverPaletteBitmap === bitmap && this._coverPalette) {
+      return this._coverPalette;
+    }
+
+    const fallback = {
+      accent: [122, 106, 92] as [number, number, number],
+      secondary: [72, 63, 58] as [number, number, number],
+    };
+    try {
+      const size = 16;
+      const sample = document.createElement("canvas");
+      sample.width = size;
+      sample.height = size;
+      const sampleCtx = sample.getContext("2d", { willReadFrequently: true });
+      if (!sampleCtx) throw new Error("2D canvas unavailable");
+      sampleCtx.drawImage(bitmap, 0, 0, size, size);
+      const pixels = sampleCtx.getImageData(0, 0, size, size).data;
+      const collect = (fromX: number, toX: number): [number, number, number] => {
+        let red = 0;
+        let green = 0;
+        let blue = 0;
+        let total = 0;
+        for (let y = 0; y < size; y++) {
+          for (let x = fromX; x < toX; x++) {
+            const i = (y * size + x) * 4;
+            if (pixels[i + 3] < 180) continue;
+            const r = pixels[i];
+            const g = pixels[i + 1];
+            const b = pixels[i + 2];
+            const high = Math.max(r, g, b);
+            const low = Math.min(r, g, b);
+            const luminance = (r * 0.2126 + g * 0.7152 + b * 0.0722) / 255;
+            if (luminance < 0.035 || luminance > 0.96) continue;
+            const saturation = high ? (high - low) / high : 0;
+            const weight = 0.22 + saturation * 1.6;
+            red += r * weight;
+            green += g * weight;
+            blue += b * weight;
+            total += weight;
+          }
+        }
+        if (!total) return fallback.accent;
+        return [
+          Math.round(red / total),
+          Math.round(green / total),
+          Math.round(blue / total),
+        ];
+      };
+      this._coverPalette = {
+        accent: collect(0, size / 2),
+        secondary: collect(size / 2, size),
+      };
+    } catch {
+      this._coverPalette = fallback;
+    }
+    this._coverPaletteBitmap = bitmap;
+    const palette = this._coverPalette ?? fallback;
+    this.coverArtOverlay?.style.setProperty(
+      "--movi-cover-accent",
+      palette.accent.join(", "),
+    );
+    this.coverArtOverlay?.style.setProperty(
+      "--movi-cover-secondary",
+      palette.secondary.join(", "),
+    );
+    return palette;
   }
 
   private updateCoverArtOverlay(): void {
@@ -28087,6 +28233,7 @@ export class MoviElement extends HTMLElement {
         ? `url("${bgUrl.replace(/"/g, '\\"')}")`
         : "none";
     }
+    const palette = this.applyCoverArtPalette(bitmap);
     ctx.clearRect(0, 0, cssW, cssH); // transparent — let the blurred bg show
 
     const bitmapAR = bitmap.width / bitmap.height;
@@ -28113,39 +28260,84 @@ export class MoviElement extends HTMLElement {
       )?.textContent?.trim() ||
       "";
     const artistName = readMeta("artist", "album_artist", "performer", "author");
+    const albumName = readMeta("album");
+    const releaseDate = readMeta("date", "year", "originaldate");
+    const releaseYear = releaseDate.match(/\b(?:19|20)\d{2}\b/)?.[0] ?? "";
+    const eyebrow = [
+      albumName && albumName.toLocaleLowerCase() !== trackTitle.toLocaleLowerCase()
+        ? albumName
+        : "",
+      releaseYear,
+    ]
+      .filter(Boolean)
+      .join("  ·  ");
 
     // Side by side when there is room for both, the sleeve alone when there is
-    // not: a narrow or short player has nowhere to put a line of type without
-    // taking the picture apart.
+    // not. The composition intentionally occupies the upper-middle of the
+    // player: the artwork and copy feel like one editorial lockup, while the
+    // lower quarter stays quiet for the waveform and the revealed controls.
     const words = trackTitle || artistName;
     const sideBySide = !!words && cssW >= 560 && cssW / cssH >= 1.1;
 
     const frameSize = sideBySide
-      ? Math.min(cssH * 0.62, cssW * 0.34)
-      : Math.min(cssW, cssH) * 0.6;
+      ? Math.min(cssH * 0.43, cssW * 0.24)
+      : Math.min(cssW, cssH) * (cssW < 420 ? 0.66 : 0.56);
     const artW = bitmapAR >= 1 ? frameSize : frameSize * bitmapAR;
     const artH = bitmapAR >= 1 ? frameSize / bitmapAR : frameSize;
 
-    const gap = Math.round(frameSize * 0.16);
-    const titleSize = Math.max(18, Math.min(44, Math.round(frameSize * 0.13)));
-    const artistSize = Math.round(titleSize * 0.66);
-    // As much of the row as is left after the sleeve and the gutters — a
-    // narrower column than that cut "Vaaroon feat. Romy & Ginny" in half.
+    const gap = Math.max(30, Math.round(frameSize * 0.2));
+    const titleSize = Math.max(20, Math.min(42, Math.round(frameSize * 0.105)));
+    const artistSize = Math.max(15, Math.round(titleSize * 0.68));
+    // Keep a deliberate text measure instead of donating every remaining pixel
+    // to it. The previous full-width column pinned the sleeve against the left
+    // edge and made the layout feel like a settings screen rather than a cover.
     const sidePad = Math.max(24, Math.round(cssW * 0.04));
     const textW = sideBySide
-      ? Math.max(120, cssW - artW - gap - sidePad * 2)
+      ? Math.min(
+          Math.max(220, cssW * 0.39),
+          cssW - artW - gap - sidePad * 2,
+        )
       : 0;
     const blockW = sideBySide ? artW + gap + textW : artW;
     const artX = Math.round((cssW - blockW) / 2);
-    const artY = Math.round((cssH - artH) / 2);
+    const compositionCenterY = sideBySide ? cssH * 0.38 : cssH * 0.43;
+    const artY = Math.round(compositionCenterY - artH / 2);
 
     // Rounded sleeve, and a shadow under it so it doesn't bleed into its own
     // blurred backdrop.
-    const radius = Math.max(6, Math.round(frameSize * 0.045));
+    const radius = Math.max(7, Math.min(18, Math.round(frameSize * 0.035)));
+    // A low, coloured pool of light anchors the sleeve to the surface. It is
+    // deliberately broader than the physical shadow and borrows its hue from
+    // the art, avoiding the generic grey drop-shadow look.
     ctx.save();
-    ctx.shadowColor = "rgba(0,0,0,0.55)";
-    ctx.shadowBlur = 34;
-    ctx.shadowOffsetY = 10;
+    const haloX = artX + artW * 0.5;
+    const haloY = artY + artH * 0.58;
+    const haloRadius = Math.max(artW, artH) * 0.82;
+    const halo = ctx.createRadialGradient(
+      haloX,
+      haloY,
+      0,
+      haloX,
+      haloY,
+      haloRadius,
+    );
+    halo.addColorStop(
+      0,
+      `rgba(${palette.accent[0]},${palette.accent[1]},${palette.accent[2]},0.2)`,
+    );
+    halo.addColorStop(1, "rgba(0,0,0,0)");
+    ctx.fillStyle = halo;
+    ctx.fillRect(
+      artX - haloRadius * 0.55,
+      artY - haloRadius * 0.35,
+      artW + haloRadius * 1.1,
+      artH + haloRadius * 0.8,
+    );
+    ctx.restore();
+    ctx.save();
+    ctx.shadowColor = "rgba(0,0,0,0.58)";
+    ctx.shadowBlur = Math.max(28, Math.round(frameSize * 0.1));
+    ctx.shadowOffsetY = Math.max(8, Math.round(frameSize * 0.025));
     ctx.beginPath();
     if (typeof ctx.roundRect === "function") {
       ctx.roundRect(artX, artY, artW, artH, radius);
@@ -28165,11 +28357,24 @@ export class MoviElement extends HTMLElement {
     ctx.clip();
     ctx.drawImage(bitmap, artX, artY, artW, artH);
     ctx.restore();
+    // A restrained top/side highlight separates dark sleeves from dark ambient
+    // backgrounds without putting a generic card border around the artwork.
+    ctx.save();
+    ctx.strokeStyle = "rgba(255,255,255,0.13)";
+    ctx.lineWidth = 1;
+    ctx.beginPath();
+    if (typeof ctx.roundRect === "function") {
+      ctx.roundRect(artX + 0.5, artY + 0.5, artW - 1, artH - 1, radius);
+    } else {
+      ctx.rect(artX + 0.5, artY + 0.5, artW - 1, artH - 1);
+    }
+    ctx.stroke();
+    ctx.restore();
 
     if (sideBySide) {
       const textX = artX + artW + gap;
       const setFont = (size: number, weight: string): void => {
-        ctx.font = `${weight} ${size}px 'Inter', -apple-system, BlinkMacSystemFont, sans-serif`;
+        ctx.font = `${weight} ${size}px -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif`;
       };
       // Titles are long ("… feat. …", a remix note, the year) and a single
       // line of them is mostly ellipsis. Wrap to two, then give up.
@@ -28205,27 +28410,57 @@ export class MoviElement extends HTMLElement {
       // Set against the middle of the sleeve, not the middle of the player:
       // the pair reads as one object that way.
       const midY = artY + artH / 2;
-      const titleLines = trackTitle ? wrap(trackTitle, titleSize, "600", 2) : [];
-      const artistLines = artistName ? wrap(artistName, artistSize, "500", 1) : [];
-      const lineGap = Math.round(titleSize * 0.28);
+      const titleLines = trackTitle ? wrap(trackTitle, titleSize, "400", 2) : [];
+      const artistLines = artistName ? wrap(artistName, artistSize, "400", 1) : [];
+      const eyebrowSize = Math.max(10, Math.round(titleSize * 0.29));
+      const eyebrowGap = eyebrow ? Math.round(titleSize * 0.48) : 0;
+      const lineGap = Math.round(titleSize * 0.42);
       const blockH =
-        titleLines.length * titleSize * 1.18 +
-        (artistLines.length ? lineGap + artistSize * 1.2 : 0);
-      let y = midY - blockH / 2 + titleSize * 0.6;
+        (eyebrow ? eyebrowSize + eyebrowGap : 0) +
+        titleLines.length * titleSize * 1.22 +
+        (artistLines.length ? lineGap + artistSize * 1.24 : 0);
+      let y = midY - blockH / 2;
       ctx.save();
       ctx.textBaseline = "middle";
-      ctx.shadowColor = "rgba(0,0,0,0.45)";
-      ctx.shadowBlur = 18;
-      ctx.fillStyle = "rgba(255,255,255,0.97)";
-      setFont(titleSize, "600");
+      ctx.shadowColor = "rgba(0,0,0,0.38)";
+      ctx.shadowBlur = 16;
+      if (eyebrow) {
+        const markerW = Math.max(16, Math.round(titleSize * 0.5));
+        ctx.fillStyle = `rgba(${palette.accent[0]},${palette.accent[1]},${palette.accent[2]},0.92)`;
+        if (typeof ctx.roundRect === "function") {
+          ctx.beginPath();
+          ctx.roundRect(textX, y + eyebrowSize / 2 - 1, markerW, 2, 1);
+          ctx.fill();
+        } else {
+          ctx.fillRect(textX, y + eyebrowSize / 2 - 1, markerW, 2);
+        }
+        ctx.fillStyle = "rgba(255,255,255,0.56)";
+        setFont(eyebrowSize, "600");
+        const eyebrowText = eyebrow.toLocaleUpperCase();
+        const eyebrowX = textX + markerW + Math.round(titleSize * 0.22);
+        const maxEyebrowW = Math.max(20, textW - (eyebrowX - textX));
+        let fittedEyebrow = eyebrowText;
+        while (
+          fittedEyebrow.length > 1 &&
+          ctx.measureText(fittedEyebrow + "…").width > maxEyebrowW
+        ) {
+          fittedEyebrow = fittedEyebrow.slice(0, -1);
+        }
+        if (fittedEyebrow !== eyebrowText) fittedEyebrow += "…";
+        ctx.fillText(fittedEyebrow, eyebrowX, y + eyebrowSize / 2);
+        y += eyebrowSize + eyebrowGap;
+      }
+      y += titleSize * 0.62;
+      ctx.fillStyle = "rgba(255,255,255,0.94)";
+      setFont(titleSize, "400");
       for (const line of titleLines) {
         ctx.fillText(line, textX, y);
-        y += titleSize * 1.18;
+        y += titleSize * 1.22;
       }
       if (artistLines.length) {
         y += lineGap;
-        ctx.fillStyle = "rgba(255,255,255,0.72)";
-        setFont(artistSize, "500");
+        ctx.fillStyle = "rgba(255,255,255,0.7)";
+        setFont(artistSize, "400");
         ctx.fillText(artistLines[0], textX, y);
       }
       ctx.restore();

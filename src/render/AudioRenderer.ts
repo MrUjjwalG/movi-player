@@ -2740,8 +2740,10 @@ export class AudioRenderer {
       let sum = 0;
       for (let b = from; b < to && b < bins.length; b++) sum += bins[b];
       const avg = sum / Math.max(1, to - from) / 255;
-      // Lift the top end, which is quieter in almost every recording.
-      out[i] = Math.min(1, avg * (1 + (i / bars) * 1.6));
+      // Lift the top end, which is quieter in almost every recording — gently.
+      // At 1.6 most of the row pinned at 1.0 on anything loud, and a meter
+      // where every band reads full is a straight line, not a meter.
+      out[i] = Math.min(1, avg * (1 + (i / bars) * 0.8));
     }
     return out;
   }
