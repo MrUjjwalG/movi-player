@@ -1071,7 +1071,14 @@ async function handleStaticAsset(env, key) {
   return new Response(object.body, {
     headers: {
       "Content-Type": MIME_TYPES[ext] || "application/octet-stream",
-      "Cache-Control": "public, max-age=31536000, immutable",
+      // A day, not a year, and not immutable: everything this serves is a
+      // MUTABLE file at a fixed URL — the favicons, the touch icon, the social
+      // card. `immutable` told every browser that had ever loaded the site to
+      // keep the old mark for a year and never ask again, which is exactly
+      // what a new logo runs into. The pages carry ?v=<build> on the icons a
+      // tab shows, so a deploy still lands instantly; this header is for the
+      // ones whose URL has to stay put (the 192/512 the crawler remembers).
+      "Cache-Control": "public, max-age=86400",
     },
   });
 }
