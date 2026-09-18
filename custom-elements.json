@@ -779,7 +779,7 @@
             },
             {
               "name": "--movi-accent-light",
-              "description": "Movi Player theme variable.\n\nDefault: `#86b6ff`"
+              "description": "Movi Player theme variable.\n\nDefault: `color-mix(in srgb, var(--movi-accent) 70%, white)`"
             },
             {
               "name": "--movi-gradient",
