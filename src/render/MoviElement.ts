@@ -25520,6 +25520,20 @@ export class MoviElement extends HTMLElement {
         opacity: 0 !important;
         pointer-events: none !important;
       }
+      /* …but a menu opens OUT of those clusters, and the clip that makes the
+         collapse look like a collapse cuts it off — the settings panel came up
+         in the DOM, with a real box in the middle of the player, and painted
+         nothing at all: its cluster is 42px wide with overflow:hidden, and the
+         button row it sits in is clipped the same way on the other axis.
+         While a bottom menu is open the bar is necessarily up and nothing is
+         collapsing, so the clip can stand down for exactly that long. */
+      :host(.movi-cover-art.movi-bottom-menu-open) .movi-controls-left > *:not(.movi-time),
+      :host(.movi-cover-art.movi-bottom-menu-open) .movi-controls-right,
+      :host(.movi-cover-art.movi-bottom-menu-open) .movi-controls-center,
+      :host(.movi-cover-art.movi-bottom-menu-open) .movi-buttons-row {
+        overflow: visible;
+      }
+
       /* The button row stands down entirely when the bar is idle — its clock
          is drawn into the meter instead (see drawCoverEqualizer), on the same
          line as the dots rather than a row below them. */
