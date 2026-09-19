@@ -11,6 +11,44 @@ import { CodecParser } from "./CodecParser";
 
 const TAG = "VideoDecoder";
 
+/** FFmpeg's name for a colour property, in the words WebCodecs will accept.
+ *  Only the values the enums actually contain are here; anything else is left
+ *  out of the config rather than passed through, because one value outside the
+ *  enum makes the whole colorSpace dictionary unreadable. */
+const WC_PRIMARIES: Record<string, VideoColorPrimaries> = {
+  bt709: "bt709",
+  bt470bg: "bt470bg",
+  smpte170m: "smpte170m",
+  bt2020: "bt2020",
+  smpte432: "smpte432",
+};
+
+const WC_TRANSFER: Record<string, VideoTransferCharacteristics> = {
+  bt709: "bt709",
+  // BT.2020's 10- and 12-bit transfer IS the BT.709 curve; only the bit depth
+  // differs, and WebCodecs has no separate name for it.
+  "bt2020-10": "bt709",
+  "bt2020-12": "bt709",
+  smpte170m: "smpte170m",
+  "iec61966-2-1": "iec61966-2-1",
+  srgb: "iec61966-2-1",
+  linear: "linear",
+  pq: "pq",
+  smpte2084: "pq",
+  hlg: "hlg",
+  "arib-std-b67": "hlg",
+};
+
+const WC_MATRIX: Record<string, VideoMatrixCoefficients> = {
+  rgb: "rgb",
+  gbr: "rgb",
+  bt709: "bt709",
+  bt470bg: "bt470bg",
+  smpte170m: "smpte170m",
+  "bt2020-ncl": "bt2020-ncl",
+  bt2020nc: "bt2020-ncl",
+};
+
 export class MoviVideoDecoder {
   private decoder: VideoDecoder | null = null;
   private swDecoder: SoftwareVideoDecoder | null = null;
@@ -171,6 +209,24 @@ export class MoviVideoDecoder {
     }
   }
 
+  /** The track's colour metadata as WebCodecs spells it, or null when the
+   *  track says nothing this enum has a word for. */
+  private static webCodecsColorSpace(track: {
+    colorPrimaries?: string;
+    colorTransfer?: string;
+    colorSpace?: string;
+  }): VideoColorSpaceInit | null {
+    const primaries = WC_PRIMARIES[(track.colorPrimaries || "").toLowerCase()];
+    const transfer = WC_TRANSFER[(track.colorTransfer || "").toLowerCase()];
+    const matrix = WC_MATRIX[(track.colorSpace || "").toLowerCase()];
+    if (!primaries && !transfer && !matrix) return null;
+    const out: VideoColorSpaceInit = {};
+    if (primaries) out.primaries = primaries;
+    if (transfer) out.transfer = transfer;
+    if (matrix) out.matrix = matrix;
+    return out;
+  }
+
   /**
    * Configure the decoder for a specific track
    */
@@ -271,16 +327,27 @@ export class MoviVideoDecoder {
       hardwareAcceleration: "prefer-hardware",
     };
 
-    // Add color space if available
-    if (track.colorPrimaries || track.colorTransfer || track.colorSpace) {
-      config.colorSpace = {
-        primaries: track.colorPrimaries as VideoColorPrimaries,
-        transfer: track.colorTransfer as VideoTransferCharacteristics,
-        matrix: track.colorSpace as VideoMatrixCoefficients,
-      };
+    // Add color space if available, in WebCodecs' OWN words.
+    //
+    // FFmpeg's names are not the enum values: PQ is "smpte2084" there and "pq"
+    // here, HLG is "arib-std-b67" and "hlg". A value outside the enum does not
+    // degrade — it makes the whole dictionary unreadable, so isConfigSupported
+    // throws a TypeError and the fallback below configures the decoder with NO
+    // colour metadata at all. That is what every HDR file was doing: the log
+    // line "Codec config failed with color space. Retrying without explicit
+    // color metadata." on a perfectly ordinary bt2020/PQ stream. The frames
+    // then come out of the decoder untagged, and an untagged frame uploaded
+    // into a rec2100-pq canvas is treated as sRGB and converted — which is the
+    // picture that is technically in an HDR canvas and looks like SDR.
+    //
+    // Anything not in the enum is LEFT OUT rather than passed through, so one
+    // unknown value costs its own field and not the whole config.
+    const wcColorSpace = MoviVideoDecoder.webCodecsColorSpace(track);
+    if (wcColorSpace) {
+      config.colorSpace = wcColorSpace;
       Logger.info(
         TAG,
-        `Decoder color space: primaries=${track.colorPrimaries}, transfer=${track.colorTransfer}, matrix=${track.colorSpace}`,
+        `Decoder color space: primaries=${wcColorSpace.primaries ?? "-"}, transfer=${wcColorSpace.transfer ?? "-"}, matrix=${wcColorSpace.matrix ?? "-"} (from ${track.colorPrimaries ?? "-"}/${track.colorTransfer ?? "-"}/${track.colorSpace ?? "-"})`,
       );
     }
 
