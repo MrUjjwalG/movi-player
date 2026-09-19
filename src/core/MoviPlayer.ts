@@ -363,6 +363,16 @@ const SOFTWARE_DECODE_BUDGET_DESKTOP = 400_000_000;
  * question canPlaySmoothly is asked with a rate for.
  */
 const HARDWARE_DECODE_CEILING = 7680 * 4320 * 60;
+/**
+ * How far past realtime a decoder that already carries a stream is assumed to
+ * go. Speed does not scale hardware decoding the way it scales the software
+ * budget: a decoder has headroom above realtime — that is what makes fast
+ * playback possible at all — and above 1x the player stops asking it for every
+ * frame anyway (the adaptive frame cap, and the skip-ahead path). Two is what
+ * an 8K60 file demonstrates: it plays at 2x while the old rule, which simply
+ * multiplied the pixel rate by the speed, called it beyond hardware at 1.5x.
+ */
+const HARDWARE_RATE_HEADROOM = 2;
 
 async function screenLadderForDecode(
   rungs: {
@@ -975,12 +985,27 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
     if (decoder === "hardware") {
       // Hardware is not bound by the software budget — but it is bound by what
       // hardware decoders are built for, and the browser saying otherwise.
-      const pixelRate = width * height * fps * rate;
-      const beyondHardware = pixelRate > HARDWARE_DECODE_CEILING;
+      //
+      // Two questions, not one: can a decoder of this class carry the STREAM,
+      // and can it carry it at this SPEED. The second gets the headroom above
+      // realtime that hardware has — see HARDWARE_RATE_HEADROOM — because the
+      // old rule folded the speed into the pixel rate and so declared an 8K60
+      // file beyond hardware the moment the viewer pressed 1.5x, while it went
+      // on playing. If the headroom turns out not to be there, the stutter
+      // hint says so from what actually happened.
+      const pixelRate = width * height * fps;
+      const beyondStream = pixelRate > HARDWARE_DECODE_CEILING;
+      const beyondSpeed =
+        pixelRate * rate > HARDWARE_DECODE_CEILING * HARDWARE_RATE_HEADROOM;
+      const beyondHardware = beyondStream || beyondSpeed;
       smooth = !beyondHardware && browserSmooth !== false;
-      if (beyondHardware) {
+      if (beyondStream) {
         reasons.push(
           `${dims} is beyond what hardware video decoders are built for (8K at 60fps).`,
+        );
+      } else if (beyondSpeed) {
+        reasons.push(
+          `${dims} is more than a hardware decoder for ${width}×${height} @ ${Math.round(fps)}fps can be expected to keep up with.`,
         );
       }
     } else {
