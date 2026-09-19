@@ -2205,9 +2205,14 @@ export class MoviElement extends HTMLElement {
     //
     // A ring is the spinner every other page uses and says nothing about what
     // is being waited for. This is the same idea — a short bright arc chasing
-    // its own track — run around the player's own triangle instead of a
-    // circle: the shape means "video", the lap means "working on it". The
-    // outline stays put, so it stays readable as a play mark while it turns.
+    // its own track — run around the BRAND MARK instead of a circle: the same
+    // ribbon play shape the icons and the site wear, traced as an outline. The
+    // shape means "video" and says whose player it is; the lap means "working
+    // on it". The outline stays put, so it stays readable while it turns.
+    //
+    // The path is the mark's outer silhouette, scaled into this 48-unit box.
+    // Only the outer one: the play triangle inside the logo is a second
+    // subpath, and a second subpath would split the running segment in two.
     //
     // The dash is written in the path's OWN units, not normalised.
     //
@@ -2222,8 +2227,8 @@ export class MoviElement extends HTMLElement {
     loadingIndicator.innerHTML = `
       <div class="movi-loader-container">
         <svg class="movi-loader-mark" viewBox="0 0 48 48" aria-hidden="true">
-          <path class="movi-loader-track" d="M18 12L36 24L18 36Z" />
-          <path class="movi-loader-chase" d="M18 12L36 24L18 36Z" />
+          <path class="movi-loader-track" d="M12.34 15.59C12.34 13.58 13.96 12 16.04 12C16.94 12 17.41 12.12 18.29 12.58L32.98 20.18C35.13 21.12 35.62 22.78 35.66 23.96C35.64 26.2 33.97 27.46 32.98 27.82C28.11 30.46 23.23 33 18.36 35.39C17.75 35.64 17.25 35.97 16.04 36C14.42 35.99 12.36 34.83 12.34 32.3Z" />
+          <path class="movi-loader-chase" d="M12.34 15.59C12.34 13.58 13.96 12 16.04 12C16.94 12 17.41 12.12 18.29 12.58L32.98 20.18C35.13 21.12 35.62 22.78 35.66 23.96C35.64 26.2 33.97 27.46 32.98 27.82C28.11 30.46 23.23 33 18.36 35.39C17.75 35.64 17.25 35.97 16.04 36C14.42 35.99 12.36 34.83 12.34 32.3Z" />
         </svg>
       </div>
     `;
@@ -22553,7 +22558,7 @@ export class MoviElement extends HTMLElement {
 
          A ring is a ring: plain, comet-tailed or dotted, it is the spinner
          every other page uses. This is that same arc-chasing-its-track idea
-         drawn on the player's own triangle — outlined rather than solid, so it
+         drawn on the brand's own mark — outlined rather than solid, so it
          reads as a mark waiting on something rather than a button asking to be
          pressed, and stationary, so the shape stays legible while the segment
          laps it.
@@ -22648,36 +22653,38 @@ export class MoviElement extends HTMLElement {
          being worked on rather than something orbiting.
 
          It also fixes the thing a bead is worst at: at a quarter of the
-         perimeter the segment spends most of a lap on one edge, so the
-         triangle barely participates. Stretched to over half, the stroke wraps
-         a corner and both edges are lit at once, and the shape is in the
-         motion rather than beside it.
+         perimeter the segment spends most of a lap on one edge, so the mark
+         barely participates. Stretched to over half, the stroke wraps a corner
+         and both edges are lit at once, and the shape is in the motion rather
+         than beside it.
 
-         Every pair below sums to the perimeter (67.2666), which is what keeps
+         Every pair below sums to the perimeter (75.9586), which is what keeps
          exactly ONE dash on the path — a pair that sums to less puts a second
          copy of the segment on the far side, and the whole thing reads as two
          beads chasing.
 
          Written in user units for the same reason the old fixed dash was:
          WebKit ignores pathLength when it computes dashes (Safari measured
-         percentages against the real 67.27 perimeter and drew a static box),
-         so percentages of the way round cannot be used here. */
+         percentages against the real perimeter and drew a static box), so
+         percentages of the way round cannot be used here. The three pairs are
+         the same fractions of the lap they always were — a fifth, then nearly
+         two thirds — measured against the mark's outline. */
       @keyframes movi-loader-chase {
         0% {
-          stroke-dasharray: 14 53.2666;
+          stroke-dasharray: 15.81 60.15;
           stroke-dashoffset: 0;
         }
         45% {
-          stroke-dasharray: 40 27.2666;
-          stroke-dashoffset: -16;
+          stroke-dasharray: 45.17 30.79;
+          stroke-dashoffset: -18.07;
         }
         100% {
-          stroke-dasharray: 14 53.2666;
-          stroke-dashoffset: -67.2666;
+          stroke-dasharray: 15.81 60.15;
+          stroke-dashoffset: -75.96;
         }
       }
 
-      /* A segment travelling a triangle is exactly the kind of motion this
+      /* A segment travelling the mark is exactly the kind of motion this
          setting is about, and it is the one part of the mark that is not
          information: the shape says "video", the lap only says "still". So
          the lap stops and the outline closes up to full strength — a solid
