@@ -428,12 +428,77 @@ export class WasmBindings {
   }
 
   /**
+   * Every Asyncify call, counted while it is suspended.
+   *
+   * A call into the WASM that reads through the data source does not run to
+   * completion: it unwinds at the first read and resumes when JS hands the
+   * bytes back. In between, this side is free to do anything — including tear
+   * the player down, which is what a reload does. destroy() would then free
+   * the packet buffer the suspended call is about to write into, and free the
+   * context out from under it; the call resumes, writes into freed memory, and
+   * the NEXT free walks an allocator whose metadata it just trampled. That is
+   * the "memory access out of bounds" inside _free, with a stack that points
+   * at readFrame's finally and tells you nothing about who freed what.
+   *
+   * So a teardown that lands mid-call is remembered rather than performed, and
+   * runs when the last call returns. The caller is told nothing: destroy()
+   * still means "this is finished with", and nothing new is routed here —
+   * activeBindings drops it immediately.
+   */
+  private inFlight = 0;
+  private teardownPending = false;
+
+  private ccallAsync(
+    name: string,
+    returnType: string,
+    argTypes: string[],
+    args: unknown[],
+    // Kept so call sites read exactly as ccall's do; every call through here
+    // is an Asyncify call by definition.
+    _opts?: { async: boolean },
+  ): Promise<unknown> {
+    this.inFlight++;
+    const settle = () => {
+      this.inFlight--;
+      if (this.inFlight === 0 && this.teardownPending) {
+        this.teardownPending = false;
+        this.teardown();
+      }
+    };
+    return Promise.resolve(
+      this.module.ccall(name, returnType, argTypes, args, { async: true }),
+    ).then(
+      (value) => {
+        settle();
+        return value;
+      },
+      (error) => {
+        settle();
+        throw error;
+      },
+    );
+  }
+
+  /**
    * Destroy the demuxer context
    */
   destroy(): void {
     // Unregister this instance
     activeBindings.delete(this);
 
+    if (this.inFlight > 0) {
+      this.teardownPending = true;
+      Logger.debug(
+        TAG,
+        `Destroy deferred: ${this.inFlight} call(s) still suspended in WASM`,
+      );
+      return;
+    }
+
+    this.teardown();
+  }
+
+  private teardown(): void {
     if (this.packetBuffer) {
       this.module._free(this.packetBuffer);
       this.packetBuffer = 0;
@@ -494,7 +559,7 @@ export class WasmBindings {
     // Clear any previous error
     this.lastError = null;
 
-    const ret = (await this.module.ccall(
+    const ret = (await this.ccallAsync(
       "movi_open",
       "number",
       ["number"],
@@ -536,7 +601,7 @@ export class WasmBindings {
    */
   async scanDuration(budgetMs: number): Promise<number> {
     if (!this.contextPtr) return -1;
-    return (await this.module.ccall(
+    return (await this.ccallAsync(
       "movi_scan_duration",
       "number",
       ["number", "number"],
@@ -796,7 +861,7 @@ export class WasmBindings {
     }
 
     // Use ccall with async:true for Asyncify
-    const ret = (await this.module.ccall(
+    const ret = (await this.ccallAsync(
       "movi_seek_to",
       "number",
       ["number", "number", "number", "number"],
@@ -820,7 +885,7 @@ export class WasmBindings {
     const infoPtr = this.module._malloc(PACKET_INFO_SIZE);
     try {
       // Use ccall with async:true for Asyncify
-      let ret = (await this.module.ccall(
+      let ret = (await this.ccallAsync(
         "movi_read_frame",
         "number",
         ["number", "number", "number", "number"],
@@ -1081,7 +1146,7 @@ export class WasmBindings {
       const packetDuration = duration ?? 0;
 
       // Decode subtitle using ccall with async
-      const result = (await this.module.ccall(
+      const result = (await this.ccallAsync(
         "movi_decode_subtitle",
         "number",
         ["number", "number", "number", "number", "number", "number"],
@@ -1226,7 +1291,7 @@ export class WasmBindings {
   ): Promise<{ start: number; end: number; text: string }[] | null> {
     if (!this.contextPtr) return null;
 
-    const count = (await this.module.ccall(
+    const count = (await this.ccallAsync(
       "movi_prefetch_subtitle_cues",
       "number",
       ["number", "number"],
@@ -1606,7 +1671,7 @@ export class ThumbnailBindings {
     if (!this.contextPtr) return false;
 
     // Use ccall with async:true to handle Asyncify correctly
-    const result = (await this.module.ccall(
+    const result = (await this.ccallAsync(
       "movi_thumbnail_open",
       "number",
       ["number"],
@@ -1649,7 +1714,7 @@ export class ThumbnailBindings {
     try {
       // Call C function using ccall with async:true
       // This ensures we wait for the entire async operation to complete
-      await this.module.ccall(
+      await this.ccallAsync(
         "movi_thumbnail_read_keyframe",
         "void",
         ["number", "number"],
@@ -1686,7 +1751,7 @@ export class ThumbnailBindings {
       },
     };
     try {
-      await this.module.ccall(
+      await this.ccallAsync(
         "movi_thumbnail_read_next_packet",
         "void",
         ["number"],
@@ -1890,10 +1955,57 @@ export class ThumbnailBindings {
     (this.module as any)._movi_thumbnail_clear_buffer(this.contextPtr);
   }
 
+  /** Counted while suspended, and a teardown that lands mid-call is deferred —
+   *  the same race the demuxer's guard explains, reached here by a scrub that
+   *  is still reading when the source changes under it. */
+  private inFlight = 0;
+  private teardownPending = false;
+
+  private ccallAsync(
+    name: string,
+    returnType: string,
+    argTypes: string[],
+    args: unknown[],
+    _opts?: { async: boolean },
+  ): Promise<unknown> {
+    this.inFlight++;
+    const settle = () => {
+      this.inFlight--;
+      if (this.inFlight === 0 && this.teardownPending) {
+        this.teardownPending = false;
+        this.teardown();
+      }
+    };
+    return Promise.resolve(
+      this.module.ccall(name, returnType, argTypes, args, { async: true }),
+    ).then(
+      (value) => {
+        settle();
+        return value;
+      },
+      (error) => {
+        settle();
+        throw error;
+      },
+    );
+  }
+
   /**
    * Destroy thumbnail context
    */
   destroy(): void {
+    if (this.inFlight > 0) {
+      this.teardownPending = true;
+      Logger.debug(
+        TAG,
+        `Thumbnail destroy deferred: ${this.inFlight} call(s) still suspended in WASM`,
+      );
+      return;
+    }
+    this.teardown();
+  }
+
+  private teardown(): void {
     if (this.contextPtr) {
       this.module._movi_thumbnail_destroy(this.contextPtr);
       this.contextPtr = 0;
