@@ -716,6 +716,9 @@ export class CanvasRenderer {
                 `WebGL drawing buffer color space set to: ${applied} (requested: ${detectedColorSpace}, HDR path: ${isHDRPath})`,
               );
             }
+            this.setMacHdrCompositingGuard(applied === hdrSpace);
+          } else {
+            this.setMacHdrCompositingGuard(false);
           }
         }
       } catch (e) {
@@ -2363,6 +2366,7 @@ export class CanvasRenderer {
             `Updated WebGL color space to ${applied} (detected: ${detectedColorSpace}, HDR path: ${isHDRPath}) following HDR toggle`,
           );
         }
+        this.setMacHdrCompositingGuard(applied === hdrSpace);
       } catch (e) {
         Logger.warn(TAG, "Failed to update drawingBufferColorSpace on the fly");
       }
@@ -2393,6 +2397,51 @@ export class CanvasRenderer {
     if (!this.isPlaying && this.lastRenderedFrame) {
       this.drawFrame(this.lastRenderedFrame, true);
     }
+  }
+
+  /**
+   * Make macOS Chromium hand this canvas to CoreAnimation as extended-range
+   * content rather than as a PQ-tagged surface.
+   *
+   * Measured 2026-09-19 (Chrome 153, macOS 26, HDR display, /tmp/hdr10.mp4,
+   * pixels read back from a screencapture of the composited display):
+   * whenever every quad in the frame qualifies, Chromium's Mac compositor
+   * gives the whole frame to CoreAnimation as CALayers
+   * (Compositing.Renderer.CALayerResult bucket 0 on a bare page and in
+   * fullscreen), and the layer holding a rec2100-pq canvas is shown
+   * tone-mapped to SDR — red bar 234,53,36, correct colours, no headroom.
+   * An RGBA16F drawing buffer changes nothing (same 234,53,36), and
+   * configureHighDynamicRange({mode:"extended"}) changes nothing;
+   * drawingBufferToneMapping is not in Chrome 153 at all. The app page only
+   * showed HDR windowed because a backdrop-filter in it failed the promotion
+   * (bucket 19) and the frame was drawn by the SkiaRenderer, whose HDR
+   * surfaces are extended-sRGB float — red 255,0,21. With
+   * --disable-features=UseCALayerContentsHeadroom (Chromium's Metal HDR
+   * copier instead of the macOS 26 contentsHeadroom attribute) the same PQ
+   * layer shows as HDR, so the loss is in that new path.
+   *
+   * Two different non-zero corner radii on the canvas make cc render it
+   * through a render pass of its own; the pass texture is viz's extended-sRGB
+   * float, and that is what the CALayer receives — promotion still succeeds
+   * (bucket 0) but the bare page, windowed and fullscreen, now composites
+   * the same pixels as the app page (255,0,16). Uniform radii would not do:
+   * they are applied on the quad itself and the PQ surface would still go
+   * to the layer. The rounding is 1px and 2px on the top corners, under the
+   * host's own clip when it is rounded and at the screen corners in
+   * fullscreen, so nothing shows. Mac + Chromium only: that is where it was
+   * measured, and elsewhere it would only cost a render pass.
+   */
+  private setMacHdrCompositingGuard(on: boolean): void {
+    if (!(this.canvas instanceof HTMLCanvasElement)) return;
+    const nav = navigator as Navigator & {
+      userAgentData?: { platform?: string };
+    };
+    const isMac =
+      nav.userAgentData?.platform === "macOS" ||
+      /^Mac/i.test(nav.platform || "");
+    const isChromium = !!(window as any).chrome;
+    if (!isMac || !isChromium) return;
+    this.canvas.style.borderRadius = on ? "1px 2px 0 0" : "";
   }
 
   /**
