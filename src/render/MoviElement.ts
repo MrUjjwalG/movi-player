@@ -13515,6 +13515,45 @@ export class MoviElement extends HTMLElement {
    * Called from every route that lands on "no source": the property setter's
    * two null branches and the attribute callback's removal.
    */
+  /**
+   * Everything a fresh load has to forget, whichever route it arrived by.
+   *
+   * Any src (re)set — even to the same URL — is a fresh load, so the
+   * DASH-fallback guards clear: the fallback must be able to run again, and a
+   * stale forced-quality pick must not carry over. Same for the `engine`
+   * priority walk (the new source starts at the top of the author's list, not
+   * wherever the last one gave up) and the pre-play speed test.
+   *
+   * `_hasEverPlayed` goes with them, EXCEPT during a rebuild. A quality switch
+   * on a premuxed ladder comes through the attribute too — each rung is its own
+   * URL — but the CONTENT is the one already playing, and clearing the flag
+   * there makes the poster eligible again, so the switch paints a static
+   * thumbnail over a video that never stopped. That is what the last-frame
+   * snapshot is meant to cover, and the snapshot is best-effort, which is why
+   * the cover appeared only sometimes.
+   *
+   * Both callers matter. The attribute callback returns early when the value
+   * has not changed — a deliberate guard against hosts that re-write props on
+   * every render — so a page re-sending the URL it is already on reaches this
+   * only through the setter's same-value branch. Until that branch called this,
+   * a re-set reloaded the media, landed it paused at zero, and left the element
+   * believing the source had already played: no centre play button, which is
+   * only offered before the first play, at the end, or on touch. A paused video
+   * with nothing to press, from pressing the web app's URL bar twice.
+   */
+  private resetForFreshSource(): void {
+    this._streamDemuxTried = false;
+    this._streamEngineTried = false;
+    this._engineTried.clear();
+    this._startProbeDone = false;
+    this._startPickConfirmed = false;
+    this._measuredStartBps = 0;
+    this._forcedDashRendition = null;
+    const isRebuild =
+      this._qualitySwitchInProgress || this._fullRecreateInFlight;
+    if (!isRebuild) this._hasEverPlayed = false;
+  }
+
   private resetToEmptyState(): void {
     // A load that was in flight is over — leaving this set keeps the spinner
     // eligible on a player with nothing to spin for.
@@ -26997,35 +27036,12 @@ export class MoviElement extends HTMLElement {
           // New source → reset the "has been played" flag so the
           // next source's initial poster-seek "paused" transition
           // doesn't trigger a premature bar surface.
-          // Any src (re)set — even to the same URL — is a fresh load, so clear
-          // the DASH-fallback guards: the fallback must be able to run again,
-          // and a stale forced-quality pick must not carry over. (The
-          // quality-switch re-init calls load() directly, not setAttribute, so
-          // it never reaches here — no risk of clearing its own forced pick.)
-          this._streamDemuxTried = false;
-          this._streamEngineTried = false;
-          // Same for the `engine` priority walk — the new source starts at the
-          // top of the author's list, not wherever the last one gave up.
-          this._engineTried.clear();
-          // Fresh source → fresh pre-play speed test.
-          this._startProbeDone = false;
-          this._startPickConfirmed = false;
-          this._measuredStartBps = 0;
-          this._forcedDashRendition = null;
-          // A quality switch on a premuxed ladder DOES come through here — each
-          // rung is its own URL, so it sets the src attribute (only the DASH
-          // path calls load() directly). The url differs, but the CONTENT is the
-          // one already playing, so this must not read as a new source: clearing
-          // the flag makes the poster eligible again, and the switch then paints
-          // the static thumbnail over a video that never stopped playing. That
-          // is what the last-frame snapshot is meant to cover, but the snapshot
-          // is best-effort (a tainted or already-wiped canvas gives nothing back)
-          // — which is exactly why the cover appeared only sometimes.
+          this.resetForFreshSource();
+          // A rebuild rewrites the attribute mid-flight; the empty-source check
+          // further down reads this to tell that apart from a host clearing the
+          // source outright.
           const isRebuild =
             this._qualitySwitchInProgress || this._fullRecreateInFlight;
-          if (newValue !== oldSrc && !isRebuild) {
-            this._hasEverPlayed = false;
-          }
 
           // Show/hide empty state indicator based on src
           if (this.emptyStateIndicator) {
@@ -35599,6 +35615,9 @@ export class MoviElement extends HTMLElement {
         this.setAttribute("src", value);
         if (sameValue) {
           this._src = value;
+          // The callback that normally does this was never called — see
+          // resetForFreshSource.
+          this.resetForFreshSource();
           this.updatePoster();
           if (this.isConnected) {
             this.load();
