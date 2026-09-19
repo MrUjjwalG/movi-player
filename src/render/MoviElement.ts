@@ -12,6 +12,7 @@
 
 import { MoviPlayer } from "../core/MoviPlayer";
 import { NativeVideoWrapper } from "./NativeVideoWrapper";
+import { loadingIndicatorMarkup, loadingIndicatorStyles } from "./LoadingIndicator";
 import type {
   SourceConfig,
   RendererType,
@@ -2201,37 +2202,9 @@ export class MoviElement extends HTMLElement {
     const loadingIndicator = document.createElement("div");
     loadingIndicator.className = "movi-loading-indicator";
     loadingIndicator.style.display = "none";
-    // The play mark, with a segment running round it.
-    //
-    // A ring is the spinner every other page uses and says nothing about what
-    // is being waited for. This is the same idea — a short bright arc chasing
-    // its own track — run around the BRAND MARK instead of a circle: the same
-    // ribbon play shape the icons and the site wear, traced as an outline. The
-    // shape means "video" and says whose player it is; the lap means "working
-    // on it". The outline stays put, so it stays readable while it turns.
-    //
-    // The path is the mark's outer silhouette, scaled into this 48-unit box.
-    // Only the outer one: the play triangle inside the logo is a second
-    // subpath, and a second subpath would split the running segment in two.
-    //
-    // The dash is written in the path's OWN units, not normalised.
-    //
-    // pathLength="100" would let the segment and its offset be plain
-    // percentages of the way round, which is how this was first built — but
-    // WebKit does not honour pathLength when it computes dashes, so in Safari
-    // "28 72" was measured against the real perimeter of 67.27 instead of
-    // against 100. The pattern was then longer than the shape it ran on, and
-    // the chase came out as a static box rather than a segment travelling the
-    // triangle. The awkward numbers below are that same 28%/72% split written
-    // out in user units, which every engine reads the same way.
-    loadingIndicator.innerHTML = `
-      <div class="movi-loader-container">
-        <svg class="movi-loader-mark" viewBox="0 0 48 48" aria-hidden="true">
-          <path class="movi-loader-track" d="M12.34 15.59C12.34 13.58 13.96 12 16.04 12C16.94 12 17.41 12.12 18.29 12.58L32.98 20.18C35.13 21.12 35.62 22.78 35.66 23.96C35.64 26.2 33.97 27.46 32.98 27.82C28.11 30.46 23.23 33 18.36 35.39C17.75 35.64 17.25 35.97 16.04 36C14.42 35.99 12.36 34.83 12.34 32.3Z" />
-          <path class="movi-loader-chase" d="M12.34 15.59C12.34 13.58 13.96 12 16.04 12C16.94 12 17.41 12.12 18.29 12.58L32.98 20.18C35.13 21.12 35.62 22.78 35.66 23.96C35.64 26.2 33.97 27.46 32.98 27.82C28.11 30.46 23.23 33 18.36 35.39C17.75 35.64 17.25 35.97 16.04 36C14.42 35.99 12.36 34.83 12.34 32.3Z" />
-        </svg>
-      </div>
-    `;
+    loadingIndicator.setAttribute("role", "status");
+    loadingIndicator.setAttribute("aria-label", "Loading video");
+    loadingIndicator.innerHTML = loadingIndicatorMarkup;
     shadowRoot.appendChild(loadingIndicator);
 
     // Create centered play/pause button
@@ -8627,13 +8600,8 @@ export class MoviElement extends HTMLElement {
           background: rgba(0,0,0,0.35); pointer-events: none;
         }
         body.is-loading .pip-spinner { display: flex; }
-        .pip-spinner > i {
-          width: 34px; height: 34px; border-radius: 50%;
-          border: 3px solid rgba(255,255,255,0.25);
-          border-top-color: #fff;
-          animation: pip-spin 0.9s linear infinite;
-        }
-        @keyframes pip-spin { to { transform: rotate(360deg); } }
+        ${loadingIndicatorStyles}
+        .pip-spinner .movi-loader-container { width: 52px; height: 52px; }
         .pip-time { font: 500 10px/1 -apple-system, sans-serif; color: rgba(255,255,255,0.7); white-space: nowrap; }
         .pip-time-row { display: flex; justify-content: space-between; padding: 0 2px; }
         .pip-btn-row { display: flex; align-items: center; justify-content: center; gap: 16px; position: relative; }
@@ -8837,7 +8805,9 @@ export class MoviElement extends HTMLElement {
       // outlasts them must not take the only sign of life with it.
       const pipSpinner = pipWindow.document.createElement("div");
       pipSpinner.className = "pip-spinner";
-      pipSpinner.appendChild(pipWindow.document.createElement("i"));
+      pipSpinner.setAttribute("role", "status");
+      pipSpinner.setAttribute("aria-label", "Loading video");
+      pipSpinner.innerHTML = loadingIndicatorMarkup;
       pipWindow.document.body.appendChild(pipSpinner);
 
       // Show controls briefly on open
@@ -21590,11 +21560,6 @@ export class MoviElement extends HTMLElement {
           --movi-btn-size: var(--movi-btn-size-mobile);
         }
         
-        .movi-loader-container {
-          width: 64px !important;
-          height: 64px !important;
-        }
-
         /* Keyframe animations off on small/compact layouts for perf, but keep
            CSS transitions so the controls still move smoothly here too (the
            PiP / mini player is a small container).
@@ -22554,177 +22519,7 @@ export class MoviElement extends HTMLElement {
         transition: top var(--movi-transition-normal);
       }
 
-      /* The play mark, with a segment running round it.
-
-         A ring is a ring: plain, comet-tailed or dotted, it is the spinner
-         every other page uses. This is that same arc-chasing-its-track idea
-         drawn on the brand's own mark — outlined rather than solid, so it
-         reads as a mark waiting on something rather than a button asking to be
-         pressed, and stationary, so the shape stays legible while the segment
-         laps it.
-
-         Scale lives on the container; everything inside is in the SVG's own
-         48-unit space, so one width change moves the lot. */
-      .movi-loader-container {
-        width: 68px;
-        height: 68px;
-        display: inline-block;
-        color: var(--movi-controls-color);
-        /* Two tight shadows ahead of the soft one.
-           The soft shadow on its own is depth, and depth is exactly what a
-           light backdrop takes away: the white mark goes into the white behind
-           it and all that survives is the blur — a grey rectangle-ish smudge
-           with nothing legible in it, which is what it looks like over a page
-           that has not painted a picture yet. Drop-shadows chain, each applying
-           to the result of the last, so a tight pair traces the outline and
-           gives the shape an edge it keeps on white. On the dark surface a
-           player usually is, they are too small to see and the soft one still
-           does the work it always did. */
-        filter:
-          drop-shadow(0 0 1px rgba(0, 0, 0, 0.55))
-          drop-shadow(0 1px 1px rgba(0, 0, 0, 0.4))
-          drop-shadow(0 2px 8px rgba(0, 0, 0, 0.35));
-        position: relative;
-        /* Arrive, rather than appear.
-           The ring is held back for a second or two now (see spinnerdelay), so
-           by the time it is shown the viewer is already looking at a picture
-           that has stopped — and something snapping into the middle of that
-           reads as another fault rather than as an answer. A short rise puts
-           it there as a response to the wait instead. It runs off the display
-           flip, so there is nothing to undo on the way out: by then the
-           picture is moving again and nobody is watching the spinner leave. */
-        animation: movi-loader-in 240ms cubic-bezier(0.2, 0.8, 0.2, 1) both;
-      }
-
-      @keyframes movi-loader-in {
-        from {
-          opacity: 0;
-          transform: scale(0.84);
-        }
-        to {
-          opacity: 1;
-          transform: none;
-        }
-      }
-
-      .movi-loader-mark {
-        width: 100%;
-        height: 100%;
-        display: block;
-      }
-
-
-      .movi-loader-track,
-      .movi-loader-chase {
-        fill: none;
-        stroke: currentColor;
-        stroke-width: 4;
-        /* The round join is what carries the same softened corners the play
-           buttons have; the round cap is what keeps the running segment from
-           ending in a chopped-off square. */
-        stroke-linejoin: round;
-        stroke-linecap: round;
-      }
-
-      /* Present enough to hold the shape, quiet enough that the segment is
-         what the eye follows.
-
-         0.2 was a white line at a fifth strength, and over a black frame —
-         which a player shows more than any other single thing — that is gone.
-         0.3 keeps the outline worth seeing without it ever competing with the
-         segment travelling it. */
-      .movi-loader-track {
-        opacity: 0.3;
-      }
-
-      .movi-loader-chase {
-        /* The dash is animated, not fixed — see the keyframes. */
-        animation: movi-loader-chase 1.6s cubic-bezier(0.45, 0.05, 0.55, 0.95)
-          infinite;
-      }
-
-      /* A segment that BREATHES its way round, instead of a bead on a string.
-
-         A fixed-length dash at a constant speed is a bead: the eye tracks one
-         object going round and round, which is the same thing a ring does and
-         says nothing the ring did not. Letting the length animate turns it
-         into a stroke being DRAWN — the head runs ahead down an edge, the tail
-         gathers in behind it at the corner — so the mark reads as something
-         being worked on rather than something orbiting.
-
-         It also fixes the thing a bead is worst at: at a quarter of the
-         perimeter the segment spends most of a lap on one edge, so the mark
-         barely participates. Stretched to over half, the stroke wraps a corner
-         and both edges are lit at once, and the shape is in the motion rather
-         than beside it.
-
-         Every pair below sums to the perimeter (75.9586), which is what keeps
-         exactly ONE dash on the path — a pair that sums to less puts a second
-         copy of the segment on the far side, and the whole thing reads as two
-         beads chasing.
-
-         Written in user units for the same reason the old fixed dash was:
-         WebKit ignores pathLength when it computes dashes (Safari measured
-         percentages against the real perimeter and drew a static box), so
-         percentages of the way round cannot be used here. The three pairs are
-         the same fractions of the lap they always were — a fifth, then nearly
-         two thirds — measured against the mark's outline. */
-      @keyframes movi-loader-chase {
-        0% {
-          stroke-dasharray: 15.81 60.15;
-          stroke-dashoffset: 0;
-        }
-        45% {
-          stroke-dasharray: 45.17 30.79;
-          stroke-dashoffset: -18.07;
-        }
-        100% {
-          stroke-dasharray: 15.81 60.15;
-          stroke-dashoffset: -75.96;
-        }
-      }
-
-      /* A segment travelling the mark is exactly the kind of motion this
-         setting is about, and it is the one part of the mark that is not
-         information: the shape says "video", the lap only says "still". So
-         the lap stops and the outline closes up to full strength — a solid
-         play mark, which is the same thing said without moving anything —
-         and the waiting is carried by a slow breath of opacity, which is not
-         motion in the sense the setting means. */
-      @media (prefers-reduced-motion: reduce) {
-        .movi-loader-container {
-          animation: none;
-        }
-        .movi-loader-track {
-          opacity: 0.85;
-        }
-        .movi-loader-chase {
-          animation: none;
-          stroke-dasharray: none;
-          opacity: 0;
-        }
-        .movi-loader-mark {
-          animation: movi-loader-breathe 2.4s ease-in-out infinite;
-        }
-      }
-
-      @keyframes movi-loader-breathe {
-        0%,
-        100% {
-          opacity: 0.45;
-        }
-        50% {
-          opacity: 1;
-        }
-      }
-
-      /* Mobile loader - smaller size */
-      @container movi-host (max-width: 720px) {
-        .movi-loader-container {
-          width: 52px;
-          height: 52px;
-        }
-      }
+      ${loadingIndicatorStyles}
 
       /* Centre play/pause button. Default placement assumes only the
          bottom controls bar is visible — sit the icon at the centre
