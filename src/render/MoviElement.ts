@@ -9116,6 +9116,25 @@ export class MoviElement extends HTMLElement {
     // player leaving pseudo-fullscreen while a host still holds its own must
     // not be told it left fullscreen altogether.
     this.classList.toggle("movi-fullscreen-active", this.isFullscreenActive());
+    // HDR comes off for the length of fullscreen.
+    //
+    // Chromium composites an HDR canvas correctly in a window and does not in
+    // fullscreen: the same rec2100-pq buffer that looks right windowed comes
+    // out flat and milky there, because the PQ values are put on screen as if
+    // they were SDR. Measured on the player and on a bare canvas outside it —
+    // the canvas keeps its colour space, `(dynamic-range: high)` stays true,
+    // nothing on our side changes. So while fullscreen the renderer goes back
+    // to the wide-gamut SDR path, where the browser TONE MAPS the HDR frames
+    // on the way into the canvas and the picture is simply a correct SDR
+    // rendition. rec2100-pq returns on the way out.
+    //
+    // Nothing here touches the viewer's HDR setting; it is suspended, not
+    // turned off, and the menu still reads what they chose.
+    (
+      (this.player as unknown as {
+        videoRenderer?: { setHDRSuspended?: (suspended: boolean) => void };
+      } | null)?.videoRenderer
+    )?.setHDRSuspended?.(this.isFullscreenActive());
     this.updateFullscreenIcon(isFullscreen);
     this.updateFullscreenContextMenu(isFullscreen);
     // Every fullscreen route lands here — native, host-driven and the iOS

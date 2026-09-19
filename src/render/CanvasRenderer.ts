@@ -655,8 +655,10 @@ export class CanvasRenderer {
         const transferLc = (colorTransfer || "").toLowerCase();
         const isHLGSource =
           transferLc.includes("hlg") || transferLc.includes("arib-std-b67");
+        // …and not while something is holding HDR back — a source opened while
+        // the player is already fullscreen has to start on the SDR path too.
         const isHDRPath =
-          this.isHDRSource && this.hdrEnabled && isChromium;
+          this.isHDRSource && this.hdrEnabled && !this.hdrSuspended && isChromium;
         const hdrSpace = isHLGSource ? "rec2100-hlg" : "rec2100-pq";
 
         // @ts-ignore
@@ -2289,13 +2291,38 @@ export class CanvasRenderer {
   private lastTransfer?: string;
 
   /**
+   * HDR off for as long as something else is in the way — not the viewer's
+   * choice, so hdrEnabled is left alone and comes back when the obstacle does.
+   * The obstacle is fullscreen: see MoviElement's fullscreen handler.
+   */
+  setHDRSuspended(suspended: boolean): void {
+    if (this.hdrSuspended === suspended) return;
+    this.hdrSuspended = suspended;
+    Logger.info(
+      TAG,
+      `HDR ${suspended ? "suspended" : "resumed"} (viewer's setting: ${this.hdrEnabled})`,
+    );
+    this.reapplyColorSpace(suspended ? "HDR suspended" : "HDR resumed");
+  }
+  private hdrSuspended = false;
+
+  /**
    * Set HDR enabled state
    */
   setHDREnabled(enabled: boolean): void {
     if (this.hdrEnabled === enabled) return;
     this.hdrEnabled = enabled;
     Logger.info(TAG, `HDR manual override set to: ${enabled}`);
+    this.reapplyColorSpace("HDR toggle");
+  }
 
+  /**
+   * Put the canvas back on the colour space the current state asks for.
+   *
+   * Called when the viewer toggles HDR, and when HDR is suspended or resumed
+   * around something that cannot carry it.
+   */
+  private reapplyColorSpace(reason: string): void {
     // Re-detect and re-apply color space if gl exists.
     // Mirror configure(): upgrade HDR sources on Chromium to rec2100-pq/hlg so
     // the compositor sends full peak brightness. detectHDRColorSpace() only
@@ -2311,7 +2338,8 @@ export class CanvasRenderer {
         const transferLc = (this.lastTransfer || "").toLowerCase();
         const isHLGSource =
           transferLc.includes("hlg") || transferLc.includes("arib-std-b67");
-        const isHDRPath = this.isHDRSource && this.hdrEnabled && isChromium;
+        const isHDRPath =
+          this.isHDRSource && this.hdrEnabled && !this.hdrSuspended && isChromium;
         const hdrSpace = isHLGSource ? "rec2100-hlg" : "rec2100-pq";
 
         let targetSpace: string;
@@ -2360,7 +2388,7 @@ export class CanvasRenderer {
           this.colorSpace = applied === targetSpace ? detectedColorSpace : applied;
           Logger.info(
             TAG,
-            `Updated WebGL color space to ${applied} (detected: ${detectedColorSpace}, HDR path: ${isHDRPath}) following HDR toggle`,
+            `Updated WebGL color space to ${applied} (detected: ${detectedColorSpace}, HDR path: ${isHDRPath}) following ${reason}`,
           );
         }
       } catch (e) {
@@ -2368,24 +2396,24 @@ export class CanvasRenderer {
       }
     }
 
-    // Update u_hdrEnabled uniform for shader-based tone mapping (non-Chromium browsers)
+    // The shader's own tone mapping, for browsers without a native HDR path.
+    // It follows the same two answers this method does: what the viewer asked
+    // for, and whether anything is suspending it.
     if (
       this.gl &&
       this.program &&
       !this.hasNativeHDRSupport &&
       this.isHDRSource
     ) {
+      const on = this.hdrEnabled && !this.hdrSuspended;
       const uHdrEnabled = this.gl.getUniformLocation(
         this.program,
         "u_hdrEnabled",
       );
       if (uHdrEnabled) {
         this.gl.useProgram(this.program);
-        this.gl.uniform1f(uHdrEnabled, enabled ? 1.0 : 0.0);
-        Logger.debug(
-          TAG,
-          `Updated u_hdrEnabled uniform to: ${enabled ? 1.0 : 0.0}`,
-        );
+        this.gl.uniform1f(uHdrEnabled, on ? 1.0 : 0.0);
+        Logger.debug(TAG, `Updated u_hdrEnabled uniform to: ${on ? 1.0 : 0.0}`);
       }
     }
 
