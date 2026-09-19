@@ -11,11 +11,37 @@ import { CodecParser } from "./CodecParser";
 
 const TAG = "VideoDecoder";
 
+/* lib.dom's WebCodecs colour enums are older than the spec the browsers ship:
+   VideoColorPrimaries there is bt709/bt470bg/smpte170m with no bt2020, and the
+   transfer list has no pq or hlg — the very values an HDR stream needs. So the
+   names are typed here, and handed to the config with one cast at the boundary
+   rather than each map being typed as `any`. Verified against Chrome:
+   isConfigSupported accepts {bt2020, pq, bt2020-ncl}. */
+type WcPrimaries =
+  | "bt709"
+  | "bt470bg"
+  | "smpte170m"
+  | "bt2020"
+  | "smpte432";
+type WcTransfer =
+  | "bt709"
+  | "smpte170m"
+  | "iec61966-2-1"
+  | "linear"
+  | "pq"
+  | "hlg";
+type WcMatrix =
+  | "rgb"
+  | "bt709"
+  | "bt470bg"
+  | "smpte170m"
+  | "bt2020-ncl";
+
 /** FFmpeg's name for a colour property, in the words WebCodecs will accept.
  *  Only the values the enums actually contain are here; anything else is left
  *  out of the config rather than passed through, because one value outside the
  *  enum makes the whole colorSpace dictionary unreadable. */
-const WC_PRIMARIES: Record<string, VideoColorPrimaries> = {
+const WC_PRIMARIES: Record<string, WcPrimaries> = {
   bt709: "bt709",
   bt470bg: "bt470bg",
   smpte170m: "smpte170m",
@@ -23,7 +49,7 @@ const WC_PRIMARIES: Record<string, VideoColorPrimaries> = {
   smpte432: "smpte432",
 };
 
-const WC_TRANSFER: Record<string, VideoTransferCharacteristics> = {
+const WC_TRANSFER: Record<string, WcTransfer> = {
   bt709: "bt709",
   // BT.2020's 10- and 12-bit transfer IS the BT.709 curve; only the bit depth
   // differs, and WebCodecs has no separate name for it.
@@ -39,7 +65,7 @@ const WC_TRANSFER: Record<string, VideoTransferCharacteristics> = {
   "arib-std-b67": "hlg",
 };
 
-const WC_MATRIX: Record<string, VideoMatrixCoefficients> = {
+const WC_MATRIX: Record<string, WcMatrix> = {
   rgb: "rgb",
   gbr: "rgb",
   bt709: "bt709",
@@ -221,9 +247,9 @@ export class MoviVideoDecoder {
     const matrix = WC_MATRIX[(track.colorSpace || "").toLowerCase()];
     if (!primaries && !transfer && !matrix) return null;
     const out: VideoColorSpaceInit = {};
-    if (primaries) out.primaries = primaries;
-    if (transfer) out.transfer = transfer;
-    if (matrix) out.matrix = matrix;
+    if (primaries) out.primaries = primaries as VideoColorPrimaries;
+    if (transfer) out.transfer = transfer as VideoTransferCharacteristics;
+    if (matrix) out.matrix = matrix as VideoMatrixCoefficients;
     return out;
   }
 
