@@ -2240,7 +2240,6 @@ export class MoviElement extends HTMLElement {
             <path class="movi-loader-face" d="M11.37 11.5L18.98 11.5L18.98 28.46C12.65 31.09 12.69 32.55 12.35 32.73L11.37 32.73Z" />
             <path class="movi-loader-face movi-loader-face-fold" d="M12.35 32.73C12.69 32.55 12.65 31.09 18.98 28.46C18.62 32.13 15.57 35.14 14.54 35.7L11.37 36.86L11.37 32.73Z" />
           </g>
-          <path class="movi-loader-inner" d="M18.98 19.56L27.59 24.18C21.08 27.66 18.98 28.39 18.98 28.47Z" />
           <path class="movi-loader-chase" d="M12.34 15.59C12.34 13.58 13.96 12 16.04 12C16.94 12 17.41 12.12 18.29 12.58L32.98 20.18C35.13 21.12 35.62 22.78 35.66 23.96C35.64 26.2 33.97 27.46 32.98 27.82C28.11 30.46 23.23 33 18.36 35.39C17.75 35.64 17.25 35.97 16.04 36C14.42 35.99 12.36 34.83 12.34 32.3Z" />
         </svg>
       </div>
@@ -22627,20 +22626,16 @@ export class MoviElement extends HTMLElement {
       }
 
 
-      /* The play triangle inside the mark, and the two faces that make the
-         ribbon read as folded rather than flat. Both are the logo's own
-         geometry; neither moves. The outline is what the segment laps, so
-         these stay quiet enough to be structure rather than another thing
-         travelling. */
-      .movi-loader-inner {
-        fill: none;
-        stroke: currentColor;
-        stroke-width: 2.2;
-        stroke-linejoin: round;
-        stroke-linecap: round;
-        opacity: 0.3;
-      }
+      /* The two faces that make the ribbon read as folded rather than flat.
+         The logo's own geometry, and neither moves: the outline is what the
+         segment laps, so these stay quiet enough to be structure rather than
+         another thing travelling.
 
+         The logo's inner play triangle is NOT drawn. Stroked at this size its
+         long edge runs parallel to the outline's own right edge, a hair
+         inside it, and the two read as one doubled line instead of as a mark
+         with a triangle in it. The faces leave that space open, which says the
+         same thing with one line fewer. */
       .movi-loader-face {
         fill: currentColor;
         stroke: none;
