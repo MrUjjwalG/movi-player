@@ -116,6 +116,10 @@ export class CanvasRenderer {
   // Presentation loop
   private rafId: number | null = null;
   private isPlaying: boolean = false;
+  // A source with no picture never presents a frame, so the presentation loop
+  // below refuses to run — and the caption clock was only ever driven from
+  // inside it. See startSubtitleClock().
+  private subtitleClockTimer: ReturnType<typeof setInterval> | null = null;
   // Set once configure() runs, which only happens when a real video track is
   // active. Audio-only sources (incl. cover-art "video" streams that
   // TrackManager classifies as attached-pic) never configure the renderer, so
@@ -534,7 +538,19 @@ export class CanvasRenderer {
     isHDR?: boolean,
     pixelFormat?: string,
   ): void {
+    const hadSubtitleClock = this.subtitleClockTimer !== null;
     this.isVideoConfigured = true;
+    if (hadSubtitleClock) {
+      // A picture arrived mid-track (a switch off an audio-only rendition).
+      // The presentation loop owns the captions again — but the play() that
+      // started this run already called startPresentationLoop() and was turned
+      // away, so nothing else will start it.
+      this.stopSubtitleClock();
+      if (this.isPlaying && this.rafId === null) {
+        this.isPlaying = false;
+        this.startPresentationLoop();
+      }
+    }
     // Detect high bit-depth (12-bit+) content that needs RGBA16F textures
     const pf = (pixelFormat || "").toLowerCase();
     this.isHighBitDepth = pf.includes("12") || pf.includes("14") || pf.includes("16");
@@ -2806,7 +2822,15 @@ export class CanvasRenderer {
     // Audio-only source (no video track configured): nothing to present, and
     // running A/V sync against a non-existent video stream is meaningless. The
     // cover art, if any, is drawn separately via the overlay canvas.
-    if (!this.isVideoConfigured) return;
+    if (!this.isVideoConfigured) {
+      // The captions still have to run, though. Cues arrive from the decoder
+      // either way, and with no loop nothing ever compares them against the
+      // clock: an audio track's subtitles stayed empty for its whole length,
+      // and giving the source a picture back is what appeared to fix them.
+      this.isPlaying = true;
+      this.startSubtitleClock();
+      return;
+    }
     if (this.rafId !== null) return;
 
     this.isPlaying = true;
@@ -2868,6 +2892,7 @@ export class CanvasRenderer {
    */
   stopPresentationLoop(): void {
     this.isPlaying = false;
+    this.stopSubtitleClock();
     // The perf windows are rates measured across wall-clock time, and nothing
     // is going to tick them while the loop is stopped. See resetPerfWindows().
     this.resetPerfWindows();
@@ -2884,6 +2909,34 @@ export class CanvasRenderer {
     // Do NOT clear lastRenderedFrame here - we need it for resize during pause
 
     Logger.debug(TAG, "Presentation loop stopped");
+  }
+
+  /**
+   * The caption clock for a source with no picture.
+   *
+   * updateActiveSubtitle() and renderSubtitles() live inside the presentation
+   * loop, which is where they belong while frames are being shown and exactly
+   * the wrong place for a source that has none: an audio file, or an
+   * audio-only rendition of a video one. This stands in for the loop there.
+   *
+   * An interval rather than a rAF, because neither of the reasons to use rAF
+   * applies: nothing is being painted in step with a frame, and an audio track
+   * playing behind another tab is the ordinary case, not the odd one — rAF
+   * parks there while the sound carries on. 100ms is the tolerance the cue
+   * matcher already works to.
+   */
+  private startSubtitleClock(): void {
+    if (this.subtitleClockTimer !== null) return;
+    this.subtitleClockTimer = setInterval(() => {
+      this.updateActiveSubtitle();
+      this.renderSubtitles();
+    }, 100);
+  }
+
+  private stopSubtitleClock(): void {
+    if (this.subtitleClockTimer === null) return;
+    clearInterval(this.subtitleClockTimer);
+    this.subtitleClockTimer = null;
   }
 
   /**
@@ -3023,6 +3076,13 @@ export class CanvasRenderer {
    * This ensures smooth 60fps video playback while maintaining A/V sync
    */
   private getCurrentPlaybackTime(): number {
+    // No picture at all: the sound IS the clock. Everything below exists to
+    // hold frames in step with the audio, and there are no frames — while the
+    // last-presented-PTS fallback right under this would pin every caption to
+    // -1 for the whole track, since nothing is ever presented.
+    if (!this.isVideoConfigured) {
+      return this.getAudioTime ? this.getAudioTime() : -1;
+    }
     // When the presentation loop is stopped (player paused), the
     // wall-clock formula below would advance time forever — but no one
     // is consuming frames, so updateActiveSubtitle (called from
