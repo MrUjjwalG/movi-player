@@ -80,6 +80,17 @@ export const loadingIndicatorStyles = `
     width: 100%;
     height: 100%;
     display: block;
+    /* Sat where the centre play button's triangle sits, not where the box's
+       middle is. That button nudges its glyph right — a triangle centred by its
+       box reads as leaning left — and the nudge is part fixed (translateX
+       2.75px) and part scaled with the glyph, which measures +5.0px on a 96px
+       button, +6.0 at 104 and +6.5 at 112: about 5.5% of the button's box
+       either way. So the same fraction of the same expression the button is
+       sized from, and the two marks land on each other at every width instead
+       of the spinner appearing a few pixels to the left of the thing it
+       replaces. On the mark rather than the container, which the arrival
+       animation already owns. */
+    transform: translateX(clamp(5.28px, 0.55cqw, 6.16px));
   }
 
   .movi-loader-flow {
@@ -118,5 +129,12 @@ export const loadingIndicatorStyles = `
 
   @container movi-host (max-width: 720px) {
     .movi-loader-container { width: 52px; height: 52px; }
+  }
+
+  /* The button steps out of its clamp here — 72px — so the nudge that follows
+     it has to step too, or the spinner lands a pixel and a half right of the
+     triangle it stands in for. */
+  @media (max-width: 480px) {
+    .movi-loader-mark { transform: translateX(4px); }
   }
 `;
