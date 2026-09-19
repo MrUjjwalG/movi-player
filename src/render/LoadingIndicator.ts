@@ -64,8 +64,13 @@ export const loadingIndicatorMarkup = `
 // Shared with Document PiP, whose markup lives in a different document.
 export const loadingIndicatorStyles = `
   .movi-loader-container {
-    width: 68px;
-    height: 68px;
+    /* The same box the centre play button has, at every size it has it —
+       clamp(96px, 10cqw, 112px) here, 72px on a narrow viewport. The two are
+       concentric, so matching the box is what keeps the mark from jumping when
+       one hands over to the other: the spinner used to be 68px against the
+       button's 96, and the swap moved and resized the thing the eye was on. */
+    width: clamp(96px, 10cqw, 112px);
+    height: clamp(96px, 10cqw, 112px);
     display: inline-block;
     color: #fff;
     position: relative;
@@ -116,7 +121,8 @@ export const loadingIndicatorStyles = `
     .movi-loader-highlight { display: none; }
   }
 
-  @container movi-host (max-width: 720px) {
-    .movi-loader-container { width: 52px; height: 52px; }
+  /* The button's own narrow-viewport size — see the note on the container. */
+  @media (max-width: 480px) {
+    .movi-loader-container { width: 72px; height: 72px; }
   }
 `;
