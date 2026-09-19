@@ -283,6 +283,26 @@
         --font-family: "Inter", system-ui, -apple-system, sans-serif;
       }
 
+      /* The skip link is the first thing in <body>, and what parks it off
+         screen used to be in a <style> further down the body — so on a slow
+         first paint the browser drew it before it read the rule, and "Skip to
+         player" flashed in the top-left corner. Rules that style anything
+         above the body's own stylesheet belong up here, where they are already
+         in force when the element is parsed. */
+      .skip-link {
+        position: fixed;
+        top: 0.75rem;
+        left: 0.75rem;
+        z-index: 1000;
+        padding: 0.7rem 1rem;
+        border-radius: 0.5rem;
+        color: #fff;
+        background: var(--accent);
+        transform: translateY(-160%);
+        transition: transform 180ms ease;
+      }
+      .skip-link:focus { transform: translateY(0); }
+
       /* Dark Theme (Default) */
       :root {
         --bg-base: #0f0f12;
@@ -3970,20 +3990,6 @@
         opacity: 0.025;
         background-image: url("data:image/svg+xml,%3Csvg viewBox='0 0 180 180' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='.92' numOctaves='3' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)' opacity='.7'/%3E%3C/svg%3E");
       }
-
-      .skip-link {
-        position: fixed;
-        top: 0.75rem;
-        left: 0.75rem;
-        z-index: 1000;
-        padding: 0.7rem 1rem;
-        border-radius: 0.5rem;
-        color: #fff;
-        background: var(--accent);
-        transform: translateY(-160%);
-        transition: transform 180ms ease;
-      }
-      .skip-link:focus { transform: translateY(0); }
 
       .navbar {
         height: 76px;
