@@ -18996,12 +18996,23 @@ export class MoviElement extends HTMLElement {
               var(--movi-seg-hover-to, 0%),
             transparent var(--movi-seg-hover-to, 0%) 100%
           ),
+          var(--movi-brand-fill, linear-gradient(var(--movi-primary), var(--movi-primary))),
           linear-gradient(
             to right,
-            var(--movi-primary) 0 var(--movi-seg-played, 0%),
+            transparent 0 var(--movi-seg-played, 0%),
             rgba(255, 255, 255, 0.25) var(--movi-seg-played, 0%) var(--movi-seg-buffered, 0%),
             transparent var(--movi-seg-buffered, 0%) 100%
           );
+        /* The played slice is a LAYER, not a stop: the brand fill is a
+           gradient, and a gradient cannot be a colour stop inside another one —
+           which is why the raised chapter used to fill with flat
+           --movi-primary while the rest of the bar wore the gradient. Sized to
+           the played percentage, exactly as the thin bar's fill element is
+           sized by its width, so the brand runs across the played part of this
+           chapter the same way it runs across the bar. */
+        background-size: 100% 100%, var(--movi-seg-played, 0%) 100%, 100% 100%;
+        background-position: left center;
+        background-repeat: no-repeat;
         transition: height 0.18s cubic-bezier(0.4, 0, 0.2, 1);
       }
 
