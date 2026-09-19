@@ -120,6 +120,9 @@ export class CanvasRenderer {
   // below refuses to run — and the caption clock was only ever driven from
   // inside it. See startSubtitleClock().
   private subtitleClockTimer: ReturnType<typeof setInterval> | null = null;
+  // Data-saver: the source HAS a video track and this renderer is configured
+  // for it, but nothing is being decoded. See setPictureSuspended().
+  private pictureSuspended: boolean = false;
   // Set once configure() runs, which only happens when a real video track is
   // active. Audio-only sources (incl. cover-art "video" streams that
   // TrackManager classifies as attached-pic) never configure the renderer, so
@@ -540,7 +543,7 @@ export class CanvasRenderer {
   ): void {
     const hadSubtitleClock = this.subtitleClockTimer !== null;
     this.isVideoConfigured = true;
-    if (hadSubtitleClock) {
+    if (hadSubtitleClock && !this.pictureSuspended) {
       // A picture arrived mid-track (a switch off an audio-only rendition).
       // The presentation loop owns the captions again — but the play() that
       // started this run already called startPresentationLoop() and was turned
@@ -2822,7 +2825,7 @@ export class CanvasRenderer {
     // Audio-only source (no video track configured): nothing to present, and
     // running A/V sync against a non-existent video stream is meaningless. The
     // cover art, if any, is drawn separately via the overlay canvas.
-    if (!this.isVideoConfigured) {
+    if (!this.isVideoConfigured || this.pictureSuspended) {
       // The captions still have to run, though. Cues arrive from the decoder
       // either way, and with no loop nothing ever compares them against the
       // clock: an audio track's subtitles stayed empty for its whole length,
@@ -2937,6 +2940,38 @@ export class CanvasRenderer {
     if (this.subtitleClockTimer === null) return;
     clearInterval(this.subtitleClockTimer);
     this.subtitleClockTimer = null;
+  }
+
+  /**
+   * Data-saver audio-only: a video track is configured and this renderer is
+   * set up for it, but not one packet of it is being decoded.
+   *
+   * Presenting is then a loop with nothing to present, and worse than idle:
+   * the perf detectors would read sixty ticks a second against zero frames
+   * with audio flowing, which is their signature for a source the machine
+   * cannot decode. So the captions move to the clock a picture-less source
+   * uses, and the loop stands down until the picture comes back.
+   */
+  setPictureSuspended(suspended: boolean): void {
+    if (this.pictureSuspended === suspended) return;
+    this.pictureSuspended = suspended;
+    if (!this.isPlaying) return;
+    if (suspended) {
+      if (this.rafId !== null) {
+        cancelAnimationFrame(this.rafId);
+        this.rafId = null;
+      }
+      // Whatever those windows measured, they measured it against a picture
+      // that is about to stop arriving. See resetPerfWindows().
+      this.resetPerfWindows();
+      this.startSubtitleClock();
+      return;
+    }
+    this.stopSubtitleClock();
+    if (this.rafId === null) {
+      this.isPlaying = false;
+      this.startPresentationLoop();
+    }
   }
 
   /**
@@ -3080,7 +3115,7 @@ export class CanvasRenderer {
     // hold frames in step with the audio, and there are no frames — while the
     // last-presented-PTS fallback right under this would pin every caption to
     // -1 for the whole track, since nothing is ever presented.
-    if (!this.isVideoConfigured) {
+    if (!this.isVideoConfigured || this.subtitleClockTimer !== null) {
       return this.getAudioTime ? this.getAudioTime() : -1;
     }
     // When the presentation loop is stopped (player paused), the

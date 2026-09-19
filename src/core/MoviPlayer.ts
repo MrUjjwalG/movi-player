@@ -2874,6 +2874,10 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
         // Use canvas with WebCodecs (or WASM software if forced)
         this.videoDecoder = new MoviVideoDecoder(forceSoftware);
         this.videoRenderer = new CanvasRenderer(config.canvas);
+        // A source that OPENS in data-saver (the adaptive path reloads into
+        // exactly that) has a configured video track and no picture. Say so
+        // now, or the renderer spends the track believing one is coming.
+        this.videoRenderer.setPictureSuspended(this._audioOnly);
 
         // Connect video renderer to audio clock for A/V sync (skip if audio disabled)
         if (!this.disableAudio) {
@@ -10490,6 +10494,12 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
           this.stateManager.setState("playing");
         }
         this.clock.start();
+        // Split audio-only runs playback entirely from here — play()'s body,
+        // and with it the one call that starts the renderer, is never reached.
+        // Nothing is being presented either way; what this starts is the
+        // caption clock, without which subtitles turned on in audio-only sit
+        // there for the whole track (see setPictureSuspended).
+        this.videoRenderer?.startPresentationLoop();
         // Resume the (auto-suspended) context so audio is audible. Fire-and-
         // forget like the video path — the shared context was already unlocked
         // by the previous track, so this wakes it without a fresh gesture.
@@ -15304,6 +15314,9 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
   setAudioOnly(enabled: boolean): void {
     if (this._audioOnly === enabled) return;
     this._audioOnly = enabled;
+    // Captions are not part of the picture, and they are the one thing on
+    // screen that still has to keep time while it is gone.
+    this.videoRenderer?.setPictureSuspended(enabled);
     if (this.streamWrapper) {
       // Adaptive streams: the wrapper picks an audio-only / smallest-video
       // variant live (no reload, so the stream — and its LIVE state — survives).
