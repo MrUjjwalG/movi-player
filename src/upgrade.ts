@@ -228,7 +228,62 @@ function upgradeOne(
 
   if (options.proxy !== false) forwardTo(video, player);
 
+  hideHostChrome();
+
   return { video, player };
+}
+
+/**
+ * Take down the controls the page was drawing around this video.
+ *
+ * A page built on video.js is a <video> with a skin on top: replacing the
+ * element leaves the skin behind, so the viewer gets two control bars, two
+ * play buttons and two spinners, one of them over the other. The skin is not
+ * removed and its player is not disposed — the page's scripts still hold it,
+ * and it still works, because the element it drives is the hidden <video> that
+ * forwards to ours. It is only stopped from drawing.
+ *
+ * Written as a stylesheet with !important rather than inline styles, because
+ * the skin sets its own inline styles as it shows and hides itself and would
+ * otherwise draw straight over the top again on the next mouse move. Put up
+ * whenever anything is upgraded, without first looking for a skin: whether
+ * there is one to hide depends on when that skin's own script runs, which is
+ * as likely to be after this as before it. The rules match nothing on a page
+ * that has none.
+ */
+const HOST_CHROME_STYLE_ID = "movi-upgrade-host-chrome";
+
+function hideHostChrome(): void {
+  if (document.getElementById(HOST_CHROME_STYLE_ID)) return;
+  // Keyed on the skin CONTAINING a player rather than on a class put there at
+  // upgrade time: video.js builds its skin when its own script runs, which may
+  // be before this or after it, and a class added to the element it is about
+  // to rebuild around is a class that will not be there afterwards.
+  const vjs = ".video-js:has(> movi-player)";
+  const plyr = ".plyr:has(movi-player)";
+  const style = document.createElement("style");
+  style.id = HOST_CHROME_STYLE_ID;
+  style.textContent = [
+    [
+      `${vjs} > .vjs-control-bar`,
+      `${vjs} > .vjs-big-play-button`,
+      `${vjs} > .vjs-poster`,
+      `${vjs} > .vjs-loading-spinner`,
+      `${vjs} > .vjs-text-track-display`,
+      `${vjs} > .vjs-title-bar`,
+      `${vjs} > .vjs-modal-dialog`,
+      `${vjs} > .vjs-error-display`,
+      `${plyr} > .plyr__controls`,
+      `${plyr} > .plyr__control--overlaid`,
+    ].join(",\n") + " { display: none !important; }",
+    // The skin hides the pointer while it believes the viewer is idle. Ours
+    // decides that for itself now, and its own bar is what the pointer is
+    // being moved towards.
+    `${vjs} { cursor: auto !important; }`,
+    // …and the player takes the space the tech had.
+    `${vjs} > movi-player { width: 100% !important; height: 100% !important; }`,
+  ].join("\n");
+  (document.head || document.documentElement).appendChild(style);
 }
 
 /**

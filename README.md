@@ -259,6 +259,12 @@ so `getElementById` keeps finding the player. The original element stays hidden
 with its API pointed at the new one, so `video.play()`, `video.currentTime = 60`
 and `video.addEventListener(…)` in existing code keep working.
 
+Where the page drew a skin around its `<video>` — video.js, Plyr — that skin
+stops drawing: its control bar, big play button, poster and spinner would
+otherwise sit on top of the player's own. Nothing is removed and no player is
+disposed, so the page's scripts keep working; they are simply no longer the
+thing on screen.
+
 Only a `<video>` that is playing a **file at a URL** is taken over. A site that
 feeds its element from JavaScript — Media Source Extensions, a MediaStream, a
 DRM stream, or an element with no source yet — is left alone: there is no file
