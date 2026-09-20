@@ -24671,7 +24671,16 @@ export class MoviElement extends HTMLElement {
            player. Follows the box once there IS one — as a flat 158 it silently
            clipped the taller frames a wide player now asks for. */
         max-height: var(--movi-preview-h, 158px);
-        object-fit: contain;
+        /* The box is built from the SOURCE's own shape (see updatePreviewBox),
+           so the picture and the box are the same picture — and contain was
+           letting the difference between two roundings show as a hairline of
+           the card's backdrop along one edge. Both ends round: the box to whole
+           pixels, and the preview itself to a whole-pixel height when it is
+           made. In the light theme that hairline is #f0f0f0, which reads as a
+           white line under the thumbnail.
+           Filling the box instead crops that same fraction of a pixel, which
+           nobody can see, from a picture that is meant to fill it anyway. */
+        object-fit: cover;
         /* No outline. The frame stands off the picture on its shadow alone —
            a hairline around a moving image at this size reads as a stray edge
            drawn over the video rather than as the border of a card. */
