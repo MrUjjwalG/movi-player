@@ -445,8 +445,6 @@ export class CanvasRenderer {
   private subtitleControlsPadding: number = 0; // Extra padding when controls visible
   // Set while the viewer is dragging the caption. See setSubtitleHeld().
   private subtitleHeld: boolean = false;
-  // Is the chrome the reserve is for on screen right now?
-  private subtitleControlsVisible: boolean = false;
   // Subtitle delay in seconds. VLC/mpv convention: positive = subs appear
   // later, negative = earlier. Applied at the active-cue check so it works
   // uniformly for text and image subtitles and can be adjusted live without
@@ -4019,16 +4017,8 @@ export class CanvasRenderer {
    * Set extra bottom padding for subtitles when controls are visible
    * 0 = use default padding, >0 = use this value instead
    */
-  /**
-   * @param visible is the chrome this reserve is FOR actually on screen? The
-   * reserve is kept while the bar is merely away (see
-   * subtitleEffectiveBottomPadding), so the two are no longer the same
-   * question, and a reserve of 0 now means only one thing: there is no
-   * chrome here at all.
-   */
-  setSubtitleControlsPadding(padding: number, visible = padding > 0): void {
+  setSubtitleControlsPadding(padding: number): void {
     this.subtitleControlsPadding = padding;
-    this.subtitleControlsVisible = visible;
     // Apply immediately if overlay exists
     if (this.subtitleOverlay) {
       const height = this.containerHeight || 672;
@@ -4515,16 +4505,17 @@ export class CanvasRenderer {
   }
 
   /**
-   * The controls reserve keeps the caption off the bar as the bar comes and
-   * goes — and it belongs to the caption the PLAYER places, not to one the
-   * viewer has put somewhere themselves.
+   * The controls reserve is for the caption the bar would otherwise cover,
+   * and for no other caption.
    *
-   * A placed caption stays where it was put, bar or no bar. Holding it clear
-   * of the bar instead sounds kinder and is not: the caption still moves on
-   * its own every time the bar appears and hides, which is the thing that was
-   * wrong with applying the reserve to it in the first place. If the viewer
-   * parks it where the bar will cover it, the bar is a few seconds of its own
-   * and then gone.
+   * Where the caption sits comes out as max(home, controlsPadding) once CSS
+   * adds the viewer's own lift back on — so one sitting down by the bar rides
+   * up with it and settles back when it hides, exactly as it always has, and
+   * one carried anywhere above the bar's reach never moves for it again.
+   *
+   * Stated as a maximum rather than as a near/far test, because a test flips:
+   * the caption would jump the moment a drag crossed the line, in the middle
+   * of the gesture that crossed it.
    */
   private subtitleEffectiveBottomPadding(
     overlayHeight: number,
@@ -4536,35 +4527,8 @@ export class CanvasRenderer {
     // so nothing moves as it is picked up either — and nothing moves as it is
     // let go, because the reserve does not come back for a placed caption.
     if (this.subtitleHeld) return bottomPadding;
-    // Half a pixel, not zero: a caption dragged away and back to within a
-    // hair of home has still been placed, and re-applying the reserve to it
-    // would move it the height of the bar the moment the pointer let go.
-    if (Math.abs(this.subtitleUserLift(overlayHeight)) > 0.5) {
-      return bottomPadding;
-    }
-    // Nothing to reserve for: no bar on this player at all.
-    if (this.subtitleControlsPadding <= 0) return bottomPadding;
-    // The bar's reserve is kept even while the bar is away.
-    //
-    // Letting the caption drop back the moment the bar hides means it rises
-    // and falls by the height of the bar every few seconds, because that is
-    // how often the bar comes and goes while anyone is using the player. The
-    // ~68px of picture it wins back is not worth a caption that will not sit
-    // still, so the caption holds the one height at which the bar can never
-    // reach it.
-    //
-    // Unless the caption's own home is right down on the bottom edge, which
-    // only happens when the page asks for it with --movi-sub-bottom. That is
-    // a decision about where captions belong on this page, and a caption
-    // asked to sit at the very bottom does follow the bar up and back down
-    // rather than be held a fifth of the frame above the place it was put.
-    const pinnedToTheEdge = bottomPadding <= overlayHeight * 0.04;
-    if (pinnedToTheEdge) {
-      return this.subtitleControlsVisible
-        ? this.subtitleControlsPadding
-        : bottomPadding;
-    }
-    return Math.max(bottomPadding, this.subtitleControlsPadding);
+    const lift = this.subtitleUserLift(overlayHeight);
+    return Math.max(bottomPadding, this.subtitleControlsPadding - lift);
   }
 
   /**

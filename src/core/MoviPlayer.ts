@@ -12899,9 +12899,9 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
     this.videoRenderer?.setSubtitleHeld(held);
   }
 
-  setSubtitleControlsPadding(padding: number, visible?: boolean): void {
+  setSubtitleControlsPadding(padding: number): void {
     if (this.videoRenderer) {
-      this.videoRenderer.setSubtitleControlsPadding(padding, visible);
+      this.videoRenderer.setSubtitleControlsPadding(padding);
     }
   }
 
