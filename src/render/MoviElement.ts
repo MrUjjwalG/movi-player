@@ -12527,11 +12527,6 @@ export class MoviElement extends HTMLElement {
       this.player?.setSubtitleHeld(false);
       this._subtitleDragSuppressClick = true;
       this.saveSubtitleSettings();
-      // Counted per drag, not per frame of one: this is the end of a drag the
-      // hint was offered for.
-      if (this._captionHint?.style.display !== "none") {
-        this.setCaptionHintsSeen(this.captionHintsSeen() + 1);
-      }
       this.dismissCaptionHint();
     };
 
@@ -12577,8 +12572,8 @@ export class MoviElement extends HTMLElement {
       s.posY = 0;
       this.saveSubtitleSettings();
       this.applySubtitlePosition();
-      // They know. Nothing more to say, now or later.
-      this.setCaptionHintsSeen(MoviElement.CAPTION_HINT_LIMIT);
+      // They know — they just did it. Nothing more to say, now or ever.
+      this.markCaptionHintLearned();
       this.dismissCaptionHint(true);
     });
   }
@@ -12617,29 +12612,28 @@ export class MoviElement extends HTMLElement {
 
   private _captionHint: HTMLDivElement | null = null;
   private _captionHintTimer: number | null = null;
-  private static readonly CAPTION_HINT_STORAGE_KEY = "movi.captionDragHint";
-  /** Shown on this many drags, then never again — and not once it is known. */
-  private static readonly CAPTION_HINT_LIMIT = 3;
+  private static readonly CAPTION_HINT_STORAGE_KEY = "movi.captionDragHintDone";
 
-  private captionHintsSeen(): number {
+  /**
+   * Has the viewer ever put a caption back?
+   *
+   * The one thing that proves the hint has been read. Counting drags would
+   * only prove the hint has been SHOWN, which is not the same and stops
+   * telling people who have not looked at it yet.
+   */
+  private captionHintLearned(): boolean {
     try {
-      return parseInt(
-        localStorage.getItem(MoviElement.CAPTION_HINT_STORAGE_KEY) || "0",
-        10,
-      ) || 0;
+      return !!localStorage.getItem(MoviElement.CAPTION_HINT_STORAGE_KEY);
     } catch {
-      // No store: say it every time rather than never. A hint nobody can
-      // dismiss is worse than one that is offered again.
-      return 0;
+      // No store: offer it every time rather than never. A hint nobody can
+      // reach is worse than one offered again.
+      return false;
     }
   }
 
-  private setCaptionHintsSeen(count: number): void {
+  private markCaptionHintLearned(): void {
     try {
-      localStorage.setItem(
-        MoviElement.CAPTION_HINT_STORAGE_KEY,
-        String(count),
-      );
+      localStorage.setItem(MoviElement.CAPTION_HINT_STORAGE_KEY, "1");
     } catch {
       /* private window, blocked storage — the hint just keeps being offered */
     }
@@ -12650,14 +12644,15 @@ export class MoviElement extends HTMLElement {
    *
    * A drag has no undo the eye can find: the caption is somewhere new and
    * nothing on screen says the way back. So it is said at the one moment it
-   * is wanted, in the smallest thing that can carry a sentence — and only for
-   * the first few drags, because after that it is a label on a door the
-   * viewer already knows how to open. Using the reset retires it at once.
+   * is wanted, in the smallest thing that can carry a sentence — on every
+   * drag, until the viewer puts a caption back for the first time. That, and
+   * not a number of showings, is what says the sentence has been read; after
+   * it, the hint is a label on a door they know how to open.
    */
   private showCaptionHint(touch: boolean): void {
     const hint = this._captionHint;
     if (!hint) return;
-    if (this.captionHintsSeen() >= MoviElement.CAPTION_HINT_LIMIT) return;
+    if (this.captionHintLearned()) return;
     if (this._captionHintTimer !== null) {
       window.clearTimeout(this._captionHintTimer);
       this._captionHintTimer = null;
