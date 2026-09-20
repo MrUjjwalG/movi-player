@@ -13,6 +13,19 @@
  */
 import { upgradeVideoElements } from "./dist/element.slim.js";
 
+// The arrow has to mean something. On the extension's own page it goes back to
+// where files are opened; here the only place it can go is out of fullscreen,
+// which is where the title bar carrying it appears in the first place. The
+// element only announces the press — a page that wants its own answer can
+// still preventDefault this before it reaches us.
+document.addEventListener("back", (event) => {
+  const target = event.target;
+  if (!target || target.tagName !== "MOVI-PLAYER") return;
+  if (!document.fullscreenElement) return;
+  event.preventDefault();
+  document.exitFullscreen?.().catch(() => {});
+});
+
 upgradeVideoElements({
   // A page that routes without reloading — and every site that swaps its
   // player between items — puts its next <video> in later.
@@ -27,11 +40,10 @@ upgradeVideoElements({
     thumb: "precise",
     fastseek: "",
     showtitle: "",
-    // player.html's is "back-windowed". The arrow is not carried over: there
-    // it goes back to the player's own home, and here there is nowhere for it
-    // to go — the back event would be dispatched into a page that has never
-    // heard of it. The title itself is worth having, so the rest stands.
-    titlemode: "windowed",
+    // The name of what is playing, where it is actually wanted: fullscreen,
+    // with nothing else on screen to say it. Windowed, the page's own title
+    // and chrome are right there and a second one over the picture is noise.
+    titlemode: "fullscreen back",
     subtitlepicker: "",
     ambientmode: "",
     resume: "",
