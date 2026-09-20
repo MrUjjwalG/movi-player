@@ -103,11 +103,18 @@ function looksLikeDrmFailure(e: unknown): boolean {
 // renderer tries an FPS cap first, means "can't sustain even at half rate": a
 // device limit, not a transient. Cleared only on a full page reload.
 const deviceDecodeBoundHeights = new Set<string>();
-// …and the same lesson, kept across reloads. A device that cannot sustain 8K
-// today cannot sustain it after F5 either, but the in-memory set above is
-// cleared by the reload, so every fresh visit paid the same stutter to
-// re-learn it. Small and self-correcting: the ceiling only ever rises to what
-// the machine has actually failed at, and clearing site data resets it.
+// …and the same lesson, kept across reloads — of this TAB, and no further.
+// The in-memory set above is cleared by a reload, so a fresh visit paid the
+// same stutter to re-learn a limit it had just found; carrying it in session
+// storage saves that without the verdict outliving the run it was made in.
+//
+// Which matters, because the verdict is made from one machine on one evening:
+// a laptop on battery, a GPU busy behind another tab, a browser mid-update.
+// None of those is a property of the device, and all of them were being
+// written down forever. The ceiling only ever rises — nothing lowers it — so
+// a bad evening barred a rung on that device for good, on every video, with
+// nothing in the interface to say why 4K was never chosen again. A session is
+// the longest any of it can honestly claim to be true for.
 // The thumbnail pipeline's WASM module, kept for the whole page session.
 //
 // It used to be built fresh per video — a second emscripten instance, its own
@@ -216,6 +223,20 @@ function webCodecsUnavailable(): boolean {
 const DECODE_CEILING_KEY = "movi:decode-ceiling:v2";
 
 /**
+ * The store is session storage: the ceiling belongs to this tab's run of the
+ * player and goes when the tab does. See deviceDecodeBoundHeights.
+ */
+function decodeCeilingStore(): Storage | null {
+  try {
+    return typeof sessionStorage !== "undefined" ? sessionStorage : null;
+  } catch {
+    // Blocked storage (a sandboxed frame, a privacy mode): the in-memory set
+    // still holds for the life of the page.
+    return null;
+  }
+}
+
+/**
  * Resolve `p`, or TIMED_OUT once `ms` have passed.
  *
  * The losing promise is NOT cancelled — it cannot be — so every caller must
@@ -267,7 +288,14 @@ function decodeBoundExactKey(codec: string, height: number): string {
 
 function loadPersistedDecodeCeiling(): void {
   try {
-    const raw = localStorage.getItem(DECODE_CEILING_KEY);
+    // Whatever earlier versions wrote down for ever: drop it on sight. A
+    // ceiling from another day is the thing this stopped keeping.
+    localStorage.removeItem(DECODE_CEILING_KEY);
+  } catch {
+    /* nothing there to clear, or nowhere to clear it from */
+  }
+  try {
+    const raw = decodeCeilingStore()?.getItem(DECODE_CEILING_KEY);
     if (!raw) return;
     for (const k of JSON.parse(raw) as string[]) {
       if (typeof k === "string" && k.includes("@")) deviceDecodeBoundHeights.add(k);
@@ -288,7 +316,7 @@ const sessionOnlyDecodeBoundHeights = new Set<string>();
 
 function persistDecodeCeiling(): void {
   try {
-    localStorage.setItem(
+    decodeCeilingStore()?.setItem(
       DECODE_CEILING_KEY,
       JSON.stringify(
         [...deviceDecodeBoundHeights].filter(
@@ -731,7 +759,8 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
 
   /**
    * Resolutions this device has been shown not to sustain — learned from a
-   * decode-bound stall or from MediaCapabilities, and kept across reloads.
+   * decode-bound stall or from MediaCapabilities, and kept for this tab's
+   * session (see deviceDecodeBoundHeights).
    * Public because the pick happens BEFORE any player exists: the element's
    * pre-play speed test chooses the opening rung off a bandwidth measurement
    * alone, so without this a machine that cannot decode 8K still opened on it
