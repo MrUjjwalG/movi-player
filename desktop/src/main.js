@@ -183,36 +183,52 @@ function chromeOptions() {
  * acknowledgement, so a renderer that is wedged or has no sound at all delays
  * the quit by the same fifth of a second and never blocks it.
  */
-const AUDIO_FADE_MS = 200;
+// Short enough that the app is gone while the hand is still on the key, long
+// enough that the sound stops on a slope instead of a click — a click is what
+// this was fixing, and anything past about this reads as the app taking its
+// time to leave.
+const AUDIO_FADE_MS = 140;
+/**
+ * The window goes faster than the sound, and front-loaded.
+ *
+ * Matched to the gain ramp and run linear, the window read as a slow one —
+ * held at a visible opacity for most of its length, which is the shape of an
+ * app labouring to shut, not one closing. A close has to LOOK instant and only
+ * sound gentle: the picture is most of the way gone before the eye has
+ * followed the click, while the sound is still on its way down behind it,
+ * which is what an unhurried exit sounds like.
+ */
+const WINDOW_FADE_MS = 120;
 // Plus the margin between a ramp ending and the sound being gone from the
 // device — see the slope's own duration in AudioRenderer.fadeOut.
-const AUDIO_FADE_WAIT_MS = AUDIO_FADE_MS + 60;
+const AUDIO_FADE_WAIT_MS = AUDIO_FADE_MS + 40;
 let audioFaded = false;
 
 /**
- * The picture goes with the sound.
- *
- * Same slope, same length, so closing reads as one movement rather than a
- * window vanishing over a sound that is still going. Linear, because the gain
- * ramp underneath it is linear and the two are meant to be the same gesture.
+ * The picture goes before the sound, and quickly.
  *
  * On the window itself rather than on anything the page draws: the frame, the
  * background and the title bar are not the renderer's to fade, and a page that
- * dimmed itself inside a window that did not would look like a bug.
+ * dimmed itself inside a window that did not would look like a fault.
+ *
+ * Cubic, so most of the window is gone in the first third of the fade — the
+ * eye gets its answer at once and the last of it is a soft edge rather than a
+ * wait. See WINDOW_FADE_MS.
  */
 function fadeWindowsOut(ms) {
   const windows = BrowserWindow.getAllWindows();
   const startedAt = Date.now();
   const step = () => {
     const through = Math.min(1, (Date.now() - startedAt) / ms);
+    const left = (1 - through) ** 3;
     for (const w of windows) {
       try {
-        if (!w.isDestroyed()) w.setOpacity(1 - through);
+        if (!w.isDestroyed()) w.setOpacity(left);
       } catch {
         /* a window that has gone, or a platform without window opacity */
       }
     }
-    if (through < 1) setTimeout(step, 16);
+    if (through < 1) setTimeout(step, 8);
   };
   step();
 }
@@ -226,7 +242,7 @@ function fadeAudioThen(finish) {
       /* a window already on its way out */
     }
   }
-  fadeWindowsOut(AUDIO_FADE_MS);
+  fadeWindowsOut(WINDOW_FADE_MS);
   setTimeout(finish, AUDIO_FADE_WAIT_MS);
 }
 
