@@ -17,9 +17,24 @@ upgradeVideoElements({
   // A page that routes without reloading — and every site that swaps its
   // player between items — puts its next <video> in later.
   watch: true,
+  // The same player the extension's own page opens files in. A <video> has no
+  // way to ask for any of this, so it comes from here — and it is the same
+  // list as player.html's, so a video is the same player wherever it is met.
   attributes: {
-    // The page's own <video> may have had no controls because the site drew
-    // its own around it. Ours has nothing else to be driven by.
+    // The site drew its own controls around its <video>; ours has nothing
+    // else to be driven by.
     controls: "",
+    thumb: "precise",
+    fastseek: "",
+    showtitle: "",
+    // player.html's is "back-windowed". The arrow is not carried over: there
+    // it goes back to the player's own home, and here there is nowhere for it
+    // to go — the back event would be dispatched into a page that has never
+    // heard of it. The title itself is worth having, so the rest stands.
+    titlemode: "windowed",
+    subtitlepicker: "",
+    ambientmode: "",
+    resume: "",
+    smoothwarning: "",
   },
 });
