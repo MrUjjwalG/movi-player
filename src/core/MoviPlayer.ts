@@ -12889,6 +12889,16 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
   /**
    * Set extra bottom padding for subtitles when controls are visible
    */
+  /** See CanvasRenderer.subtitleReservePx. */
+  getSubtitleReserve(): number {
+    return this.videoRenderer?.subtitleReservePx() ?? 0;
+  }
+
+  /** Hold the caption still while the viewer drags it. */
+  setSubtitleHeld(held: boolean): void {
+    this.videoRenderer?.setSubtitleHeld(held);
+  }
+
   setSubtitleControlsPadding(padding: number): void {
     if (this.videoRenderer) {
       this.videoRenderer.setSubtitleControlsPadding(padding);

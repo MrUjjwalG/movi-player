@@ -443,6 +443,8 @@ export class CanvasRenderer {
     return this.subtitleOverlay;
   }
   private subtitleControlsPadding: number = 0; // Extra padding when controls visible
+  // Set while the viewer is dragging the caption. See setSubtitleHeld().
+  private subtitleHeld: boolean = false;
   // Subtitle delay in seconds. VLC/mpv convention: positive = subs appear
   // later, negative = earlier. Applied at the active-cue check so it works
   // uniformly for text and image subtitles and can be adjusted live without
@@ -4515,8 +4517,31 @@ export class CanvasRenderer {
     overlayHeight: number,
     bottomPadding: number,
   ): number {
+    // While the caption is being carried there is no reserve at all: it goes
+    // where the pointer goes, pixel for pixel. The reserve it was sitting on
+    // was folded into the drag when the drag began (see getSubtitleReserve),
+    // so nothing moves at the moment it is picked up either.
+    if (this.subtitleHeld) return bottomPadding;
     const lift = this.subtitleUserLift(overlayHeight);
     return Math.max(bottomPadding, this.subtitleControlsPadding - lift);
+  }
+
+  /**
+   * How much of where the caption sits right now is the controls reserve
+   * rather than the caption's own place — the distance it would drop if the
+   * reserve were dropped. The element folds this into the drag it is about to
+   * start, which is what lets the reserve be suspended for the drag without
+   * the caption lurching the height of the bar as it is picked up.
+   */
+  subtitleReservePx(): number {
+    const overlayHeight = (this.subtitleOverlay as HTMLElement | null)?.offsetHeight ?? 0;
+    if (!overlayHeight) return 0;
+    const bottomPadding = this.subtitleBottomPadding(overlayHeight);
+    return Math.max(
+      0,
+      this.subtitleEffectiveBottomPadding(overlayHeight, bottomPadding) -
+        bottomPadding,
+    );
   }
 
   private subtitleBottomPadding(overlayHeight: number): number {
@@ -4554,7 +4579,34 @@ export class CanvasRenderer {
   /**
    * Update active subtitle based on current time
    */
+  /**
+   * Hold the caption on the cue it is showing.
+   *
+   * For the length of a drag, and for nothing else. A caption is rewritten
+   * wholesale on every karaoke word and every cue — and between cues it is
+   * taken off the screen altogether — so the thing the viewer has hold of
+   * keeps being replaced underneath them: the block re-centres itself on the
+   * new text and slips out from under the pointer, and in a gap between cues
+   * there is suddenly nothing there at all. Pinned to one cue, the render
+   * below meets the same key every tick and leaves the DOM alone.
+   *
+   * The CUE is held, not the rendering: the overlay's box and the controls
+   * reserve go on being worked out every tick, because the reserve shrinks as
+   * the caption is carried up and away from the bar. Frozen along with the
+   * cue, all of that shrink arrived at once when the caption was let go, and
+   * dropped it the height of the bar out of the viewer's hand.
+   */
+  setSubtitleHeld(held: boolean): void {
+    if (this.subtitleHeld === held) return;
+    this.subtitleHeld = held;
+    if (!held) {
+      this.updateActiveSubtitle();
+      this.renderSubtitles();
+    }
+  }
+
   private updateActiveSubtitle(): void {
+    if (this.subtitleHeld) return;
     // Use getCurrentPlaybackTime() instead of this.currentTime to ensure accurate timing
     // this.currentTime is only updated when frames are drawn, but subtitles need real-time updates
     const currentTime = this.getCurrentPlaybackTime();

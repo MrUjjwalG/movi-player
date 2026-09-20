@@ -2209,15 +2209,17 @@ export class MoviElement extends HTMLElement {
     // Transcript is gated to file sources — streamed sources can't
     // reliably hand back the full cue list.
     this.subtitleOverlay.addEventListener("click", (e) => {
-      const target = e.target as HTMLElement | null;
-      if (!target?.closest(".movi-subtitle-block")) return;
       // The click that ends a drag is not a click on the caption, it is where
-      // the caption was let go of.
+      // the caption was let go of — and under pointer capture it is aimed at
+      // the overlay rather than at the caption, so this is asked first or the
+      // click falls through to the picture and pauses the video.
       if (this._subtitleDragSuppressClick) {
         this._subtitleDragSuppressClick = false;
         e.stopPropagation();
         return;
       }
+      const target = e.target as HTMLElement | null;
+      if (!target?.closest(".movi-subtitle-block")) return;
       if (!this.player?.isFileSource()) return;
       e.stopPropagation();
       // Held for one double-click interval, because the first click of the
@@ -12463,6 +12465,28 @@ export class MoviElement extends HTMLElement {
       if (!drag.moved) {
         drag.moved = true;
         overlay.classList.add("movi-subtitle-dragging");
+        // Whatever of the caption's present height is the controls reserve
+        // becomes part of the drag, and the reserve is then suspended for the
+        // duration. Read before the hold, which is what suspends it: from here
+        // the caption answers the pointer alone, and it neither lurches as it
+        // is picked up nor stalls for the first stretch of the way up.
+        const reserve = this.player?.getSubtitleReserve?.() ?? 0;
+        if (reserve) drag.baseY -= (reserve / drag.boxH) * 100;
+        // Capture on the overlay, which outlives the cue. Without it the
+        // pointer is implicitly captured by the caption the drag started on,
+        // and on touch the browser answers that caption's removal with
+        // pointercancel — the subtitles drop the drag themselves. Taken here
+        // and not on the press, because a captured pointer aims its click at
+        // the capture element: from the press it would take the plain click
+        // and the double click off the caption they were meant for.
+        try {
+          overlay.setPointerCapture(e.pointerId);
+        } catch {
+          /* an exotic pointer, or one already gone: the drag still tracks */
+        }
+        // Only now, not on the pointerdown: a plain click on the caption
+        // opens the transcript and has no business stopping the subtitles.
+        this.player?.setSubtitleHeld(true);
       }
       const settings = this._subtitleSettings;
       settings.posX = MoviElement.clampSubtitlePos(
@@ -12481,10 +12505,16 @@ export class MoviElement extends HTMLElement {
       if (!drag || e.pointerId !== drag.pointerId) return;
       this._subtitleDrag = null;
       overlay.classList.remove("movi-subtitle-dragging");
+      try {
+        overlay.releasePointerCapture(e.pointerId);
+      } catch {
+        /* released with the pointer itself */
+      }
       window.removeEventListener("pointermove", onMove);
       window.removeEventListener("pointerup", onEnd);
       window.removeEventListener("pointercancel", onEnd);
       if (!drag.moved) return;
+      this.player?.setSubtitleHeld(false);
       this._subtitleDragSuppressClick = true;
       this.saveSubtitleSettings();
     };
@@ -23096,6 +23126,13 @@ export class MoviElement extends HTMLElement {
          animate: it goes where the pointer is, this frame. */
       .movi-subtitle-overlay.movi-subtitle-dragging .movi-subtitle-block {
         animation: none;
+      }
+
+      /* The overlay eases its padding when the bar comes and goes, which is
+         right for the bar and wrong for a hand: eased, the caption arrives
+         where it was put a third of a second late, trailing the pointer. */
+      .movi-subtitle-overlay.movi-subtitle-dragging {
+        transition: none;
       }
 
       /* VTT gets its backdrop PER LINE, not one box around the cue. A shared
