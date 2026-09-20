@@ -31,6 +31,10 @@ contextBridge.exposeInMainWorld("movi", {
   // Menu "Open URL…" asks the renderer to focus its URL field.
   onFocusUrl: (cb) => ipcRenderer.on("focus-url", () => cb()),
 
+  // The window is closing: take the sound down a slope first. Main holds the
+  // close open for the length of the fade and no longer — see main.js.
+  onFadeOut: (cb) => ipcRenderer.on("app:fade-out", (_e, ms) => cb(ms)),
+
   // OS window fullscreen toggled (used to drop the macOS titlebar inset AND to
   // sync the player's own fullscreen UI — see renderer).
   onFullscreen: (cb) => ipcRenderer.on("window-fullscreen", (_e, on) => cb(on)),

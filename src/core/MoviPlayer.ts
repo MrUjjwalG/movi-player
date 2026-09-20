@@ -14957,6 +14957,34 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
   }
 
   /**
+   * Take the sound down a slope, for a player that is about to go away.
+   *
+   * See AudioRenderer.fadeOut. An adaptive stream's audio comes out of a media
+   * element rather than our gain node, so there is nothing to ramp — it is
+   * stepped down instead, often enough that the ear hears a slope and not a
+   * staircase.
+   */
+  fadeOutAudio(durationMs: number = 200): void {
+    this.audioRenderer.fadeOut(durationMs);
+    const wrapper = this.streamWrapper;
+    if (!wrapper) return;
+    const from = this.audioRenderer.getVolume?.() ?? 1;
+    const steps = Math.max(4, Math.round(durationMs / 25));
+    for (let i = 1; i <= steps; i++) {
+      setTimeout(
+        () => {
+          try {
+            wrapper.setVolume(Math.max(0, from * (1 - i / steps)));
+          } catch {
+            /* the stream is already gone */
+          }
+        },
+        (durationMs * i) / steps,
+      );
+    }
+  }
+
+  /**
    * Get volume (0-1)
    */
   getVolume(): number {

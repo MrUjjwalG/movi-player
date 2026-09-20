@@ -1616,7 +1616,7 @@ export class AudioRenderer {
   setVolume(volume: number): void {
     // 0–2: values above 1 boost up to 200% (VLC-style).
     this.volume = Math.max(0, Math.min(2, volume));
-    if (this.gainNode && !this._muted) {
+    if (this.gainNode && !this._muted && !this._fadingOut) {
       const g = this.perceptualGain(this.volume);
       if (this._stableAudio) {
         this.rampGain(g);
@@ -1844,7 +1844,7 @@ export class AudioRenderer {
       await this.init();
     }
 
-    if (this.gainNode) {
+    if (this.gainNode && !this._fadingOut) {
       const g = this.perceptualGain(this.volume);
       if (this._stableAudio) {
         this.rampGain(g);
@@ -2890,8 +2890,40 @@ export class AudioRenderer {
     }
   }
 
+  /**
+   * Take the sound down a slope and leave it there.
+   *
+   * For a player that is going away — the desktop window closing, a page
+   * unloading — where the alternative is the sound stopping dead on whatever
+   * sample it was on. That cliff is what makes closing an app feel like
+   * pulling a plug out; a fifth of a second of slope is all it takes to feel
+   * like a door closing instead.
+   *
+   * Nothing raises it again on the way down: the drift net restores a gain
+   * that is wrong, and this one is wrong on purpose. There is no fade back —
+   * whatever asked for this is not expecting to play again.
+   */
+  fadeOut(durationMs: number = 200): void {
+    if (!this.gainNode || !this.audioContext) return;
+    this._fadingOut = true;
+    const seconds = Math.max(0.02, durationMs / 1000);
+    this._gainHoldUntil = performance.now() + durationMs + 2000;
+    try {
+      const now = this.audioContext.currentTime;
+      this.gainNode.gain.cancelScheduledValues(now);
+      this.gainNode.gain.setValueAtTime(this.gainNode.gain.value, now);
+      this.gainNode.gain.linearRampToValueAtTime(0, now + seconds);
+    } catch {
+      this.gainNode.gain.value = 0;
+    }
+    Logger.debug(TAG, `Fading out over ${durationMs}ms`);
+  }
+
+  /** Set once fadeOut has run: the level is on its way to zero and stays there. */
+  private _fadingOut: boolean = false;
+
   private rampGain(targetValue: number): void {
-    if (!this.gainNode || !this.audioContext) {
+    if (!this.gainNode || !this.audioContext || this._fadingOut) {
       return;
     }
     try {

@@ -399,6 +399,16 @@ player.addEventListener("error", (e) => {
 
 // ---------- Wires from main ----------
 window.movi.onLoadPaths(loadPaths);
+// Closing: let the sound out rather than cutting it. Main waits the length of
+// the fade before the window actually goes.
+window.movi.onFadeOut?.((ms) => {
+  try {
+    player.fadeOutAudio?.(ms || 200);
+  } catch {
+    /* nothing playing, or an older bundle without it */
+  }
+});
+
 window.movi.onFullscreen((on) => {
   document.body.classList.toggle("osfs", on);
   // Sync the player's own fullscreen UI (icon, context-menu label, auto-hide /

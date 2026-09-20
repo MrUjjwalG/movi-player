@@ -80,6 +80,16 @@ window.addEventListener("beforeunload", reportState);
 // A Finder open while PiP is active is routed here by the main process.
 window.movi.onPipLoad((d) => load(d && d.src, (d && d.time) || 0, true));
 
+// The float is a window too, and it is the one that is usually making the
+// sound when the app is closed — see fadeAudioThen in main.js.
+window.movi.onFadeOut?.((ms) => {
+  try {
+    p.fadeOutAudio?.(ms || 200);
+  } catch {
+    /* nothing playing, or an older bundle without it */
+  }
+});
+
 // Drag & drop onto the PiP window.
 window.addEventListener("dragover", (e) => e.preventDefault());
 window.addEventListener("drop", async (e) => {

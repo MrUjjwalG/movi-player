@@ -36280,6 +36280,20 @@ export class MoviElement extends HTMLElement {
    *
    *   player.audioOnly = true;  // data saver on
    */
+  /**
+   * Take the sound down a slope over `ms`, and leave it down.
+   *
+   * For a player that is about to go away — a desktop window closing, a page
+   * unloading. Sound that stops dead on whatever sample it was on is what
+   * makes closing an app feel like pulling a plug; a fifth of a second of
+   * slope is all it takes to feel like a door closing instead. There is no
+   * way back from it on purpose: whoever calls this is not expecting to play
+   * again.
+   */
+  fadeOutAudio(ms: number = 200): void {
+    this.player?.fadeOutAudio(ms);
+  }
+
   get audioOnly(): boolean {
     return this._audioOnly;
   }

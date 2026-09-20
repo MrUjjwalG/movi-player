@@ -173,7 +173,37 @@ function chromeOptions() {
   return {}; // Linux: keep the standard frame
 }
 
+/**
+ * Closing should sound like a door, not a plug being pulled.
+ *
+ * Audio stops dead the moment a window's web contents go, on whatever sample
+ * it happened to be on — a click, and then nothing. So the close is held open
+ * for the length of a short fade while every window takes its sound down a
+ * slope. Held for that and no longer: the wait is a timer, not an
+ * acknowledgement, so a renderer that is wedged or has no sound at all delays
+ * the quit by the same fifth of a second and never blocks it.
+ */
+const AUDIO_FADE_MS = 200;
+// Plus the margin between a ramp ending and the sound being gone from the
+// device — see the slope's own duration in AudioRenderer.fadeOut.
+const AUDIO_FADE_WAIT_MS = AUDIO_FADE_MS + 60;
+let audioFaded = false;
+
+function fadeAudioThen(finish) {
+  audioFaded = true;
+  for (const w of BrowserWindow.getAllWindows()) {
+    try {
+      w.webContents.send("app:fade-out", AUDIO_FADE_MS);
+    } catch {
+      /* a window already on its way out */
+    }
+  }
+  setTimeout(finish, AUDIO_FADE_WAIT_MS);
+}
+
 function createWindow() {
+  // A new window is a new run of the player, with its own sound to let out.
+  audioFaded = false;
   mainWindow = new BrowserWindow({
     width: 1180,
     height: 760,
@@ -208,6 +238,12 @@ function createWindow() {
   // Let the renderer drop the macOS titlebar inset while in OS fullscreen.
   mainWindow.on("enter-full-screen", () => mainWindow.webContents.send("window-fullscreen", true));
   mainWindow.on("leave-full-screen", () => mainWindow.webContents.send("window-fullscreen", false));
+
+  mainWindow.on("close", (e) => {
+    if (audioFaded) return;
+    e.preventDefault();
+    fadeAudioThen(() => mainWindow && mainWindow.close());
+  });
 
   mainWindow.on("closed", () => {
     mainWindow = null;
@@ -498,6 +534,14 @@ if (!gotLock) {
     app.on("activate", () => {
       if (BrowserWindow.getAllWindows().length === 0) createWindow();
     });
+  });
+
+  // Cmd+Q / the menu / the OS asking us to go: same slope, and the same
+  // single flag, so a quit that follows a window close does not wait twice.
+  app.on("before-quit", (e) => {
+    if (audioFaded) return;
+    e.preventDefault();
+    fadeAudioThen(() => app.quit());
   });
 
   app.on("window-all-closed", () => {
