@@ -3211,6 +3211,14 @@ export class MoviElement extends HTMLElement {
       });
     shadowRoot.appendChild(smoothWarning);
 
+    // Said once, while the caption is in the viewer's hand and the answer is
+    // of any use to them — and then not again. See showCaptionHint().
+    this._captionHint = document.createElement("div");
+    this._captionHint.className = "movi-caption-hint";
+    this._captionHint.setAttribute("role", "status");
+    this._captionHint.style.display = "none";
+    shadowRoot.appendChild(this._captionHint);
+
     resumeDialog.querySelector(".movi-resume-yes")?.addEventListener("click", (e) => {
       e.stopPropagation();
       const time = parseFloat(resumeDialog.dataset.time || "0");
@@ -12484,6 +12492,7 @@ export class MoviElement extends HTMLElement {
         } catch {
           /* an exotic pointer, or one already gone: the drag still tracks */
         }
+        this.showCaptionHint(e.pointerType === "touch");
         // Only now, not on the pointerdown: a plain click on the caption
         // opens the transcript and has no business stopping the subtitles.
         this.player?.setSubtitleHeld(true);
@@ -12496,7 +12505,8 @@ export class MoviElement extends HTMLElement {
         drag.baseY + (dy / drag.boxH) * 100,
       );
       this.applySubtitlePosition();
-      this.keepCaptionInPicture(drag.boxW, drag.boxH);
+      const box = this.keepCaptionInPicture(drag.boxW, drag.boxH);
+      if (box) this.placeCaptionHint(box);
       e.preventDefault();
     };
 
@@ -12517,6 +12527,12 @@ export class MoviElement extends HTMLElement {
       this.player?.setSubtitleHeld(false);
       this._subtitleDragSuppressClick = true;
       this.saveSubtitleSettings();
+      // Counted per drag, not per frame of one: this is the end of a drag the
+      // hint was offered for.
+      if (this._captionHint?.style.display !== "none") {
+        this.setCaptionHintsSeen(this.captionHintsSeen() + 1);
+      }
+      this.dismissCaptionHint();
     };
 
     overlay.addEventListener("pointerdown", (e) => {
@@ -12561,6 +12577,9 @@ export class MoviElement extends HTMLElement {
       s.posY = 0;
       this.saveSubtitleSettings();
       this.applySubtitlePosition();
+      // They know. Nothing more to say, now or later.
+      this.setCaptionHintsSeen(MoviElement.CAPTION_HINT_LIMIT);
+      this.dismissCaptionHint(true);
     });
   }
 
@@ -12574,11 +12593,11 @@ export class MoviElement extends HTMLElement {
    * short of the top of the picture by exactly the height of the bar that
    * hid while it was being carried there.
    */
-  private keepCaptionInPicture(boxW: number, boxH: number): void {
+  private keepCaptionInPicture(boxW: number, boxH: number): DOMRect | null {
     const held = this.subtitleOverlay?.querySelector(
       ".movi-subtitle-block, .movi-subtitle-image",
     ) as HTMLElement | null;
-    if (!held) return;
+    if (!held) return null;
     const box = held.getBoundingClientRect();
     const host = this.getBoundingClientRect();
     const edge = 4;
@@ -12588,11 +12607,106 @@ export class MoviElement extends HTMLElement {
       far - near > high - low ? 0 : near < low ? low - near : far > high ? high - far : 0;
     const fixX = fix(host.left + edge, host.right - edge, box.left, box.right);
     const fixY = fix(host.top + edge, host.bottom - edge, box.top, box.bottom);
-    if (!fixX && !fixY) return;
+    if (!fixX && !fixY) return box;
     const settings = this._subtitleSettings;
     settings.posX = MoviElement.clampSubtitlePos(settings.posX + (fixX / boxW) * 100);
     settings.posY = MoviElement.clampSubtitlePos(settings.posY + (fixY / boxH) * 100);
     this.applySubtitlePosition();
+    return box;
+  }
+
+  private _captionHint: HTMLDivElement | null = null;
+  private _captionHintTimer: number | null = null;
+  private static readonly CAPTION_HINT_STORAGE_KEY = "movi.captionDragHint";
+  /** Shown on this many drags, then never again — and not once it is known. */
+  private static readonly CAPTION_HINT_LIMIT = 3;
+
+  private captionHintsSeen(): number {
+    try {
+      return parseInt(
+        localStorage.getItem(MoviElement.CAPTION_HINT_STORAGE_KEY) || "0",
+        10,
+      ) || 0;
+    } catch {
+      // No store: say it every time rather than never. A hint nobody can
+      // dismiss is worse than one that is offered again.
+      return 0;
+    }
+  }
+
+  private setCaptionHintsSeen(count: number): void {
+    try {
+      localStorage.setItem(
+        MoviElement.CAPTION_HINT_STORAGE_KEY,
+        String(count),
+      );
+    } catch {
+      /* private window, blocked storage — the hint just keeps being offered */
+    }
+  }
+
+  /**
+   * Tell the viewer, while they are dragging, how to put the caption back.
+   *
+   * A drag has no undo the eye can find: the caption is somewhere new and
+   * nothing on screen says the way back. So it is said at the one moment it
+   * is wanted, in the smallest thing that can carry a sentence — and only for
+   * the first few drags, because after that it is a label on a door the
+   * viewer already knows how to open. Using the reset retires it at once.
+   */
+  private showCaptionHint(touch: boolean): void {
+    const hint = this._captionHint;
+    if (!hint) return;
+    if (this.captionHintsSeen() >= MoviElement.CAPTION_HINT_LIMIT) return;
+    if (this._captionHintTimer !== null) {
+      window.clearTimeout(this._captionHintTimer);
+      this._captionHintTimer = null;
+    }
+    hint.textContent = touch
+      ? "Double-tap to put it back"
+      : "Double-click to put it back";
+    hint.style.display = "block";
+    // Out of the fade it may be in the middle of, on a second drag.
+    hint.classList.remove("movi-caption-hint-leaving");
+  }
+
+  /** Let it go, a beat after the caption is let go of. */
+  private dismissCaptionHint(immediately = false): void {
+    const hint = this._captionHint;
+    if (!hint || hint.style.display === "none") return;
+    if (this._captionHintTimer !== null) {
+      window.clearTimeout(this._captionHintTimer);
+      this._captionHintTimer = null;
+    }
+    const hide = () => {
+      this._captionHintTimer = null;
+      hint.classList.remove("movi-caption-hint-leaving");
+      hint.style.display = "none";
+    };
+    if (immediately) {
+      hide();
+      return;
+    }
+    hint.classList.add("movi-caption-hint-leaving");
+    this._captionHintTimer = window.setTimeout(hide, 900);
+  }
+
+  /**
+   * Keep the hint out of the caption's way: it sits at the top of the picture
+   * while the caption is in the lower half, and at the bottom once the caption
+   * has been carried up past the middle.
+   */
+  private placeCaptionHint(captionBox: DOMRect): void {
+    const hint = this._captionHint;
+    if (!hint || hint.style.display === "none") return;
+    const host = this.getBoundingClientRect();
+    const captionIsHigh =
+      captionBox.top + captionBox.height / 2 < host.top + host.height / 2;
+    // Down at the bottom it clears the bar, whether or not the bar is up at
+    // this moment — the bar comes back on the next movement of the pointer,
+    // and a note that has to dodge it is worse than one that never sat there.
+    const low = host.height - (hint.offsetHeight || 28) - 100;
+    hint.style.top = (captionIsHigh ? Math.max(18, low) : 18) + "px";
   }
 
   private _subtitleDrag: {
@@ -23133,6 +23247,61 @@ export class MoviElement extends HTMLElement {
          where it was put a third of a second late, trailing the pointer. */
       .movi-subtitle-overlay.movi-subtitle-dragging {
         transition: none;
+      }
+
+      /* The one thing a drag cannot say for itself: that it can be undone.
+         A note, not a control — it takes no pointer, carries no button, and
+         is gone a moment after the caption is let go. Small enough to read
+         past, at the far end of the picture from the caption it is about. */
+      .movi-caption-hint {
+        position: absolute;
+        top: 18px;
+        left: 50%;
+        /* Over the caption, which can be dragged underneath it. */
+        z-index: 12;
+        max-width: calc(100% - 32px);
+        padding: 6px 13px;
+        border-radius: 999px;
+        background: var(--movi-chrome-bg);
+        border: 1px solid var(--movi-chrome-border);
+        /* White in both themes, like every other surface built on
+           --movi-chrome-bg: that surface is dark whichever theme is set, and
+           a light-theme text colour here is black on black. */
+        color: rgba(255, 255, 255, 0.85);
+        font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
+        font-size: 12px;
+        font-weight: 500;
+        letter-spacing: 0.01em;
+        white-space: nowrap;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        box-shadow: 0 4px 16px rgba(0, 0, 0, 0.35);
+        pointer-events: none;
+        transform: translateX(-50%);
+        transition: top 0.25s ease;
+        animation: movi-caption-hint-in 0.2s ease both;
+      }
+
+      .movi-caption-hint.movi-caption-hint-leaving {
+        animation: movi-caption-hint-out 0.4s ease both;
+      }
+
+      @keyframes movi-caption-hint-in {
+        from { opacity: 0; transform: translate(-50%, -6px); }
+        to { opacity: 1; transform: translate(-50%, 0); }
+      }
+
+      @keyframes movi-caption-hint-out {
+        from { opacity: 1; }
+        to { opacity: 0; }
+      }
+
+      @container movi-host (max-width: 480px) {
+        .movi-caption-hint { font-size: 11px; padding: 5px 11px; }
+      }
+
+      @media (prefers-reduced-motion: reduce) {
+        .movi-caption-hint { animation: none; transition: none; }
       }
 
       /* VTT gets its backdrop PER LINE, not one box around the cue. A shared
