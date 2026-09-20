@@ -1641,6 +1641,21 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
   private static readonly PREVIEW_SOFTWARE_MAX_PIXELS = 9_000_000;
 
   /**
+   * Is the source too big to preview in software?
+   *
+   * Asked in two places, because a browser can refuse the source at
+   * configure() — Chrome does, for 8K H.264 — or accept it and then fail to
+   * produce a frame, which is what a decoder that cannot really do this size
+   * looks like from here. Both end at the same software decoder, and at that
+   * size it stalls the page either way.
+   */
+  private previewSoftwareTooBig(): boolean {
+    const track = this.trackManager.getActiveVideoTrack();
+    if (!track?.width || !track?.height) return false;
+    return track.width * track.height > MoviPlayer.PREVIEW_SOFTWARE_MAX_PIXELS;
+  }
+
+  /**
    * The source's shape, shrunk to the size a preview is actually shown at.
    *
    * Everything on the preview path used to work at the source's own
@@ -11646,6 +11661,19 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
       REMOVED OLD LOGIC END */
 
       // 2. Fallback to Software Decoding
+      if (!rendered && this.previewSoftwareTooBig()) {
+        this.previewInitGaveUp = true;
+        Logger.warn(
+          TAG,
+          "The hardware preview decoder gave up on a frame too big to decode in " +
+            "software without stalling the page — previews off for this source",
+        );
+        // Not here: this call still holds the bindings, and the finally below
+        // reaches for them again. See the WASM use-after-destroy this pipeline
+        // has already been bitten by.
+        setTimeout(() => this.destroyPreviewPipeline(), 0);
+        return null;
+      }
       if (!rendered) {
         try {
           // The size the preview is SHOWN at, not the size the source is in.
@@ -12116,8 +12144,7 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
         // the player while the keyboard seeks fine. Past the budget there is
         // no version of this worth having: no preview is better than a frozen
         // bar, and the bar still seeks.
-        const pixels = shape.width * shape.height;
-        if (pixels > MoviPlayer.PREVIEW_SOFTWARE_MAX_PIXELS) {
+        if (shape.width * shape.height > MoviPlayer.PREVIEW_SOFTWARE_MAX_PIXELS) {
           this.previewInitGaveUp = true;
           Logger.warn(
             TAG,
