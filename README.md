@@ -259,6 +259,12 @@ so `getElementById` keeps finding the player. The original element stays hidden
 with its API pointed at the new one, so `video.play()`, `video.currentTime = 60`
 and `video.addEventListener(…)` in existing code keep working.
 
+Only a `<video>` that is playing a **file at a URL** is taken over. A site that
+feeds its element from JavaScript — Media Source Extensions, a MediaStream, a
+DRM stream, or an element with no source yet — is left alone: there is no file
+behind those to open, so replacing the element would break a video that works.
+Pass `{ sources: "any" }` to upgrade them anyway, on a page you know.
+
 ### Local File
 
 ```html

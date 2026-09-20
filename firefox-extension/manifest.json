@@ -2,7 +2,7 @@
   "manifest_version": 3,
   "name": "Movi Player",
   "version": "0.4.1",
-  "description": "Play MKV, HEVC, AV1, WebM & 4K HDR videos your browser can't open natively — no upload, no conversion, right in your browser.",
+  "description": "Play MKV, HEVC, AV1, WebM & 4K HDR videos your browser can't open natively \u2014 no upload, no conversion, right in your browser.",
   "icons": {
     "16": "icons/icon16.png",
     "48": "icons/icon48.png",
@@ -13,39 +13,70 @@
       "id": "movi-player@moviplayer.com",
       "strict_min_version": "140.0",
       "data_collection_permissions": {
-        "required": ["none"]
+        "required": [
+          "none"
+        ]
       }
     },
     "gecko_android": {
       "strict_min_version": "142.0"
     }
   },
-  "permissions": ["contextMenus", "activeTab", "clipboardRead", "storage"],
-  "optional_host_permissions": ["<all_urls>"],
+  "permissions": [
+    "contextMenus",
+    "activeTab",
+    "clipboardRead",
+    "storage"
+  ],
+  "optional_host_permissions": [
+    "<all_urls>"
+  ],
   "content_security_policy": {
     "extension_pages": "script-src 'self' 'wasm-unsafe-eval'; object-src 'self'"
   },
   "background": {
-    "scripts": ["background.js"]
+    "scripts": [
+      "background.js"
+    ]
   },
   "content_scripts": [
     {
-      "matches": ["<all_urls>", "file:///*"],
-      "js": ["content.js"],
-      "css": ["content.css"],
+      "matches": [
+        "<all_urls>",
+        "file:///*"
+      ],
+      "js": [
+        "content.js"
+      ],
+      "css": [
+        "content.css"
+      ],
       "run_at": "document_end"
     },
     {
-      "matches": ["<all_urls>", "file:///*"],
-      "js": ["marker.js"],
+      "matches": [
+        "<all_urls>",
+        "file:///*"
+      ],
+      "js": [
+        "marker.js"
+      ],
       "run_at": "document_start",
       "world": "MAIN"
     }
   ],
   "web_accessible_resources": [
     {
-      "resources": ["player.html", "player.js", "dist/*"],
-      "matches": ["<all_urls>", "file:///*"]
+      "resources": [
+        "player.html",
+        "player.js",
+        "upgrade.js",
+        "dist/*"
+      ],
+      "matches": [
+        "<all_urls>",
+        "file:///*"
+      ]
     }
   ],
   "action": {

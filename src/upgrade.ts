@@ -53,6 +53,23 @@ export interface UpgradeOptions {
   proxy?: boolean;
   /** Leave alone any `<video>` matching this selector. */
   skip?: string;
+  /**
+   * Which sources may be taken over.
+   *
+   * "static" — the default — takes over a `<video>` that is playing a FILE at
+   * a URL, and leaves every other one alone. The other ones are the sites that
+   * feed the element themselves: YouTube, Netflix, anything on Media Source
+   * Extensions, a camera on a MediaStream, anything under DRM. There is no
+   * file behind those to open — the bytes arrive through JavaScript the page
+   * is running — so taking the element away from them replaces a video that
+   * works with a player that cannot possibly fetch anything, and breaks the
+   * site. A video with no source yet is left alone for the same reason: that
+   * is what a streaming site's element looks like a moment before its script
+   * attaches to it.
+   *
+   * "any" upgrades whatever is there, for a caller who knows their page.
+   */
+  sources?: "static" | "any";
 }
 
 /** What an upgrade produced, for a caller that wants the pieces. */
@@ -111,12 +128,36 @@ const FORWARD_METHODS = [
   "dispatchEvent",
 ] as const;
 
+/**
+ * Is this element playing a file at a URL, rather than bytes a script is
+ * feeding it? See UpgradeOptions.sources.
+ */
+export function hasStaticSource(video: HTMLVideoElement): boolean {
+  // A MediaSource or a MediaStream handed over as an object: nothing to fetch.
+  if (video.srcObject) return false;
+  // Encrypted: the keys belong to the page's own pipeline.
+  if ((video as unknown as { mediaKeys?: unknown }).mediaKeys) return false;
+  const source =
+    video.currentSrc ||
+    video.getAttribute("src") ||
+    video.querySelector("source")?.getAttribute("src") ||
+    "";
+  if (!source) return false;
+  // blob: is both — a file the page picked, and the handle a MediaSource is
+  // attached by — and the two cannot be told apart from here. It is the form
+  // every streaming site's element takes, so it is the form this leaves alone.
+  return /^(https?:|file:|data:)/i.test(source) ||
+    // A relative or protocol-relative URL is a file on the page's own origin.
+    /^(\/|\.\.?\/)/.test(source);
+}
+
 function upgradeOne(
   video: HTMLVideoElement,
   options: UpgradeOptions,
 ): UpgradedVideo | null {
   if ((video as unknown as Record<string, unknown>)[TAKEN]) return null;
   if (options.skip && video.matches(options.skip)) return null;
+  if (options.sources !== "any" && !hasStaticSource(video)) return null;
   if (!video.parentNode) return null;
 
   const player = document.createElement("movi-player");
@@ -277,6 +318,11 @@ export function upgradeVideoElements(
   if (options.watch) {
     const observer = new MutationObserver((records) => {
       for (const record of records) {
+        if (record.type === "attributes") {
+          const target = record.target;
+          if (target instanceof HTMLVideoElement) upgradeOne(target, options);
+          continue;
+        }
         for (const node of Array.from(record.addedNodes)) {
           if (!(node instanceof Element)) continue;
           const videos =
@@ -290,6 +336,12 @@ export function upgradeVideoElements(
     observer.observe(root === document ? document.documentElement : (root as Node), {
       childList: true,
       subtree: true,
+      // A <video> is routinely in the page before it has anything to play, and
+      // under the "static" rule it is not a candidate until it does. Watching
+      // the attribute is what lets the one that gains a file be taken over,
+      // without the ones that never will being touched.
+      attributes: true,
+      attributeFilter: ["src"],
     });
     done.stop = () => observer.disconnect();
   }

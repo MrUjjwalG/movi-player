@@ -2,17 +2,28 @@
   "manifest_version": 3,
   "name": "Movi Player",
   "version": "0.4.1",
-  "description": "Play MKV, HEVC, AV1, WebM & 4K HDR videos your browser can't open natively — no upload, no conversion, right in your browser.",
+  "description": "Play MKV, HEVC, AV1, WebM & 4K HDR videos your browser can't open natively \u2014 no upload, no conversion, right in your browser.",
   "icons": {
     "16": "icons/icon16.png",
     "48": "icons/icon48.png",
     "128": "icons/icon128.png"
   },
-  "permissions": ["contextMenus", "activeTab", "clipboardRead", "storage"],
+  "permissions": [
+    "contextMenus",
+    "activeTab",
+    "clipboardRead",
+    "storage"
+  ],
   "incognito": "split",
-  "optional_host_permissions": ["<all_urls>"],
-  "cross_origin_embedder_policy": { "value": "require-corp" },
-  "cross_origin_opener_policy": { "value": "same-origin" },
+  "optional_host_permissions": [
+    "<all_urls>"
+  ],
+  "cross_origin_embedder_policy": {
+    "value": "require-corp"
+  },
+  "cross_origin_opener_policy": {
+    "value": "same-origin"
+  },
   "content_security_policy": {
     "extension_pages": "script-src 'self' 'wasm-unsafe-eval'; object-src 'self'"
   },
@@ -21,22 +32,42 @@
   },
   "content_scripts": [
     {
-      "matches": ["<all_urls>", "file:///*"],
-      "js": ["content.js"],
-      "css": ["content.css"],
+      "matches": [
+        "<all_urls>",
+        "file:///*"
+      ],
+      "js": [
+        "content.js"
+      ],
+      "css": [
+        "content.css"
+      ],
       "run_at": "document_end"
     },
     {
-      "matches": ["<all_urls>", "file:///*"],
-      "js": ["marker.js"],
+      "matches": [
+        "<all_urls>",
+        "file:///*"
+      ],
+      "js": [
+        "marker.js"
+      ],
       "run_at": "document_start",
       "world": "MAIN"
     }
   ],
   "web_accessible_resources": [
     {
-      "resources": ["player.html", "player.js", "dist/*"],
-      "matches": ["<all_urls>", "file:///*"]
+      "resources": [
+        "player.html",
+        "player.js",
+        "upgrade.js",
+        "dist/*"
+      ],
+      "matches": [
+        "<all_urls>",
+        "file:///*"
+      ]
     }
   ],
   "file_handlers": [
@@ -44,8 +75,40 @@
       "action": "/player.html",
       "name": "Video or audio",
       "accept": {
-        "video/*": [".mp4", ".m4v", ".mkv", ".webm", ".mov", ".avi", ".flv", ".wmv", ".ts", ".m2ts", ".mts", ".evo", ".mpg", ".mpeg", ".3gp", ".ogv"],
-        "audio/*": [".mp3", ".m4a", ".m4b", ".aac", ".flac", ".wav", ".ogg", ".oga", ".opus", ".mka", ".ac3", ".ec3", ".eac3", ".dts"]
+        "video/*": [
+          ".mp4",
+          ".m4v",
+          ".mkv",
+          ".webm",
+          ".mov",
+          ".avi",
+          ".flv",
+          ".wmv",
+          ".ts",
+          ".m2ts",
+          ".mts",
+          ".evo",
+          ".mpg",
+          ".mpeg",
+          ".3gp",
+          ".ogv"
+        ],
+        "audio/*": [
+          ".mp3",
+          ".m4a",
+          ".m4b",
+          ".aac",
+          ".flac",
+          ".wav",
+          ".ogg",
+          ".oga",
+          ".opus",
+          ".mka",
+          ".ac3",
+          ".ec3",
+          ".eac3",
+          ".dts"
+        ]
       },
       "launch_type": "single-client"
     }

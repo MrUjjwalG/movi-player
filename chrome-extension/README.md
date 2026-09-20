@@ -13,6 +13,13 @@ bottom of `player.js` for the pattern.
 
 ## Features
 
+- **Take over page videos** (off by default, in the player page's settings) —
+  a site's own `<video>` is replaced by Movi, so a file the browser refuses
+  plays where it already is. Only a `<video>` playing a file at a URL is taken:
+  the streaming sites feed their element from JavaScript (MSE, DRM), and those
+  are left alone, so YouTube, Netflix and the rest are untouched. Nothing is
+  injected into a page until one of those files is actually on it — the player
+  is megabytes of WebAssembly and a page that has no use for it must not pay
 - **ChromeOS Files app** — the extension registers as a file handler, so
   double-clicking a video in Files opens it here (multi-select becomes a
   playlist). ChromeOS + Chrome 120 or newer; everywhere else the code is inert

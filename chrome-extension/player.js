@@ -1553,6 +1553,33 @@ setInterval(() => {
     });
   }
 
+  // ── Take over page videos ──
+  //
+  // The flag alone gates it: the content script reads it on every page, and
+  // nothing is injected while it is off. The takeover itself is the library's
+  // upgradeVideoElements(), which only ever takes a <video> that is playing a
+  // file at a URL — the streaming sites feed their element from JavaScript, so
+  // there is no file to open and it leaves them alone.
+  const takeoverToggle = document.getElementById("takeover-toggle");
+  const takeoverSub = document.getElementById("takeover-sub");
+  if (takeoverToggle) {
+    chrome.storage.local.get("takeOverPageVideos", (data) => {
+      takeoverToggle.checked = !!data.takeOverPageVideos;
+    });
+    takeoverToggle.addEventListener("change", () => {
+      chrome.storage.local.set({ takeOverPageVideos: takeoverToggle.checked });
+      if (takeoverSub) {
+        const said = takeoverSub.textContent;
+        takeoverSub.textContent = takeoverToggle.checked
+          ? "On — open a page with a video file in it"
+          : "Off — pages keep their own player";
+        setTimeout(() => {
+          takeoverSub.textContent = said;
+        }, 2200);
+      }
+    });
+  }
+
   // ── Experimental features row ──
   // `window.chrome` is NOT a Chromium test inside an extension page — Firefox
   // defines a `chrome` alias for the WebExtension APIs too, so this row would

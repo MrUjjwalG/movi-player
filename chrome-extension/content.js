@@ -216,3 +216,89 @@ if (document.body instanceof HTMLElement) {
   });
   observer.observe(document.body, { childList: true, subtree: true });
 }
+
+// ─── Take over the page's own <video> (off by default) ─────────────────────
+//
+// Switched on from the player page's settings. When it is on, the library's
+// upgradeVideoElements() replaces a plain <video> with a <movi-player> that
+// carries its attributes, its sources and its API — so the page's own scripts
+// keep working while the file plays through a real demuxer.
+//
+// Two gates, for two different reasons:
+//
+//  1. Here: is there anything on this page worth the bundle? The player is
+//     megabytes of WebAssembly. A page whose videos are all streamed — which
+//     is most pages with a video on them — must not pay for it, so nothing is
+//     injected until a <video> with a file behind it actually exists.
+//  2. There: which of them may be taken. upgradeVideoElements leaves anything
+//     that is not a file at a URL alone (MSE, MediaStream, DRM, no source
+//     yet), which is what keeps YouTube and Netflix working.
+const TAKEOVER_KEY = "takeOverPageVideos";
+let takeoverInjected = false;
+
+function videoWorthTakingOver(video) {
+  if (video.srcObject) return false;
+  if (video.mediaKeys) return false;
+  const source =
+    video.currentSrc ||
+    video.getAttribute("src") ||
+    video.querySelector("source")?.getAttribute("src") ||
+    "";
+  // blob: is how a MediaSource is attached, and it is also how a page plays a
+  // file it picked. The two cannot be told apart from out here, so it is the
+  // streaming case that decides: left alone.
+  return !!source && !/^(blob:|mediastream:)/i.test(source);
+}
+
+function injectTakeover() {
+  if (takeoverInjected) return;
+  takeoverInjected = true;
+  const script = document.createElement("script");
+  script.type = "module";
+  script.src = chrome.runtime.getURL("upgrade.js");
+  script.addEventListener("load", () => script.remove());
+  (document.head || document.documentElement).appendChild(script);
+}
+
+function watchForTakeover() {
+  const look = () => {
+    if (takeoverInjected) return true;
+    if (Array.from(document.querySelectorAll("video")).some(videoWorthTakingOver)) {
+      injectTakeover();
+      return true;
+    }
+    return false;
+  };
+  if (look()) return;
+  const observer = new MutationObserver(() => {
+    if (look()) observer.disconnect();
+  });
+  observer.observe(document.documentElement, {
+    childList: true,
+    subtree: true,
+    attributes: true,
+    attributeFilter: ["src"],
+  });
+  // A src set as a PROPERTY mutates nothing. The element still says so itself.
+  document.addEventListener(
+    "loadedmetadata",
+    () => {
+      if (look()) observer.disconnect();
+    },
+    true,
+  );
+  // A page that was never going to have one should not be watched for ever.
+  setTimeout(() => observer.disconnect(), 60000);
+}
+
+try {
+  chrome.storage?.local.get(TAKEOVER_KEY, (data) => {
+    if (data && data[TAKEOVER_KEY]) watchForTakeover();
+  });
+  // Switched on while this page is open: from here, not after a reload.
+  chrome.storage?.onChanged.addListener((changes, area) => {
+    if (area === "local" && changes[TAKEOVER_KEY]?.newValue) watchForTakeover();
+  });
+} catch {
+  /* no storage access in this context — the setting simply stays off */
+}

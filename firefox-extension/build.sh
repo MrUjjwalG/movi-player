@@ -16,7 +16,7 @@ ROOT="$(dirname "$DIR")"
 SRC="$ROOT/chrome-extension"
 
 # Shared files the add-on needs, copied from the Chrome extension.
-SHARED="background.js content.js content.css marker.js player.html player.js"
+SHARED="background.js content.js content.css marker.js player.html player.js upgrade.js"
 
 # SKIP_BUILD=1 lets the release orchestrator build the player once and reuse it
 # across every target instead of rebuilding here.
