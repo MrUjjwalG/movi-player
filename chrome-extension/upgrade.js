@@ -15,9 +15,10 @@ import { upgradeVideoElements } from "./dist/element.slim.js";
 
 // The arrow has to mean something. On the extension's own page it goes back to
 // where files are opened; here the only place it can go is out of fullscreen,
-// which is where the title bar carrying it appears in the first place. The
-// element only announces the press — a page that wants its own answer can
-// still preventDefault this before it reaches us.
+// which is where the title bar carrying it appears in the first place. On a
+// phone it is also the only way out that does not need a keyboard — which is
+// why "back-mobile" puts it there and nowhere else. The element only announces
+// the press, so a page that wants its own answer can preventDefault it first.
 document.addEventListener("back", (event) => {
   const target = event.target;
   if (!target || target.tagName !== "MOVI-PLAYER") return;
@@ -43,7 +44,7 @@ upgradeVideoElements({
     // The name of what is playing, where it is actually wanted: fullscreen,
     // with nothing else on screen to say it. Windowed, the page's own title
     // and chrome are right there and a second one over the picture is noise.
-    titlemode: "fullscreen back",
+    titlemode: "fullscreen back-mobile",
     subtitlepicker: "",
     ambientmode: "",
     resume: "",
