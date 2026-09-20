@@ -189,6 +189,34 @@ const AUDIO_FADE_MS = 200;
 const AUDIO_FADE_WAIT_MS = AUDIO_FADE_MS + 60;
 let audioFaded = false;
 
+/**
+ * The picture goes with the sound.
+ *
+ * Same slope, same length, so closing reads as one movement rather than a
+ * window vanishing over a sound that is still going. Linear, because the gain
+ * ramp underneath it is linear and the two are meant to be the same gesture.
+ *
+ * On the window itself rather than on anything the page draws: the frame, the
+ * background and the title bar are not the renderer's to fade, and a page that
+ * dimmed itself inside a window that did not would look like a bug.
+ */
+function fadeWindowsOut(ms) {
+  const windows = BrowserWindow.getAllWindows();
+  const startedAt = Date.now();
+  const step = () => {
+    const through = Math.min(1, (Date.now() - startedAt) / ms);
+    for (const w of windows) {
+      try {
+        if (!w.isDestroyed()) w.setOpacity(1 - through);
+      } catch {
+        /* a window that has gone, or a platform without window opacity */
+      }
+    }
+    if (through < 1) setTimeout(step, 16);
+  };
+  step();
+}
+
 function fadeAudioThen(finish) {
   audioFaded = true;
   for (const w of BrowserWindow.getAllWindows()) {
@@ -198,6 +226,7 @@ function fadeAudioThen(finish) {
       /* a window already on its way out */
     }
   }
+  fadeWindowsOut(AUDIO_FADE_MS);
   setTimeout(finish, AUDIO_FADE_WAIT_MS);
 }
 
