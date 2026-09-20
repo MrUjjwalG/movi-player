@@ -1567,16 +1567,32 @@ setInterval(() => {
       takeoverToggle.checked = !!data.takeOverPageVideos;
     });
     takeoverToggle.addEventListener("change", () => {
-      chrome.storage.local.set({ takeOverPageVideos: takeoverToggle.checked });
-      if (takeoverSub) {
-        const said = takeoverSub.textContent;
-        takeoverSub.textContent = takeoverToggle.checked
-          ? "On — open a page with a video file in it"
-          : "Off — pages keep their own player";
+      const on = takeoverToggle.checked;
+      chrome.storage.local.set({ takeOverPageVideos: on });
+      const say = (words) => {
+        if (!takeoverSub) return;
+        const said = takeoverSub.dataset.said || takeoverSub.textContent;
+        takeoverSub.dataset.said = said;
+        takeoverSub.textContent = words;
         setTimeout(() => {
           takeoverSub.textContent = said;
-        }, 2200);
+        }, 2600);
+      };
+      if (!on) {
+        say("Off — pages keep their own player");
+        return;
       }
+      // Site access is what lets the extension add the CORS header a site
+      // never sent — without it a file from another origin still plays, but
+      // through the browser's own decoders, which is the thing this is for.
+      // Asked for, not required: the setting stays on either way.
+      chrome.permissions.request({ origins: ["<all_urls>"] }, (granted) => {
+        say(
+          granted
+            ? "On — open a page with a video file in it"
+            : "On — without site access, other-origin files fall back to the browser",
+        );
+      });
     });
   }
 

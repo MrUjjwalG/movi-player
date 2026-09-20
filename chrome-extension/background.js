@@ -73,7 +73,89 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     probeVideoUrl(message.url).then(sendResponse).catch(() => sendResponse({ isVideo: false }));
     return true; // keep channel open for async response
   }
+
+  if (message.action === "allowMediaCors") {
+    allowMediaCors(message.urls, sender.tab?.id)
+      .then(sendResponse)
+      .catch(() => sendResponse({ ok: false }));
+    return true;
+  }
 });
+
+// ─── CORS for the takeover ─────────────────────────────────────────────────
+//
+// A native <video> plays a cross-origin file without asking anyone. Movi reads
+// the bytes itself, so the same file needs an Access-Control-Allow-Origin the
+// site was never asked to send — and without it the player falls back to the
+// native element, which is only as good as the browser's own decoders. For an
+// MKV or an HEVC file that is no better than doing nothing.
+//
+// So the header is added here, to the response, where an extension is allowed
+// to. Not by proxying the bytes: a range read through chrome.runtime is a
+// multi-megabyte string squeezed through JSON twice, for every read, for the
+// whole film.
+//
+// Narrow on purpose. One rule per media URL the page is actually going to
+// open, bound to the tab that asked, cleared when that tab goes. Never a
+// blanket "allow everything": the same header on an unrelated credentialed
+// request is not permissiveness, it is a broken request — and a rule that
+// outlives its page is a permission nobody granted.
+const corsRuleIds = new Map(); // tabId → [ruleId]
+let nextCorsRuleId = 9000;
+
+async function allowMediaCors(urls, tabId) {
+  if (!Array.isArray(urls) || urls.length === 0 || tabId == null) {
+    return { ok: false };
+  }
+  // The rules only apply where the extension has access to the host, and that
+  // access is optional — asked for on the player page, next to the setting.
+  const granted = await chrome.permissions.contains({ origins: ["<all_urls>"] });
+  if (!granted) return { ok: false, needsPermission: true };
+
+  const addRules = [];
+  for (const url of urls.slice(0, 8)) {
+    addRules.push({
+      id: ++nextCorsRuleId,
+      priority: 1,
+      condition: { urlFilter: url, tabIds: [tabId], resourceTypes: ["xmlhttprequest"] },
+      action: {
+        type: "modifyHeaders",
+        responseHeaders: [
+          { header: "access-control-allow-origin", operation: "set", value: "*" },
+          {
+            header: "access-control-expose-headers",
+            operation: "set",
+            value: "content-range, content-length, accept-ranges",
+          },
+        ],
+      },
+    });
+  }
+  const previous = corsRuleIds.get(tabId) ?? [];
+  await chrome.declarativeNetRequest.updateSessionRules({
+    removeRuleIds: previous,
+    addRules,
+  });
+  corsRuleIds.set(tabId, addRules.map((rule) => rule.id));
+  return { ok: true, rules: addRules.length };
+}
+
+// A rule belongs to the page that asked for it.
+chrome.tabs.onRemoved.addListener((tabId) => void dropCorsRules(tabId));
+chrome.tabs.onUpdated.addListener((tabId, info) => {
+  if (info.status === "loading") void dropCorsRules(tabId);
+});
+
+async function dropCorsRules(tabId) {
+  const ids = corsRuleIds.get(tabId);
+  if (!ids || ids.length === 0) return;
+  corsRuleIds.delete(tabId);
+  try {
+    await chrome.declarativeNetRequest.updateSessionRules({ removeRuleIds: ids });
+  } catch {
+    /* the session is going away anyway */
+  }
+}
 
 // In-memory cache so repeated probes for the same URL don't re-hit the network.
 // Service worker may be evicted; that's fine — cache is best-effort.

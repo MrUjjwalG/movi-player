@@ -12,7 +12,8 @@
     "contextMenus",
     "activeTab",
     "clipboardRead",
-    "storage"
+    "storage",
+    "declarativeNetRequestWithHostAccess"
   ],
   "incognito": "split",
   "optional_host_permissions": [

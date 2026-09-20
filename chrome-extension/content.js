@@ -250,14 +250,52 @@ function videoWorthTakingOver(video) {
   return !!source && !/^(blob:|mediastream:)/i.test(source);
 }
 
+/**
+ * Ask for the CORS header the site never sent, before the player asks for the
+ * bytes.
+ *
+ * Only for files on another origin — a same-origin read needs nothing — and
+ * only the ones this page is actually about to open. See allowMediaCors in
+ * background.js. It is best-effort: without the host permission (or in a
+ * browser without the API) the player still opens, and still falls back to the
+ * native element the way it did before any of this.
+ */
+function askForMediaCors() {
+  const urls = Array.from(document.querySelectorAll("video"))
+    .filter(videoWorthTakingOver)
+    .map((video) => video.currentSrc || video.getAttribute("src") || "")
+    .filter((url) => {
+      try {
+        return new URL(url, location.href).origin !== location.origin;
+      } catch {
+        return false;
+      }
+    })
+    .map((url) => new URL(url, location.href).href);
+  if (urls.length === 0) return Promise.resolve();
+  return new Promise((resolve) => {
+    try {
+      chrome.runtime.sendMessage({ action: "allowMediaCors", urls }, () => {
+        void chrome.runtime.lastError;
+        resolve();
+      });
+    } catch {
+      resolve();
+    }
+  });
+}
+
 function injectTakeover() {
   if (takeoverInjected) return;
   takeoverInjected = true;
-  const script = document.createElement("script");
-  script.type = "module";
-  script.src = chrome.runtime.getURL("upgrade.js");
-  script.addEventListener("load", () => script.remove());
-  (document.head || document.documentElement).appendChild(script);
+  // The header rule has to exist before the first read, not after it.
+  askForMediaCors().then(() => {
+    const script = document.createElement("script");
+    script.type = "module";
+    script.src = chrome.runtime.getURL("upgrade.js");
+    script.addEventListener("load", () => script.remove());
+    (document.head || document.documentElement).appendChild(script);
+  });
 }
 
 function watchForTakeover() {

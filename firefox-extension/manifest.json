@@ -26,7 +26,8 @@
     "contextMenus",
     "activeTab",
     "clipboardRead",
-    "storage"
+    "storage",
+    "declarativeNetRequestWithHostAccess"
   ],
   "optional_host_permissions": [
     "<all_urls>"
