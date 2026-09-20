@@ -4500,30 +4500,36 @@ export class CanvasRenderer {
   }
 
   /**
-   * The controls reserve exists to keep the caption off the bar — nothing
-   * more. Applied to a caption the viewer has carried up the picture, it made
-   * that caption hop the height of the bar every time the bar came and went,
-   * at the top of the frame, for no reason anyone watching could see.
+   * The controls reserve keeps the caption off the bar as the bar comes and
+   * goes — and it belongs to the caption the PLAYER places, not to one the
+   * viewer has put somewhere themselves.
    *
-   * So reserve what is left of the bar after the viewer's own lift, rather
-   * than the bar. Where the caption sits comes out as
-   * max(bottomPadding + lift, controlsPadding) once CSS adds the lift back —
-   * it rides the drag, and is held at the bar's top edge rather than behind
-   * it. Stated this way and not as a near/far test, because a test flips: the
-   * caption would jump the moment the drag crossed the line, which is the
-   * hop again, now in the middle of the gesture that causes it.
+   * A placed caption stays where it was put, bar or no bar. Holding it clear
+   * of the bar instead sounds kinder and is not: the caption still moves on
+   * its own every time the bar appears and hides, which is the thing that was
+   * wrong with applying the reserve to it in the first place. If the viewer
+   * parks it where the bar will cover it, the bar is a few seconds of its own
+   * and then gone.
    */
   private subtitleEffectiveBottomPadding(
     overlayHeight: number,
     bottomPadding: number,
   ): number {
     // While the caption is being carried there is no reserve at all: it goes
-    // where the pointer goes, pixel for pixel. The reserve it was sitting on
-    // was folded into the drag when the drag began (see getSubtitleReserve),
-    // so nothing moves at the moment it is picked up either.
+    // where the pointer goes, pixel for pixel. Whatever reserve it was sitting
+    // on was folded into the drag when the drag began (see subtitleReservePx),
+    // so nothing moves as it is picked up either — and nothing moves as it is
+    // let go, because the reserve does not come back for a placed caption.
     if (this.subtitleHeld) return bottomPadding;
-    const lift = this.subtitleUserLift(overlayHeight);
-    return Math.max(bottomPadding, this.subtitleControlsPadding - lift);
+    // Half a pixel, not zero: a caption dragged away and back to within a
+    // hair of home has still been placed, and re-applying the reserve to it
+    // would move it the height of the bar the moment the pointer let go.
+    if (Math.abs(this.subtitleUserLift(overlayHeight)) > 0.5) {
+      return bottomPadding;
+    }
+    return this.subtitleControlsPadding > 0
+      ? this.subtitleControlsPadding
+      : bottomPadding;
   }
 
   /**
