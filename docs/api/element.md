@@ -670,7 +670,7 @@ Switches built-in controls off, as `no<name>` tokens — the same shape
 `noprogress`, `noaudio`, `nocc`, `noquality`, `nospeed`, `nostableaudio`,
 `nohdr`, `noloop`, `nosettings`, `noaspect`, `nopip`, `nofullscreen`, `nomore`,
 `nostats`, `noshortcuts`, `noambient`, `nocrop`, `nosnapshot`, `norotate`,
-`notimeline`, `nodivider`
+`notimeline`, `nodivider`, `nosubtitledrag`
 — plus the `id` of any control added with
 [`addControl()`](#addcontrol-spec), which is simply not added.
 
@@ -680,6 +680,10 @@ row, and — for the ones the availability check knows (`aspect`, `pip`,
 — its keyboard shortcut. `noplaylist` also clears the queue's skip pair from
 the OS lock screen, which is the one surface a page cannot restyle its way out
 of.
+
+`nosubtitledrag` is not a control on the bar at all — it takes away the
+viewer's ability to drag the live caption somewhere else in the picture. The
+caption still opens the transcript when clicked.
 
 `noprev` and `nonext` are a different kind of token: they take one BUTTON off
 the bar and nothing else. The key, the queue and the lock screen's pair carry
@@ -1349,6 +1353,8 @@ Customize subtitle rendering. All four are also exposed in the in-player customi
 ```
 
 The size multiplier drives both text (SRT/ASS/VTT) and image (PGS/VOBSUB) subtitles. Edge style applies to text subs only.
+
+**Where the caption sits** is the viewer's, not the page's: they drag the caption itself to anywhere in the picture, and a double click (or double tap) puts it back. The position is kept as a share of the picture rather than a pixel offset, so it holds through a resize, fullscreen and the next video, and it persists to localStorage alongside the four attributes above — as does "Reset to default" in the customize panel, which clears it with everything else. Hosts that want the caption to stay where the player puts it write `controlslist="nosubtitledrag"`.
 
 ---
 

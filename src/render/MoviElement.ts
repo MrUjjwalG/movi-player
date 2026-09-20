@@ -1032,11 +1032,22 @@ export class MoviElement extends HTMLElement {
     color: string;
     bgAlpha: number;
     edge: "none" | "shadow" | "outline" | "raised";
+    /**
+     * Where the viewer dragged the caption to, as a percentage of the overlay
+     * box — never pixels. The box is the picture, so a share of it means the
+     * same place on a phone, on a desktop and in fullscreen, and the caption
+     * does not have to be re-placed when any of those change. 0,0 is where the
+     * renderer puts it.
+     */
+    posX: number;
+    posY: number;
   } = {
     sizeMult: 1,
     color: "#FFFFFF",
     bgAlpha: 0.75,
     edge: "shadow",
+    posX: 0,
+    posY: 0,
   };
   private _ambientMode: boolean = false;
   private _renderer: RendererType = "canvas";
@@ -2193,10 +2204,28 @@ export class MoviElement extends HTMLElement {
     this.subtitleOverlay.addEventListener("click", (e) => {
       const target = e.target as HTMLElement | null;
       if (!target?.closest(".movi-subtitle-block")) return;
+      // The click that ends a drag is not a click on the caption, it is where
+      // the caption was let go of.
+      if (this._subtitleDragSuppressClick) {
+        this._subtitleDragSuppressClick = false;
+        e.stopPropagation();
+        return;
+      }
       if (!this.player?.isFileSource()) return;
       e.stopPropagation();
-      void this.openCuesPanel();
+      // Held for one double-click interval, because the first click of the
+      // reset gesture lands here: opening the transcript and closing it again
+      // a moment later is worse than a fifth of a second's wait to open it.
+      if (this._captionClickTimer !== null) {
+        window.clearTimeout(this._captionClickTimer);
+      }
+      this._captionClickTimer = window.setTimeout(() => {
+        this._captionClickTimer = null;
+        void this.openCuesPanel();
+      }, 220);
     });
+
+    this.wireSubtitleDrag();
 
     // Create loading indicator (positioned over video area)
     const loadingIndicator = document.createElement("div");
@@ -12357,6 +12386,15 @@ export class MoviElement extends HTMLElement {
         ) {
           this._subtitleSettings.edge = parsed.edge;
         }
+        // Clamped on the way in as well as on the way out: a stored position
+        // is only ever as trustworthy as the localStorage it came from, and a
+        // caption parked off the edge of the picture cannot be dragged back.
+        if (Number.isFinite(parsed.posX)) {
+          this._subtitleSettings.posX = MoviElement.clampSubtitlePos(parsed.posX);
+        }
+        if (Number.isFinite(parsed.posY)) {
+          this._subtitleSettings.posY = MoviElement.clampSubtitlePos(parsed.posY);
+        }
       }
     } catch {
       /* ignore — fall back to defaults */
@@ -12386,6 +12424,168 @@ export class MoviElement extends HTMLElement {
     this.style.setProperty(
       "--movi-sub-edge",
       MoviElement.SUBTITLE_EDGE_STYLES[s.edge],
+    );
+    this.applySubtitlePosition();
+  }
+
+  /**
+   * Let the viewer put the caption where it suits them, and leave it there.
+   *
+   * On the caption itself, which is the only part of the overlay that takes a
+   * pointer at all (the rest stays transparent so a click lands on the picture
+   * behind it). The move is tracked on the window rather than on the caption:
+   * the overlay's contents are rewritten on every karaoke tick, so the element
+   * the drag started on is routinely gone before the drag ends.
+   *
+   * A double click puts it back. Hosts that don't want any of this write
+   * `controlslist="nosubtitledrag"`.
+   */
+  private wireSubtitleDrag(): void {
+    const overlay = this.subtitleOverlay;
+    if (!overlay) return;
+    const GRABBABLE = ".movi-subtitle-block, .movi-subtitle-image";
+
+    const onMove = (e: PointerEvent) => {
+      const drag = this._subtitleDrag;
+      if (!drag || e.pointerId !== drag.pointerId) return;
+      let dx = e.clientX - drag.startX;
+      let dy = e.clientY - drag.startY;
+      // A caption is also a button (it opens the transcript), so the first few
+      // pixels belong to the click, not to the drag.
+      if (!drag.moved && Math.hypot(dx, dy) < 3) return;
+      if (!drag.moved) {
+        drag.moved = true;
+        overlay.classList.add("movi-subtitle-dragging");
+      }
+      dx = Math.min(drag.maxDx, Math.max(drag.minDx, dx));
+      dy = Math.min(drag.maxDy, Math.max(drag.minDy, dy));
+      this._subtitleSettings.posX = MoviElement.clampSubtitlePos(
+        drag.baseX + (dx / drag.boxW) * 100,
+      );
+      this._subtitleSettings.posY = MoviElement.clampSubtitlePos(
+        drag.baseY + (dy / drag.boxH) * 100,
+      );
+      this.applySubtitlePosition();
+      e.preventDefault();
+    };
+
+    const onEnd = (e: PointerEvent) => {
+      const drag = this._subtitleDrag;
+      if (!drag || e.pointerId !== drag.pointerId) return;
+      this._subtitleDrag = null;
+      overlay.classList.remove("movi-subtitle-dragging");
+      window.removeEventListener("pointermove", onMove);
+      window.removeEventListener("pointerup", onEnd);
+      window.removeEventListener("pointercancel", onEnd);
+      if (!drag.moved) return;
+      this._subtitleDragSuppressClick = true;
+      this.saveSubtitleSettings();
+    };
+
+    overlay.addEventListener("pointerdown", (e) => {
+      if (this.isControlDisabled("subtitledrag")) return;
+      if (e.button > 0) return;
+      const grabbed = (e.target as HTMLElement | null)?.closest(
+        GRABBABLE,
+      ) as HTMLElement | null;
+      if (!grabbed) return;
+      // Measured now, so the caption can be held anywhere inside the picture
+      // and nowhere outside it — including the case where it is already as far
+      // over as it goes, where the bounds meet and the axis simply holds.
+      const box = grabbed.getBoundingClientRect();
+      const host = this.getBoundingClientRect();
+      const edge = 4;
+      const span = (low: number, high: number) =>
+        low > high ? { low: 0, high: 0 } : { low, high };
+      const x = span(host.left + edge - box.left, host.right - edge - box.right);
+      const y = span(host.top + edge - box.top, host.bottom - edge - box.bottom);
+      this._subtitleDrag = {
+        pointerId: e.pointerId,
+        startX: e.clientX,
+        startY: e.clientY,
+        baseX: this._subtitleSettings.posX,
+        baseY: this._subtitleSettings.posY,
+        minDx: x.low,
+        maxDx: x.high,
+        minDy: y.low,
+        maxDy: y.high,
+        boxW: overlay.offsetWidth || host.width || 1,
+        boxH: overlay.offsetHeight || host.height || 1,
+        moved: false,
+      };
+      // Not the picture's pointerdown: this one is for the caption, and the
+      // play/pause toggle behind it must not also take it.
+      e.stopPropagation();
+      window.addEventListener("pointermove", onMove);
+      window.addEventListener("pointerup", onEnd);
+      window.addEventListener("pointercancel", onEnd);
+    });
+
+    overlay.addEventListener("dblclick", (e) => {
+      if (!(e.target as HTMLElement | null)?.closest(GRABBABLE)) return;
+      // Double click on the picture is fullscreen, and double tap is a seek.
+      // On the caption it is neither.
+      e.stopPropagation();
+      e.preventDefault();
+      if (this._captionClickTimer !== null) {
+        window.clearTimeout(this._captionClickTimer);
+        this._captionClickTimer = null;
+      }
+      const s = this._subtitleSettings;
+      if (!s.posX && !s.posY) return;
+      s.posX = 0;
+      s.posY = 0;
+      this.saveSubtitleSettings();
+      this.applySubtitlePosition();
+    });
+  }
+
+  private _subtitleDrag: {
+    pointerId: number;
+    startX: number;
+    startY: number;
+    baseX: number;
+    baseY: number;
+    minDx: number;
+    maxDx: number;
+    minDy: number;
+    maxDy: number;
+    boxW: number;
+    boxH: number;
+    moved: boolean;
+  } | null = null;
+  /** A drag ends in a click event the transcript must not answer. */
+  private _subtitleDragSuppressClick: boolean = false;
+  private _captionClickTimer: number | null = null;
+
+  /** Percent of the overlay box a dragged caption may travel from home. */
+  private static readonly SUBTITLE_POS_LIMIT = 48;
+
+  private static clampSubtitlePos(value: number): number {
+    const limit = MoviElement.SUBTITLE_POS_LIMIT;
+    return Math.min(limit, Math.max(-limit, value));
+  }
+
+  /**
+   * Put the caption where it was dragged to.
+   *
+   * The independent `translate` property, not `transform`: the renderer owns
+   * `transform` on this overlay (it carries the video's rotation, rewritten on
+   * every cue), and the two compose without either having to know about the
+   * other. `translate` also applies OUTSIDE the rotation, so a caption on a
+   * rotated video still follows the pointer rather than the picture's idea of
+   * which way is right.
+   *
+   * Written on the overlay rather than the host so it travels with the element
+   * into the document-PiP window, where the host's own custom properties do
+   * not reach.
+   */
+  private applySubtitlePosition(): void {
+    if (!this.subtitleOverlay) return;
+    const { posX, posY } = this._subtitleSettings;
+    this.subtitleOverlay.style.setProperty(
+      "translate",
+      posX || posY ? `${posX}% ${posY}%` : "",
     );
   }
 
@@ -12883,6 +13083,8 @@ export class MoviElement extends HTMLElement {
         color: "#FFFFFF",
         bgAlpha: 0.75,
         edge: "shadow",
+        posX: 0,
+        posY: 0,
       };
       this.saveSubtitleSettings();
       this.applySubtitleSettings();
@@ -22799,6 +23001,18 @@ export class MoviElement extends HTMLElement {
 
       /* Subtitle shift is handled via JS in showControls/hideControls */
 
+      /* With the bar up the caption is lifted clear of it (that same shift), so
+         the two never meet and this z-index is the one that counts. With the
+         bar DOWN the caption drops back into the strip the bar occupies — and
+         the bar's own children keep pointer-events:auto even while the bar is
+         invisible, so an unreachable control was sitting on top of the caption:
+         a drag, or a click meant for the transcript, landed on the progress
+         container instead. Nothing is painted there to be covered up, so the
+         caption simply takes the higher card while the bar is away. */
+      :host(.movi-bar-collapsed) .movi-subtitle-overlay {
+        z-index: 11;
+      }
+
       /* Full-width anchor row; padding-left set inline by the renderer
          pushes the inline-block backdrop to the position where the
          final sentence's centered start would sit. */
@@ -22825,9 +23039,36 @@ export class MoviElement extends HTMLElement {
         box-sizing: border-box;
         /* Make the block itself clickable while keeping the overlay
            transparent — clicking the live caption opens the transcript
-           browser, scrolled to the current cue. */
+           browser, scrolled to the current cue. It is also the handle the
+           caption is dragged by, so it says grab rather than pointer: the
+           drag is the gesture you cannot otherwise guess is there, and the
+           transcript stays one click away either way.
+           touch-action, or the first finger-drag scrolls the page out from
+           under the caption instead of moving it. */
         pointer-events: auto;
-        cursor: pointer;
+        cursor: grab;
+        touch-action: none;
+        user-select: none;
+        -webkit-user-select: none;
+      }
+
+      /* Image subtitles (PGS / VOBSUB) are one bitmap, positioned by the
+         renderer — same handle, same gesture. */
+      .movi-subtitle-image {
+        pointer-events: auto;
+        cursor: grab;
+        touch-action: none;
+      }
+
+      .movi-subtitle-overlay.movi-subtitle-dragging .movi-subtitle-block,
+      .movi-subtitle-overlay.movi-subtitle-dragging .movi-subtitle-image {
+        cursor: grabbing;
+      }
+
+      /* Nothing about a caption being carried across the picture should
+         animate: it goes where the pointer is, this frame. */
+      .movi-subtitle-overlay.movi-subtitle-dragging .movi-subtitle-block {
+        animation: none;
       }
 
       /* VTT gets its backdrop PER LINE, not one box around the cue. A shared
@@ -31294,7 +31535,13 @@ export class MoviElement extends HTMLElement {
       this._carryAudioEl = null;
     }
 
-    // Clear subtitle overlay
+    // Clear subtitle overlay. Where the viewer dragged the caption to is
+    // theirs and stays; the transcript this caption was about to open is the
+    // outgoing source's, and does not.
+    if (this._captionClickTimer !== null) {
+      window.clearTimeout(this._captionClickTimer);
+      this._captionClickTimer = null;
+    }
     if (this.subtitleOverlay) {
       this.subtitleOverlay.innerHTML = "";
     }
