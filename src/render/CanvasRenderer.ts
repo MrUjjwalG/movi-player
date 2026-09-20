@@ -2636,7 +2636,10 @@ export class CanvasRenderer {
         this.subtitleOverlay.style.top = `${(height - overlayHeight) / 2}px`;
         this.subtitleOverlay.style.margin = "0";
         this.subtitleOverlay.style.padding = "0";
-        const effectivePadding = this.subtitleControlsPadding > 0 ? this.subtitleControlsPadding : bottomPadding;
+        const effectivePadding = this.subtitleEffectiveBottomPadding(
+          overlayHeight,
+          bottomPadding,
+        );
         this.subtitleOverlay.style.paddingBottom = `${effectivePadding}px`;
         this.subtitleOverlay.style.display = "flex";
         this.subtitleOverlay.style.flexDirection = "column";
@@ -4352,7 +4355,10 @@ export class CanvasRenderer {
       // The text path has always computed its padding first, which is exactly
       // why text cues never did this.
       const bottomPaddingImg = this.subtitleBottomPadding(ovH);
-      const effectivePaddingImg = this.subtitleControlsPadding > 0 ? this.subtitleControlsPadding : bottomPaddingImg;
+      const effectivePaddingImg = this.subtitleEffectiveBottomPadding(
+        ovH,
+        bottomPaddingImg,
+      );
       this.subtitleOverlay.style.padding = "0";
       this.subtitleOverlay.style.paddingBottom = `${effectivePaddingImg}px`;
       this.subtitleOverlay.style.textAlign = "center";
@@ -4473,6 +4479,46 @@ export class CanvasRenderer {
    * this is the one that matters on the canvas path, where the overlay is
    * positioned by inline style and the CSS `bottom` never applies.
    */
+  /**
+   * How far the viewer has carried the caption UP the picture, in pixels.
+   *
+   * The element writes the drag onto this same overlay as `translate: x% y%`,
+   * an inline value on an element this renderer already owns the rest of the
+   * inline styles of — so it is read back here rather than pushed through the
+   * player, and read off the style attribute rather than the computed style,
+   * which would force a layout flush on every cue.
+   */
+  private subtitleUserLift(overlayHeight: number): number {
+    const raw = (this.subtitleOverlay as HTMLElement | null)?.style?.translate;
+    if (!raw || !Number.isFinite(overlayHeight) || overlayHeight <= 0) return 0;
+    const y = raw.trim().split(/\s+/)[1];
+    const pct = y ? /^(-?[\d.]+)%$/.exec(y) : null;
+    if (!pct) return 0;
+    return (-parseFloat(pct[1]) / 100) * overlayHeight;
+  }
+
+  /**
+   * The controls reserve exists to keep the caption off the bar — nothing
+   * more. Applied to a caption the viewer has carried up the picture, it made
+   * that caption hop the height of the bar every time the bar came and went,
+   * at the top of the frame, for no reason anyone watching could see.
+   *
+   * So reserve what is left of the bar after the viewer's own lift, rather
+   * than the bar. Where the caption sits comes out as
+   * max(bottomPadding + lift, controlsPadding) once CSS adds the lift back —
+   * it rides the drag, and is held at the bar's top edge rather than behind
+   * it. Stated this way and not as a near/far test, because a test flips: the
+   * caption would jump the moment the drag crossed the line, which is the
+   * hop again, now in the middle of the gesture that causes it.
+   */
+  private subtitleEffectiveBottomPadding(
+    overlayHeight: number,
+    bottomPadding: number,
+  ): number {
+    const lift = this.subtitleUserLift(overlayHeight);
+    return Math.max(bottomPadding, this.subtitleControlsPadding - lift);
+  }
+
   private subtitleBottomPadding(overlayHeight: number): number {
     const raw = this.subtitleOverlay
       ? getComputedStyle(this.subtitleOverlay)
@@ -4677,7 +4723,10 @@ export class CanvasRenderer {
       this.subtitleOverlay.style.top = `${(overlayH - ovTxtH) / 2}px`;
       this.subtitleOverlay.style.margin = "0";
       this.subtitleOverlay.style.padding = "0";
-      const effectivePad = this.subtitleControlsPadding > 0 ? this.subtitleControlsPadding : bottomPadding;
+      const effectivePad = this.subtitleEffectiveBottomPadding(
+        ovTxtH,
+        bottomPadding,
+      );
       this.subtitleOverlay.style.paddingBottom = `${effectivePad}px`;
       this.subtitleOverlay.style.transformOrigin = "center center";
       this.subtitleOverlay.style.transform = rotTxt ? `rotate(${rotTxt}deg)` : "none";

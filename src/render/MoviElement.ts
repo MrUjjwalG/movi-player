@@ -87,6 +87,13 @@ const SYMBOLS = {
   volumeMuted: `<path d="M4.25 9.2h3.2l4.3-3.55v12.7l-4.3-3.55h-3.2a1.5 1.5 0 0 1-1.5-1.5v-2.6a1.5 1.5 0 0 1 1.5-1.5Zm11.95-.2 5.1 5.1m0-5.1-5.1 5.1"/>`,
   audio: `<path d="M9 17.4V6.7l10.5-2.15v10.7"/><ellipse cx="6.15" cy="18" rx="2.85" ry="2.35"/><ellipse cx="16.65" cy="15.85" rx="2.85" ry="2.35"/>`,
   subtitles: `<rect x="2.75" y="4.75" width="18.5" height="14.5" rx="3"/><path d="M6.75 13.25h4.5m2.5 0h3.5M6.75 16.25h3m2.5 0h5"/>`,
+  /* The outline glyph's own silhouette, filled, with the caption rows cut out
+     of it (evenodd) rather than drawn on top: the two are the same icon in two
+     states, so the box must not appear to change size or shape when subtitles
+     come on. The box is grown by half the outline's stroke (0.825) on every
+     side, which is where that stroke's OUTER edge sits, and the rows are the
+     stroked lines' exact stadium silhouettes. */
+  subtitlesFilled: `<path fill-rule="evenodd" d="M5.75 3.93H18.25a3.83 3.83 0 0 1 3.83 3.82V16.25a3.83 3.83 0 0 1-3.83 3.83H5.75a3.83 3.83 0 0 1-3.82-3.83V7.75a3.83 3.83 0 0 1 3.82-3.82Z M6.75 12.425H11.25a.825.825 0 0 1 0 1.65H6.75a.825.825 0 0 1 0-1.65Z M13.75 12.425H17.25a.825.825 0 0 1 0 1.65H13.75a.825.825 0 0 1 0-1.65Z M6.75 15.425H9.75a.825.825 0 0 1 0 1.65H6.75a.825.825 0 0 1 0-1.65Z M12.25 15.425H17.25a.825.825 0 0 1 0 1.65H12.25a.825.825 0 0 1 0-1.65Z"/>`,
   subtitlesOff: `<rect x="2.75" y="4.75" width="18.5" height="14.5" rx="3"/><path d="M6.75 13.25h4.5m2.5 0h3.5M6.75 16.25h3m2.5 0h5M4.25 3.25l15.5 17.5"/>`,
   speed: `<path d="M4.7 18.1a9 9 0 1 1 14.6 0"/><path d="m12 12 4.65-3.35"/><circle cx="12" cy="12" r="1.15" fill="currentColor" stroke="none"/>`,
   stable: `<rect x="2.75" y="4.75" width="18.5" height="14.5" rx="3"/><path d="M6.25 13.5v-3m3 5v-7m3 5.5v-4m3 6v-8m3 5.5v-3"/>`,
@@ -2500,7 +2507,7 @@ export class MoviElement extends HTMLElement {
       <div class="movi-context-menu-divider movi-context-menu-divider-subtitle" style="display: none;"></div>
       <div class="movi-context-menu-item movi-context-menu-item-subtitle" data-action="subtitle-track" style="display: none;">
         ${symbolSvg("subtitles", "movi-context-menu-icon")}
-        ${symbolSvg("subtitles", "movi-context-menu-icon movi-context-menu-subtitle-filled", { hidden: true })}
+        ${symbolSvg("subtitlesFilled", "movi-context-menu-icon movi-context-menu-subtitle-filled", { hidden: true, filled: true })}
         <span class="movi-context-menu-label">Subtitle Track</span>
         <span class="movi-context-menu-shortcut" data-shortcut-action="subtitles">V</span>
         <span class="movi-context-menu-arrow">▶</span>
@@ -2767,7 +2774,7 @@ export class MoviElement extends HTMLElement {
               <div class="movi-subtitle-track-container">
                 <button class="movi-btn movi-subtitle-track-btn" aria-label="Subtitles/Captions">
                   ${symbolSvg("subtitles", "movi-icon-subtitle")}
-                  ${symbolSvg("subtitles", "movi-icon-subtitle-filled", { hidden: true })}
+                  ${symbolSvg("subtitlesFilled", "movi-icon-subtitle-filled", { hidden: true, filled: true })}
                 </button>
                 <div class="movi-subtitle-track-menu" style="display: none;">
                   <div class="movi-track-menu-header movi-subtitle-track-header">
@@ -12448,8 +12455,8 @@ export class MoviElement extends HTMLElement {
     const onMove = (e: PointerEvent) => {
       const drag = this._subtitleDrag;
       if (!drag || e.pointerId !== drag.pointerId) return;
-      let dx = e.clientX - drag.startX;
-      let dy = e.clientY - drag.startY;
+      const dx = e.clientX - drag.startX;
+      const dy = e.clientY - drag.startY;
       // A caption is also a button (it opens the transcript), so the first few
       // pixels belong to the click, not to the drag.
       if (!drag.moved && Math.hypot(dx, dy) < 3) return;
@@ -12457,15 +12464,15 @@ export class MoviElement extends HTMLElement {
         drag.moved = true;
         overlay.classList.add("movi-subtitle-dragging");
       }
-      dx = Math.min(drag.maxDx, Math.max(drag.minDx, dx));
-      dy = Math.min(drag.maxDy, Math.max(drag.minDy, dy));
-      this._subtitleSettings.posX = MoviElement.clampSubtitlePos(
+      const settings = this._subtitleSettings;
+      settings.posX = MoviElement.clampSubtitlePos(
         drag.baseX + (dx / drag.boxW) * 100,
       );
-      this._subtitleSettings.posY = MoviElement.clampSubtitlePos(
+      settings.posY = MoviElement.clampSubtitlePos(
         drag.baseY + (dy / drag.boxH) * 100,
       );
       this.applySubtitlePosition();
+      this.keepCaptionInPicture(drag.boxW, drag.boxH);
       e.preventDefault();
     };
 
@@ -12489,26 +12496,13 @@ export class MoviElement extends HTMLElement {
         GRABBABLE,
       ) as HTMLElement | null;
       if (!grabbed) return;
-      // Measured now, so the caption can be held anywhere inside the picture
-      // and nowhere outside it — including the case where it is already as far
-      // over as it goes, where the bounds meet and the axis simply holds.
-      const box = grabbed.getBoundingClientRect();
       const host = this.getBoundingClientRect();
-      const edge = 4;
-      const span = (low: number, high: number) =>
-        low > high ? { low: 0, high: 0 } : { low, high };
-      const x = span(host.left + edge - box.left, host.right - edge - box.right);
-      const y = span(host.top + edge - box.top, host.bottom - edge - box.bottom);
       this._subtitleDrag = {
         pointerId: e.pointerId,
         startX: e.clientX,
         startY: e.clientY,
         baseX: this._subtitleSettings.posX,
         baseY: this._subtitleSettings.posY,
-        minDx: x.low,
-        maxDx: x.high,
-        minDy: y.low,
-        maxDy: y.high,
         boxW: overlay.offsetWidth || host.width || 1,
         boxH: overlay.offsetHeight || host.height || 1,
         moved: false,
@@ -12540,16 +12534,43 @@ export class MoviElement extends HTMLElement {
     });
   }
 
+  /**
+   * Pull a caption that has left the picture back to its edge.
+   *
+   * Measured after the move rather than bounded before it, because the ground
+   * shifts under a drag: the bar hides and the caption's home moves the height
+   * of the bar, the cue changes and the block changes width. Bounds worked out
+   * when the caption was picked up are wrong by then, and the caption stopped
+   * short of the top of the picture by exactly the height of the bar that
+   * hid while it was being carried there.
+   */
+  private keepCaptionInPicture(boxW: number, boxH: number): void {
+    const held = this.subtitleOverlay?.querySelector(
+      ".movi-subtitle-block, .movi-subtitle-image",
+    ) as HTMLElement | null;
+    if (!held) return;
+    const box = held.getBoundingClientRect();
+    const host = this.getBoundingClientRect();
+    const edge = 4;
+    // A caption wider (or taller) than the picture cannot satisfy both edges,
+    // and pulling it at one of them just fights the viewer. Leave that axis.
+    const fix = (low: number, high: number, near: number, far: number) =>
+      far - near > high - low ? 0 : near < low ? low - near : far > high ? high - far : 0;
+    const fixX = fix(host.left + edge, host.right - edge, box.left, box.right);
+    const fixY = fix(host.top + edge, host.bottom - edge, box.top, box.bottom);
+    if (!fixX && !fixY) return;
+    const settings = this._subtitleSettings;
+    settings.posX = MoviElement.clampSubtitlePos(settings.posX + (fixX / boxW) * 100);
+    settings.posY = MoviElement.clampSubtitlePos(settings.posY + (fixY / boxH) * 100);
+    this.applySubtitlePosition();
+  }
+
   private _subtitleDrag: {
     pointerId: number;
     startX: number;
     startY: number;
     baseX: number;
     baseY: number;
-    minDx: number;
-    maxDx: number;
-    minDy: number;
-    maxDy: number;
     boxW: number;
     boxH: number;
     moved: boolean;
@@ -12558,8 +12579,16 @@ export class MoviElement extends HTMLElement {
   private _subtitleDragSuppressClick: boolean = false;
   private _captionClickTimer: number | null = null;
 
-  /** Percent of the overlay box a dragged caption may travel from home. */
-  private static readonly SUBTITLE_POS_LIMIT = 48;
+  /**
+   * A sanity bound on a STORED position, not a leash on the drag.
+   *
+   * How far the caption may actually travel is decided by the picture: the
+   * drag is clamped to the player's own box, so the caption stops at the edge
+   * it reached and nowhere sooner. This only catches a number that came back
+   * from localStorage as something no drag could have produced, which would
+   * park the caption off-screen where it cannot be dragged back.
+   */
+  private static readonly SUBTITLE_POS_LIMIT = 100;
 
   private static clampSubtitlePos(value: number): number {
     const limit = MoviElement.SUBTITLE_POS_LIMIT;
@@ -17188,10 +17217,8 @@ export class MoviElement extends HTMLElement {
       .movi-track-item-check {
         stroke-width: 2.1;
       }
-      .movi-icon-subtitle-filled,
       .movi-icon-stable-audio-filled,
       .movi-icon-loop-filled,
-      .movi-context-menu-subtitle-filled,
       .movi-context-menu-stable-filled,
       .movi-context-menu-loop-filled,
       .movi-context-menu-shuffle-filled,
