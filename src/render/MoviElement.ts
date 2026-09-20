@@ -16129,7 +16129,19 @@ export class MoviElement extends HTMLElement {
           this.player?.setSubtitleControlsPadding(tlHeight + 24);
         });
       } else {
-        this.player.setSubtitleControlsPadding(0);
+        // The bar is away, not gone. Sending 0 here is what made the caption
+        // fall the height of the bar every time the bar hid and climb back
+        // every time a pointer moved — several times a minute, for the sake
+        // of picture nobody asked for. The reserve stands; what changes is
+        // that the bar is no longer on screen, which is only of interest to a
+        // caption a page has pinned to the very bottom edge.
+        const bar = this.shadowRoot?.querySelector(
+          ".movi-controls-bar",
+        ) as HTMLElement | null;
+        this.player.setSubtitleControlsPadding(
+          this._controls && bar ? (bar.offsetHeight || 80) + 20 : 0,
+          false,
+        );
       }
     }
 

@@ -445,6 +445,8 @@ export class CanvasRenderer {
   private subtitleControlsPadding: number = 0; // Extra padding when controls visible
   // Set while the viewer is dragging the caption. See setSubtitleHeld().
   private subtitleHeld: boolean = false;
+  // Is the chrome the reserve is for on screen right now?
+  private subtitleControlsVisible: boolean = false;
   // Subtitle delay in seconds. VLC/mpv convention: positive = subs appear
   // later, negative = earlier. Applied at the active-cue check so it works
   // uniformly for text and image subtitles and can be adjusted live without
@@ -4017,12 +4019,25 @@ export class CanvasRenderer {
    * Set extra bottom padding for subtitles when controls are visible
    * 0 = use default padding, >0 = use this value instead
    */
-  setSubtitleControlsPadding(padding: number): void {
+  /**
+   * @param visible is the chrome this reserve is FOR actually on screen? The
+   * reserve is kept while the bar is merely away (see
+   * subtitleEffectiveBottomPadding), so the two are no longer the same
+   * question, and a reserve of 0 now means only one thing: there is no
+   * chrome here at all.
+   */
+  setSubtitleControlsPadding(padding: number, visible = padding > 0): void {
     this.subtitleControlsPadding = padding;
+    this.subtitleControlsVisible = visible;
     // Apply immediately if overlay exists
     if (this.subtitleOverlay) {
+      const height = this.containerHeight || 672;
+      const settled = this.subtitleEffectiveBottomPadding(
+        height,
+        this.subtitleBottomPadding(height),
+      );
       if (padding > 0) {
-        this.subtitleOverlay.style.paddingBottom = `${padding}px`;
+        this.subtitleOverlay.style.paddingBottom = `${settled}px`;
       } else {
         // containerHeight is CSS pixels; this.height is the dpr-scaled
         // backbuffer and would inflate the padding 2× on retina.
@@ -4527,9 +4542,29 @@ export class CanvasRenderer {
     if (Math.abs(this.subtitleUserLift(overlayHeight)) > 0.5) {
       return bottomPadding;
     }
-    return this.subtitleControlsPadding > 0
-      ? this.subtitleControlsPadding
-      : bottomPadding;
+    // Nothing to reserve for: no bar on this player at all.
+    if (this.subtitleControlsPadding <= 0) return bottomPadding;
+    // The bar's reserve is kept even while the bar is away.
+    //
+    // Letting the caption drop back the moment the bar hides means it rises
+    // and falls by the height of the bar every few seconds, because that is
+    // how often the bar comes and goes while anyone is using the player. The
+    // ~68px of picture it wins back is not worth a caption that will not sit
+    // still, so the caption holds the one height at which the bar can never
+    // reach it.
+    //
+    // Unless the caption's own home is right down on the bottom edge, which
+    // only happens when the page asks for it with --movi-sub-bottom. That is
+    // a decision about where captions belong on this page, and a caption
+    // asked to sit at the very bottom does follow the bar up and back down
+    // rather than be held a fifth of the frame above the place it was put.
+    const pinnedToTheEdge = bottomPadding <= overlayHeight * 0.04;
+    if (pinnedToTheEdge) {
+      return this.subtitleControlsVisible
+        ? this.subtitleControlsPadding
+        : bottomPadding;
+    }
+    return Math.max(bottomPadding, this.subtitleControlsPadding);
   }
 
   /**
