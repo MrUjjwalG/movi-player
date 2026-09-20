@@ -54,6 +54,16 @@ export interface UpgradeOptions {
   /** Leave alone any `<video>` matching this selector. */
   skip?: string;
   /**
+   * The last word on whether a particular `<video>` is taken.
+   *
+   * Everything else here asks what CAN be opened. This is for a caller that
+   * also has to judge what SHOULD be — a page where videos are content rather
+   * than a player, a grid of previews, a muted loop behind a headline. Called
+   * with each candidate that has already passed the rest; return false to
+   * leave it as it is.
+   */
+  filter?: (video: HTMLVideoElement) => boolean;
+  /**
    * Which sources may be taken over.
    *
    * "static" — the default — takes over a `<video>` that is playing a FILE at
@@ -158,6 +168,7 @@ function upgradeOne(
   if ((video as unknown as Record<string, unknown>)[TAKEN]) return null;
   if (options.skip && video.matches(options.skip)) return null;
   if (options.sources !== "any" && !hasStaticSource(video)) return null;
+  if (options.filter && !options.filter(video)) return null;
   if (!video.parentNode) return null;
 
   const player = document.createElement("movi-player");

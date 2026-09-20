@@ -271,6 +271,11 @@ DRM stream, or an element with no source yet — is left alone: there is no file
 behind those to open, so replacing the element would break a video that works.
 Pass `{ sources: "any" }` to upgrade them anyway, on a page you know.
 
+That answers what *can* be opened. On a page you do not control, what *should*
+be is a second question — a search page of stock footage is a grid of `<video>`
+thumbnails, a marketing page has one looping behind its headline — and
+`{ filter: (video) => … }` is where a caller answers it.
+
 ### Local File
 
 ```html

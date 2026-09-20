@@ -236,6 +236,44 @@ if (document.body instanceof HTMLElement) {
 const TAKEOVER_KEY = "takeOverPageVideos";
 let takeoverInjected = false;
 
+/**
+ * Is this the page's PLAYER, or is it furniture?
+ *
+ * A <video> on the web is not always something to be watched. A search page
+ * of stock footage is a grid of them, each one a thumbnail that plays a muted
+ * loop when the pointer crosses it; a marketing page puts one behind its
+ * headline. Replacing those with a real player turns a page of previews into a
+ * page of black boxes — and costs a WebAssembly engine for each one.
+ *
+ * So the question is not "can this be opened" (the library answers that) but
+ * "did the page put this here to be watched":
+ *
+ *  - a site's own player skin around it says yes, whatever else is true;
+ *  - the controls attribute says yes — the page expects a viewer to drive it;
+ *  - a muted or looping video says no: that is a decoration, a preview, a
+ *    background;
+ *  - otherwise, only a page whose single video is big enough to be the point
+ *    of the page.
+ *
+ * Kept in both content.js and upgrade.js on purpose: this copy decides whether
+ * the page is worth megabytes of player at all, the other which elements get
+ * one. They must answer the same way, so they ask the same question.
+ */
+function looksLikeThePagesPlayer(video) {
+  if (
+    video.closest(
+      ".video-js, .vjs-container, .plyr, .jwplayer, .flowplayer, .shaka-video-container, .mejs__container",
+    )
+  ) {
+    return true;
+  }
+  if (video.hasAttribute("controls")) return true;
+  if (video.loop || video.muted || video.hasAttribute("muted")) return false;
+  if (document.querySelectorAll("video").length !== 1) return false;
+  const box = video.getBoundingClientRect();
+  return box.width >= 400 && box.height >= 225;
+}
+
 function videoWorthTakingOver(video) {
   if (video.srcObject) return false;
   if (video.mediaKeys) return false;
@@ -247,7 +285,8 @@ function videoWorthTakingOver(video) {
   // blob: is how a MediaSource is attached, and it is also how a page plays a
   // file it picked. The two cannot be told apart from out here, so it is the
   // streaming case that decides: left alone.
-  return !!source && !/^(blob:|mediastream:)/i.test(source);
+  if (!source || /^(blob:|mediastream:)/i.test(source)) return false;
+  return looksLikeThePagesPlayer(video);
 }
 
 /**
