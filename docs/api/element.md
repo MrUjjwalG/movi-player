@@ -999,6 +999,12 @@ Generates thumbnails on demand (used internally for preview).
 <movi-player src="video.mp4" thumb></movi-player>
 ```
 
+Previews are decoded by the browser where it has a decoder for the source, and
+in software where it has not. Software decoding happens on the page's own
+thread, so above roughly 4K — an 8K source no browser offers a decoder for, say
+— the player leaves previews off for that source rather than stalling the page
+for most of a second on every hover. The seek bar itself is unaffected.
+
 ---
 
 #### `sw`

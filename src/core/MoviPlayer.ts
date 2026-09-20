@@ -1628,6 +1628,46 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
    * hovered position, on a fast desktop. Downscaling first costs one draw.
    */
   private static readonly PREVIEW_MAX_EDGE = 480;
+
+  /**
+   * How big a frame the SOFTWARE preview decoder may be asked for.
+   *
+   * Only reached when WebCodecs refuses the source outright — 8K H.264 is
+   * refused by every browser tested. The cost is the decode, which is the
+   * source's own size whatever the scaler is then asked for: measured in WASM
+   * on this machine, ~250-330ms of blocked main thread per 8K frame, and over
+   * a second for the first. 4K UHD (8.3MP) sits just under the line and stays.
+   */
+  private static readonly PREVIEW_SOFTWARE_MAX_PIXELS = 9_000_000;
+
+  /**
+   * The source's shape, shrunk to the size a preview is actually shown at.
+   *
+   * Everything on the preview path used to work at the source's own
+   * resolution and shrink at the very end, one step before the JPEG. On an 8K
+   * source that means a 7680x4320 RGBA buffer — 132MB — scaled by the decoder,
+   * copied out of WASM, uploaded as a texture and drawn, per hover, for a
+   * picture that is then thrown away and redrawn at 480px. Measured on 8K
+   * H.264: 1.7-2.4s per preview with the main thread stalled for up to 2.1s of
+   * it, which is the seek bar hanging the player while the keyboard seeks fine.
+   *
+   * The scaler has to resize the frame either way, so asking it for the size
+   * the picture is wanted at costs nothing and saves all of the above.
+   */
+  private static previewShape(
+    width: number,
+    height: number,
+  ): { width: number; height: number } {
+    const longest = Math.max(width, height);
+    if (!(longest > MoviPlayer.PREVIEW_MAX_EDGE) || !(width > 0) || !(height > 0)) {
+      return { width, height };
+    }
+    const scale = MoviPlayer.PREVIEW_MAX_EDGE / longest;
+    return {
+      width: Math.max(2, Math.round(width * scale)),
+      height: Math.max(2, Math.round(height * scale)),
+    };
+  }
   private previewScaleCanvas: OffscreenCanvas | HTMLCanvasElement | null = null;
 
   /**
@@ -11608,15 +11648,14 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
       // 2. Fallback to Software Decoding
       if (!rendered) {
         try {
-          // Get width/height from active video track
+          // The size the preview is SHOWN at, not the size the source is in.
+          // See previewShape — this is where the 8K hang was.
           const videoTrack = this.trackManager.getActiveVideoTrack();
-          let width = 320; // Default small
-          let height = 180;
-
-          if (videoTrack) {
-            width = videoTrack.width;
-            height = videoTrack.height;
-          }
+          const shrunk = videoTrack
+            ? MoviPlayer.previewShape(videoTrack.width, videoTrack.height)
+            : { width: 320, height: 180 };
+          const width = shrunk.width;
+          const height = shrunk.height;
 
           const rgba = this.thumbnailBindings!.decodeCurrentPacket(
             width,
@@ -12039,9 +12078,14 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
 
     if (shape) {
       // Initialize renderer dimensions and HDR settings
+      // The canvas is a preview surface, so it is preview-sized: a WebGL
+      // surface at 8K is 132MB to allocate and to read back, for a picture
+      // that is 480px wide. The draw scales the frame on the GPU on its way
+      // in, which is cheaper than doing it afterwards as well.
+      const canvasShape = MoviPlayer.previewShape(shape.width, shape.height);
       this.thumbnailRenderer.initialize({
-        width: shape.width,
-        height: shape.height,
+        width: canvasShape.width,
+        height: canvasShape.height,
         rotation: shape.rotation,
         colorPrimaries: shape.colorPrimaries,
         colorTransfer: shape.colorTransfer,
@@ -12065,6 +12109,28 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
       );
 
       if (!configured) {
+        // The software fallback decodes the frame WHOLE, in WASM, on this
+        // thread — the scaler can hand back a small picture but the decode
+        // itself is the source's own size. At 8K that is most of a second per
+        // hover with everything else stopped, which is the seek bar hanging
+        // the player while the keyboard seeks fine. Past the budget there is
+        // no version of this worth having: no preview is better than a frozen
+        // bar, and the bar still seeks.
+        const pixels = shape.width * shape.height;
+        if (pixels > MoviPlayer.PREVIEW_SOFTWARE_MAX_PIXELS) {
+          this.previewInitGaveUp = true;
+          Logger.warn(
+            TAG,
+            `No hardware path for ${shape.codec} at ${shape.width}x${shape.height}, ` +
+              "and software decode at that size would stall the page — previews off for this source",
+          );
+          // Everything this got as far as building — the second WASM context,
+          // its own reader, the WebGL surface — is for a pipeline that is not
+          // going to be used. It is never published, so teardown is the only
+          // thing that can still reach it.
+          this.destroyPreviewPipeline();
+          return;
+        }
         Logger.warn(
           TAG,
           "Failed to configure thumbnail VideoDecoder, will use software fallback",
