@@ -12513,7 +12513,7 @@ export class MoviElement extends HTMLElement {
       );
       this.applySubtitlePosition();
       const box = this.keepCaptionInPicture(drag.boxW, drag.boxH);
-      if (box) this.dismissCaptionHintIfCrowded(box);
+      if (box) this.syncCaptionHintClearance(box);
       e.preventDefault();
     };
 
@@ -12670,13 +12670,18 @@ export class MoviElement extends HTMLElement {
     hint.style.display = "block";
     // Out of the fade it may be in the middle of, on a second drag.
     hint.classList.remove("movi-caption-hint-leaving");
+    this._captionHintCrowdedOut = false;
     this.placeCaptionHint(captionBox);
   }
 
   /** Let it go, a beat after the caption is let go of. */
   private dismissCaptionHint(immediately = false): void {
     const hint = this._captionHint;
-    if (!hint || hint.style.display === "none") return;
+    if (!hint) return;
+    if (hint.style.display === "none") {
+      this._captionHintCrowdedOut = false;
+      return;
+    }
     if (this._captionHintTimer !== null) {
       window.clearTimeout(this._captionHintTimer);
       this._captionHintTimer = null;
@@ -12686,6 +12691,7 @@ export class MoviElement extends HTMLElement {
       hint.classList.remove("movi-caption-hint-leaving");
       hint.style.display = "none";
     };
+    if (!this._subtitleDrag) this._captionHintCrowdedOut = false;
     if (immediately) {
       hide();
       return;
@@ -12728,24 +12734,41 @@ export class MoviElement extends HTMLElement {
   /**
    * The caption has been carried to where the hint is standing.
    *
-   * Which is the one case a fixed hint cannot answer by staying put. It does
-   * not dodge — a note that jumps out of the way is the thing that distracts
-   * — it goes, a little early. By this point it has been read or it has not.
+   * The one case a fixed note cannot answer by staying put. It does not dodge
+   * — a note that jumps out of the way is the thing that distracts — it steps
+   * out while the caption is on top of it and comes back the moment the
+   * caption moves off, so carrying one to the top of the picture does not
+   * cost the sentence for the rest of the drag.
    */
-  private dismissCaptionHintIfCrowded(captionBox: DOMRect): void {
+  private syncCaptionHintClearance(captionBox: DOMRect): void {
     const hint = this._captionHint;
-    if (!hint || hint.style.display === "none") return;
+    if (!hint) return;
+    if (hint.style.display === "none" && !this._captionHintCrowdedOut) return;
     const box = hint.getBoundingClientRect();
     const gap = 10;
-    if (
+    const crowded =
       captionBox.right > box.left - gap &&
       captionBox.left < box.right + gap &&
       captionBox.bottom > box.top - gap &&
-      captionBox.top < box.bottom + gap
-    ) {
+      captionBox.top < box.bottom + gap;
+    if (crowded === this._captionHintCrowdedOut) return;
+    this._captionHintCrowdedOut = crowded;
+    if (crowded) {
       this.dismissCaptionHint();
+      return;
     }
+    // Back where it was standing — not re-placed, because where it stands was
+    // settled when the drag began and the caption has not stopped moving.
+    if (this._captionHintTimer !== null) {
+      window.clearTimeout(this._captionHintTimer);
+      this._captionHintTimer = null;
+    }
+    hint.classList.remove("movi-caption-hint-leaving");
+    hint.style.display = "block";
   }
+
+  /** Standing aside for a caption that is on top of it, as opposed to done. */
+  private _captionHintCrowdedOut: boolean = false;
 
   private _subtitleDrag: {
     pointerId: number;
