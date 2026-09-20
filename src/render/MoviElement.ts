@@ -12492,7 +12492,14 @@ export class MoviElement extends HTMLElement {
         } catch {
           /* an exotic pointer, or one already gone: the drag still tracks */
         }
-        this.showCaptionHint(e.pointerType === "touch");
+        this.showCaptionHint(
+          e.pointerType === "touch",
+          (
+            this.subtitleOverlay?.querySelector(
+              ".movi-subtitle-block, .movi-subtitle-image",
+            ) as HTMLElement | null
+          )?.getBoundingClientRect() ?? null,
+        );
         // Only now, not on the pointerdown: a plain click on the caption
         // opens the transcript and has no business stopping the subtitles.
         this.player?.setSubtitleHeld(true);
@@ -12506,7 +12513,7 @@ export class MoviElement extends HTMLElement {
       );
       this.applySubtitlePosition();
       const box = this.keepCaptionInPicture(drag.boxW, drag.boxH);
-      if (box) this.placeCaptionHint(box);
+      if (box) this.dismissCaptionHintIfCrowded(box);
       e.preventDefault();
     };
 
@@ -12649,7 +12656,7 @@ export class MoviElement extends HTMLElement {
    * not a number of showings, is what says the sentence has been read; after
    * it, the hint is a label on a door they know how to open.
    */
-  private showCaptionHint(touch: boolean): void {
+  private showCaptionHint(touch: boolean, captionBox: DOMRect | null): void {
     const hint = this._captionHint;
     if (!hint) return;
     if (this.captionHintLearned()) return;
@@ -12663,6 +12670,7 @@ export class MoviElement extends HTMLElement {
     hint.style.display = "block";
     // Out of the fade it may be in the middle of, on a second drag.
     hint.classList.remove("movi-caption-hint-leaving");
+    this.placeCaptionHint(captionBox);
   }
 
   /** Let it go, a beat after the caption is let go of. */
@@ -12687,21 +12695,56 @@ export class MoviElement extends HTMLElement {
   }
 
   /**
-   * Keep the hint out of the caption's way: it sits at the top of the picture
-   * while the caption is in the lower half, and at the bottom once the caption
-   * has been carried up past the middle.
+   * Put the hint at the end of the picture the caption is not at — and then
+   * leave it there for the whole drag.
+   *
+   * It used to be worked out on every movement, so carrying a caption past
+   * the middle of the frame sent the hint sailing the other way across it,
+   * animated, in the middle of the gesture it was there to explain. Where it
+   * goes is decided once, when it is raised.
    */
-  private placeCaptionHint(captionBox: DOMRect): void {
+  private placeCaptionHint(captionBox: DOMRect | null): void {
     const hint = this._captionHint;
-    if (!hint || hint.style.display === "none") return;
+    if (!hint) return;
     const host = this.getBoundingClientRect();
     const captionIsHigh =
+      !!captionBox &&
       captionBox.top + captionBox.height / 2 < host.top + host.height / 2;
-    // Down at the bottom it clears the bar, whether or not the bar is up at
-    // this moment — the bar comes back on the next movement of the pointer,
-    // and a note that has to dodge it is worse than one that never sat there.
-    const low = host.height - (hint.offsetHeight || 28) - 100;
-    hint.style.top = (captionIsHigh ? Math.max(18, low) : 18) + "px";
+    if (!captionIsHigh) {
+      hint.style.top = "18px";
+      return;
+    }
+    // Below, it has to clear the bar — measured, because the bar is 48px tall
+    // on a phone and twice that on a desktop, and it is down at this moment
+    // anyway on the drag that puts the caption up here.
+    const bar = this.shadowRoot?.querySelector(
+      ".movi-controls-bar",
+    ) as HTMLElement | null;
+    const floor = (bar?.offsetHeight ?? 80) + 12;
+    hint.style.top =
+      Math.max(18, host.height - (hint.offsetHeight || 28) - floor) + "px";
+  }
+
+  /**
+   * The caption has been carried to where the hint is standing.
+   *
+   * Which is the one case a fixed hint cannot answer by staying put. It does
+   * not dodge — a note that jumps out of the way is the thing that distracts
+   * — it goes, a little early. By this point it has been read or it has not.
+   */
+  private dismissCaptionHintIfCrowded(captionBox: DOMRect): void {
+    const hint = this._captionHint;
+    if (!hint || hint.style.display === "none") return;
+    const box = hint.getBoundingClientRect();
+    const gap = 10;
+    if (
+      captionBox.right > box.left - gap &&
+      captionBox.left < box.right + gap &&
+      captionBox.bottom > box.top - gap &&
+      captionBox.top < box.bottom + gap
+    ) {
+      this.dismissCaptionHint();
+    }
   }
 
   private _subtitleDrag: {
@@ -23273,7 +23316,6 @@ export class MoviElement extends HTMLElement {
         box-shadow: 0 4px 16px rgba(0, 0, 0, 0.35);
         pointer-events: none;
         transform: translateX(-50%);
-        transition: top 0.25s ease;
         animation: movi-caption-hint-in 0.2s ease both;
       }
 
@@ -23296,7 +23338,7 @@ export class MoviElement extends HTMLElement {
       }
 
       @media (prefers-reduced-motion: reduce) {
-        .movi-caption-hint { animation: none; transition: none; }
+        .movi-caption-hint { animation: none; }
       }
 
       /* VTT gets its backdrop PER LINE, not one box around the cue. A shared
