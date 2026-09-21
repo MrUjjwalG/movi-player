@@ -120,6 +120,9 @@ const FORWARD_PROPS = [
   "controls",
   "poster",
   "src",
+  // The old element's own source is taken off it (see below), so this has to
+  // come from the player or a page asking what is playing gets "".
+  "currentSrc",
   // Sizing through the property is how a page resizes a <video> from script —
   // `myVideo.width = 600`. Without these it set a number on the hidden element
   // and nothing moved.
@@ -234,10 +237,27 @@ function upgradeOne(
   video.removeAttribute("controls");
   video.style.display = "none";
 
+  // Let go of the film.
+  //
+  // The old element is kept for the page's sake, not to play anything — and a
+  // hidden <video> with a source still loads it. Two consequences, both real:
+  // the browser downloads and decodes the whole film a second time beside the
+  // player that is actually showing it, and the element learns the film's
+  // dimensions, which is how a page that fits its layout to videoWidth ends up
+  // re-fitting the box it had already sized from the tag. Detached, it reports
+  // what an element with nothing in it reports, and everything the page asks
+  // it comes from the player instead (see FORWARD_PROPS).
+  try {
+    video.removeAttribute("src");
+    video.load();
+  } catch {
+    /* an element that was never going to load anything anyway */
+  }
+
   (video as unknown as Record<string, unknown>)[TAKEN] = true;
   (video as unknown as Record<string, unknown>).moviPlayer = player;
 
-  if (options.proxy !== false) forwardTo(video, player);
+  if (options.proxy !== false) forwardTo(video, player, !!video.closest?.(HOST_SKINS));
 
   fitToHostSkin(video, player);
   hideHostChrome();
@@ -337,9 +357,32 @@ function hideHostChrome(): void {
  * so `video.currentTime = 30` reaches the player, and every listener the page
  * added later is added to the player instead.
  */
-function forwardTo(video: HTMLVideoElement, player: HTMLElement): void {
+/**
+ * The film's own dimensions, which a skin's page measures its layout with.
+ *
+ * Kept off the forwarded surface inside a skin. The page sized its box before
+ * anything had loaded — from the tag, from the window, from its own fit — and
+ * that box is the one it laid out around. Handing it the film's numbers makes
+ * it re-fit to the FILM on the next thing that prompts a re-fit, which is a
+ * resize, which is also what leaving fullscreen is: a 2.39:1 film in a 16:9
+ * box takes two thirds of the height the page had allowed, and the player
+ * appears to shrink for no reason the viewer can see.
+ *
+ * The player still answers for itself — `document.querySelector("movi-player")
+ * .videoWidth` is the film's width — and outside a skin the old element
+ * answers too, because there the page's box IS the video's box and there is
+ * nothing to protect.
+ */
+const SKIN_UNSAFE_PROPS = new Set(["videoWidth", "videoHeight"]);
+
+function forwardTo(
+  video: HTMLVideoElement,
+  player: HTMLElement,
+  insideSkin: boolean,
+): void {
   const target = player as unknown as Record<string, unknown>;
   for (const name of FORWARD_PROPS) {
+    if (insideSkin && SKIN_UNSAFE_PROPS.has(name)) continue;
     try {
       Object.defineProperty(video, name, {
         configurable: true,
