@@ -751,6 +751,9 @@ export class MoviElement extends HTMLElement {
   // load() (unlike the movi-audio-strip class) so a strip↔non-strip switch is
   // detected even across a source change. null = never told the page yet.
   private _lastStripDispatched: boolean | null = null;
+  // Whether the player last had sound alone. Survives load(), which clears the
+  // classes — see the fullscreen exit in updateAudioStripLayout.
+  private _lastAudioModeSeen: boolean | null = null;
   private controlsTimeout: number | null = null;
   private isOverControls: boolean = false;
   /** Document-level "you tapped somewhere else" — see where it is set up. */
@@ -28765,17 +28768,24 @@ export class MoviElement extends HTMLElement {
       audioMode && !bitmap && this._posterCoverLoading;
     const stripMode =
       audioMode && !bitmap && !coverArtPending && !posterCoverPending;
-    const wasStrip = this.classList.contains("movi-audio-strip");
     this.classList.toggle("movi-audio-mode", audioMode);
     this.classList.toggle("movi-audio-strip", stripMode);
     // Fullscreen is for a picture, and this is the moment it turns out there
     // isn't one — a source that is sound alone, or audioOnly switched on while
-    // a film was filling the screen. What is left fullscreen is a 56px bar in
-    // the middle of a black screen, too far away to read and with nothing
-    // around it, so come back out the way the viewer would have. Only on the
-    // way IN, and only for the strip: cover art is a picture, and a sleeve at
-    // full screen is a presentation someone may have asked for.
-    if (stripMode && !wasStrip) this.exitFullscreen();
+    // a film was filling the screen. What is left is a bar or a sleeve in the
+    // middle of a black screen, at arm's length, with no way back but the
+    // keyboard; so come back out the way the viewer would have.
+    //
+    // Cover art counts. It is a picture, but it is not the one fullscreen was
+    // entered for, and a switch to sound is a switch away from watching.
+    //
+    // Against what the player last WAS, not against the class: load() clears
+    // both classes on every source change, so the class would have read
+    // "wasn't audio" for a playlist moving from one track to the next and
+    // dropped a fullscreen sleeve nobody asked it to drop.
+    const wasAudioMode = this._lastAudioModeSeen;
+    this._lastAudioModeSeen = audioMode;
+    if (audioMode && wasAudioMode === false) this.exitFullscreen();
     // Keep a portaled menu's host classes in sync so a video→audio switch made
     // while the menu is open updates it live (the cloned :host(.movi-audio-mode)
     // rules hide the video-only items).
