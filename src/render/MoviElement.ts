@@ -26691,8 +26691,6 @@ export class MoviElement extends HTMLElement {
         font-size: 12px !important;
         white-space: nowrap;
       }
-      /* The seek thumbnail tooltip is tied to a non-existent video frame
-         in strip mode — suppress so the hover preview doesn't pop up. */
       /* Audio: there is no frame to preview, so the card is just its readout.
          The FRAME goes (it would shimmer forever waiting for a picture that is
          never fetched — see applyAudioOnly) and the pill stays, because where
@@ -26702,8 +26700,27 @@ export class MoviElement extends HTMLElement {
       :host(.movi-audio-mode) .movi-thumbnail-placeholder {
         display: none !important;
       }
+      /* The strip gets that readout too. It used to take the whole card away
+         on the grounds that there was no frame behind it — but the frame is
+         what the rule above already removes, and what is left is the one thing
+         a scrubber this short needs most: where the pointer is actually
+         pointing. The card clears the top of the row (the host does not clip
+         it, the same way its menus open past the bar) and sits above the title
+         band when there is one. */
       :host(.movi-audio-strip) .movi-seek-thumbnail {
-        display: none !important;
+        bottom: 22px;
+      }
+      :host(.movi-audio-strip.movi-has-title) .movi-seek-thumbnail {
+        bottom: 26px;
+      }
+      /* The card rides in the title band, because there is nowhere else in a
+         56px row for it to go and floating it above the host would put it over
+         whatever the page keeps there. So the title steps aside while it is
+         up — the same arrangement the OSD pill already has with the title, and
+         for the same reason: the two want the same line, and only one of them
+         is being pointed at. */
+      :host(.movi-audio-strip):has(.movi-seek-thumbnail.visible) .movi-title-bar {
+        opacity: 0 !important;
       }
     `;
     shadowRoot.appendChild(style);
