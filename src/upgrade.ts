@@ -239,6 +239,7 @@ function upgradeOne(
 
   if (options.proxy !== false) forwardTo(video, player);
 
+  fitToHostSkin(video, player);
   hideHostChrome();
 
   return { video, player };
@@ -262,6 +263,34 @@ function upgradeOne(
  * as likely to be after this as before it. The rules match nothing on a page
  * that has none.
  */
+/** The skins that own the box their video sits in. */
+const HOST_SKINS = ".video-js, .vjs-container, .plyr, .jwplayer, .flowplayer, .shaka-video-container, .mejs__container";
+
+/**
+ * Inside a skin, the page owns the box — say so, in the only way that is
+ * heard.
+ *
+ * A player with no size given to it works out its own from the film, which is
+ * right on a page that put it there and left it alone, and wrong here: the
+ * skin already has a box, sized to the page, and the film is very often a
+ * different shape from it. A 2.39:1 film in a 16:9 skin sizes itself to 67% of
+ * the height the page allowed — a player that is suddenly, visibly short.
+ *
+ * It does not show while the skin's own height holds, because a CSS height
+ * beats an aspect ratio. It shows the moment that height wobbles, which is
+ * what a fullscreen transition is: the skin re-lays out around it and the
+ * player comes back the shape of the FILM rather than the shape of the box.
+ *
+ * So the box is taken outright, as the skin's own tech rules would have done
+ * for the <video> that was there — and an inline height is also what tells the
+ * player to stop working one out (see applyIntrinsicAspect in the element).
+ */
+function fitToHostSkin(video: HTMLVideoElement, player: HTMLElement): void {
+  if (!video.closest?.(HOST_SKINS)) return;
+  if (!player.style.width) player.style.width = "100%";
+  if (!player.style.height) player.style.height = "100%";
+}
+
 const HOST_CHROME_STYLE_ID = "movi-upgrade-host-chrome";
 
 function hideHostChrome(): void {
