@@ -291,8 +291,12 @@ function hideHostChrome(): void {
     // decides that for itself now, and its own bar is what the pointer is
     // being moved towards.
     `${vjs} { cursor: auto !important; }`,
-    // …and the player takes the space the tech had.
-    `${vjs} > movi-player { width: 100% !important; height: 100% !important; }`,
+    // Plyr sizes its video with a `video` selector, which no longer matches
+    // anything, so the player is given the box. NOT for video.js: it sizes
+    // whatever carries .vjs-tech, and our element carries it — forcing a size
+    // on top of that is a second opinion about the layout, in !important, with
+    // nothing to gain.
+    `${plyr} > movi-player { width: 100% !important; height: 100% !important; }`,
   ].join("\n");
   (document.head || document.documentElement).appendChild(style);
 }
