@@ -300,17 +300,23 @@ function videoWorthTakingOver(video) {
  * native element the way it did before any of this.
  */
 function askForMediaCors() {
+  // Every candidate, not only the ones that LOOK cross-origin. A same-origin
+  // media URL that redirects to a CDN is the ordinary shape of this — the page
+  // asks its own host, the host sends the request somewhere else, and the
+  // somewhere-else is what has to carry the header. The rule for a same-origin
+  // URL costs nothing: the header it adds is one the browser would not have
+  // asked about.
   const urls = Array.from(document.querySelectorAll("video"))
     .filter(videoWorthTakingOver)
     .map((video) => video.currentSrc || video.getAttribute("src") || "")
-    .filter((url) => {
+    .map((url) => {
       try {
-        return new URL(url, location.href).origin !== location.origin;
+        return new URL(url, location.href).href;
       } catch {
-        return false;
+        return "";
       }
     })
-    .map((url) => new URL(url, location.href).href);
+    .filter(Boolean);
   if (urls.length === 0) return Promise.resolve();
   return new Promise((resolve) => {
     try {

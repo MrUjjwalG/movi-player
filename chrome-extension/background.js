@@ -112,8 +112,19 @@ async function allowMediaCors(urls, tabId) {
   const granted = await chrome.permissions.contains({ origins: ["<all_urls>"] });
   if (!granted) return { ok: false, needsPermission: true };
 
-  const addRules = [];
+  // Where each one actually ENDS. A media URL that redirects — the page's own
+  // host handing off to a CDN — is answered by the address it lands on, and
+  // that is the response the header has to be added to. The rule matches a
+  // request by its own URL, so the redirect needs one of its own.
+  const wanted = new Set();
   for (const url of urls.slice(0, 8)) {
+    wanted.add(url);
+    const landed = await finalUrl(url);
+    if (landed) wanted.add(landed);
+  }
+
+  const addRules = [];
+  for (const url of wanted) {
     addRules.push({
       id: ++nextCorsRuleId,
       priority: 1,
@@ -138,6 +149,32 @@ async function allowMediaCors(urls, tabId) {
   });
   corsRuleIds.set(tabId, addRules.map((rule) => rule.id));
   return { ok: true, rules: addRules.length };
+}
+
+/**
+ * Follow a media URL to wherever it ends, without reading a byte of it.
+ *
+ * From here rather than from the page: this side has the host permission, so
+ * the redirect can be followed without the CORS the page is missing in the
+ * first place. HEAD where the server answers one; a single byte where it does
+ * not, which is every server that answers HEAD with 405.
+ */
+async function finalUrl(url) {
+  for (const init of [
+    { method: "HEAD" },
+    { method: "GET", headers: { Range: "bytes=0-0" } },
+  ]) {
+    try {
+      const response = await fetch(url, { ...init, redirect: "follow" });
+      if (init.method === "GET") response.body?.cancel?.();
+      if (response.url && response.url !== url) return response.url;
+      if (response.ok || response.status === 206) return "";
+    } catch {
+      /* try the next shape, then give up — the rule for the URL we were
+         given still stands */
+    }
+  }
+  return "";
 }
 
 // A rule belongs to the page that asked for it.
