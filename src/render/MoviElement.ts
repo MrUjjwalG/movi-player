@@ -16095,6 +16095,13 @@ export class MoviElement extends HTMLElement {
     // hidden (nobody can see them), so hiding it here left a frozen 0:00 and an
     // empty progress bar sitting in plain sight for as long as PiP was open.
     if (this._pipWindow) return;
+    // Nor in strip mode, for the same reason read the other way round: there
+    // is no picture here for the bar to be in the way of. Hiding it took the
+    // controls away and left a clock and a line, and everything the hidden
+    // class drags along with it — the cursor going, the resume dialog and the
+    // smoothness notice standing down — applied to a player that was still
+    // sitting there in full view.
+    if (this.classList.contains("movi-audio-strip")) return;
     const container = this.controlsContainer;
     if (container) {
       container.classList.remove("movi-controls-visible");
@@ -16781,9 +16788,15 @@ export class MoviElement extends HTMLElement {
       // mouseenter / mousemove handlers surface the bar on the first
       // real interaction, and stateChange → "paused" / "ended" still
       // re-shows it after playback has started.
+      // …except in strip mode, where there is no picture to keep clear and
+      // the row IS the player: it comes up with the first paint and stays.
+      // Without this the hidden class landed here after the strip layout had
+      // already taken it off, and while the row still showed (its own rules
+      // see to that) everything keyed off "the bar is away" believed it.
+      const strip = this.classList.contains("movi-audio-strip");
       container.style.display = "block";
-      container.classList.remove("movi-controls-visible");
-      container.classList.add("movi-controls-hidden");
+      container.classList.toggle("movi-controls-visible", strip);
+      container.classList.toggle("movi-controls-hidden", !strip);
     } else {
       container.style.display = "none";
       if (centerPlayPause) centerPlayPause.classList.remove("movi-center-visible");
@@ -18118,8 +18131,10 @@ export class MoviElement extends HTMLElement {
          wasn't enough. Wildcard inside the host catches the overlay,
          controls-container, title bar, and any other layered child
          without having to enumerate them. */
-      :host:has(.movi-controls-container.movi-controls-hidden),
-      :host:has(.movi-controls-container.movi-controls-hidden) * {
+      /* …except in strip mode, where the bar never goes away: the pointer
+         would vanish over a row that is still fully live. */
+      :host(:not(.movi-audio-strip)):has(.movi-controls-container.movi-controls-hidden),
+      :host(:not(.movi-audio-strip)):has(.movi-controls-container.movi-controls-hidden) * {
         cursor: none !important;
       }
 
@@ -26219,90 +26234,21 @@ export class MoviElement extends HTMLElement {
         flex: 0 0 auto !important;
       }
 
-      /* Idle strip: what is left when the pointer goes away.
-         The bar's groups fade out on the auto-hide but keep their space, so a
-         strip at rest showed a scrubber stranded in the middle of the row with
-         an empty gap either side of it — the play cluster and the buttons,
-         invisible but still laid out. Give the row to the two things worth
-         reading when nothing is being pointed at: the clock, and a progress
-         bar across the full width. Everything else stands down until the
-         pointer comes back. */
-      :host(.movi-audio-strip) .movi-controls-container.movi-controls-hidden .movi-controls-left {
-        opacity: 1 !important;
-        transform: none !important;
-      }
-      /* The clock's own capsule is drawn for a row that has buttons beside it;
-         alone in an idle bar it reads as a pill around the elapsed time while
-         the total at the other end sits bare. Drop it and let the two match. */
-      :host(.movi-audio-strip) .movi-controls-container.movi-controls-hidden .movi-time {
-        background: none !important;
-        padding-left: 0 !important;
-        padding-right: 0 !important;
-      }
+      /* The strip does not thin out at rest.
+         A picture's bar can go away because the picture is still there to
+         look at. The strip IS the player, so the same move takes the controls
+         off the screen and leaves a clock and a line where the player was:
+         play, volume and the gear all stood down, and the first press after a
+         pause went on bringing them back rather than on doing anything. The
+         row is now what it is at every moment — hideControls() stands down in
+         strip mode (see there), and these keep the row whole even if the
+         hidden class arrives by some other road. */
       :host(.movi-audio-strip) .movi-controls-container.movi-controls-hidden .movi-controls-left,
-      :host(.movi-audio-strip) .movi-controls-container.movi-controls-hidden .movi-controls-right {
-        gap: 0 !important;
-      }
-      /* Collapsed by MAX-WIDTH, which is a length either side of the change
-         and therefore animates — display:none cannot transition (the row
-         snapped from a scrubber in the middle to one across the whole bar),
-         and neither can a width of auto, which is what these are the rest of
-         the time. The scrubber is flex:1, so it takes the width back as the
-         buttons give it up. */
-      :host(.movi-audio-strip) .movi-controls-left > *:not(.movi-time),
-      :host(.movi-audio-strip) .movi-controls-right {
-        max-width: 400px;
-        overflow: hidden;
-        transition:
-          max-width 260ms var(--movi-motion-out),
-          opacity 160ms ease;
-      }
-      :host(.movi-audio-strip) .movi-controls-container.movi-controls-hidden .movi-controls-left > *:not(.movi-time),
-      :host(.movi-audio-strip) .movi-controls-container.movi-controls-hidden .movi-controls-right {
-        max-width: 0 !important;
-        min-width: 0 !important;
-        padding-left: 0 !important;
-        padding-right: 0 !important;
-        margin-left: 0 !important;
-        margin-right: 0 !important;
-        opacity: 0 !important;
-        pointer-events: none !important;
-      }
+      :host(.movi-audio-strip) .movi-controls-container.movi-controls-hidden .movi-controls-right,
       :host(.movi-audio-strip) .movi-controls-container.movi-controls-hidden .movi-progress-container {
         opacity: 1 !important;
         transform: none !important;
-      }
-
-      /* Idle strip, the clock: elapsed at the head of the scrubber and total at
-         its tail, the way a bar with nothing else on it reads. The separator
-         goes (there is nothing between them to separate any more) and the
-         scrubber leaves room at its right for the total. */
-      :host(.movi-audio-strip) .movi-controls-container.movi-controls-hidden .movi-time-separator {
-        max-width: 0 !important;
-        opacity: 0 !important;
-        overflow: hidden !important;
-      }
-      :host(.movi-audio-strip) .movi-controls-container.movi-controls-hidden .movi-duration {
-        position: absolute;
-        /* Flush with the row's end, which is where the elapsed sits at the
-           other one: both are then the container's 12px in from the player's
-           edge. At 2px the total hung 2px further out than the elapsed hung
-           in — not a gap anyone can name, and exactly the kind of thing that
-           reads as crooked. */
-        right: 0;
-        top: 50%;
-        transform: translateY(-50%);
-      }
-      :host(.movi-audio-strip) .movi-controls-container.movi-controls-hidden .movi-progress-container {
-        /* Room at the scrubber's tail for the total parked over it. A fixed
-           58px was a guess at one duration's width: "01:31" left 33px of slack
-           after it, so the space before the total came out at twice the space
-           after the elapsed and the row sat lopsided — while "1:23:45" would
-           have had none to spare. The clock publishes the width it actually
-           occupies (see updateTimeDisplay), and the +4px mirrors the 4px that
-           sits after the elapsed inside its own cluster — the row's flex gap
-           supplies the rest, on both sides, whatever it currently is. */
-        padding-right: calc(var(--movi-clock-total-w, 36px) + 4px) !important;
+        pointer-events: auto !important;
       }
       /* Linear playback (no Range support, over-cap file): the scrubber and
          skip buttons stay — seeking is allowed but clamped in JS to the
@@ -28807,6 +28753,14 @@ export class MoviElement extends HTMLElement {
       this.shadowRoot
         ?.querySelector(".movi-gear-btn")
         ?.classList.add("movi-gear-visible");
+      // The first paint starts every bar hidden (chrome arrives on the first
+      // interaction). hideControls() stands down in strip mode, so nothing
+      // would have taken that state off again — the row would have sat in the
+      // hidden state for good, which is now a state that shows the whole row
+      // but still tells the rest of the player the bar is away.
+      if (this.controlsContainer?.classList.contains("movi-controls-hidden")) {
+        this.showControls();
+      }
     }
     // Notify the embedding page when the strip state changes vs what we LAST
     // TOLD it — not vs the current class. load() clears movi-audio-strip on
