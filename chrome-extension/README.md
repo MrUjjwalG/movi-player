@@ -25,7 +25,10 @@ bottom of `player.js` for the pattern.
   header itself (one `declarativeNetRequest` session rule, for that one URL, in
   that one tab, gone when the tab is). Without site access nothing breaks: the
   player falls back to the native element, which is as good as the browser's
-  own decoders and no better
+  own decoders and no better. That fallback is the whole point of the setting
+  going missing, so it is said out loud rather than guessed at: the settings
+  row carries a **Grant access** button whenever the switch is on without it,
+  and the page's console names the reason once
 - **ChromeOS Files app** — the extension registers as a file handler, so
   double-clicking a video in Files opens it here (multi-select becomes a
   playlist). ChromeOS + Chrome 120 or newer; everywhere else the code is inert

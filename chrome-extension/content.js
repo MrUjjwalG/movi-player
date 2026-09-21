@@ -331,8 +331,17 @@ function askForMediaCors() {
   if (urls.length === 0) return Promise.resolve();
   return new Promise((resolve) => {
     try {
-      chrome.runtime.sendMessage({ action: "allowMediaCors", urls }, () => {
+      chrome.runtime.sendMessage({ action: "allowMediaCors", urls }, (reply) => {
         void chrome.runtime.lastError;
+        // Say the one thing the console cannot work out for itself. Without
+        // site access no header rule is written, every media read is refused,
+        // and the page fills with CORS failures that look like the player's
+        // fault. One line names the cause and where the switch is.
+        if (reply && reply.needsPermission) {
+          console.info(
+            "[movi] Take over page videos: no site access, so this page's video files are read by the browser instead. Turn on site access in the movi-player extension to change that.",
+          );
+        }
         resolve();
       });
     } catch {

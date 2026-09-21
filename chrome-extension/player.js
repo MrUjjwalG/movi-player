@@ -1562,10 +1562,44 @@ setInterval(() => {
   // there is no file to open and it leaves them alone.
   const takeoverToggle = document.getElementById("takeover-toggle");
   const takeoverSub = document.getElementById("takeover-sub");
-  if (takeoverToggle) {
+  const takeoverGrant = document.getElementById("takeover-grant");
+  const TAKEOVER_SAID = takeoverSub ? takeoverSub.textContent : "";
+  const TAKEOVER_ORIGINS = { origins: ["<all_urls>"] };
+
+  /**
+   * Say when the setting is on but cannot do the half that matters.
+   *
+   * Without site access the extension cannot add the CORS header a site never
+   * sent, so a file from another origin — which includes every file a page
+   * serves from its own address and redirects to a CDN — falls back to the
+   * browser's own decoders. That is the case this exists to beat, and it
+   * failed quietly: the player looked like it was working and the console
+   * filled with blocked fetches. Now the row says so, and offers the fix.
+   */
+  function refreshTakeoverRow() {
+    if (!takeoverToggle) return;
     chrome.storage.local.get("takeOverPageVideos", (data) => {
-      takeoverToggle.checked = !!data.takeOverPageVideos;
+      const on = !!data.takeOverPageVideos;
+      takeoverToggle.checked = on;
+      chrome.permissions.contains(TAKEOVER_ORIGINS, (granted) => {
+        const needs = on && !granted;
+        if (takeoverGrant) takeoverGrant.hidden = !needs;
+        if (!takeoverSub) return;
+        takeoverSub.textContent = needs
+          ? "Needs site access — without it, other-origin files fall back to the browser"
+          : TAKEOVER_SAID;
+        takeoverSub.style.color = needs ? "#f5b83d" : "";
+      });
     });
+  }
+  refreshTakeoverRow();
+  chrome.permissions.onAdded.addListener(refreshTakeoverRow);
+  chrome.permissions.onRemoved.addListener(refreshTakeoverRow);
+  takeoverGrant?.addEventListener("click", () => {
+    chrome.permissions.request(TAKEOVER_ORIGINS, () => refreshTakeoverRow());
+  });
+
+  if (takeoverToggle) {
     takeoverToggle.addEventListener("change", () => {
       const on = takeoverToggle.checked;
       chrome.storage.local.set({ takeOverPageVideos: on });
@@ -1586,12 +1620,13 @@ setInterval(() => {
       // never sent — without it a file from another origin still plays, but
       // through the browser's own decoders, which is the thing this is for.
       // Asked for, not required: the setting stays on either way.
-      chrome.permissions.request({ origins: ["<all_urls>"] }, (granted) => {
+      chrome.permissions.request(TAKEOVER_ORIGINS, (granted) => {
         say(
           granted
             ? "On — open a page with a video file in it"
             : "On — without site access, other-origin files fall back to the browser",
         );
+        setTimeout(refreshTakeoverRow, 2700);
       });
     });
   }
