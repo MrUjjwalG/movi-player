@@ -88,6 +88,25 @@ VS Code's webview sandbox restricts a few features that work in the [Chrome exte
 
 For full feature parity (browser fullscreen + Document PiP), use the Chrome extension or the [MoviPlayer web app](https://moviplayer.com).
 
+## While debugging this extension
+
+The Extension Development Host shows one error that is not a fault here:
+
+> [mrujjwalg.movi-player-vscode]: The 'css' contribution point is proposed API.
+
+The extension ships CSS and HTML custom data — the `--movi-*` variables and
+the `<movi-player>` attributes, with their descriptions, for completions and
+hover in any workspace — through the documented `contributes.css.customData`
+key. In January 2026 VS Code took `contributes.css` for a proposal of its own
+("contributes CSS files to be loaded in the workbench"), whose handler errors
+for every extension that has that key without the proposal enabled. The custom
+data itself is unaffected: the built-in CSS language features read
+`packageJSON.contributes.css.customData` directly, so the completions work.
+
+The notification only appears for an extension under development — installed
+copies log it and nothing more — so it is left alone rather than paid for with
+the completions.
+
 ## Privacy
 
 Everything runs locally inside VS Code's sandboxed webview. No uploads, no telemetry, no servers. Your video files never leave your machine.
