@@ -25878,7 +25878,11 @@ export class MoviElement extends HTMLElement {
         position: absolute;
         top: 9px !important;
         bottom: auto !important;
-        left: 14px;
+        /* The control row's own gutter, so the two rows start on one line.
+           At 14 the band sat two pixels inside the play button below it —
+           not a gap anyone reads as a gap, just a row that looks askew. The
+           right stays at 14, which is where the corner gear's edge is. */
+        left: 12px;
         right: 14px;
         /* !important: a desktop host may inject a ":host(:not(:fullscreen))
            .movi-title-bar { padding-top: 46px }" rule (macOS traffic-light
@@ -25893,6 +25897,22 @@ export class MoviElement extends HTMLElement {
         pointer-events: none;
         z-index: 6;
         transition: opacity 0.2s ease;
+      }
+      /* The back arrow at the bar's own scale. It is built for a phone
+         player's top bar over a picture — a 40px box around a 26px arrow —
+         and in a 78px strip that is bigger than everything under it: its
+         stroke landed five pixels right of the play glyph in the row below,
+         where the eye reads the two as one column. Same box, same icon, same
+         left edge as that row's first button. */
+      :host(.movi-audio-strip) .movi-title-back {
+        width: 32px;
+        height: 32px;
+        padding: 7px;
+        margin: calc((var(--movi-title-line) - 32px) / 2) 0;
+      }
+      :host(.movi-audio-strip) .movi-title-back svg {
+        width: 18px;
+        height: 18px;
       }
       :host(.movi-audio-strip) .movi-title-text {
         font-size: 13px;
