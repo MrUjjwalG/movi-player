@@ -306,17 +306,28 @@ function askForMediaCors() {
   // somewhere-else is what has to carry the header. The rule for a same-origin
   // URL costs nothing: the header it adds is one the browser would not have
   // asked about.
-  const urls = Array.from(document.querySelectorAll("video"))
-    .filter(videoWorthTakingOver)
-    .map((video) => video.currentSrc || video.getAttribute("src") || "")
-    .map((url) => {
+  const urls = [];
+  for (const video of Array.from(document.querySelectorAll("video"))) {
+    if (!videoWorthTakingOver(video)) continue;
+    // Every source it declares, not just the one it settled on. A <video> with
+    // an mp4 and an ogg beside it is the oldest shape on the web, and the
+    // player tries what the page offered — so each of them needs the header,
+    // or the second one is blocked after the first is not.
+    const declared = [
+      video.currentSrc,
+      video.getAttribute("src"),
+      ...Array.from(video.querySelectorAll("source")).map((s) => s.getAttribute("src")),
+    ];
+    for (const raw of declared) {
+      if (!raw) continue;
       try {
-        return new URL(url, location.href).href;
+        const href = new URL(raw, location.href).href;
+        if (!urls.includes(href)) urls.push(href);
       } catch {
-        return "";
+        /* a source the page wrote that is not a URL */
       }
-    })
-    .filter(Boolean);
+    }
+  }
   if (urls.length === 0) return Promise.resolve();
   return new Promise((resolve) => {
     try {

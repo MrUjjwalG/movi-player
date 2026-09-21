@@ -117,7 +117,7 @@ async function allowMediaCors(urls, tabId) {
   // that is the response the header has to be added to. The rule matches a
   // request by its own URL, so the redirect needs one of its own.
   const wanted = new Set();
-  for (const url of urls.slice(0, 8)) {
+  for (const url of urls.slice(0, 12)) {
     wanted.add(url);
     const landed = await finalUrl(url);
     if (landed) wanted.add(landed);
