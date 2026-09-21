@@ -65,7 +65,7 @@ customElements.whenDefined("movi-player").then(() => {
   playerEl.addEventListener("loadeddata", () => {
     hideLoading();
     const t = playerEl.title;
-    if (t) document.title = t + " — Movi Player";
+    if (t) document.title = t + " — MoviPlayer";
   });
   // Title typically isn't known at loadeddata — MoviElement auto-loads
   // it from FFmpeg metadata / Content-Disposition / URL filename after
@@ -74,7 +74,7 @@ customElements.whenDefined("movi-player").then(() => {
   // title resolves (or when an integrator sets the attribute later).
   playerEl.addEventListener("titlechange", (e) => {
     const t = e?.detail?.title || playerEl.title;
-    if (t) document.title = t + " — Movi Player";
+    if (t) document.title = t + " — MoviPlayer";
   });
   // Strip-mode layout: tag both the outer shell (centres the strip in
   // the viewport, swaps the black panel for a neutral surface) and the
@@ -399,7 +399,7 @@ function loadFile(file) {
   // Next button pointing into a playlist that is no longer on screen.
   if (!playlist.length) { try { playerEl.playlist = []; } catch {} }
   overlay.classList.add("hidden");
-  document.title = file.name + " — Movi Player";
+  document.title = file.name + " — MoviPlayer";
   if (playerEl.setFile) playerEl.setFile(file);
   else playerEl.src = file;
   // Opening a single file always autoplays — the playlist toggle only governs
@@ -664,7 +664,7 @@ function playPlaylistItem(i, { forcePlay = false } = {}) {
   currentFile = file;
   hasMedia = true;
   overlay.classList.add("hidden");
-  document.title = file.name + " — Movi Player";
+  document.title = file.name + " — MoviPlayer";
   // Drop poster so previous item's poster doesn't bleed in
   playerEl.removeAttribute("poster");
   playerEl.removeAttribute("postertime");
@@ -1214,7 +1214,7 @@ function showPicker() {
   if (window.location.search) {
     history.replaceState(null, "", window.location.pathname);
   }
-  document.title = "Movi Player";
+  document.title = "MoviPlayer";
 }
 
 function hidePicker() {
@@ -1250,10 +1250,10 @@ function showFileAccessError(fileUrl) {
     })();
     const how = isChromium
       ? `open <b style="color:#A78BFA">chrome://extensions</b>,
-        find <b style="color:#A78BFA">Movi Player</b>, click <b style="color:#A78BFA">Details</b>,
+        find <b style="color:#A78BFA">MoviPlayer</b>, click <b style="color:#A78BFA">Details</b>,
         and enable <b style="color:#A78BFA">"Allow access to file URLs"</b>`
       : `open <b style="color:#A78BFA">about:addons</b>,
-        select <b style="color:#A78BFA">Movi Player</b>, open the
+        select <b style="color:#A78BFA">MoviPlayer</b>, open the
         <b style="color:#A78BFA">Permissions</b> tab, and allow
         <b style="color:#A78BFA">"Access your data for sites in the file:// domain"</b>`;
     dropText.innerHTML = `
@@ -1284,7 +1284,7 @@ async function loadFileUrl(fileUrl) {
 if (url) {
   if (url.startsWith("file://")) {
     const name = filenameFromPath(url).replace(/\.[^.]+$/, "");
-    document.title = (name || "Video") + " — Movi Player";
+    document.title = (name || "Video") + " — MoviPlayer";
     hasMedia = true;
     loadFileUrl(url);
   } else {
@@ -1296,7 +1296,7 @@ if (url) {
         if (segments.length > 0) name = decodeURIComponent(segments[segments.length - 1]).replace(/[-_]/g, " ");
       } catch {}
     }
-    document.title = (name || "Video") + " — Movi Player";
+    document.title = (name || "Video") + " — MoviPlayer";
     hasMedia = true;
     customElements.whenDefined("movi-player").then(() => { playerEl.src = url; });
   }

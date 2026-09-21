@@ -16,7 +16,7 @@ customElements.whenDefined("movi-player").then(() => {
   player.addEventListener("loadeddata", () => {
     hideLoading();
     const title = player.title;
-    if (title) document.title = title + " — Movi Player";
+    if (title) document.title = title + " — MoviPlayer";
   });
 });
 
@@ -29,7 +29,7 @@ async function loadFromUrl(url, name) {
     const file = new File([blob], name || "video", {
       type: blob.type || "video/mp4",
     });
-    if (name) document.title = name + " — Movi Player";
+    if (name) document.title = name + " — MoviPlayer";
     customElements.whenDefined("movi-player").then(() => {
       document.getElementById("player").src = file;
     });
@@ -41,7 +41,7 @@ async function loadFromUrl(url, name) {
 
 function loadRemoteUrl(url) {
   const name = decodeURIComponent(url.split("/").pop().split("?")[0]).replace(/\.[^.]+$/, "");
-  if (name) document.title = name + " — Movi Player";
+  if (name) document.title = name + " — MoviPlayer";
   customElements.whenDefined("movi-player").then(() => {
     document.getElementById("player").src = url;
   });

@@ -1,12 +1,12 @@
-# Movi Player Firefox Add-on
+# MoviPlayer Firefox Add-on
 
-Play any video URL with Movi Player directly in Firefox — the same add-on as
+Play any video URL with MoviPlayer directly in Firefox — the same add-on as
 [`chrome-extension/`](../chrome-extension/), repackaged for Gecko.
 
 ## Features
 
 - **Play button overlay** on video links detected on any page
-- **Right-click context menu** → "Open with Movi Player" on any link or `<video>`
+- **Right-click context menu** → "Open with MoviPlayer" on any link or `<video>`
 - **Popup** to paste and play any video URL, or play a local file
 - Supports: MP4, MKV, WebM, MOV, TS, AVI, HLS (`.m3u8`), MPEG-DASH (`.mpd`), HEVC, AV1, HDR
 
@@ -77,12 +77,12 @@ Host access is optional. Firefox MV3 treats host permissions as opt-in, so the
 "Scan CDN / no-extension links for video" toggle on the player page requests
 `<all_urls>` on demand — everything else works without it.
 
-File (`file:///*`) access is granted from **about:addons → Movi Player →
+File (`file:///*`) access is granted from **about:addons → MoviPlayer →
 Permissions** if you want the play-button overlay on local directory listings.
 
 ## How it works
 
-- **Content script** scans every page for `<a>` tags with video extensions and adds a play button; on a direct-video page it offers an "Open with Movi Player" card
+- **Content script** scans every page for `<a>` tags with video extensions and adds a play button; on a direct-video page it offers an "Open with MoviPlayer" card
 - **Background event page** handles context-menu clicks, opens the player tab, and probes extension-less links with a HEAD request
 - **Player page** loads the `movi-player` element with the video URL — full controls, seek, subtitles, HDR
 - **No server needed** — everything runs locally in the browser via WASM

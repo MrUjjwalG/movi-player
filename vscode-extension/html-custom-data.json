@@ -5,7 +5,7 @@
       "name": "movi-player",
       "description": {
         "kind": "markdown",
-        "value": "Movi Player — a WASM + WebCodecs video player custom element.\n\nPlays formats the browser cannot (MKV, HEVC, AV1, TrueHD/DTS, …) on a WebGL2 canvas, with adaptive quality, HDR, subtitles and a full built-in UI."
+        "value": "MoviPlayer — a WASM + WebCodecs video player custom element.\n\nPlays formats the browser cannot (MKV, HEVC, AV1, TrueHD/DTS, …) on a WebGL2 canvas, with adaptive quality, HDR, subtitles and a full built-in UI."
       },
       "attributes": [
         {

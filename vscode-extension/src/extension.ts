@@ -50,7 +50,7 @@ let commandPanel: vscode.WebviewPanel | undefined;
 let logChannel: vscode.OutputChannel | undefined;
 
 function getLogChannel(): vscode.OutputChannel {
-  if (!logChannel) logChannel = vscode.window.createOutputChannel("Movi Player");
+  if (!logChannel) logChannel = vscode.window.createOutputChannel("MoviPlayer");
   return logChannel;
 }
 
@@ -660,7 +660,7 @@ async function openCommandPanelWithUrl(
 
   const panel = vscode.window.createWebviewPanel(
     "moviPlayer",
-    title + " — Movi Player",
+    title + " — MoviPlayer",
     column,
     {
       enableScripts: true,

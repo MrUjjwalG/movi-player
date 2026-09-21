@@ -14,7 +14,7 @@ function promoHtml({ screenshot, logo, font, size }) {
 <html lang="en">
 <head>
   <meta charset="utf-8">
-  <title>Movi Player — ${size} promotional tile</title>
+  <title>MoviPlayer — ${size} promotional tile</title>
   <style>
     @font-face {
       font-family: Manrope;
@@ -87,11 +87,11 @@ function promoHtml({ screenshot, logo, font, size }) {
 </head>
 <body>
   <main class="${size}">
-    <div class="brand"><img src="${logo}" alt=""><span>Movi Player</span></div>
+    <div class="brand"><img src="${logo}" alt=""><span>MoviPlayer</span></div>
     <h1>Your videos. <span>Your browser.</span></h1>
     <p class="description">${size === 'large' ? 'Play local files with embedded subtitles.<br>More formats. Right inside Chrome.' : 'Local files.<br>Embedded<br>subtitles.'}</p>
     <ul class="formats" aria-label="Supported formats"><li>MKV</li><li>HEVC</li><li>AV1</li></ul>
-    <img class="shot" src="${screenshot}" alt="Real Movi Player Chrome extension during video playback">
+    <img class="shot" src="${screenshot}" alt="Real MoviPlayer Chrome extension during video playback">
     <div class="footnote">${size === 'small' ? 'Chrome extension' : 'CHROME EXTENSION &nbsp; / &nbsp; moviplayer.com'}</div>
     <p class="credit">Sintel © Blender Foundation · durian.blender.org · CC BY 3.0</p>
   </main>

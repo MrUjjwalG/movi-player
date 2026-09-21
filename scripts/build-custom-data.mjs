@@ -252,7 +252,7 @@ function buildCssProperties() {
   }
   return [...seen].map(([name, value]) => ({
     name,
-    description: `Movi Player theme variable.\n\nDefault: \`${value}\``,
+    description: `MoviPlayer theme variable.\n\nDefault: \`${value}\``,
   }));
 }
 
@@ -283,7 +283,7 @@ const cssProperties = buildCssProperties();
 const events = buildEvents();
 
 const TAG_DESCRIPTION =
-  "Movi Player — a WASM + WebCodecs video player custom element.\n\n" +
+  "MoviPlayer — a WASM + WebCodecs video player custom element.\n\n" +
   "Plays formats the browser cannot (MKV, HEVC, AV1, TrueHD/DTS, …) on a WebGL2 " +
   "canvas, with adaptive quality, HDR, subtitles and a full built-in UI.";
 

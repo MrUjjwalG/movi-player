@@ -76,7 +76,7 @@ const SECTIONS: ActionNode[] = [
         id: "current.play",
         label: "Play Active File",
         icon: "play",
-        tooltip: "Open the active editor's file in Movi Player",
+        tooltip: "Open the active editor's file in MoviPlayer",
         command: "movi.openCurrentFile",
       },
     ],

@@ -1,6 +1,6 @@
-# Movi Player Chrome Extension
+# MoviPlayer Chrome Extension
 
-Play any video URL with Movi Player directly in Chrome.
+Play any video URL with MoviPlayer directly in Chrome.
 
 For real Chrome Web Store screenshots, promotional tiles, and the repeatable
 capture workflow, see [STORE-ASSETS.md](./STORE-ASSETS.md).
@@ -40,7 +40,7 @@ bottom of `player.js` for the pattern.
   the incognito window it was launched from rather than being pushed into a
   normal one. Still has to be allowed at `chrome://extensions` first
 - **Play button overlay** on video links detected on any page
-- **Right-click context menu** → "Open with Movi Player" on any link
+- **Right-click context menu** → "Open with MoviPlayer" on any link
 - **Toolbar icon** opens the player page — pick files, paste a link, and the
   two settings all live there (there is no popup)
 - **Back arrow in the title bar** returns to that picker without losing what is

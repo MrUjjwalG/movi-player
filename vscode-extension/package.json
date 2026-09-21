@@ -1,6 +1,6 @@
 {
   "name": "movi-player-vscode",
-  "displayName": "Movi Player",
+  "displayName": "MoviPlayer",
   "description": "A modern video player that handles formats and codecs VS Code can't play natively — right inside your editor.",
   "version": "0.4.1",
   "publisher": "mrujjwalg",
@@ -59,7 +59,7 @@
     "customEditors": [
       {
         "viewType": "movi.player",
-        "displayName": "Movi Player",
+        "displayName": "MoviPlayer",
         "selector": [
           {
             "filenamePattern": "*.mp4"
@@ -176,7 +176,7 @@
       },
       {
         "command": "movi.openCurrentFile",
-        "title": "Movi: Play with Movi Player",
+        "title": "Movi: Play with MoviPlayer",
         "category": "Movi"
       },
       {
@@ -239,7 +239,7 @@
       ]
     },
     "configuration": {
-      "title": "Movi Player",
+      "title": "MoviPlayer",
       "properties": {
         "movi.autoplay": {
           "type": "boolean",
@@ -298,7 +298,7 @@
       "activitybar": [
         {
           "id": "moviPlayer",
-          "title": "Movi Player",
+          "title": "MoviPlayer",
           "icon": "icons/movi-sidebar.svg"
         }
       ]

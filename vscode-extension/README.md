@@ -1,8 +1,8 @@
-# Movi Player for VS Code
+# MoviPlayer for VS Code
 
 Play modern video formats directly inside VS Code — **MKV, HEVC, AV1, HDR, WebM, MOV, AVI, M2TS** and more, including formats VS Code can't natively handle.
 
-![Movi Player](https://raw.githubusercontent.com/MrUjjwalG/movi-player/main/docs/images/element.gif)
+![MoviPlayer](https://raw.githubusercontent.com/MrUjjwalG/movi-player/main/docs/images/element.gif)
 
 100% local. Nothing uploaded. Powered by FFmpeg WebAssembly + WebCodecs hardware decoding. True streaming — multi-GB and 8K HDR files no longer hit the 4 GB Blob limit. **Progressive remote URLs stream through the extension host**, so cross-origin videos play without CORS errors that block them in browsers. **Adaptive streams (HLS `.m3u8`, MPEG-DASH `.mpd`, Smooth `.ism`)** load directly in the player engine against CORS-enabled CDNs.
 
@@ -10,18 +10,18 @@ Play modern video formats directly inside VS Code — **MKV, HEVC, AV1, HDR, Web
 
 ### Activity Bar
 
-Click the **Movi Player** icon in the left-side Activity Bar to open the **Quick Actions** panel — one click to play any local file, paste a URL, or open beside / in a new window.
+Click the **MoviPlayer** icon in the left-side Activity Bar to open the **Quick Actions** panel — one click to play any local file, paste a URL, or open beside / in a new window.
 
 ### Open a video
 
-- **Single-click any video file** in the Explorer (`.mp4`, `.mkv`, `.webm`, `.mov`, `.avi`, `.flv`, `.wmv`, `.m4v`, `.3gp`, `.mpg`, `.mpeg`, `.m2ts`, `.hevc`, `.265`) — opens directly in Movi Player
-- **Right-click any file** → **"Open With…"** → **"Movi Player"** — works for any extension (`.iso`, `.vob`, etc.)
+- **Single-click any video file** in the Explorer (`.mp4`, `.mkv`, `.webm`, `.mov`, `.avi`, `.flv`, `.wmv`, `.m4v`, `.3gp`, `.mpg`, `.mpeg`, `.m2ts`, `.hevc`, `.265`) — opens directly in MoviPlayer
+- **Right-click any file** → **"Open With…"** → **"MoviPlayer"** — works for any extension (`.iso`, `.vob`, etc.)
 
 ### Multi-window & side-by-side
 
 Right-click any video in the Explorer to get extra options:
 
-- **Movi: Play with Movi Player** — open in the active editor group
+- **Movi: Play with MoviPlayer** — open in the active editor group
 - **Movi: Play to the Side** — open beside your code (great for tutorials, lectures, or while pair-coding)
 - **Movi: Play in New Window** — open in a separate VS Code window (independent layout, true multi-monitor playback)
 
@@ -35,7 +35,7 @@ Right-click any video in the Explorer to get extra options:
 | `Movi: Open Video from URL` | Paste a remote video URL — progressive files or adaptive streams (`.m3u8` / `.mpd` / `.ism`) |
 | `Movi: Open URL to the Side` | Paste a remote URL beside the active editor |
 | `Movi: Open URL in New Window` | Paste a remote URL in a new VS Code window |
-| `Movi: Play with Movi Player` | Open the active editor's file |
+| `Movi: Play with MoviPlayer` | Open the active editor's file |
 | `Movi: Play to the Side` | Open the active file beside |
 | `Movi: Play in New Window` | Open the active file in a new window |
 
@@ -86,7 +86,7 @@ VS Code's webview sandbox restricts a few features that work in the [Chrome exte
 - **Picture-in-Picture** is hidden (same reason). For PiP, use **"Play in New Window"** to drag the video to a separate window.
 - **SharedArrayBuffer** is unavailable, so FFmpeg runs single-threaded — slightly slower demuxing on very large files (8K HDR streams). Hardware video decode is unaffected.
 
-For full feature parity (browser fullscreen + Document PiP), use the Chrome extension or the [Movi Player web app](https://moviplayer.com).
+For full feature parity (browser fullscreen + Document PiP), use the Chrome extension or the [MoviPlayer web app](https://moviplayer.com).
 
 ## Privacy
 

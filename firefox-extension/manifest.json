@@ -1,6 +1,6 @@
 {
   "manifest_version": 3,
-  "name": "Movi Player",
+  "name": "MoviPlayer",
   "version": "0.4.1",
   "description": "Play MKV, HEVC, AV1, WebM & 4K HDR videos your browser can't open natively \u2014 no upload, no conversion, right in your browser.",
   "icons": {
@@ -81,6 +81,6 @@
     }
   ],
   "action": {
-    "default_title": "Open Movi Player"
+    "default_title": "Open MoviPlayer"
   }
 }

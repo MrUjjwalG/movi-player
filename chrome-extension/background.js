@@ -1,4 +1,4 @@
-// Context menu: "Open with Movi Player" on links and on <video> elements.
+// Context menu: "Open with MoviPlayer" on links and on <video> elements.
 //
 // Built on every worker start, not on onInstalled. The extension is
 // `"incognito": "split"`, so the incognito profile runs a background of its
@@ -12,7 +12,7 @@ function ensureContextMenu() {
   chrome.contextMenus.removeAll(() => {
     chrome.contextMenus.create({
       id: "open-with-movi",
-      title: "Open with Movi Player",
+      title: "Open with MoviPlayer",
       contexts: ["link", "video"],
     });
   });
