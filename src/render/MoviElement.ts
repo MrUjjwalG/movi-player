@@ -755,6 +755,7 @@ export class MoviElement extends HTMLElement {
   private isOverControls: boolean = false;
   /** Document-level "you tapped somewhere else" — see where it is set up. */
   private _outsideTapHandler: ((e: Event) => void) | null = null;
+  private _settingsOutsideHandler: ((e: Event) => void) | null = null;
   /** The bar's post-touch re-show, pending — cancellable by a tap elsewhere. */
   private _barTouchReshowTimer: number | undefined;
   private isSeeking: boolean = false;
@@ -15772,6 +15773,30 @@ export class MoviElement extends HTMLElement {
       true,
     );
 
+    // …and a press that lands outside the player closes it as well.
+    //
+    // The rule above covers the rest of the control row and a click on the
+    // picture closes it from the surface handler, which between them is the
+    // whole player — when the player is a picture. In strip mode it is the
+    // row and nothing else: the panel opens over the page, every place the
+    // viewer might press next is outside the host, and the only thing that
+    // put the panel away was the gear a second time.
+    //
+    // pointerdown in capture, the same reasoning as the outside-tap that
+    // hides the bar: it is the first thing a press does, and a page with its
+    // own click handler still lets the down through. composedPath rather than
+    // the target, or every press inside the shadow root reads as a press on
+    // the document. The gear is excluded or its own click would find the
+    // panel already closed and open it straight back.
+    this._settingsOutsideHandler = (e: Event) => {
+      if (!this.isBottomMenuOpen(menu)) return;
+      const path = e.composedPath?.() ?? [];
+      if (path.includes(menu) || path.includes(btn)) return;
+      if (container && path.includes(container)) return;
+      this.closeSettingsMenu();
+    };
+    document.addEventListener("pointerdown", this._settingsOutsideHandler, true);
+
     // Swipe down to dismiss, on a touch popup (the panel on a small player).
     //
     // The panel follows the finger down and fades as it goes; let go past
@@ -27279,6 +27304,14 @@ export class MoviElement extends HTMLElement {
     if (this._outsideTapHandler) {
       document.removeEventListener("pointerdown", this._outsideTapHandler, true);
       this._outsideTapHandler = null;
+    }
+    if (this._settingsOutsideHandler) {
+      document.removeEventListener(
+        "pointerdown",
+        this._settingsOutsideHandler,
+        true,
+      );
+      this._settingsOutsideHandler = null;
     }
     // A spinner still waiting out its delay, for a player that is no longer in
     // the document.
