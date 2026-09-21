@@ -15793,6 +15793,14 @@ export class MoviElement extends HTMLElement {
       const path = e.composedPath?.() ?? [];
       if (path.includes(menu) || path.includes(btn)) return;
       if (container && path.includes(container)) return;
+      // Outside the PLAYER, not merely outside the panel. Inside it the click
+      // that follows already closes the panel — the bar's own rule for the
+      // row, the surface handler for the picture — and that handler closes it
+      // and then swallows the click, which is how the track and speed popups
+      // have always behaved: the press that dismisses one does nothing else.
+      // Closing here instead left that click with no menu to find, so a tap on
+      // the picture dismissed the panel AND toggled playback.
+      if (path.includes(this)) return;
       this.closeSettingsMenu();
     };
     document.addEventListener("pointerdown", this._settingsOutsideHandler, true);
