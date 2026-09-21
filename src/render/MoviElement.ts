@@ -26107,12 +26107,25 @@ export class MoviElement extends HTMLElement {
       }
       :host(.movi-cover-art) .movi-controls-container.movi-controls-hidden .movi-duration {
         position: absolute;
-        right: 2px;
+        /* Flush with the row's end, which is where the elapsed sits at the
+           other one: both are then the container's 12px in from the player's
+           edge. At 2px the total hung 2px further out than the elapsed hung
+           in — not a gap anyone can name, and exactly the kind of thing that
+           reads as crooked. */
+        right: 0;
         top: 50%;
         transform: translateY(-50%);
       }
       :host(.movi-cover-art) .movi-controls-container.movi-controls-hidden .movi-progress-container {
-        padding-right: 58px !important;
+        /* Room at the scrubber's tail for the total parked over it. A fixed
+           58px was a guess at one duration's width: "01:31" left 33px of slack
+           after it, so the space before the total came out at twice the space
+           after the elapsed and the row sat lopsided — while "1:23:45" would
+           have had none to spare. The clock publishes the width it actually
+           occupies (see updateTimeDisplay), and the +4px mirrors the 4px that
+           sits after the elapsed inside its own cluster — the row's flex gap
+           supplies the rest, on both sides, whatever it currently is. */
+        padding-right: calc(var(--movi-clock-total-w, 36px) + 4px) !important;
       }
 
       :host(.movi-audio-strip) .movi-controls-overlay {
@@ -26246,12 +26259,25 @@ export class MoviElement extends HTMLElement {
       }
       :host(.movi-audio-strip) .movi-controls-container.movi-controls-hidden .movi-duration {
         position: absolute;
-        right: 2px;
+        /* Flush with the row's end, which is where the elapsed sits at the
+           other one: both are then the container's 12px in from the player's
+           edge. At 2px the total hung 2px further out than the elapsed hung
+           in — not a gap anyone can name, and exactly the kind of thing that
+           reads as crooked. */
+        right: 0;
         top: 50%;
         transform: translateY(-50%);
       }
       :host(.movi-audio-strip) .movi-controls-container.movi-controls-hidden .movi-progress-container {
-        padding-right: 58px !important;
+        /* Room at the scrubber's tail for the total parked over it. A fixed
+           58px was a guess at one duration's width: "01:31" left 33px of slack
+           after it, so the space before the total came out at twice the space
+           after the elapsed and the row sat lopsided — while "1:23:45" would
+           have had none to spare. The clock publishes the width it actually
+           occupies (see updateTimeDisplay), and the +4px mirrors the 4px that
+           sits after the elapsed inside its own cluster — the row's flex gap
+           supplies the rest, on both sides, whatever it currently is. */
+        padding-right: calc(var(--movi-clock-total-w, 36px) + 4px) !important;
       }
       /* Linear playback (no Range support, over-cap file): the scrubber and
          skip buttons stay — seeking is allowed but clamped in JS to the
@@ -32763,6 +32789,17 @@ export class MoviElement extends HTMLElement {
     if (clockLen !== this._lastClockLen) {
       this._lastClockLen = clockLen;
       this.fitControlsRow();
+      // The idle strip and the idle cover art park the total at the end of the
+      // row and hold that much room open in the scrubber. Only the element
+      // itself knows how wide that is — the readout is tabular, so the count
+      // of characters decides it, and that is what has just changed.
+      const totalW = durationEl?.getBoundingClientRect().width ?? 0;
+      if (totalW > 0) {
+        this.style.setProperty(
+          "--movi-clock-total-w",
+          `${Math.round(totalW)}px`,
+        );
+      }
     }
 
     this.updateSeekAria();
