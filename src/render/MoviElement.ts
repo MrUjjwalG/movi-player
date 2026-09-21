@@ -28765,8 +28765,17 @@ export class MoviElement extends HTMLElement {
       audioMode && !bitmap && this._posterCoverLoading;
     const stripMode =
       audioMode && !bitmap && !coverArtPending && !posterCoverPending;
+    const wasStrip = this.classList.contains("movi-audio-strip");
     this.classList.toggle("movi-audio-mode", audioMode);
     this.classList.toggle("movi-audio-strip", stripMode);
+    // Fullscreen is for a picture, and this is the moment it turns out there
+    // isn't one — a source that is sound alone, or audioOnly switched on while
+    // a film was filling the screen. What is left fullscreen is a 56px bar in
+    // the middle of a black screen, too far away to read and with nothing
+    // around it, so come back out the way the viewer would have. Only on the
+    // way IN, and only for the strip: cover art is a picture, and a sleeve at
+    // full screen is a presentation someone may have asked for.
+    if (stripMode && !wasStrip) this.exitFullscreen();
     // Keep a portaled menu's host classes in sync so a video→audio switch made
     // while the menu is open updates it live (the cloned :host(.movi-audio-mode)
     // rules hide the video-only items).
