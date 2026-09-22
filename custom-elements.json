@@ -619,9 +619,9 @@
             },
             {
               "name": "qualitychange",
-              "description": "Active video quality / track switched",
+              "description": "Active video quality / track switched. The shape depends on what moved it: a pick from the track menu carries trackId, a ladder switch carries src and height, and an Auto/ABR switch carries height and auto: true. A host persisting a deliberate choice should ignore auto === true; one prefetching the next video should read height from any of them and treat its absence as \"unchanged\"",
               "type": {
-                "text": "CustomEvent<{ trackId: number }>"
+                "text": "CustomEvent<{ trackId } or { src, height, … } or { height, auto }>"
               }
             },
             {
