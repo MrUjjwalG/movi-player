@@ -143,6 +143,18 @@ export class WatchParty {
         return;
       }
 
+      case "name": {
+        // A name arrives at connect time as a URL parameter, when nobody has
+        // been asked for one yet, so everyone is "Guest". It is asked for at
+        // the moment it starts mattering — someone wanting the remote — and
+        // has to be able to change after the socket is already open.
+        const name = typeof msg.name === "string" ? msg.name.slice(0, 24).trim() : "";
+        if (!name) return;
+        member.name = name;
+        this.broadcastRoster();
+        return;
+      }
+
       case "req": {
         // A guest asking for the remote. Only the host is told; everyone else
         // has no business approving it.

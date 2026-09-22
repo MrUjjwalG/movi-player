@@ -10461,8 +10461,14 @@
             dot.className = "wp-dot" + (m.control ? " on" : "");
             const name = document.createElement("span");
             name.className = "wp-name";
-            name.textContent =
-              (m.id === me ? "You" : m.name) + (m.host ? " · host" : m.control ? " · can control" : "");
+            // Nobody is asked for a name until they want something, so most
+            // people in a room are called "Guest". Printing that against the
+            // host read as "Guest · host", which is two words disagreeing.
+            const label = m.id === me ? "You" : (m.name === "Guest" && m.host ? "Host" : m.name);
+            const role = m.host && label !== "Host"
+              ? " · host"
+              : (!m.host && m.control ? " · can control" : "");
+            name.textContent = label + role;
             row.append(dot, name);
             if (hostId === me && !m.host && m.control) {
               const b = document.createElement("button");
@@ -10485,10 +10491,21 @@
             button("Start hosting", true, becomeHost);
             return;
           }
-          button("Ask for the remote", false, (e) => {
+          // "Guest wants the remote" tells the host nothing they can decide
+          // on, and everyone in the room is called Guest until someone is
+          // asked. So the name is asked for here, at the one moment it is
+          // worth anything, and remembered so it is asked once.
+          button("Ask for the remote", false, async () => {
+            const name = await ask({
+              prompt: "Who should the host see asking?",
+              placeholder: "Your name", type: "text", submit: "Ask",
+              value: storedName(),
+            });
+            try { localStorage.setItem("movi-party-name", name); } catch { /* private window */ }
+            ws?.send(JSON.stringify({ t: "name", name }));
             ws?.send(JSON.stringify({ t: "req" }));
-            e.target.disabled = true;
             say("Asked the host. Waiting.");
+            renderActions();
           });
         };
 
@@ -10499,27 +10516,38 @@
           return "Following the host.";
         };
 
-        const askForSecret = () =>
+        const ask = ({ prompt, placeholder, type, submit, value }) =>
           new Promise((resolve) => {
-            say("Enter the host secret to take this room.");
+            say(prompt);
             const input = document.createElement("input");
             input.className = "wp-in";
-            input.type = "password";
-            input.placeholder = "Host secret";
+            input.type = type;
+            input.placeholder = placeholder;
             input.autocomplete = "off";
+            if (value) input.value = value;
             panel.insertBefore(input, elActs);
             const go = () => {
-              const value = input.value;
-              if (!value) return;
+              const given = input.value.trim();
+              if (!given) return;
               input.remove();
               elActs.textContent = "";
-              resolve(value);
+              resolve(given);
             };
             input.addEventListener("keydown", (e) => { if (e.key === "Enter") go(); });
             elActs.textContent = "";
-            button("Take the room", true, go);
+            button(submit, true, go);
             input.focus();
+            input.select();
           });
+
+        const askForSecret = () =>
+          ask({ prompt: "Enter the host secret to take this room.",
+                placeholder: "Host secret", type: "password", submit: "Take the room" });
+
+        const storedName = () => {
+          try { return (localStorage.getItem("movi-party-name") || "").slice(0, 24); }
+          catch { return ""; }
+        };
 
         // The room decides who hosts at the door, so the only way to change
         // that answer is to knock again — this time carrying a token.
@@ -10591,7 +10619,7 @@
           const proto = location.protocol === "https:" ? "wss:" : "ws:";
           const url = new URL(proto + "//" + location.host + "/api/party/room");
           url.searchParams.set("code", partyCode);
-          url.searchParams.set("name", (localStorage.getItem("movi-party-name") || "").slice(0, 24) || "Guest");
+          url.searchParams.set("name", storedName() || "Guest");
           if (auth) {
             url.searchParams.set("token", auth.token);
             url.searchParams.set("exp", String(auth.exp));
