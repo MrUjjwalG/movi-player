@@ -10320,9 +10320,16 @@
           "color:var(--text-muted,#7f8a99)}",
           ".wp-chip.drives{border-color:var(--accent,#6366f1)}",
           ".wp-chip.drives .r{color:var(--accent,#6366f1)}",
-          ".wp-x{border:0;background:none;padding:0 0 0 2px;cursor:pointer;line-height:1;",
-          "color:var(--text-muted,#7f8a99);font-size:14px}",
-          ".wp-x:hover{color:var(--text-primary,#e8ecf5)}",
+          // Written as `.wp button.wp-x` because `.wp button` below is more
+          // specific than a bare `.wp-x` and was winning: the close control
+          // inherited the button border, radius and padding, and came out as
+          // a square box sitting inside a pill.
+          ".wp button.wp-x{width:17px;height:17px;padding:0;margin:0 -3px 0 1px;",
+          "flex:0 0 auto;display:inline-flex;align-items:center;justify-content:center;",
+          "border:0;border-radius:50%;background:transparent;",
+          "color:var(--text-muted,#7f8a99)}",
+          ".wp button.wp-x:hover{background:var(--bg-surface,#1b2029);",
+          "color:var(--text-primary,#e8ecf5);border:0}",
           // footer: the running account of who did what
           ".wp-foot{display:flex;align-items:center;gap:8px;padding:9px 14px;",
           "border-top:var(--rule,1px solid #333b47);background:var(--bg-surface,#1b2029);",
@@ -10667,7 +10674,12 @@
             if (hostId === me && !m.host && m.control) {
               const x = document.createElement("button");
               x.className = "wp-x";
-              x.textContent = "×";
+              // A drawn cross rather than the × character, which sits off its
+              // own baseline and lands low in a 17px circle.
+              x.innerHTML =
+                '<svg width="9" height="9" viewBox="0 0 10 10" fill="none" ' +
+                'stroke="currentColor" stroke-width="1.6" stroke-linecap="round" ' +
+                'aria-hidden="true"><path d="M1.5 1.5 8.5 8.5M8.5 1.5 1.5 8.5"/></svg>';
               x.title = "Take the remote back";
               x.setAttribute("aria-label", "Take the remote back from " + label);
               x.addEventListener("click", () => ws?.send(JSON.stringify({ t: "revoke", who: m.id })));
