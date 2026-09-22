@@ -5245,6 +5245,21 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
       const startedAt = performance.now();
       const res = await fetch(url, {
         headers: { Range: `bytes=0-${PROBE_BYTES - 1}`, ...(this.config.headers || {}) },
+        // Ask the LINK, not the cache — the probe exists to measure the one and
+        // the other cannot answer for it.
+        //
+        // Every probe reads the same opening range, so the first one put those
+        // bytes in the HTTP cache and every probe after it was served from
+        // there. The reading is then correctly thrown out ("cache or short
+        // read, not the link"), which leaves the rung unmeasured, which is
+        // exactly the state the paced guard below refuses to climb out of — so
+        // it never climbs again. Seen on a 480p → 720p hold: "1953KB in 6ms"
+        // thirteen times in a row, on a link that had probed at 79.5Mbps and a
+        // buffer 349s deep. A ladder that can only ever step up once.
+        //
+        // `reload` bypasses the cache on the way out and still writes the
+        // response back, so the bytes are there for the switch that follows.
+        cache: "reload",
         signal: ctl.signal,
       });
       if ((!res.ok && res.status !== 206) || !res.body) {
