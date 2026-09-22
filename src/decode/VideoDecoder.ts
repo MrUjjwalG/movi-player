@@ -1269,6 +1269,18 @@ export class MoviVideoDecoder {
         (codecForFallback.startsWith("hvc1.") ||
           codecForFallback.startsWith("hev1.")) &&
         !this.justFlushed;
+      // The same reasoning covers a rejection at a SEEK's restart point, in
+      // any codec: justFlushed means this keyframe is the one the seek chose
+      // to resume on, and the decoder has refused it. That is a fact about
+      // the stream's restart points, not a moment — the next one will be
+      // refused too, and each refusal costs a whole GOP of frozen picture
+      // while the reset skips to the next keyframe.
+      //
+      // Measured on a 1080p H.264 file with CRA keyframes at 84.32, 85.64 and
+      // 87.00: seeking anywhere between 83 and 87 refused all three, decoded
+      // nothing, and left the last painted frame on screen — one frame for a
+      // four-second stretch, every time, because the session-wide count of 15
+      // was nowhere near reached.
       const openGopFallbackLimit = isHevcMidStream
         ? MoviVideoDecoder.MID_STREAM_OPENGOP_REJECT_LIMIT
         : 15;
@@ -1292,6 +1304,20 @@ export class MoviVideoDecoder {
         try {
           this.decoder.reset();
           this.decoder.configure(this.lastConfig!);
+          // A reset leaves the decoder in exactly the state a flush does: it
+          // holds no references and will take nothing but a key frame. Say so,
+          // because that is what decides how the NEXT CRA is sent —
+          // craAsDelta is `isOpenGopKey && !justFlushed`, so without this the
+          // CRA goes as `delta`, a freshly configured decoder answers "a key
+          // frame is required after configure()", and we reset again. That is
+          // the loop: every keyframe in a CRA run refused in turn, nothing
+          // decoded, the last picture left on screen.
+          //
+          // Measured on a 1080p H.264 file whose keyframes at 84.32, 85.64 and
+          // 87.00 are all CRA: seeking anywhere between 83 and 87 painted one
+          // identical frame, every time. The recreate path a few lines down
+          // has set this for the same reason all along.
+          this.justFlushed = true;
           this.setWaitingForKeyframe(true, "reset + reconfigure after an error");
           return;
         } catch (e) {
