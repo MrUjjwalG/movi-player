@@ -40,6 +40,17 @@ export interface SourceAdapter {
    * Get a unique identifier for this source (used for caching)
    */
   getKey(): string;
+
+  /**
+   * The failure this source will not recover from, if it has had one — a
+   * signed URL that has started answering 403, a file that has gone away.
+   *
+   * A read that fails reaches the demuxer as "invalid data", which is also
+   * what one bad packet looks like, and a reader that treats the two alike
+   * retries a source that is never going to answer. Optional: a source that
+   * cannot fail this way simply does not have it.
+   */
+  getFatalError?(): Error | null;
 }
 
 /**

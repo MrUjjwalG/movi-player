@@ -17291,7 +17291,12 @@ export class MoviElement extends HTMLElement {
     if (this._stuckRecoveries >= MoviElement.MAX_STUCK_RECOVERIES) {
       // Prefer the source's own reason — an expired link, a revoked token —
       // over the generic stall, so the overlay can say something true.
-      const failure = p.getSourceFailure?.() ?? null;
+      // Either source: a split stream's audio is fetched separately, and when
+      // it is the half that has died the video source has nothing to report —
+      // so the stall read as "the bytes are fine" and went on spending rungs
+      // on a rendition whose sound was never coming.
+      const failure =
+        p.getSourceFailure?.() ?? p.getSplitAudioFailure?.() ?? null;
 
       // The source has NO complaint. That is evidence, not an absence of it:
       // the bytes are fine and something downstream is failing to turn them

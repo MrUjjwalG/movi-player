@@ -215,6 +215,11 @@ export class HttpSource implements SourceAdapter {
    */
   private fatalError: Error | null = null; // Store fatal errors from background stream
 
+  /** Consecutive fatal answers from this URL, across stream attempts, and the
+   *  message they carried. See readStreamBackground. */
+  private fatalAttempts = 0;
+  private lastFatalMessage = "";
+
   // Track maximum buffered position (independent of sliding window)
   private maxBufferedEnd: number = 0;
 
@@ -1137,10 +1142,14 @@ export class HttpSource implements SourceAdapter {
     // during a re-auth, and a 404 can be a node that has not caught up. So it
     // is asked again, a few times, with a widening gap. Only the same answer
     // every time is treated as the answer.
-    let fatalAttempts = 0;
+    // …and the tally lives on the source, not in this call. A reader that
+    // asks for one window at a time gets one stream per read, so a per-call
+    // counter started again at every refusal and never reached three: the
+    // URL was refusing every single read and the source still reported no
+    // fault, which upstream reads as "the bytes are fine, something else is
+    // broken". It is cleared by the first response that works (see below).
     const MAX_FATAL_ATTEMPTS = 3;
     const FATAL_RETRY_DELAY = 700;
-    let lastFatalMessage = "";
     let streamBaseOffset = startOffset;
     // Set once a bounded range fetch is rejected with 403 by a server that only
     // accepts open-ended ranges; from then on this stream requests `bytes=N-`.
@@ -1257,8 +1266,8 @@ export class HttpSource implements SourceAdapter {
         rangeRetryCount = 0;
         // …and the fatal streak: the URL answered, so whatever it was is over.
         if (response.ok || response.status === 206) {
-          fatalAttempts = 0;
-          lastFatalMessage = "";
+          this.fatalAttempts = 0;
+          this.lastFatalMessage = "";
         }
 
         if (!response.ok && response.status !== 206) {
@@ -1551,16 +1560,16 @@ export class HttpSource implements SourceAdapter {
           // Same failure as last time? Then it is a fact about the URL, not a
           // moment. A DIFFERENT one starts the count again — something is still
           // changing, and that is worth another ask.
-          if (errMsgForFatal !== lastFatalMessage) {
-            lastFatalMessage = errMsgForFatal;
-            fatalAttempts = 0;
+          if (errMsgForFatal !== this.lastFatalMessage) {
+            this.lastFatalMessage = errMsgForFatal;
+            this.fatalAttempts = 0;
           }
-          fatalAttempts++;
-          if (fatalAttempts < MAX_FATAL_ATTEMPTS && this.atomicIsStreaming()) {
-            const wait = FATAL_RETRY_DELAY * fatalAttempts;
+          this.fatalAttempts++;
+          if (this.fatalAttempts < MAX_FATAL_ATTEMPTS && this.atomicIsStreaming()) {
+            const wait = FATAL_RETRY_DELAY * this.fatalAttempts;
             Logger.warn(
               TAG,
-              `${errMsgForFatal} (attempt ${fatalAttempts}/${MAX_FATAL_ATTEMPTS}) — retrying in ${wait}ms`,
+              `${errMsgForFatal} (attempt ${this.fatalAttempts}/${MAX_FATAL_ATTEMPTS}) — retrying in ${wait}ms`,
             );
             try {
               if (this.reader) await this.reader.cancel();
@@ -1571,7 +1580,7 @@ export class HttpSource implements SourceAdapter {
           }
           Logger.error(
             TAG,
-            `Fatal HTTP error after ${fatalAttempts} attempts, giving up: ${errMsgForFatal}`,
+            `Fatal HTTP error after ${this.fatalAttempts} attempts, giving up: ${errMsgForFatal}`,
           );
           this.atomicSetStreaming(false);
           this.streamError = error instanceof Error ? error : new Error(errMsgForFatal);

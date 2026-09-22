@@ -614,7 +614,15 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
   private audioAnimationFrameId: number | null = null;
   private audioDemuxInFlight: boolean = false;
   private _splitAudioTrackId: number = -1;
+  /** How long a split-audio track may fail every read before the player says
+   *  so. Long enough to step over a bad patch, short enough that nobody sits
+   *  through a silent film wondering. */
+  private static readonly SPLIT_AUDIO_GIVE_UP_MS = 4000;
+
   private _splitAudioEof: boolean = false;
+  // A split-audio track that has stopped answering. See pumpSplitAudio.
+  private _splitAudioDead: boolean = false;
+  private _splitAudioErrorSince: number = 0;
   // Bounded automatic recovery from a decoder that started rejecting every
   // packet (see recoverBrokenAudio). Counted per source, so a genuinely
   // undecodable stream ends in silence instead of a seek loop.
@@ -10483,6 +10491,14 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
     );
   }
 
+  /** The same question for a separately-fetched audio rendition, which has a
+   *  source of its own and therefore an expiry of its own. A split stream's
+   *  two URLs are signed together and die together, but the audio is the one
+   *  read on a tick of its own — see pumpSplitAudio. */
+  getSplitAudioFailure(): Error | null {
+    return this.audioSource?.getFatalError?.() ?? null;
+  }
+
   /**
    * End playback on a failure nothing downstream can recover from.
    *
@@ -13780,6 +13796,9 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
         this.audioRenderer.setOutputChannelCount(2);
       }
       this._splitAudioEof = false;
+      // A source of its own, so a clean slate for its failures too.
+      this._splitAudioDead = false;
+      this._splitAudioErrorSince = 0;
       this._lastSplitAudioPts = 0;
       // Sync the freshly-opened audio demuxer to where the player ACTUALLY is.
       // This setup is async: a recovery recreate's resume-seek (or any seek that
@@ -13845,7 +13864,9 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
   // foreground, the un-throttled background Worker timer when hidden (rAF is
   // throttled in background, which is exactly what stalled audio there).
   private async pumpSplitAudio(): Promise<boolean> {
-    if (!this.audioDemuxer || this._splitAudioEof) return false;
+    if (!this.audioDemuxer || this._splitAudioEof || this._splitAudioDead) {
+      return false;
+    }
     const state = this.stateManager.getState();
     if (
       state !== "playing" &&
@@ -13922,9 +13943,18 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
         const pkt = await this.audioDemuxer.readPacket();
         reads++;
         if (!pkt) {
+          // No bytes is either the end of the track or a source that has
+          // stopped answering — they reach C as the same thing. Ask, the way
+          // the muxed loop asks (see getSourceFailure), or an expired audio
+          // URL passes for a finished one and the film plays on in silence.
+          const failure = this.getSplitAudioFailure();
+          if (failure) throw failure;
           this._splitAudioEof = true;
           break;
         }
+        // A packet arrived, so whatever went wrong before was a moment, not
+        // the end of the road.
+        this._splitAudioErrorSince = 0;
         if (
           this._splitAudioTrackId !== -1 &&
           pkt.streamIndex !== this._splitAudioTrackId
@@ -13970,12 +14000,41 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
         this._lastSplitAudioPts = pts - this.startTime;
       }
     } catch (e) {
-      Logger.warn(TAG, `Split audio demux error: ${(e as any)?.message ?? e}`);
+      const message = (e as any)?.message ?? String(e);
+      // A bad packet is worth stepping over: the next read usually works, and
+      // this loop's whole job is to keep the sound coming. A source that has
+      // stopped answering is not that. It fails every read the same way, and
+      // this pump runs on the animation frame — so the same warning went out
+      // sixty times a second, for ever, while the viewer watched a picture
+      // with no sound and no reason given. (Measured on a signed URL that
+      // began answering 403 mid-playback: 777 identical lines and counting.)
+      //
+      // So: ask the source whether this is a fact about the URL, and failing
+      // that, give the track a few seconds to produce ONE packet. Neither
+      // answer is recoverable here — the link has to be re-issued, which is
+      // the embedding page's business, and it can only do that if it is told.
+      const failure = this.getSplitAudioFailure();
+      const stuckFor = this._splitAudioErrorSince
+        ? performance.now() - this._splitAudioErrorSince
+        : 0;
+      if (!this._splitAudioErrorSince) {
+        this._splitAudioErrorSince = performance.now();
+        Logger.warn(TAG, `Split audio demux error: ${message}`);
+      }
+      if (failure || stuckFor >= MoviPlayer.SPLIT_AUDIO_GIVE_UP_MS) {
+        this._splitAudioDead = true;
+        this.failFatally(
+          failure ??
+            new Error(
+              `Audio track stopped reading after ${(stuckFor / 1000).toFixed(1)}s: ${message}`,
+            ),
+        );
+      }
     } finally {
       this.audioDemuxInFlight = false;
     }
 
-    return !this._splitAudioEof;
+    return !this._splitAudioEof && !this._splitAudioDead;
   }
 
   /** True once the split-audio demuxer has hit EOF and the renderer has played
@@ -14302,6 +14361,10 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
     this.disableAudio = false;
     this._activeAudioLang = lang;
     this._splitAudioEof = false;
+    // Another language is another source: whatever the last one died of is
+    // not this one's to carry.
+    this._splitAudioDead = false;
+    this._splitAudioErrorSince = 0;
     this._lastSplitAudioPts = t;
     // Restart the pump on the state AS IT IS NOW, and count a seek in flight
     // as live.
