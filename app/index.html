@@ -3932,6 +3932,324 @@
     <!-- Shared design system — spliced in by the worker AFTER this page's own
          <style> so it is the authority on the site-wide chrome. -->
     <!--__SHARED_CSS__-->
+
+    <!-- ════════════════════════════════════════════════════════════════
+         PRECISION PASS
+         The page read as a template: a gradient headline with a glow, blobs
+         and particles behind it, a drawing of a browser with handwriting on
+         it, and rows of coloured pills. None of that is the product. This
+         layer takes the ornament out and lets the structure carry the page —
+         hairline boundaries instead of shadows, one accent spent only on the
+         thing you press, a monospace voice for anything technical, and a
+         single vertical rhythm. It is deliberately a layer: it overrides the
+         stylesheet above rather than rewriting it, so the direction can be
+         judged, and folded in or dropped, in one piece.
+         ════════════════════════════════════════════════════════════════ -->
+    <style id="precision-pass">
+      :root {
+        --bg-base: #0b0d11;
+        --bg-elevated: #12151a;
+        --bg-card: #12151a;
+        --bg-surface: #171b21;
+        --text-primary: #f2f4f7;
+        --text-secondary: #9aa3b0;
+        --text-muted: #6b7280;
+        --border-subtle: #262b33;
+        --border-hover: #39404b;
+        --accent: #6366f1;
+        --accent-hover: #818cf8;
+        --accent-glow: transparent;
+        --shadow-heavy: none;
+        --feature-bg: transparent;
+        --feature-border: #262b33;
+        --badge-bg: transparent;
+        --badge-text: #9aa3b0;
+        --r-1: 2px;
+        --r-2: 4px;
+        --r-3: 6px;
+        --rule: 1px solid var(--border-subtle);
+      }
+      [data-theme="light"] {
+        --bg-base: #ffffff;
+        --bg-elevated: #ffffff;
+        --bg-card: #ffffff;
+        --bg-surface: #f6f7f9;
+        --text-primary: #0e1116;
+        --text-secondary: #55606f;
+        --text-muted: #8b94a3;
+        --border-subtle: #e3e6ec;
+        --border-hover: #ccd2dc;
+        --accent: #4f46e5;
+        --accent-hover: #4338ca;
+      }
+
+      /* ── Ornament, gone ─────────────────────────────────────────── */
+      .hero-particles,
+      .hero-blob,
+      .hero-handnote,
+      .hero-bg::before,
+      .hero-bg::after {
+        display: none !important;
+      }
+      /* A headline is text. It does not need a gradient poured into it or a
+         light source behind it. */
+      .highlight {
+        background: none !important;
+        -webkit-text-fill-color: currentColor !important;
+        color: var(--accent) !important;
+        filter: none !important;
+        animation: none !important;
+      }
+      /* Nothing on this page is made of frosted glass, and nothing floats. */
+      .hero-panel,
+      .hero-browser,
+      .way-card,
+      .feature-card,
+      .faq-item,
+      .stat-pill,
+      .url-bar {
+        backdrop-filter: none !important;
+        -webkit-backdrop-filter: none !important;
+        box-shadow: none !important;
+      }
+
+      /* ── The drawing of a player, gone ──────────────────────────
+         The right half of the hero was a picture of a browser window with a
+         stock lake in it and "Just open and play" written across the corner
+         in a handwriting font. It is a video player's site: the player itself
+         is one scroll down, real and loaded, and a drawing of one standing in
+         front of it is the least convincing thing on the page. The hero is
+         now a single column that ends at the thing you type into, and the
+         payoff is the real player underneath. */
+      .hero-showcase { display: none !important; }
+      .hero--split .hero-content,
+      .hero-content {
+        display: grid !important;
+        grid-template-columns: minmax(0, 1.15fr) minmax(0, 0.85fr);
+        gap: 3.5rem;
+        align-items: start;
+        max-width: 1200px;
+      }
+      .hero-left,
+      .hero-copy { max-width: 640px; }
+
+      /* The spec column: information, set as information. */
+      .hero-spec {
+        border: var(--rule);
+        border-radius: var(--r-3);
+        background: var(--bg-elevated);
+        padding: 1.25rem 1.35rem 1.1rem;
+      }
+      .hero-spec-head {
+        display: flex;
+        align-items: baseline;
+        justify-content: space-between;
+        gap: 1rem;
+        padding-bottom: 0.85rem;
+        border-bottom: var(--rule);
+      }
+      .hero-spec-eyebrow {
+        color: var(--text-primary);
+        font: 600 0.78rem/1.2 var(--font-family);
+        letter-spacing: -0.01em;
+      }
+      .hero-spec-more {
+        color: var(--text-muted);
+        font: 500 0.7rem/1 "DM Mono", ui-monospace, monospace;
+        text-decoration: none;
+      }
+      .hero-spec-more:hover { color: var(--accent); }
+      .hero-spec-list { margin: 0; }
+      .hero-spec-list > div {
+        display: grid;
+        grid-template-columns: 5.5rem minmax(0, 1fr);
+        gap: 0.9rem;
+        padding: 0.62rem 0;
+        border-bottom: var(--rule);
+      }
+      .hero-spec-list > div:last-child { border-bottom: 0; }
+      .hero-spec-list dt {
+        margin: 0;
+        color: var(--text-muted);
+        font: 600 0.65rem/1.5 "DM Mono", ui-monospace, monospace;
+        letter-spacing: 0.08em;
+        text-transform: uppercase;
+      }
+      .hero-spec-list dd {
+        margin: 0;
+        color: var(--text-secondary);
+        font: 500 0.75rem/1.5 "DM Mono", ui-monospace, monospace;
+      }
+      .hero-spec-foot {
+        margin: 0.85rem 0 0;
+        color: var(--text-muted);
+        font-size: 0.72rem;
+        line-height: 1.5;
+      }
+      @media (max-width: 900px) {
+        .hero--split .hero-content,
+        .hero-content { grid-template-columns: minmax(0, 1fr) !important; gap: 2rem; }
+        .hero-spec { order: 3; }
+      }
+      .hero {
+        border-bottom: var(--rule);
+        background: var(--bg-base) !important;
+      }
+      .hero-bg { background: none !important; }
+      /* The player section follows immediately, so the hero does not need to
+         fill a screen on its own. */
+      .hero-content { padding-block: 4.5rem 3rem; }
+
+      /* ── One chip, everywhere ───────────────────────────────────── */
+      .format-chip,
+      .format-chips li,
+      .stat-pill,
+      .hero-meta span {
+        padding: 0.2rem 0.45rem !important;
+        border: var(--rule) !important;
+        border-radius: var(--r-1) !important;
+        background: transparent !important;
+        color: var(--text-secondary) !important;
+        font: 500 0.69rem/1.35 "DM Mono", ui-monospace, monospace !important;
+        letter-spacing: 0.06em;
+        text-transform: uppercase;
+      }
+      .format-chips { gap: 0.4rem !important; }
+
+      /* ── Section rhythm: one cadence, hairline breaks ───────────── */
+      .features-section {
+        padding-block: 4.5rem;
+        border-bottom: var(--rule);
+      }
+      .section-eyebrow,
+      .hero-kicker {
+        color: var(--text-muted) !important;
+        font: 600 0.68rem/1 "DM Mono", ui-monospace, monospace !important;
+        letter-spacing: 0.09em !important;
+      }
+      .section-head h2,
+      .features-section h2 {
+        letter-spacing: -0.025em;
+      }
+
+      /* ── Controls: the accent is for the thing you press ────────── */
+      .url-bar,
+      .hero-mode-tabs,
+      .hero-install,
+      .way-card,
+      .faq-item {
+        border-radius: var(--r-2) !important;
+        border: var(--rule) !important;
+        background: var(--bg-elevated) !important;
+      }
+      .url-bar-btn,
+      .hero-cta-primary {
+        border-radius: var(--r-2) !important;
+        background: var(--accent) !important;
+        box-shadow: none !important;
+      }
+      .url-bar-btn:hover,
+      .hero-cta-primary:hover {
+        background: var(--accent-hover) !important;
+        filter: none !important;
+        transform: none !important;
+      }
+      .hero-mode-tab {
+        border-radius: var(--r-1) !important;
+      }
+      .hero-mode-tab.active {
+        border: 1px solid var(--accent) !important;
+        background: transparent !important;
+        color: var(--text-primary) !important;
+      }
+      :focus-visible {
+        outline: 1px solid var(--accent);
+        outline-offset: 2px;
+      }
+
+      /* ── Counters and icons: squared, not bubbled ───────────────
+         Numbered circles beside circled icons is the shape every generated
+         landing page arrives in. The number is set like a figure in a
+         reference table, the icon sits in the same square box as everything
+         else, and neither is filled with the accent. */
+      .how-step-num {
+        width: auto !important;
+        height: auto !important;
+        min-width: 1.7rem;
+        border-radius: 0 !important;
+        border: 0 !important;
+        background: none !important;
+        color: var(--text-muted) !important;
+        font: 600 0.78rem/1 "DM Mono", ui-monospace, monospace !important;
+        font-variant-numeric: tabular-nums;
+        letter-spacing: 0.04em;
+      }
+      .how-step-icon,
+      .proof-icon,
+      .feature-icon,
+      .way-icon {
+        border-radius: var(--r-2) !important;
+        border: var(--rule) !important;
+        background: transparent !important;
+        box-shadow: none !important;
+        color: var(--text-secondary) !important;
+      }
+      .how-step-icon svg,
+      .proof-icon svg,
+      .feature-icon svg,
+      .way-icon svg { stroke: currentColor !important; }
+      .how-step { gap: 0.7rem !important; }
+      .how-step:not(:last-child)::after { opacity: 0.45; }
+
+      /* ── No washes behind the sections ──────────────────────────── */
+      .features-section::before,
+      .features-section::after,
+      .player-section::before,
+      .player-section::after,
+      .watch-rail::before,
+      .watch-rail::after {
+        display: none !important;
+      }
+      body,
+      .features-section,
+      .player-section,
+      .watch-rail { background-image: none !important; }
+
+      /* ── The hero, tightened ────────────────────────────────────── */
+      .hero-kicker { margin-bottom: 0.75rem !important; }
+      .hero h1 { margin-bottom: 0.9rem !important; }
+      .hero-tagline { margin-bottom: 1.1rem !important; }
+      .hero-install { margin-top: 0 !important; margin-bottom: 1.6rem !important; }
+      .hero-panel { padding: 0 !important; border: 0 !important; background: none !important; }
+      .hero-proof-grid { margin-top: 1.6rem !important; }
+
+      /* ── The extension card moves out of the content's way ─────
+         It was pinned under the navbar on the right, which used to be the
+         decorative half of the hero and is now the half that answers "will it
+         play my file?" — so it sat on top of the answer, and the link inside
+         it could not even be clicked. A promotion belongs beside the page,
+         not over it: bottom right, where a dismissible card goes. */
+      .ext-prompt-wrap {
+        position: fixed !important;
+        top: auto !important;
+        bottom: 1.25rem !important;
+        right: 1.25rem !important;
+        z-index: 40 !important;
+      }
+      .ext-prompt {
+        border-radius: var(--r-3) !important;
+        border: var(--rule) !important;
+        background: var(--bg-elevated) !important;
+        box-shadow: none !important;
+      }
+
+      /* ── Tabular numerals: a running time that does not wobble ──── */
+      .stat-pill,
+      .hero-meta span,
+      .how-step-index {
+        font-variant-numeric: tabular-nums;
+      }
+    </style>
   </head>
 
   <body>
@@ -6465,6 +6783,24 @@
           </div>
         </div>
 
+        <!-- The question a visitor actually arrives with, answered where they
+             arrive: not a picture of a player, a list of what it opens. Same
+             facts as the "What can it play?" section further down, in the
+             form you can scan in two seconds. -->
+        <aside class="hero-spec" aria-label="What it plays">
+          <div class="hero-spec-head">
+            <span class="hero-spec-eyebrow">Will it play my file?</span>
+            <a class="hero-spec-more" href="#formats">Full list &rarr;</a>
+          </div>
+          <dl class="hero-spec-list">
+            <div><dt>Containers</dt><dd>MKV &middot; MP4 &middot; AVI &middot; MOV &middot; FLV &middot; MPEG-TS &middot; WebM</dd></div>
+            <div><dt>Video</dt><dd>H.264 &middot; HEVC &middot; AV1 &middot; VP9 &middot; VP8</dd></div>
+            <div><dt>Audio</dt><dd>AAC &middot; Opus &middot; FLAC &middot; MP3 &middot; AC3 &middot; TrueHD &middot; DTS</dd></div>
+            <div><dt>HDR</dt><dd>HDR10 &middot; HLG &middot; Dolby Vision (profile 8)</dd></div>
+            <div><dt>Subtitles</dt><dd>SRT &middot; ASS &middot; WebVTT &middot; PGS &middot; DVB</dd></div>
+          </dl>
+          <p class="hero-spec-foot">Demuxed by FFmpeg (WebAssembly), decoded by WebCodecs — on your device, nothing uploaded.</p>
+        </aside>
         <div class="hero-showcase" aria-label="MoviPlayer preview playing a mountain landscape video">
           <div class="hero-blob hero-blob-a" aria-hidden="true"></div>
           <div class="hero-blob hero-blob-b" aria-hidden="true"></div>
