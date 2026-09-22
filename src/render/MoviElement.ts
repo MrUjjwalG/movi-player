@@ -23176,16 +23176,15 @@ export class MoviElement extends HTMLElement {
       }
 
 
-      /* Default (the base rule) is the true geometric centre. When the controls
-         bar is visible, lift the centre button AND the loading spinner a little
-         so they read as centred in the band above the bar. Keyed off a host
-         class toggled in show/hideControls, because :host:has() checks against
-         the shadow tree don't apply in every engine (notably Electron). The
-         transition on top (in each base rule) animates the move. */
-      :host(.movi-bar-visible) .movi-center-play-pause,
-      :host(.movi-bar-visible) .movi-loading-indicator {
-        top: calc(50% - var(--movi-controls-height) / 4);
-      }
+      /* The centre is the centre.
+         These used to lift by a quarter of the bar's height whenever the bar
+         was up, so they would read as centred in the band above it. It is a
+         defensible optical argument and it loses to a simpler one: the button
+         is a circle in the middle of a picture, and anything that puts it 18px
+         off the middle is read as a mistake — most visibly on a phone, where
+         autoplay flashes it while the bar is still up and it appears, once,
+         high. The spinner moved with it and is left where it is for the same
+         reason: it stands exactly where the button it replaces stood. */
 
       .movi-center-play-pause::before {
         content: "";
