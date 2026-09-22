@@ -249,13 +249,13 @@ void movi_thumbnail_read_keyframe(struct MoviThumbnailContext *ctx,
 
   if (!ctx || !ctx->fmt_ctx || !ctx->pkt) {
     av_log(NULL, AV_LOG_ERROR, "[THUMB] ERROR: null context\n");
-    js_thumbnail_packet_ready(-1, 0.0);
+    js_thumbnail_packet_ready(-1, 0.0, 0.0);
     return;
   }
   if (ctx->video_stream_index < 0) {
     av_log(NULL, AV_LOG_ERROR, "[THUMB] ERROR: video_stream_index=%d\n",
             ctx->video_stream_index);
-    js_thumbnail_packet_ready(-2, 0.0);
+    js_thumbnail_packet_ready(-2, 0.0, 0.0);
     return;
   }
 
@@ -372,7 +372,7 @@ void movi_thumbnail_read_keyframe(struct MoviThumbnailContext *ctx,
 
   if (ret < 0) {
     av_log(NULL, AV_LOG_ERROR, "[THUMB] ERROR: seek failed\n");
-    js_thumbnail_packet_ready(-3, 0.0);
+    js_thumbnail_packet_ready(-3, 0.0, 0.0);
     return;
   }
 
@@ -394,7 +394,7 @@ void movi_thumbnail_read_keyframe(struct MoviThumbnailContext *ctx,
   AVPacket *best_pkt = av_packet_alloc();
   if (!best_pkt) {
       av_log(NULL, AV_LOG_ERROR, "[THUMB] ERROR: OOM for best_pkt\n");
-      js_thumbnail_packet_ready(-4, 0.0);
+      js_thumbnail_packet_ready(-4, 0.0, 0.0);
       return;
   }
 
@@ -473,7 +473,7 @@ void movi_thumbnail_read_keyframe(struct MoviThumbnailContext *ctx,
     js_thumbnail_packet_ready(ctx->pkt->size, pts, dts);
   } else {
       av_log(NULL, AV_LOG_ERROR, "[THUMB] No valid keyframe found after search\n");
-      js_thumbnail_packet_ready(-6, 0.0);
+      js_thumbnail_packet_ready(-6, 0.0, 0.0);
   }
 
   av_packet_free(&best_pkt);
@@ -492,7 +492,7 @@ void movi_thumbnail_read_keyframe(struct MoviThumbnailContext *ctx,
 EMSCRIPTEN_KEEPALIVE
 void movi_thumbnail_read_next_packet(struct MoviThumbnailContext *ctx) {
   if (!ctx || !ctx->fmt_ctx || !ctx->pkt || ctx->video_stream_index < 0) {
-    js_thumbnail_packet_ready(-1, 0.0);
+    js_thumbnail_packet_ready(-1, 0.0, 0.0);
     return;
   }
   AVStream *st = ctx->fmt_ctx->streams[ctx->video_stream_index];
@@ -504,14 +504,14 @@ void movi_thumbnail_read_next_packet(struct MoviThumbnailContext *ctx) {
   while (guard-- > 0) {
     int ret = av_read_frame(ctx->fmt_ctx, ctx->pkt);
     if (ret < 0) {
-      js_thumbnail_packet_ready(-6, 0.0);
+      js_thumbnail_packet_ready(-6, 0.0, 0.0);
       return;
     }
     if (ctx->pkt->stream_index == ctx->video_stream_index && ctx->pkt->size > 0)
       break;
     av_packet_unref(ctx->pkt);
     if (guard == 0) {
-      js_thumbnail_packet_ready(-6, 0.0);
+      js_thumbnail_packet_ready(-6, 0.0, 0.0);
       return;
     }
   }
