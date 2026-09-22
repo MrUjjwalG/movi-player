@@ -23185,15 +23185,23 @@ export class MoviElement extends HTMLElement {
       }
 
 
-      /* The centre is the centre.
-         These used to lift by a quarter of the bar's height whenever the bar
-         was up, so they would read as centred in the band above it. It is a
-         defensible optical argument and it loses to a simpler one: the button
-         is a circle in the middle of a picture, and anything that puts it 18px
-         off the middle is read as a mistake — most visibly on a phone, where
-         autoplay flashes it while the bar is still up and it appears, once,
-         high. The spinner moved with it and is left where it is for the same
-         reason: it stands exactly where the button it replaces stood. */
+      /* The centre is the centre — on a player with room to spare.
+         The button used to lift by a quarter of the bar's height whenever the
+         bar was up, at every size, and on a large player that reads as a
+         mistake: the bar is a thin strip along the bottom and the circle is
+         visibly off the middle of the picture.
+         On a SHORT player it is the other way round. The bar is 72px of a
+         300px frame — a quarter of everything — so the true centre sits right
+         on top of it and the button looks stuck to the controls. There the
+         lift is what centring means.
+         So: only while the bar is on screen, and only when the player is
+         short enough for the bar to be a real share of it. The spinner moves
+         with the button, because it stands exactly where the button it
+         replaces stood. */
+      :host(.movi-short.movi-bar-visible) .movi-center-play-pause,
+      :host(.movi-short.movi-bar-visible) .movi-loading-indicator {
+        top: calc(50% - var(--movi-controls-height) / 4);
+      }
 
       .movi-center-play-pause::before {
         content: "";
