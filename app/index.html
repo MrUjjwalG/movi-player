@@ -4223,6 +4223,24 @@
       .hero-panel { padding: 0 !important; border: 0 !important; background: none !important; }
       .hero-proof-grid { margin-top: 1.6rem !important; }
 
+      /* ── Say it once ────────────────────────────────────────────
+         "MKV" appears twelve times on this page, "HEVC" thirteen, "AV1"
+         twelve. The hero alone said it three ways: a row of chips under the
+         tagline, a "PLAYS EVERY FORMAT" strip of nine more below the fold of
+         the copy, and a card in the proof quad reading "Supports All Formats
+         — From MP4 to AV1, and more". Repetition is not emphasis; it is what
+         a page does when it has nothing else to say, and it is a good part of
+         why this one read as filler.
+         The spec block answers it once, properly, and links to the full list.
+         The proof quad goes with them: its other three cards ("100% Private",
+         "Plays Instantly", "Works on Any Device") are the trust row directly
+         above it, said again in bigger type. */
+      .hero-formats,
+      .hero-format-strip,
+      .hero-proof {
+        display: none !important;
+      }
+
       /* ── The extension card moves out of the content's way ─────
          It was pinned under the navbar on the right, which used to be the
          decorative half of the hero and is now the half that answers "will it
