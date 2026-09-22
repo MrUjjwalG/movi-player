@@ -4328,6 +4328,11 @@
       /* The developer switch is a control, so it gets a control's box: the
          same height as the round buttons either side of it, with its own
          word inside the box rather than floating beside it. */
+      /* …and it sits at the head of the group, not wedged between two round
+         buttons. The bar then reads as shapes that belong together: the
+         search field and this pill, then the round icons, then the button.
+         It is also the switch nobody touches twice, so the edge is right. */
+      .nav-search { order: 0; }
       .dev-mode-switch {
         order: 1;
         display: inline-flex !important;
@@ -4349,9 +4354,10 @@
         border-color: var(--accent) !important;
       }
       .dev-mode-switch[aria-checked="true"] .label { color: var(--accent) !important; }
+      .nav-right > .nav-icon-link { order: 2; }
       #theme-toggle,
-      .nav-icon-btn#theme-toggle { order: 2; }
-      .nav-extension-cta { order: 3; }
+      .nav-icon-btn#theme-toggle { order: 3; }
+      .nav-extension-cta { order: 4; }
 
       /* ── The player wears a hairline, not a bezel ───────────────
          The wrapper carried a 10px border, a 22px radius and a 75px shadow —
