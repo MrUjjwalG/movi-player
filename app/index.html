@@ -4376,8 +4376,24 @@
         border-radius: var(--r-3) !important;
         box-shadow: none !important;
       }
-      .player-stage,
-      .player-wrapper movi-player { border-radius: 0 !important; }
+      /* The picture takes the frame's INNER curve — the wrapper's radius less
+         its 1px border — and that radius has to reach the <movi-player>
+         itself, not stop at the stage: Firefox composites the player's canvas
+         as its own layer and does not apply an ancestor's overflow:hidden to
+         it, so a rounded frame keeps square video inside it. Zeroing both was
+         the bug this replaces. The wrapper curved, the black picture did not,
+         and its square corners sat outside the curve. */
+      .player-wrapper > .player-stage {
+        border-radius: calc(var(--r-3) - 1px) !important;
+      }
+      .player-wrapper > .player-stage > movi-player {
+        border-radius: inherit !important;
+      }
+      /* In audio-strip mode the stage goes transparent and the strip is its
+         own element, so it carries the full outer radius, not the inner one. */
+      .player-stage:has(movi-player.movi-audio-strip) > movi-player {
+        border-radius: var(--r-3) !important;
+      }
       /* The player section's eyebrow was landing on the hero's bottom rule —
          the old layout pulled this section up by 100px to overlap the hero,
          which only worked while the hero ended in a picture. It keeps the
