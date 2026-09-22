@@ -3956,9 +3956,17 @@
         --bg-surface: #171b21;
         --text-primary: #f2f4f7;
         --text-secondary: #9aa3b0;
-        --text-muted: #6b7280;
-        --border-subtle: #262b33;
-        --border-hover: #39404b;
+        /* The eyebrows, the spec labels and the chips are all set in this
+           colour at 11px; #6b7280 on this canvas is about 4.4:1, which is
+           under the bar for small text and reads as "greyed out" rather
+           than "quiet". */
+        --text-muted: #7f8a99;
+        /* A hairline has to be a line. At #262b33 on this canvas the rule
+           was there in the file and gone on the screen — the large type in
+           the hero carried itself, and every small box (the step icons, the
+           chips, the spec rows) lost its edge. */
+        --border-subtle: #333b47;
+        --border-hover: #4a5462;
         --accent: #6366f1;
         --accent-hover: #818cf8;
         --accent-glow: transparent;
@@ -4517,6 +4525,17 @@
           gap: 0.35rem !important;
           padding: 0 0.5rem !important;
         }
+      }
+
+      /* ── The initial gets its circle back ───────────────────────
+         It was drawn with --badge-bg, and this layer zeroed that token to
+         stop the page filling every little badge with colour — which left
+         the letter floating with nothing around it. It is its own thing:
+         a surface, a hairline, and the letter in the accent. */
+      .comment-avatar {
+        background: var(--bg-surface) !important;
+        border: var(--rule);
+        color: var(--accent) !important;
       }
 
       /* ── Tabular numerals: a running time that does not wobble ──── */
