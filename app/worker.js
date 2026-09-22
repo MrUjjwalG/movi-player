@@ -3394,10 +3394,10 @@ function timingSafeEqualStr(a, b) {
 // Two doors, different sizes. The room code is what people share and is not a
 // credential — anyone may open ?party=movie and will land in it as a
 // follower, able to do nothing. Claiming the chair in that room means
-// presenting the one secret in D1 (party_secret), and only the first claim on
-// a room is honoured.
+// presenting a six-digit code from an authenticator app, and only the first
+// claim on a room is honoured.
 //
-// The secret never reaches the Durable Object. It is checked here, and what
+// The code never reaches the Durable Object. It is checked here, and what
 // travels onward is a short-lived HMAC over (code, expiry) — so a token
 // lifted from one room's URL opens neither another room nor the same one
 // tomorrow.
@@ -3413,11 +3413,64 @@ function partyCodeKey(code) {
   return code.trim().toLowerCase().replace(/[\s_-]+/g, "-");
 }
 
-async function sha256Hex(text) {
-  const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(text));
-  let hex = "";
-  for (const b of new Uint8Array(digest)) hex += b.toString(16).padStart(2, "0");
-  return hex;
+// --- TOTP (RFC 6238), so the thing a host types is a code that expires ---
+//
+// Checked against RFC 6238 Appendix B's published vectors before being
+// trusted: all six match at 8 digits, which is the same computation the 6
+// digits below take the tail of.
+
+function base32Decode(str) {
+  const A = "ABCDEFGHIJKLMNOPQRSTUVWXYZ234567";
+  const clean = String(str).toUpperCase().replace(/[\s-]+/g, "").replace(/=+$/, "");
+  if (!clean) return null;
+  let bits = 0;
+  let value = 0;
+  const out = [];
+  for (const ch of clean) {
+    const idx = A.indexOf(ch);
+    if (idx === -1) return null;
+    value = (value << 5) | idx;
+    bits += 5;
+    if (bits >= 8) {
+      out.push((value >>> (bits - 8)) & 0xff);
+      bits -= 8;
+    }
+  }
+  return out.length ? new Uint8Array(out) : null;
+}
+
+async function totpAt(keyBytes, counter) {
+  const buf = new ArrayBuffer(8);
+  const view = new DataView(buf);
+  view.setUint32(0, Math.floor(counter / 4294967296));
+  view.setUint32(4, counter >>> 0);
+  const key = await crypto.subtle.importKey(
+    "raw",
+    keyBytes,
+    { name: "HMAC", hash: "SHA-1" },
+    false,
+    ["sign"],
+  );
+  const sig = new Uint8Array(await crypto.subtle.sign("HMAC", key, buf));
+  const off = sig[sig.length - 1] & 0x0f;
+  const bin =
+    ((sig[off] & 0x7f) << 24) | (sig[off + 1] << 16) | (sig[off + 2] << 8) | sig[off + 3];
+  return String(bin % 1000000).padStart(6, "0");
+}
+
+// One step either side of now. Phones and Cloudflare do not agree to the
+// second, and a host whose clock is twenty seconds out should not be told
+// their code is wrong.
+const TOTP_SKEW_STEPS = 1;
+
+async function totpValid(secretBase32, given) {
+  const key = base32Decode(secretBase32);
+  if (!key || !/^[0-9]{6}$/.test(given)) return false;
+  const now = Math.floor(Date.now() / 1000 / 30);
+  for (let d = -TOTP_SKEW_STEPS; d <= TOTP_SKEW_STEPS; d++) {
+    if (constantTimeEqual(given, await totpAt(key, now + d))) return true;
+  }
+  return false;
 }
 
 async function signPartyToken(env, codeKey, expiresAt) {
@@ -3425,14 +3478,18 @@ async function signPartyToken(env, codeKey, expiresAt) {
 }
 
 /**
- * POST /api/party/host  { code, secret } -> { token, exp, code }
+ * POST /api/party/host  { code, otp } -> { token, exp, code }
  *
- * Deliberately quiet about which half was wrong: a caller probing for the
- * secret learns the same thing from a bad one as from a malformed code, and
- * the same again when no secret has been set at all.
+ * The six digits from an authenticator app, not a password. Nothing to store
+ * and nothing to leak: the shared secret lives in PARTY_TOTP_SECRET and never
+ * leaves the worker, and what the host types stops working within the minute.
+ *
+ * Deliberately quiet about which half was wrong: a caller probing learns the
+ * same thing from a bad code as from a malformed room name, and the same
+ * again when no secret has been configured at all.
  */
 async function handlePartyHost(request, env) {
-  if (!env.ENC_SERVER_SECRET || !env.COMMENTS_DB) {
+  if (!env.ENC_SERVER_SECRET) {
     return jsonResponse({ error: "Watch party is not configured on this deployment" }, 503);
   }
   let body;
@@ -3442,19 +3499,14 @@ async function handlePartyHost(request, env) {
     return jsonResponse({ error: "Invalid request" }, 400);
   }
   const code = typeof body?.code === "string" ? body.code.trim() : "";
-  const secret = typeof body?.secret === "string" ? body.secret : "";
-  if (!PARTY_CODE_RE.test(code) || !secret) {
+  const otp = typeof body?.otp === "string" ? body.otp.replace(/\s+/g, "") : "";
+  if (!PARTY_CODE_RE.test(code) || !otp) {
     return jsonResponse({ error: "Not allowed" }, 403);
   }
 
-  const row = await env.COMMENTS_DB.prepare(
-    "SELECT secret_hash FROM party_secret WHERE id = 1",
-  ).first().catch(() => null);
-  // No row means nobody has set a secret, which means nobody can host. That
-  // is the correct fail-closed answer for a gate: an unset gate is shut, not
-  // open.
-  if (!row?.secret_hash) return jsonResponse({ error: "Not allowed" }, 403);
-  if (!constantTimeEqual(await sha256Hex(secret), row.secret_hash)) {
+  // No secret configured means nobody can host, rather than everybody: a gate
+  // nobody has set up is shut.
+  if (!env.PARTY_TOTP_SECRET || !(await totpValid(env.PARTY_TOTP_SECRET, otp))) {
     return jsonResponse({ error: "Not allowed" }, 403);
   }
 

@@ -10250,8 +10250,8 @@
       //
       // The code is what people share, and it is NOT a credential: open
       // someone else's code and you land in their room as a follower. Taking
-      // the chair means presenting the one secret in D1, and only the first
-      // claim on a room is honoured.
+      // the chair means presenting a six-digit code from an authenticator
+      // app, and only the first claim on a room is honoured.
       //
       // Only URL sources can be shared. A local file cannot travel, so the
       // host is stopped before a party starts on one rather than being let
@@ -10575,7 +10575,7 @@
           return "Following the host.";
         };
 
-        const ask = ({ prompt, placeholder, type, submit, value }) =>
+        const ask = ({ prompt, placeholder, type, submit, value, numeric }) =>
           new Promise((resolve) => {
             say(prompt);
             const input = document.createElement("input");
@@ -10583,6 +10583,14 @@
             input.type = type;
             input.placeholder = placeholder;
             input.autocomplete = "off";
+            if (numeric) {
+              // A phone should offer digits for six digits, and an
+              // authenticator code is the one thing a password manager must
+              // not try to fill.
+              input.inputMode = "numeric";
+              input.pattern = "[0-9]*";
+              input.maxLength = 6;
+            }
             if (value) input.value = value;
             panel.insertBefore(input, elActs);
             const go = () => {
@@ -10600,8 +10608,9 @@
           });
 
         const askForSecret = () =>
-          ask({ prompt: "Enter the host secret to take this room.",
-                placeholder: "Host secret", type: "password", submit: "Take the room" });
+          ask({ prompt: "Enter the 6-digit code from your authenticator app.",
+                placeholder: "123456", type: "text", submit: "Take the room",
+                numeric: true });
 
         const storedName = () => {
           try { return (localStorage.getItem("movi-party-name") || "").slice(0, 24); }
@@ -10617,12 +10626,12 @@
             const res = await fetch("/api/party/host", {
               method: "POST",
               headers: { "Content-Type": "application/json" },
-              body: JSON.stringify({ code: partyCode, secret }),
+              body: JSON.stringify({ code: partyCode, otp: secret }),
             });
             if (res.ok) auth = await res.json();
           } catch { /* offline, or the worker is down — same answer below */ }
           if (!auth) {
-            say("That secret was not accepted.", true);
+            say("That code was not accepted.", true);
             renderActions();
             return;
           }

@@ -435,31 +435,3 @@ INSERT OR IGNORE INTO profanity_terms (term, kind) VALUES
   ('gangbang', 'strong'),
   ('masturbat', 'strong'),
   ('pedophile', 'strong');
-
--- ---------------------------------------------------------------------------
--- Watch party: the one secret that lets someone HOST.
---
--- The room code is what people share; it is not a credential. Anyone can open
--- ?party=movie. But claiming the chair in that room means presenting this
--- secret, so a stranger who guesses a code joins as a follower and can do
--- nothing. That is the whole point: the feature is not meant to be a public
--- watch-anything-together service.
---
--- One row, by construction (the CHECK pins the id), because there is one
--- secret. Only its SHA-256 is kept — a dump of this table does not let anyone
--- host. Set or change it in one command; edit the first line only:
---
---   SECRET='1234'
---   wrangler d1 execute movi-comments --remote --command \
---     "INSERT OR REPLACE INTO party_secret (id, secret_hash, updated_at) \
---      VALUES (1, '$(printf %s \"$SECRET\" | shasum -a 256 | cut -d' ' -f1)', \
---      strftime('%s','now') * 1000)"
---
--- Turn hosting off entirely without changing anything else:
---   DELETE FROM party_secret;
-
-CREATE TABLE IF NOT EXISTS party_secret (
-  id          INTEGER PRIMARY KEY CHECK (id = 1),
-  secret_hash TEXT    NOT NULL,
-  updated_at  INTEGER NOT NULL
-);
