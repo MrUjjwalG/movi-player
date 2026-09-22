@@ -11366,17 +11366,48 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
         { data: packetData, pts: timestamp, key: true },
       ];
       if (this.precisePreviews && timestamp < time - 0.02) {
+        // Packets arrive in DECODE order, and with B-frames that is not
+        // presentation order: a packet whose pts is past the pointer can
+        // arrive while the frames AT the pointer are still to come. Measured
+        // on a 1080p25 H.264 file with a B-pyramid, four packets in:
+        //
+        //   pts 0.000  0.040  0.080  0.200  0.120  0.160  0.320  0.240
+        //
+        // Stopping at the first `pts >= time` therefore stopped at 0.200 for
+        // a hover at 0.160 — before 0.120 and 0.160 had been read at all —
+        // and the card showed whatever the run happened to contain, which is
+        // not the frame the seek then lands on. It is exactly this file's
+        // "the preview and the frame disagree", and only this file's, because
+        // most encodes deliver pts in order.
+        //
+        // The reader answers that with the packet's DECODE timestamp, which
+        // rises with every packet in the order they arrive. The frame the
+        // pointer is on has dts <= its own pts, so reading until dts reaches
+        // the pointer is guaranteed to have read it — and everything it
+        // references, whose dts is earlier still.
+        //
+        // A WASM build that predates this reports no dts (NaN). There the
+        // walk keeps going for a short window past the first pts that passes
+        // the pointer instead: the reorder depth is small (2–4 in practice,
+        // this file included) and the frames are small, so a dozen is
+        // generous and costs a few milliseconds.
+        const REORDER_TAIL = 12;
+        let tail = -1;
         for (;;) {
           const size = await this.thumbnailBindings.readNextPacket();
           if (size <= 0) break; // EOF, or a read that went wrong
           const pts = this.previewPacketPts();
+          const rawDts = this.thumbnailBindings.getPacketDts?.() ?? Number.NaN;
+          const dts = Number.isFinite(rawDts) ? rawDts - this.startTime : Number.NaN;
           const data = this.thumbnailBindings.getPacketDataCopy(size);
           if (!data) break;
           run.push({ data, pts, key: false });
-          // Decoding stops AT the hovered moment, not before it: this packet
-          // may be the frame being asked for, and in a stream with B-frames
-          // the ones around it are needed to build it anyway.
-          if (pts >= time) break;
+          if (Number.isFinite(dts)) {
+            if (dts >= time) break;
+          } else {
+            if (pts >= time && tail < 0) tail = 0;
+            if (tail >= 0 && ++tail > REORDER_TAIL) break;
+          }
         }
       }
 

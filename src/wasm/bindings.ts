@@ -1571,6 +1571,10 @@ export class ThumbnailBindings {
   private dataSource: DataSource | null = null;
   private isOpened: boolean = false;
   private lastPacketPts: number = 0; // Store from callback
+  /** The same packet's DECODE timestamp. Monotonic in the order packets
+   *  arrive, which PTS is not once a stream carries B-frames — see
+   *  getPacketDts. NaN until a build that reports it answers. */
+  private lastPacketDts: number = Number.NaN;
 
   constructor(module: MoviWasmModule) {
     this.module = module;
@@ -1698,16 +1702,18 @@ export class ThumbnailBindings {
     // We use a shared result object to capture callback data
     let packetSize = -1;
     let packetPts = -1;
+    let packetDts = Number.NaN;
 
     // Setup callback that C will call
     (this.module as any)._pendingThumbnail = {
-      resolve: (result: { size: number; pts: number }) => {
+      resolve: (result: { size: number; pts: number; dts?: number }) => {
         Logger.debug(
           TAG,
           `JS callback received: size=${result.size}, pts=${result.pts}`,
         );
         packetSize = result.size;
         packetPts = result.pts;
+        packetDts = result.dts ?? Number.NaN;
       },
     };
 
@@ -1725,6 +1731,7 @@ export class ThumbnailBindings {
       // After ccall completes, the callback should have populated our variables
       if (packetSize > 0) {
         this.lastPacketPts = packetPts;
+        this.lastPacketDts = packetDts;
       }
       return packetSize;
     } catch (e) {
@@ -1744,10 +1751,12 @@ export class ThumbnailBindings {
     if (!this.contextPtr || !this.isOpened) return -1;
     let packetSize = -1;
     let packetPts = -1;
+    let packetDts = Number.NaN;
     (this.module as any)._pendingThumbnail = {
-      resolve: (result: { size: number; pts: number }) => {
+      resolve: (result: { size: number; pts: number; dts?: number }) => {
         packetSize = result.size;
         packetPts = result.pts;
+        packetDts = result.dts ?? Number.NaN;
       },
     };
     try {
@@ -1758,7 +1767,10 @@ export class ThumbnailBindings {
         [this.contextPtr],
         { async: true },
       );
-      if (packetSize > 0) this.lastPacketPts = packetPts;
+      if (packetSize > 0) {
+        this.lastPacketPts = packetPts;
+        this.lastPacketDts = packetDts;
+      }
       return packetSize;
     } catch (e) {
       Logger.error(TAG, "readNextPacket error", e);
@@ -1792,6 +1804,22 @@ export class ThumbnailBindings {
    */
   getPacketPts(): number {
     return this.lastPacketPts;
+  }
+
+  /**
+   * The last packet's DECODE timestamp, or NaN from a WASM build that does
+   * not report one.
+   *
+   * PTS is presentation order. Packets arrive in decode order, and with
+   * B-frames the two differ — a picture meant for later can be handed over
+   * before one meant for now. A reader walking forward to a hovered moment
+   * therefore cannot ask "is this pts past the pointer yet"; the answer is
+   * yes long before the frame under the pointer has been read. DTS rises with
+   * every packet in the order they arrive, so it is the one that says when
+   * the walk has gone far enough.
+   */
+  getPacketDts(): number {
+    return this.lastPacketDts;
   }
 
   /**

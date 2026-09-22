@@ -101,10 +101,13 @@ mergeInto(LibraryManager.library, {
 
     // Thumbnail packet ready callback
     // Called by C when thumbnail packet is found
-    js_thumbnail_packet_ready: function (size, pts) {
-        console.log('[library_movi] Thumbnail packet ready:', size, pts);
+    js_thumbnail_packet_ready: function (size, pts, dts) {
+        console.log('[library_movi] Thumbnail packet ready:', size, pts, dts);
         if (Module._pendingThumbnail) {
-            Module._pendingThumbnail.resolve({ size: size, pts: pts });
+            // dts is the decode timestamp — monotonic in the order packets
+            // arrive, unlike pts on a stream with B-frames. See the walk in
+            // MoviPlayer's preview path.
+            Module._pendingThumbnail.resolve({ size: size, pts: pts, dts: dts });
             Module._pendingThumbnail = null;
         }
     },

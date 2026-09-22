@@ -35,6 +35,13 @@ struct MoviThumbnailContext {
   // Result storage
   int last_packet_size;
   double last_packet_pts;
+  // …and its decode timestamp. PTS is presentation order; in a stream with
+  // B-frames the packets arrive in DECODE order, so a reader walking forward
+  // to a hovered moment cannot tell from PTS alone when it has passed that
+  // moment — a later picture can be handed over before an earlier one. DTS is
+  // monotonic in the order packets arrive, which is the order the reader sees
+  // them in, so it is the one that answers "am I there yet".
+  double last_packet_dts;
 };
 
 extern int js_read_async(uint8_t *buffer, int offset_low, int offset_high,
@@ -42,7 +49,7 @@ extern int js_read_async(uint8_t *buffer, int offset_low, int offset_high,
 extern int64_t js_seek_async(int offset_low, int offset_high, int whence);
 
 // JS callback declaration
-extern void js_thumbnail_packet_ready(int size, double pts);
+extern void js_thumbnail_packet_ready(int size, double pts, double dts);
 
 static int thumbnail_avio_read(void *opaque, uint8_t *buf, int buf_size) {
   struct MoviThumbnailContext *ctx = (struct MoviThumbnailContext *)opaque;
@@ -102,6 +109,7 @@ struct MoviThumbnailContext *movi_thumbnail_create(int file_size_low,
   ctx->pkt = av_packet_alloc();
   ctx->last_packet_size = 0;
   ctx->last_packet_pts = 0.0;
+  ctx->last_packet_dts = 0.0;
 
   return ctx;
 }
@@ -450,14 +458,19 @@ void movi_thumbnail_read_keyframe(struct MoviThumbnailContext *ctx,
     else if (ctx->pkt->dts != AV_NOPTS_VALUE)
         pts = ctx->pkt->dts * av_q2d(st->time_base);
         
+    double dts = pts;
+    if (ctx->pkt->dts != AV_NOPTS_VALUE)
+        dts = ctx->pkt->dts * av_q2d(st->time_base);
+
     ctx->last_packet_size = ctx->pkt->size;
     ctx->last_packet_pts = pts;
+    ctx->last_packet_dts = dts;
 
     av_log(NULL, AV_LOG_DEBUG,
-            "[THUMB] SUCCESS: returning keyframe size=%d, pts=%.2f\n",
-            ctx->pkt->size, pts);
-            
-    js_thumbnail_packet_ready(ctx->pkt->size, pts);
+            "[THUMB] SUCCESS: returning keyframe size=%d, pts=%.2f dts=%.2f\n",
+            ctx->pkt->size, pts, dts);
+
+    js_thumbnail_packet_ready(ctx->pkt->size, pts, dts);
   } else {
       av_log(NULL, AV_LOG_ERROR, "[THUMB] No valid keyframe found after search\n");
       js_thumbnail_packet_ready(-6, 0.0);
@@ -508,9 +521,13 @@ void movi_thumbnail_read_next_packet(struct MoviThumbnailContext *ctx) {
     pts = ctx->pkt->pts * av_q2d(st->time_base);
   else if (ctx->pkt->dts != AV_NOPTS_VALUE)
     pts = ctx->pkt->dts * av_q2d(st->time_base);
+  double dts = pts;
+  if (ctx->pkt->dts != AV_NOPTS_VALUE)
+    dts = ctx->pkt->dts * av_q2d(st->time_base);
   ctx->last_packet_size = ctx->pkt->size;
   ctx->last_packet_pts = pts;
-  js_thumbnail_packet_ready(ctx->pkt->size, pts);
+  ctx->last_packet_dts = dts;
+  js_thumbnail_packet_ready(ctx->pkt->size, pts, dts);
 }
 
 EMSCRIPTEN_KEEPALIVE
