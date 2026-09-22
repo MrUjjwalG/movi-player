@@ -207,6 +207,10 @@
               "description": "How long an interruption has to last, in **seconds**, before the viewer is shown a loading spinner."
             },
             {
+              "name": "posterdelay",
+              "description": "How long to wait, in **milliseconds**, before putting the opening poster up — the cover shown while a source loads its first frame."
+            },
+            {
               "name": "title",
               "description": "Sets the video title shown in the in-player overlay. Unlike the global HTML `title` attribute, this does **not** trigger a native browser tooltip on hover."
             },

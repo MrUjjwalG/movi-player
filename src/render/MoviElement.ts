@@ -1032,6 +1032,28 @@ export class MoviElement extends HTMLElement {
   // One number sets both; `spinnerdelay="1 2"` splits them. See spinnerDelayMs.
   private _spinnerDelayOpening: number | null =
     MoviElement.DEFAULT_SPINNER_DELAY_OPENING_S;
+
+  /**
+   * How long to wait before putting the OPENING poster up, in milliseconds.
+   *
+   * Zero — show it at once — is the default, because that is what every host
+   * using this today already gets and a poster is the honest thing to show
+   * while a video loads.
+   *
+   * It stops being honest when the video does not need loading. A host that
+   * prefetches (movi-tube warms the next video's first bytes, so the picture
+   * lands in ~300ms) shows a thumbnail that is gone again before it has been
+   * read: the viewer sees a flash where nothing was wrong. `posterdelay="600"`
+   * says "only cover this if it is actually going to take a moment" — under
+   * that, the poster never appears at all and the picture is simply there.
+   *
+   * The same shape as spinnerdelay above, and for the same reason: a wait that
+   * resolves inside the delay is a wait the viewer never needs to hear about.
+   */
+  private _posterDelayMs: number = 0;
+  // The pending opening poster, if one is waiting out `posterdelay`. Cleared
+  // when the frame beats it — see hidePoster.
+  private _posterDelayTimer: ReturnType<typeof setTimeout> | null = null;
   // Host-supplied pluggable subtitle renderer (e.g. jassub/libass). Stored so it
   // survives a source change: re-applied to each fresh player instance.
   private _subtitleRenderer: SubtitleRenderer | null = null;
@@ -2017,6 +2039,7 @@ export class MoviElement extends HTMLElement {
       "themecolor",
       "buffersize",
       "spinnerdelay",
+      "posterdelay",
       "title",
       "showtitle",
       "titlemode",
@@ -11059,6 +11082,24 @@ export class MoviElement extends HTMLElement {
         timedBytes = total;
       }
 
+      const head = new Uint8Array(total);
+      let at = 0;
+      for (const c of chunks) {
+        head.set(c, at);
+        at += c.byteLength;
+      }
+      // Even a probe that couldn't be timed leaves its bytes behind — the
+      // download already happened, and the source would only repeat it.
+      //
+      // BEFORE the cache check below, which is where this used to sit behind.
+      // A head served from the browser's cache is the one case where the bytes
+      // are already on the machine and free to hand over, and it was the one
+      // case that returned without handing them over — so the source went and
+      // fetched the same range again. Measured on a prefetched click: the probe
+      // read the head in 23ms, dropped it, and the open then sat in
+      // `Read: waiting for data...` for 129ms of a 345ms start.
+      HttpSource.offerWarmHead(url, head);
+
       // A body that arrived faster than any link could deliver it didn't come
       // over the link — it came from the browser's cache, and it says nothing
       // about the network. Reported as a measurement it produced "24000.0Mbps"
@@ -11068,20 +11109,10 @@ export class MoviElement extends HTMLElement {
       if (totalSecs < 0.03) {
         Logger.info(
           TAG,
-          `Head probe served from cache in ${(totalSecs * 1000).toFixed(0)}ms — link not measured`,
+          `Head probe served from cache in ${(totalSecs * 1000).toFixed(0)}ms — link not measured, head kept`,
         );
         return 0;
       }
-
-      const head = new Uint8Array(total);
-      let at = 0;
-      for (const c of chunks) {
-        head.set(c, at);
-        at += c.byteLength;
-      }
-      // Even a probe that couldn't be timed leaves its bytes behind — the
-      // download already happened, and the source would only repeat it.
-      HttpSource.offerWarmHead(url, head);
 
       const secs = timingStart > 0 ? (performance.now() - timingStart) / 1000 : 0;
       if (secs <= 0 || timedBytes <= 0) return 0;
@@ -26892,6 +26923,11 @@ export class MoviElement extends HTMLElement {
       this._spinnerDelay = spin.stall;
       this._spinnerDelayOpening = spin.opening;
     }
+    const posterDelayAttr = this.getAttribute("posterdelay");
+    if (posterDelayAttr) {
+      const ms = parseFloat(posterDelayAttr);
+      if (Number.isFinite(ms) && ms >= 0) this._posterDelayMs = ms;
+    }
     this._ambientMode = this.hasAttribute("ambientmode");
     this._ambientWrapper = this.getAttribute("ambientwrapper");
     const objectFitAttr = this.getAttribute("objectfit");
@@ -27886,6 +27922,34 @@ export class MoviElement extends HTMLElement {
           }
         }
         break;
+      case "posterdelay": {
+        const ms = parseFloat(newValue ?? "");
+        this._posterDelayMs = Number.isFinite(ms) && ms >= 0 ? ms : 0;
+        // The same late-arrival problem spinnerdelay documents below, and the
+        // same answer. A React or Vue wrapper reflects its props in a post-mount
+        // effect, so this number lands a frame AFTER the element connected and
+        // started loading — by which point the opening poster has been painted
+        // under the default of 0 and the delay the page asked for could never
+        // take effect. Measured on this app: posterdelay="600" arrived, and the
+        // cover still went up at 208ms.
+        //
+        // So take it back down and re-arm. Nothing has painted yet (that is
+        // what the flag says), so there is no picture being uncovered — and in
+        // practice this lands while showPoster is still awaiting its decode,
+        // before the poster was ever on screen at all.
+        if (
+          this._posterDelayMs > 0 &&
+          !this._hasEverPlayed &&
+          this.posterElement &&
+          this.posterElement.style.display === "block" &&
+          !this._snapshotPosterActive
+        ) {
+          const url = this._poster || this._generatedPosterUrl;
+          this.hidePoster();
+          if (url) void this.showPoster(url);
+        }
+        break;
+      }
       case "spinnerdelay": {
         const spin = MoviElement.parseSpinnerDelay(newValue);
         this._spinnerDelay = spin.stall;
@@ -40834,6 +40898,48 @@ export class MoviElement extends HTMLElement {
     if (token !== this._posterToken || !this.posterElement) return;
 
     el.style.objectFit = this.posterObjectFit();
+
+    // Nothing has been painted for this source yet, so there is nothing to fade
+    // FROM. The box is opaque black at this point — both the host and the
+    // canvas are — and ramping a thumbnail up out of it over 220ms is not a
+    // swap anyone chose: it is the flash a host sees on every navigation, and
+    // it lasts as long as the fade rather than as long as the load. Measured in
+    // movi-tube, poster opacity went 0 → 1 across 158ms → 366ms on each click,
+    // which is exactly what "a cover appears for a moment" was.
+    //
+    // So cut to it. The fade still belongs to the case it was written for —
+    // a poster replacing a picture that is ALREADY on screen — which is what
+    // _hasEverPlayed distinguishes, and which a new source resets.
+    if (!this._hasEverPlayed) {
+      const paint = () => {
+        if (token !== this._posterToken || !this.posterElement) return;
+        const keep = el.style.transition;
+        el.style.transition = "none";
+        el.src = url;
+        el.style.display = "block";
+        el.style.opacity = "1";
+        // Commit that paint before the transition goes back on, or the restore
+        // lands in the same task and the browser animates it after all.
+        void el.offsetHeight;
+        el.style.transition = keep;
+      };
+      // `posterdelay`: hold it back, and if the first frame beats the timer the
+      // poster is never shown at all. hidePoster clears the timer, and the
+      // token check above is the second guard for a source that changed while
+      // it was pending. Zero — the default — keeps the immediate paint every
+      // host has today.
+      if (this._posterDelayMs > 0) {
+        if (this._posterDelayTimer) clearTimeout(this._posterDelayTimer);
+        this._posterDelayTimer = setTimeout(() => {
+          this._posterDelayTimer = null;
+          paint();
+        }, this._posterDelayMs);
+        return;
+      }
+      paint();
+      return;
+    }
+
     el.style.opacity = "0";
     el.src = url;
     el.style.display = "block";
@@ -40855,6 +40961,14 @@ export class MoviElement extends HTMLElement {
    */
   private hidePoster(): void {
     if (!this.posterElement) return;
+    // A poster still waiting out `posterdelay` is the one this is really for:
+    // the frame arrived first, so the cover was never needed. Dropping the
+    // timer here is what makes "fast enough" mean "no poster at all" rather
+    // than "a poster that flashes up after the picture".
+    if (this._posterDelayTimer) {
+      clearTimeout(this._posterDelayTimer);
+      this._posterDelayTimer = null;
+    }
     this._posterToken++;
     this.posterElement.style.display = "none";
   }

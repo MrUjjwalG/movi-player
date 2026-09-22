@@ -1228,6 +1228,21 @@ How long an interruption has to last, in **seconds**, before the viewer is shown
 
 A second number, separated by a space or a comma, is the wait the **opening** gets — the stretch before this source has put a frame up. One number keeps its old meaning and holds every interruption, opening included, to the same wait.
 
+#### `posterdelay`
+
+How long to wait, in **milliseconds**, before putting the opening poster up — the cover shown while a source loads its first frame.
+
+```html
+<!-- only cover it if the picture is going to take more than 600ms -->
+<movi-player src="video.mp4" poster="cover.jpg" posterdelay="600"></movi-player>
+```
+
+**Value:** Milliseconds. The default is **`0`** — the poster paints at once, which is what a player without this attribute has always done.
+
+It is for a host that prefetches. When the first frame is already on its way, a poster that appears and is replaced a moment later is a flash the viewer reads as something going wrong, not as a cover. Set this and a load that finishes inside the wait never shows a poster at all: the picture is simply there. A load that takes longer still gets covered, at the point where the wait is worth explaining.
+
+The wait applies only to the **opening** poster — the one that comes up before a source has painted anything. A poster replacing a picture that is already on screen is unaffected.
+
 The two are different waits and one number is often wrong for both. A video that has not started has its poster up and is doing exactly what a starting video does; a video that stops mid-picture has frozen, and the viewer is looking at a still that was moving a moment ago. Measured on a page that hit this: an ordinary cold open put the ring up for 925ms of a 1205ms startup — a second of "something is wrong" over a video that was merely beginning — while a real mid-play stall on the same page wanted reporting inside a quarter of a second. Raising the single number far enough to cover the first would have bought that silence by going quiet on the second.
 
 Playback interrupts itself constantly and briefly: an opening seek, a scrub landing, a rendition switch, a queue refilling after a flush. Most of those are over in a tenth of a second, and a ring that appears and vanishes faster than it can be read is not information — it reads as a player in trouble. `spinnerdelay` is the wait before the player admits to one.

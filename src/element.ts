@@ -284,6 +284,13 @@ export interface MoviPlayerAttributes {
    */
   spinnerdelay?: number | string;
   /**
+   * How long to wait, in milliseconds, before putting the OPENING poster up.
+   * Default 0 — paint it at once. For a host that prefetches: a load that
+   * finishes inside the wait shows no poster at all, so the picture is simply
+   * there rather than preceded by a cover that flashes.
+   */
+  posterdelay?: number | string;
+  /**
    * Show a notice when what is loaded is not expected to play smoothly on this
    * device at the current speed — "This video may not play smoothly", with the
    * reason. Checked on load and on every speed change. Fires a cancelable

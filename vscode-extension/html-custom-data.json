@@ -693,6 +693,19 @@
           ]
         },
         {
+          "name": "posterdelay",
+          "description": {
+            "kind": "markdown",
+            "value": "How long to wait, in **milliseconds**, before putting the opening poster up — the cover shown while a source loads its first frame."
+          },
+          "references": [
+            {
+              "name": "Documentation",
+              "url": "https://moviplayer.com/docs/api/element#posterdelay"
+            }
+          ]
+        },
+        {
           "name": "title",
           "description": {
             "kind": "markdown",
