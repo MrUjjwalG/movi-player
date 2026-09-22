@@ -4311,6 +4311,24 @@
         background: none !important;
       }
       .faq-item:last-of-type { border-bottom: 0 !important; }
+      /* A row still needs a margin: the question was set hard against the
+         left edge of its own white block, and the +/− against the right. */
+      .faq-item > summary,
+      .faq-item > div {
+        padding-left: 1.25rem !important;
+        padding-right: 1.25rem !important;
+      }
+      .faq-item > div { padding-bottom: 0.35rem !important; }
+
+      /* ── The bar's two switches, in the order they are used ─────
+         Developer mode is a thing you turn on once and forget; the theme is
+         a thing you flick. It belongs nearer the hand, so the dev switch
+         moves to the theme button's left. */
+      .nav-right { display: flex; align-items: center; }
+      .dev-mode-switch { order: 1; }
+      #theme-toggle,
+      .nav-icon-btn#theme-toggle { order: 2; }
+      .nav-extension-cta { order: 3; }
 
       /* ── The player wears a hairline, not a bezel ───────────────
          The wrapper carried a 10px border, a 22px radius and a 75px shadow —
@@ -4405,6 +4423,26 @@
         margin: 2.25rem auto 0;
         text-align: left;
       }
+
+      /* ── The codec grid: twenty facts, not twenty colours ───────
+         Each tile came in its own pastel on a five-step rotation — mint,
+         powder blue, lilac, pink, peach — which tells the reader nothing
+         about the difference between MKV and AAC. The name is the thing;
+         it is set in the same mono as every other technical string, on the
+         same surface, inside the same hairline. */
+      html:root .spec-chip {
+        background: var(--bg-elevated) !important;
+        border: var(--rule) !important;
+        border-radius: var(--r-2) !important;
+        box-shadow: none !important;
+      }
+      html:root .spec-chip b {
+        font-family: "DM Mono", ui-monospace, monospace !important;
+        font-weight: 600 !important;
+        color: var(--text-primary) !important;
+      }
+      html:root .spec-chip span { color: var(--text-muted) !important; }
+      html:root .spec-grid { background: transparent !important; }
 
       /* ── Tinted cards are not information ───────────────────────
          The "why won't my browser play this" grid came in mint, powder blue,
