@@ -25129,11 +25129,18 @@ export class MoviElement extends HTMLElement {
          anything are the last things standing. */
       @container movi-error (max-height: 250px) {
         .movi-broken-stage {
+          padding: 6px 10px;
+          justify-content: center;
+        }
+        /* …and only a player that HAS a control bar steps off one. The
+           reserve used to apply either way, so a player with no controls
+           centred its error on the picture minus a bar that was never
+           drawn — the card sat 23px high in a 220px box. */
+        :host([controls]) .movi-broken-stage {
           /* The chrome owns the bottom 71px at every size (progress rail plus
              the 42px button row). Reserving all of it leaves a short player
              nothing, so reserve the button row and let the rail overlap. */
           padding: 6px 10px 52px;
-          justify-content: center;
         }
       }
 
@@ -25145,7 +25152,8 @@ export class MoviElement extends HTMLElement {
          stacking title over button no longer fits above it. Lay them side by
          side instead -- both survive, in the strip of picture that is left. */
       @container movi-error (max-height: 130px) {
-        .movi-broken-stage { padding: 3px 8px 51px; }
+        .movi-broken-stage { padding: 3px 8px; }
+        :host([controls]) .movi-broken-stage { padding: 3px 8px 51px; }
         .movi-broken-message { display: none; }
         .movi-broken-container {
           flex-direction: row;
