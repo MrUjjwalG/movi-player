@@ -7792,9 +7792,14 @@
           window.moviScrollToPlayer();
         });
 
-        // Shown only once the picture has left the viewport, so it never sits
-        // over the thing it would take you to. An observer rather than a
-        // scroll handler: no work per frame while you read the page.
+        // Shown whenever the picture is off screen, so it never sits over the
+        // thing it would take you to — and it does not matter which way you
+        // left it. It used to ask for the player to be ABOVE the viewport
+        // (boundingClientRect.top < 0), which covered reading down the page
+        // and missed the other half: scroll back up to the hero and the
+        // player is just as gone, with no way back to it but the scrollbar.
+        // An observer rather than a scroll handler: no work per frame while
+        // you read the page.
         // …and only once something is loaded: with nothing playing it would
         // take you to an empty player.
         var player = document.getElementById("movi-player");
@@ -7806,10 +7811,7 @@
         new IntersectionObserver(
           function (entries) {
             var entry = entries[0];
-            btn.classList.toggle(
-              "visible",
-              !entry.isIntersecting && entry.boundingClientRect.top < 0,
-            );
+            btn.classList.toggle("visible", !entry.isIntersecting);
           },
           // A sliver of the player still counts as "you can see it".
           { threshold: 0.12 },
