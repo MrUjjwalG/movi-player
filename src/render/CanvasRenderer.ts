@@ -739,6 +739,20 @@ export class CanvasRenderer {
             }
             this.setMacHdrCompositingGuard(applied === hdrSpace);
           } else {
+            // …and an SDR source has to say so. The context outlives the
+            // source: play an HDR film, then load an ordinary one, and the
+            // canvas was still tagged rec2100-pq from the film — so the
+            // compositor read plain Rec.709 as PQ and the picture came out
+            // washed and grey. Only the non-srgb branch above ever assigned
+            // the tag, so nothing took it off again.
+            try {
+              // @ts-ignore
+              this.gl.drawingBufferColorSpace = "srgb";
+              // @ts-ignore
+              this.gl.unpackColorSpace = "srgb";
+            } catch (_e) {
+              /* a context that does not take the property never had one */
+            }
             this.setMacHdrCompositingGuard(false);
           }
         }
