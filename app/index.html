@@ -7809,7 +7809,13 @@
         // Land with the heading just under the bar — enough to read "Now
         // playing / Your screen", not so much that the picture starts below
         // the fold.
-        var top = section.getBoundingClientRect().top + y - navbarH - 12;
+        // Measured from the heading, not from the section box: the section
+        // carries 72px of padding above its first line, so landing on the box
+        // left a band of empty page under the bar — a lot of it on a phone,
+        // where nothing below needs the room, and none of it on a laptop,
+        // where the fit rule below eats it. The heading is the thing that
+        // should be in the same place at every size.
+        var top = head.getBoundingClientRect().top + y - navbarH - 16;
 
         // …then, if the player would still hang past the bottom of the
         // window, go a little further — but never far enough to take the
@@ -7821,6 +7827,7 @@
           var playerBottom = player.getBoundingClientRect().bottom + y - top;
           var overflow = playerBottom - window.innerHeight + margin;
           if (overflow > 0) {
+            // …but never past the heading itself.
             var headTop = head.getBoundingClientRect().top + y - top;
             var room = headTop - navbarH - 4;
             if (room > 0) top += Math.min(overflow, room);
