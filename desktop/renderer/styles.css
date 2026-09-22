@@ -921,3 +921,142 @@ body.win .xnav {
     transition: none !important;
   }
 }
+
+/* ════════════════════════════════════════════════════════════════════════
+   PRECISION PASS — the same turn the web app and the extension took.
+   One product, one language: hairline boundaries instead of glows and
+   shadows, 2–6px corners instead of pills, one accent spent only on the
+   thing you press, a monospace voice for anything technical, and no
+   gradient poured into text or washed behind a panel.
+   ════════════════════════════════════════════════════════════════════════ */
+:root {
+  --bg: #0b0d11;
+  --bg-raised: #12151a;
+  --bg-panel: #12151a;
+  --bg-hover: #171b21;
+  --hairline: #262b33;
+  --hairline-2: #39404b;
+
+  --text: #f2f4f7;
+  --text-strong: #f2f4f7;
+  --text-dim: #9aa3b0;
+  --text-faint: #6b7280;
+  --text-label: #6b7280;
+
+  --accent: #6366f1;
+  --accent-text: #a5b4fc;
+  --accent-soft: rgba(99, 102, 241, 0.14);
+  --accent-grad: #6366f1;
+  --focus-ring: 0 0 0 1px #6366f1;
+
+  --r-1: 2px;
+  --r-2: 4px;
+  --r-3: 6px;
+  --rule: 1px solid var(--hairline);
+}
+
+/* A headline is text. */
+.xtitle em {
+  background: none;
+  -webkit-background-clip: border-box;
+  background-clip: border-box;
+  color: var(--accent);
+}
+
+/* Nothing is frosted, and nothing is lit from behind. */
+.welcome { background: var(--bg); }
+.xnav,
+.pl-toggle {
+  backdrop-filter: none;
+  -webkit-backdrop-filter: none;
+}
+.xnav { background: var(--bg); border-bottom: var(--rule); }
+
+/* Fields, cards and panels: one shape language. */
+.dropzone,
+.urlbar,
+.drop-card,
+.xside,
+.recent,
+.url-modal-card,
+.pl-toggle {
+  border: var(--rule);
+  border-radius: var(--r-2);
+  background: var(--bg-raised);
+  box-shadow: none;
+}
+.dropzone:hover,
+.recent:hover { border-color: var(--hairline-2); background: var(--bg-hover); }
+.urlbar:focus-within { border-color: var(--accent); box-shadow: none; }
+
+/* The accent is for the thing you press — which here is Play, and nothing
+   else. .xopen is the row that holds "Open files" and the drop hint, not a
+   button, and painting it accent turned the hint into a solid block with
+   text buried in it; the paste icon is an icon. */
+.urlbar .play {
+  border-radius: var(--r-2);
+  background: var(--accent);
+  box-shadow: none;
+  filter: none;
+}
+.urlbar .play:hover { background: #818cf8; box-shadow: none; filter: none; }
+.xopen { background: none; }
+.url-paste {
+  border: 0;
+  border-radius: var(--r-2);
+  background: transparent;
+  color: var(--text-dim);
+  box-shadow: none;
+}
+.url-paste:hover { background: var(--bg-hover); color: var(--text); }
+.modal-cancel {
+  border: var(--rule);
+  border-radius: var(--r-2);
+  background: transparent;
+  color: var(--text);
+}
+
+/* Technical strings speak in mono. */
+.xkicker,
+.section-label,
+.xformats-label,
+.recent-ext,
+.xchip {
+  font-family: var(--mono);
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+.xchip {
+  padding: 2px 6px;
+  border: var(--rule);
+  border-radius: var(--r-1);
+  background: transparent;
+  color: var(--text-dim);
+  font-size: 11px;
+  font-weight: 500;
+}
+
+/* The benefit quad says what the format row under it already says, in
+   bigger type — the duplication the web app's hero carried too. */
+.xproof { display: none; }
+
+/* The playlist, in the same language. */
+.playlist-panel { background: var(--bg-panel); border-left: var(--rule); }
+.pl-item.active {
+  background: var(--accent-soft);
+  box-shadow: inset 2px 0 0 var(--accent);
+}
+.pl-item:hover { background: var(--bg-hover); }
+.pl-index { font-family: var(--mono); font-variant-numeric: tabular-nums; }
+.toast {
+  border: var(--rule);
+  border-radius: var(--r-2);
+  background: var(--bg-raised);
+  box-shadow: none;
+}
+
+movi-player {
+  --movi-accent: #6366f1;
+  --movi-progress-color: #6366f1;
+  --movi-btn-hover-bg: rgba(99, 102, 241, 0.2);
+}

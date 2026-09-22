@@ -1194,6 +1194,147 @@
       .file-overlay .drop-link .link-go { min-width: 58px; }
       .file-overlay .cache-info { position: static; margin: 24px auto 0; }
     }
+
+    /* ════════════════════════════════════════════════════════════════
+       PRECISION PASS — the same turn the web app took.
+       Ornament out, structure in: hairline boundaries instead of glows and
+       shadows, 2–6px corners instead of pills, one accent spent only on the
+       thing you press, a monospace voice for anything technical, and no
+       gradient poured into text. The extension is the same product as the
+       site and should not look like a different one.
+       ════════════════════════════════════════════════════════════════ */
+    html:root {
+      --bg: #0b0d11;
+      --bg-surface: #12151a;
+      --border-subtle: #262b33;
+      --border-hover: #39404b;
+      --text-primary: #f2f4f7;
+      --text-secondary: #9aa3b0;
+      --text-muted: #6b7280;
+      --accent: #6366f1;
+      --accent-soft: rgba(99, 102, 241, 0.14);
+      --accent-grad: #6366f1;
+      --r-1: 2px;
+      --r-2: 4px;
+      --r-3: 6px;
+      --rule: 1px solid var(--border-subtle);
+    }
+
+    /* A headline is text; a logo does not need a light behind it. */
+    .xtitle em,
+    .xtitle span,
+    .brand-name {
+      background: none !important;
+      -webkit-text-fill-color: currentColor !important;
+      color: var(--accent) !important;
+      filter: none !important;
+    }
+    .brand-name { color: var(--text-primary) !important; }
+    .brand-logo img { box-shadow: none !important; }
+    .brand-logo::after { display: none !important; }
+    .file-overlay {
+      background: var(--bg) !important;
+      backdrop-filter: none !important;
+    }
+    .xnav { background: var(--bg) !important; border-bottom: var(--rule); }
+
+    /* Fields, panels and switches: one shape language. */
+    .drop-link,
+    .xtabs,
+    .setting,
+    .xside,
+    .drop-tip,
+    .playlist-search input {
+      border: var(--rule) !important;
+      border-radius: var(--r-2) !important;
+      background: var(--bg-surface) !important;
+      box-shadow: none !important;
+    }
+    .drop-link:focus-within {
+      border-color: var(--accent) !important;
+      box-shadow: none !important;
+      background: var(--bg-surface) !important;
+    }
+    .xtab { border-radius: var(--r-1) !important; }
+    .xtab.is-active {
+      border: 1px solid var(--accent) !important;
+      background: transparent !important;
+      color: var(--text-primary) !important;
+    }
+    .link-go,
+    .browse-btn {
+      border-radius: var(--r-2) !important;
+      background: var(--accent) !important;
+      box-shadow: none !important;
+      filter: none !important;
+    }
+    .link-go:hover,
+    .browse-btn:hover { background: #818cf8 !important; filter: none !important; box-shadow: none !important; }
+    .browse-btn.secondary {
+      background: transparent !important;
+      border: var(--rule) !important;
+      color: var(--text-primary) !important;
+    }
+    .setting-btn {
+      border: var(--rule) !important;
+      border-radius: var(--r-2) !important;
+      background: transparent !important;
+      color: var(--text-primary) !important;
+    }
+    .setting-btn:hover { background: var(--bg-surface) !important; }
+    .setting:hover { border-color: var(--border-hover) !important; }
+
+    /* Technical strings speak in mono, as they do on the site. */
+    .xkicker,
+    .xside-title,
+    .xchip {
+      font-family: "DM Mono", ui-monospace, "SF Mono", Menlo, monospace !important;
+      letter-spacing: 0.08em;
+      text-transform: uppercase;
+    }
+    .xchip {
+      padding: 0.2rem 0.45rem !important;
+      border: var(--rule) !important;
+      border-radius: var(--r-1) !important;
+      background: transparent !important;
+      color: var(--text-secondary) !important;
+      font-size: 0.68rem !important;
+      font-weight: 500 !important;
+    }
+
+    /* The benefit quad said what the chips under it already say, in bigger
+       type — the same duplication the site's hero carried. */
+    .xproof { display: none !important; }
+
+    /* The playlist, in the same language. */
+    .playlist-panel { background: var(--bg-surface) !important; border-left: var(--rule) !important; }
+    .playlist-toolbar button { border-radius: var(--r-2) !important; }
+    .playlist-toolbar button.playlist-icon-btn { border-radius: var(--r-2) !important; }
+    .playlist-toolbar button[aria-pressed="true"] {
+      background: transparent !important;
+      border: 1px solid var(--accent) !important;
+      color: var(--text-primary) !important;
+    }
+    .autoplay-switch[aria-checked="true"] .autoplay-switch-track { background: var(--accent) !important; }
+    .playlist-search input { border-radius: var(--r-2) !important; }
+    .playlist-item.active {
+      background: var(--accent-soft) !important;
+      box-shadow: inset 2px 0 0 var(--accent) !important;
+    }
+    .playlist-item.active .playlist-thumb { box-shadow: none !important; }
+    .playlist-thumb { background: var(--bg-surface) !important; border: var(--rule) !important; }
+    .playlist-toggle {
+      border-radius: var(--r-2) !important;
+      background: var(--bg-surface) !important;
+      border: var(--rule) !important;
+    }
+    .loading-overlay { background: var(--bg) !important; }
+
+    movi-player {
+      --movi-accent: #6366f1;
+      --movi-progress-color: #6366f1;
+      --movi-btn-hover-bg: rgba(99, 102, 241, 0.2);
+    }
   </style>
 </head>
 <body>
