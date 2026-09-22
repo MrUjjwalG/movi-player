@@ -4125,6 +4125,76 @@
         line-height: 1.7;
         text-align: left;
       }
+      /* The install line. Quiet enough that a visitor who came to watch
+         something reads past it, and plain enough that a developer knows
+         what it is at a glance: a prompt, a command, a clipboard. */
+      .hero-install {
+        display: inline-flex;
+        align-items: center;
+        gap: 0.5rem;
+        margin-top: 1rem;
+        padding: 0.45rem 0.7rem;
+        max-width: 100%;
+        border: 1px solid rgba(255, 255, 255, 0.14);
+        border-radius: 0.5rem;
+        background: rgba(255, 255, 255, 0.04);
+        color: rgba(255, 255, 255, 0.78);
+        font: 500 0.78rem/1 "DM Mono", ui-monospace, "SF Mono", Menlo, monospace;
+        cursor: pointer;
+        appearance: none;
+        transition: border-color 0.2s ease, background 0.2s ease, color 0.2s ease;
+      }
+      .hero-install:hover {
+        border-color: rgba(255, 255, 255, 0.28);
+        background: rgba(255, 255, 255, 0.07);
+        color: #fff;
+      }
+      .hero-install:focus-visible {
+        outline: 2px solid var(--accent, #7c75ff);
+        outline-offset: 2px;
+      }
+      .hero-install code {
+        font: inherit;
+        white-space: nowrap;
+        overflow: hidden;
+        text-overflow: ellipsis;
+      }
+      .hero-install-prompt { color: rgba(255, 255, 255, 0.38); }
+      .hero-install-icon,
+      .hero-install-tick {
+        width: 14px;
+        height: 14px;
+        flex: 0 0 auto;
+        opacity: 0.65;
+      }
+      /* One icon at a time: the tick takes the clipboard's place for a beat,
+         so the line does not change width when it answers. */
+      .hero-install-tick { display: none; color: #4ade80; opacity: 1; }
+      .hero-install.is-copied .hero-install-icon { display: none; }
+      .hero-install.is-copied .hero-install-tick { display: block; }
+      .hero-install.is-copied { border-color: rgba(74, 222, 128, 0.45); }
+      [data-theme="light"] .hero-install {
+        border-color: rgba(0, 0, 0, 0.12);
+        background: rgba(0, 0, 0, 0.03);
+        color: rgba(17, 20, 45, 0.78);
+      }
+      [data-theme="light"] .hero-install:hover {
+        border-color: rgba(0, 0, 0, 0.22);
+        background: rgba(0, 0, 0, 0.05);
+        color: #11142d;
+      }
+      [data-theme="light"] .hero-install-prompt { color: rgba(17, 20, 45, 0.4); }
+      /* Said for a screen reader, which cannot see a tick. */
+      .hero-install-said {
+        position: absolute;
+        width: 1px;
+        height: 1px;
+        overflow: hidden;
+        clip: rect(0 0 0 0);
+        clip-path: inset(50%);
+        white-space: nowrap;
+      }
+
       .hero-meta {
         display: flex;
         flex-wrap: wrap;
@@ -6135,6 +6205,27 @@
             <span class="format-chip">HDR</span>
             <span class="format-chip">4K</span>
           </div>
+
+          <!-- The other half of the audience: the same player, as a package.
+               One line, and the only thing anyone wants to do with a line like
+               this is copy it — so the line IS the button. -->
+          <button
+            class="hero-install"
+            type="button"
+            data-install="npm install movi-player"
+            aria-label="Copy the install command: npm install movi-player"
+          >
+            <span class="hero-install-prompt" aria-hidden="true">$</span>
+            <code>npm install movi-player</code>
+            <svg class="hero-install-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+              <rect x="9" y="9" width="12" height="12" rx="2"></rect>
+              <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path>
+            </svg>
+            <svg class="hero-install-tick" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+              <polyline points="20 6 9 17 4 12"></polyline>
+            </svg>
+            <span class="hero-install-said" role="status" aria-live="polite"></span>
+          </button>
         </div>
 
         <div class="hero-panel" aria-label="Start watching">
@@ -9212,6 +9303,43 @@
       // resume, thumbnails, …). Each checked box becomes a query param on the
       // /embed URL, which the worker maps to the matching <movi-player>
       // attribute. The code textarea updates live; Copy puts it on the clipboard.
+      // The hero's install line: the whole pill is the copy button.
+      //
+      // The Clipboard API is the way, and it is also the way that fails — an
+      // insecure context, a denied permission — so the old textarea trick sits
+      // behind it rather than leaving a button that does nothing.
+      document.querySelectorAll("[data-install]").forEach((pill) => {
+        const said = pill.querySelector(".hero-install-said");
+        let clearTimer = 0;
+        pill.addEventListener("click", async () => {
+          const text = pill.dataset.install || "";
+          let ok = true;
+          try {
+            await navigator.clipboard.writeText(text);
+          } catch {
+            try {
+              const ta = document.createElement("textarea");
+              ta.value = text;
+              ta.style.position = "fixed";
+              ta.style.opacity = "0";
+              document.body.appendChild(ta);
+              ta.select();
+              document.execCommand("copy");
+              ta.remove();
+            } catch {
+              ok = false;
+            }
+          }
+          pill.classList.toggle("is-copied", ok);
+          if (said) said.textContent = ok ? "Copied" : "Press Ctrl+C to copy";
+          clearTimeout(clearTimer);
+          clearTimer = window.setTimeout(() => {
+            pill.classList.remove("is-copied");
+            if (said) said.textContent = "";
+          }, 1600);
+        });
+      });
+
       const embedDialog = document.getElementById("embed-dialog");
       const embedDialogClose = document.getElementById("embed-dialog-close");
       const embedCodeEl = document.getElementById("embed-code");
