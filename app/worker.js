@@ -493,9 +493,6 @@ export default {
     }
 
     // --- Watch party (unlisted; see app/watch-party.js) ---
-    if (path === "/api/party/host" && request.method === "POST") {
-      return handlePartyHost(request, env);
-    }
     if (path === "/api/party/room") {
       return handlePartyRoom(request, env, url);
     }
@@ -3391,19 +3388,11 @@ function timingSafeEqualStr(a, b) {
 // ---------------------------------------------------------------------------
 // Watch party
 //
-// Two doors, and they are deliberately different sizes. Joining a room needs
-// the room code and nothing else — that is the whole ergonomics of the
-// feature. STARTING one needs a key, because an open "watch anything together"
-// service is a piracy tool wearing a friendly name, and this one is unlisted
-// for that reason.
-//
-// The host key never reaches the Durable Object. It is checked here, and what
-// travels onward is a short-lived HMAC over (code, expiry) — so a token stolen
-// from one room's URL cannot open another, and cannot open the same one
-// tomorrow.
+// The room code is the only secret. The first connection on a code claims the
+// room and hosts it, everyone after that joins — so there is nothing to check
+// here beyond the shape of the code, and nothing to store.
 // ---------------------------------------------------------------------------
 
-const PARTY_TOKEN_TTL_MS = 10 * 60 * 1000;
 const PARTY_CODE_RE = /^[A-Za-z0-9][A-Za-z0-9 _-]{2,39}$/;
 
 function partyCodeKey(code) {
@@ -3413,105 +3402,7 @@ function partyCodeKey(code) {
   return code.trim().toLowerCase().replace(/[\s_-]+/g, "-");
 }
 
-async function sha256Hex(text) {
-  const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(text));
-  let hex = "";
-  for (const b of new Uint8Array(digest)) hex += b.toString(16).padStart(2, "0");
-  return hex;
-}
-
-/**
- * Copy the PARTY_HOST_KEYS secret into D1 the first time it is needed.
- *
- * The secret is the source of truth for what keys EXIST; the table is where
- * their state lives — revoked or not, last used when. Seeding rather than
- * reading the secret on every check is what makes a key revocable without a
- * redeploy: pull the row's `revoked` up and the key is dead even though the
- * secret still lists it.
- *
- * Format: comma-separated, each entry `key` or `label:key`.
- */
-async function seedPartyKeys(env) {
-  const raw = (env.PARTY_HOST_KEYS || "").trim();
-  if (!raw || !env.COMMENTS_DB) return;
-  const entries = raw.split(",").map((e) => e.trim()).filter(Boolean);
-  if (!entries.length) return;
-
-  const stmts = [];
-  for (const entry of entries) {
-    const idx = entry.indexOf(":");
-    const label = idx > 0 ? entry.slice(0, idx).trim() : null;
-    const key = idx > 0 ? entry.slice(idx + 1).trim() : entry;
-    if (!key) continue;
-    stmts.push(
-      env.COMMENTS_DB.prepare(
-        "INSERT OR IGNORE INTO party_host_keys (key_hash, label, created_at) VALUES (?, ?, ?)",
-      ).bind(await sha256Hex(key), label, Date.now()),
-    );
-  }
-  if (stmts.length) await env.COMMENTS_DB.batch(stmts);
-}
-
-async function partyKeyIsLive(env, key) {
-  if (!env.COMMENTS_DB) return false;
-  const hash = await sha256Hex(key);
-  const row = await env.COMMENTS_DB.prepare(
-    "SELECT key_hash, revoked FROM party_host_keys WHERE key_hash = ?",
-  ).bind(hash).first();
-  if (!row || row.revoked) return false;
-  // Best-effort bookkeeping: a failure to record the use must not deny a host
-  // who presented a good key.
-  try {
-    await env.COMMENTS_DB.prepare(
-      "UPDATE party_host_keys SET last_used_at = ?, uses = uses + 1 WHERE key_hash = ?",
-    ).bind(Date.now(), hash).run();
-  } catch { /* the party matters more than the counter */ }
-  return true;
-}
-
-async function signPartyToken(env, codeKey, expiresAt) {
-  return hmacSha256Hex(env.ENC_SERVER_SECRET, `party:${expiresAt}:${codeKey}`);
-}
-
-/**
- * POST /api/party/host  { code, key } -> { token, exp, code }
- *
- * Deliberately quiet about which half was wrong: a caller probing for valid
- * keys learns the same thing from a bad key as from a malformed code.
- */
-async function handlePartyHost(request, env) {
-  if (!env.ENC_SERVER_SECRET) {
-    return jsonResponse({ error: "Watch party is not configured on this deployment" }, 503);
-  }
-  let body;
-  try {
-    body = await request.json();
-  } catch {
-    return jsonResponse({ error: "Invalid request" }, 400);
-  }
-  const code = typeof body?.code === "string" ? body.code.trim() : "";
-  const key = typeof body?.key === "string" ? body.key.trim() : "";
-  if (!PARTY_CODE_RE.test(code) || !key) {
-    return jsonResponse({ error: "Not allowed" }, 403);
-  }
-
-  await seedPartyKeys(env);
-  if (!(await partyKeyIsLive(env, key))) {
-    return jsonResponse({ error: "Not allowed" }, 403);
-  }
-
-  const codeKey = partyCodeKey(code);
-  const exp = Date.now() + PARTY_TOKEN_TTL_MS;
-  return jsonResponse({ token: await signPartyToken(env, codeKey, exp), exp, code: codeKey });
-}
-
-/**
- * GET /api/party/room?code=…  — WebSocket upgrade into the room's object.
- *
- * A guest arrives with no token and is let in as a follower. A host arrives
- * with the token minted above; it is verified HERE, and the object is told the
- * outcome in a URL only this worker can write.
- */
+/** GET /api/party/room?code=… — WebSocket upgrade into the room's object. */
 async function handlePartyRoom(request, env, url) {
   if (!env.PARTY) {
     return new Response("Watch party is not configured on this deployment", { status: 503 });
@@ -3521,26 +3412,8 @@ async function handlePartyRoom(request, env, url) {
   }
   const code = url.searchParams.get("code") || "";
   if (!PARTY_CODE_RE.test(code)) return new Response("bad code", { status: 400 });
-  const codeKey = partyCodeKey(code);
 
-  let asHost = false;
-  const token = url.searchParams.get("token");
-  const expRaw = url.searchParams.get("exp");
-  if (token && expRaw) {
-    const exp = Number(expRaw);
-    if (
-      Number.isSafeInteger(exp) &&
-      Date.now() <= exp &&
-      exp <= Date.now() + PARTY_TOKEN_TTL_MS &&
-      constantTimeEqual(token, await signPartyToken(env, codeKey, exp))
-    ) {
-      asHost = true;
-    }
-  }
-
-  const id = env.PARTY.idFromName(codeKey);
   const room = new URL("https://party.invalid/room");
-  room.searchParams.set("host", asHost ? "1" : "0");
   room.searchParams.set("name", (url.searchParams.get("name") || "").slice(0, 24));
-  return env.PARTY.get(id).fetch(new Request(room, request));
+  return env.PARTY.get(env.PARTY.idFromName(partyCodeKey(code))).fetch(new Request(room, request));
 }

@@ -12,10 +12,10 @@
  * bytes themselves; a local file cannot be shared this way and the client
  * refuses to start a party on one.
  *
- * Hosting is gated (see handlePartyHost in worker.js). Joining is not: the
- * room code is the only thing a guest needs. That asymmetry is the point —
- * the gate is there to keep the feature from becoming a public
- * watch-anything-together service, not to keep the host's friends out.
+ * The code is the only secret there is. The first connection on a code
+ * claims the room and hosts it; everyone who follows joins it. There is no
+ * second credential to present, which means a code worth keeping is a code
+ * worth choosing — "movie" is not one.
  *
  * Time is kept by this object, not by either browser. Two machines' clocks
  * routinely differ by seconds, which is far more than the drift we are trying
@@ -59,10 +59,6 @@ export class WatchParty {
       return new Response("room is full", { status: 503 });
     }
 
-    // The worker has already verified the host token before proxying here, and
-    // says so in the URL it rewrites. A client cannot reach this object except
-    // through that route, so the flag is trustworthy by the time we read it.
-    const asHost = url.searchParams.get("host") === "1";
     const name = (url.searchParams.get("name") || "").slice(0, 24) || "Guest";
 
     const pair = new WebSocketPair();
@@ -70,9 +66,10 @@ export class WatchParty {
     server.accept();
 
     const id = crypto.randomUUID().slice(0, 8);
-    // Only one host. A second tab claiming the role would give two people the
-    // power to approve each other, which is the whole gate defeated.
-    const isHost = asHost && this.hostId === null;
+    // Whoever gets here first owns the room. The code is the secret and
+    // claiming it is the whole of hosting: there is nothing else to present.
+    // Everyone who arrives afterwards finds the chair taken and follows.
+    const isHost = this.hostId === null;
     const member = { ws: server, name, control: isHost, host: isHost, alive: Date.now() };
     this.members.set(id, member);
     if (isHost) this.hostId = id;

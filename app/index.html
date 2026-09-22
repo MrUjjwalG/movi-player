@@ -10248,9 +10248,8 @@
       // discoverability: there is no button, no menu entry and no CSS for it
       // in the stylesheet.
       //
-      // Joining needs only the code. Hosting needs a key checked server-side
-      // (POST /api/party/host) — the feature is not meant to be a public
-      // watch-anything-together service.
+      // The code is the secret. Whoever opens it first hosts the room and
+      // everyone after that joins — there is nothing else to present.
       //
       // Only URL sources can be shared. A local file cannot travel, so the
       // host is stopped before a party starts on one rather than being let
@@ -10259,7 +10258,6 @@
         const partyParams = new URLSearchParams(location.search);
         const partyCode = (partyParams.get("party") || "").trim();
         if (!partyCode) return;
-        const wantsHost = partyParams.get("host") === "1";
 
         // Drift budgets are in WALL time, not media time: at 0.5x a second of
         // clock is half a second of film, and a budget that ignores that is
@@ -10343,38 +10341,6 @@
           return b;
         };
 
-        // ---- hosting gate ---------------------------------------------------
-        const askForKey = () =>
-          new Promise((resolve) => {
-            say("This code is not hosting yet. Enter the host key to start it.");
-            const input = document.createElement("input");
-            input.className = "wp-in";
-            input.type = "password";
-            input.placeholder = "Host key";
-            input.autocomplete = "off";
-            panel.insertBefore(input, elActs);
-            const go = () => {
-              const value = input.value.trim();
-              if (!value) return;
-              input.remove();
-              elActs.textContent = "";
-              resolve(value);
-            };
-            input.addEventListener("keydown", (e) => { if (e.key === "Enter") go(); });
-            button("Start party", true, go);
-            input.focus();
-          });
-
-        const mintHostToken = async (key) => {
-          const res = await fetch("/api/party/host", {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ code: partyCode, key }),
-          });
-          if (!res.ok) return null;
-          return res.json().catch(() => null);
-        };
-
         // ---- playback plumbing ----------------------------------------------
         // A follower's play() is an autoplay attempt with no gesture behind it,
         // and a browser is entitled to refuse. The refusal is not an error
@@ -10429,18 +10395,41 @@
           }
         };
 
+        // What we are playing RIGHT NOW, not what we were playing when the
+        // party started. The room is usually opened before anything is
+        // loaded — that is the normal order, you send the code and then pick
+        // the film — so a source captured once at startup is empty for ever
+        // and the host broadcasts nothing at all.
+        const shareableSrc = () => {
+          const url = currentVideoUrl || "";
+          return /^https?:\/\//i.test(url) ? url : "";
+        };
+
+        let warnedLocal = false;
         const sendState = (force) => {
           if (!iControl || !ws || ws.readyState !== 1 || applyingRemote) return;
           const now = Date.now();
           if (!force && now - lastSent < 250) return;
-          if (!partySrc) return;
+          const src = shareableSrc();
+          if (!src) {
+            // A local file cannot travel, so there is nothing to send. Said
+            // once, when it starts mattering, rather than at startup when the
+            // host has not chosen anything yet.
+            if (!warnedLocal && player.src) {
+              warnedLocal = true;
+              say("A local file cannot be shared — load a URL for the others to see it.", true);
+            }
+            return;
+          }
+          warnedLocal = false;
+          partySrc = src;
           lastSent = now;
           ws.send(JSON.stringify({
             t: "state",
             paused: !!player.paused,
             time: player.currentTime || 0,
             rate: player.playbackRate || 1,
-            src: partySrc,
+            src,
             title: document.title.slice(0, 120),
           }));
         };
@@ -10454,6 +10443,8 @@
           if (state === "seeking") { wasSeeking = true; return; }
           if (wasSeeking) { wasSeeking = false; sendState(true); }
         });
+        // Loading a new URL is a change the room needs as much as a pause is.
+        player.addEventListener("loadeddata", () => sendState(true));
         player.addEventListener("play", () => sendState(true));
         player.addEventListener("pause", () => sendState(true));
         player.addEventListener("ratechange", () => sendState(true));
@@ -10481,7 +10472,7 @@
           }
         };
 
-        const showGuestActions = () => {
+        const renderActions = () => {
           elActs.textContent = "";
           if (iControl) return;
           button("Ask for the remote", false, (e) => {
@@ -10489,6 +10480,12 @@
             e.target.disabled = true;
             say("Asked the host. Waiting.");
           });
+        };
+
+        const statusLine = () => {
+          if (hostId === me) return "You are hosting. Share the code.";
+          if (iControl) return "You can control playback.";
+          return "Following the host.";
         };
 
         const showRequest = (who, name) => {
@@ -10533,15 +10530,11 @@
         };
 
         // ---- socket ----------------------------------------------------------
-        const connect = (auth) => {
+        const connect = () => {
           const proto = location.protocol === "https:" ? "wss:" : "ws:";
           const url = new URL(proto + "//" + location.host + "/api/party/room");
           url.searchParams.set("code", partyCode);
           url.searchParams.set("name", (localStorage.getItem("movi-party-name") || "").slice(0, 24) || "Guest");
-          if (auth) {
-            url.searchParams.set("token", auth.token);
-            url.searchParams.set("exp", String(auth.exp));
-          }
           ws = new WebSocket(url);
 
           ws.addEventListener("open", () => {
@@ -10563,8 +10556,8 @@
                 hostId = msg.host;
                 iControl = !!msg.control;
                 if (iControl && currentVideoUrl) partySrc = currentVideoUrl;
-                say(iControl ? "You are hosting." : "Following the host.");
-                if (!iControl) showGuestActions();
+                say(statusLine());
+                renderActions();
                 if (msg.state) applyState(msg.state);
                 else sendState(true);
                 break;
@@ -10578,16 +10571,23 @@
               // arrives here is both legitimate and not our own echo.
               case "state": applyState(msg); break;
               case "roster":
+                // The host can appear after we did — someone else in the room
+                // may be the one who has the key — so the actions and the
+                // status are re-derived every time the roster moves.
                 hostId = msg.host;
                 renderPeople(msg.members || []);
+                say(statusLine());
+                renderActions();
                 break;
               case "control":
                 iControl = !!msg.control;
-                say(msg.promoted ? "The host left — the remote is yours." : iControl ? "You can control playback." : "You are following.");
-                showGuestActions();
+                say(msg.promoted
+                  ? "The host left — you have the remote, but not the key: you can pause and seek, not change what is playing."
+                  : statusLine());
+                renderActions();
                 if (iControl) { partySrc = partySrc || currentVideoUrl; sendState(true); }
                 break;
-              case "denied": say("The host said no.", true); showGuestActions(); break;
+              case "denied": say("The host said no.", true); renderActions(); break;
               case "req": showRequest(msg.who, msg.name); break;
             }
           });
@@ -10599,7 +10599,7 @@
             // being tidy about it. Backoff so a worker that is down is not
             // hammered by every guest at once.
             say("Reconnecting…");
-            setTimeout(() => connect(auth), reconnectAt);
+            setTimeout(connect, reconnectAt);
             reconnectAt = Math.min(reconnectAt * 2, 20000);
           });
         };
@@ -10610,27 +10610,10 @@
         });
 
         // ---- start ------------------------------------------------------------
-        (async () => {
-          if (!wantsHost) { connect(null); return; }
-
-          // A party on a local file would be a room where only the host can
-          // see anything, so it is refused here rather than discovered by
-          // everyone else a minute later.
-          if (!currentVideoUrl && player.src && !/^https?:/i.test(String(player.src))) {
-            say("A party can only be started on a URL source, not a local file.", true);
-            return;
-          }
-          const key = await askForKey();
-          const auth = await mintHostToken(key);
-          if (!auth) {
-            say("That key was not accepted.", true);
-            elActs.textContent = "";
-            button("Try again", true, () => location.reload());
-            return;
-          }
-          partySrc = currentVideoUrl || "";
-          connect(auth);
-        })();
+        // Whether this browser ends up hosting is the room's answer, not
+        // ours: it depends on who got here first, and only the object knows
+        // that. So there is one path in — connect, and read the welcome.
+        connect();
       })();
 
     </script>

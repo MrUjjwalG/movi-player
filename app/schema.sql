@@ -435,35 +435,3 @@ INSERT OR IGNORE INTO profanity_terms (term, kind) VALUES
   ('gangbang', 'strong'),
   ('masturbat', 'strong'),
   ('pedophile', 'strong');
-
--- ---------------------------------------------------------------------------
--- Watch party host keys.
---
--- Joining a party needs nothing but the room code. STARTING one needs a key
--- from this table. The feature is deliberately not public: a room is two
--- people agreeing to press play at the same moment, and handing that to
--- anyone who finds the URL turns it into a way to organise viewings of
--- material nobody here wants to be organising.
---
--- Only the SHA-256 of each key is stored. A dump of this table does not let
--- anyone host — it only says how many keys exist and when they were last
--- used. Keys are seeded from the PARTY_HOST_KEYS secret the first time a
--- host is attempted (see seedPartyKeys in worker.js), so rotating them is
--- `wrangler secret put PARTY_HOST_KEYS` plus one DELETE here.
---
--- Revoke one without knowing it again:
---   UPDATE party_host_keys SET revoked = 1 WHERE label = 'ujjawal';
-
-CREATE TABLE IF NOT EXISTS party_host_keys (
-  key_hash     TEXT    PRIMARY KEY,
-  label        TEXT,
-  created_at   INTEGER NOT NULL,
-  -- Soft-disable, like profanity_terms: a key turned off by mistake can come
-  -- back, and the record of it having existed survives either way.
-  revoked      INTEGER NOT NULL DEFAULT 0,
-  last_used_at INTEGER,
-  uses         INTEGER NOT NULL DEFAULT 0
-);
-
-CREATE INDEX IF NOT EXISTS idx_party_keys_live
-  ON party_host_keys (revoked);
