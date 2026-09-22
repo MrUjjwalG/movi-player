@@ -14285,6 +14285,7 @@ export class MoviElement extends HTMLElement {
       this.classList.remove("movi-bar-visible");
     }
 
+
     // Shift timeline panel up above controls
     const bar = this.shadowRoot?.querySelector(".movi-controls-bar") as HTMLElement;
     const barHeight = bar?.offsetHeight ?? 80;
@@ -25006,6 +25007,9 @@ export class MoviElement extends HTMLElement {
         align-items: center;
         justify-content: center;
         padding: clamp(16px, 5%, 40px);
+        /* The reserve comes and goes with the bar, so the card glides rather
+           than jumping when the chrome appears. */
+        transition: padding 0.2s ease;
       }
 
       .movi-broken-container {
@@ -25139,16 +25143,14 @@ export class MoviElement extends HTMLElement {
           padding: 6px 10px;
           justify-content: center;
         }
-        /* …and only a player that HAS a control bar steps off one. The
-           reserve used to apply either way, so a player with no controls
-           centred its error on the picture minus a bar that was never
-           drawn — the card sat 23px high in a 220px box. */
-        :host([controls]) .movi-broken-stage {
-          /* The chrome owns the bottom 71px at every size (progress rail plus
-             the 42px button row). Reserving all of it leaves a short player
-             nothing, so reserve the button row and let the rail overlap. */
-          padding: 6px 10px 52px;
-        }
+        /* No reserve for the bar. There used to be one — 52px of it — so the
+           card would not sit under the control row, and it cost the one
+           thing an error screen owes the viewer: being in the middle of the
+           box they are looking at. The bar does not auto-hide on an error
+           (there is nothing playing to hide it for), so the reserve applied
+           always, and the card sat 23px high in a 180px player, every time.
+           The card is above the bar in any case — the screen is z-index
+           10000 — and the bar under an error is inert. */
       }
 
       @container movi-error (max-height: 190px) {
@@ -25160,7 +25162,6 @@ export class MoviElement extends HTMLElement {
          side instead -- both survive, in the strip of picture that is left. */
       @container movi-error (max-height: 130px) {
         .movi-broken-stage { padding: 3px 8px; }
-        :host([controls]) .movi-broken-stage { padding: 3px 8px 51px; }
         .movi-broken-message { display: none; }
         .movi-broken-container {
           flex-direction: row;
