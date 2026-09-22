@@ -60,7 +60,7 @@ npm i movi-player
 ## Contents
 
 - [Why Movi Player?](#why-movi-player)
-- [What's New in 0.4.0](#whats-new-in-040)
+- [What's New in 0.4.1](#whats-new-in-041)
 - [Getting Started](#getting-started)
 - [Common Use Cases](#common-use-cases)
 - [Advanced](#advanced)
@@ -104,7 +104,7 @@ npm i movi-player
 
 **Non-Range Servers** -- Servers that ignore `Range` (respond `200`, not `206`) still play via a forward-only sliding-window "linear mode" with in-window seeking; the `linearmode` event lets your UI adapt.
 
-**Subtitles** -- SRT, ASS, WebVTT, PGS (image-based), DVB. Multi-track with on-the-fly switching. Per-source delay/offset (`Z` / `X` to nudge ±100ms), full transcript browser with search + click-to-seek, customizable size/color/background/edge (persisted), karaoke-aligned VTT. Pluggable `SubtitleRenderer` hook for full ASS/SSA styling via an external renderer (e.g. jassub).
+**Subtitles** -- SRT, ASS, WebVTT, PGS (image-based), DVB. Multi-track with on-the-fly switching. Per-source delay/offset (`Z` / `X` to nudge ±100ms), full transcript browser with search + click-to-seek, customizable size/color/background/edge (persisted), karaoke-aligned VTT. Captions can be dragged anywhere in the picture and stay put — across seeks, sources and sessions — with a double-click to reset (`controlslist="nosubtitledrag"` to switch that off). Pluggable `SubtitleRenderer` hook for full ASS/SSA styling via an external renderer (e.g. jassub).
 
 **HDR** -- BT.2020/PQ/HLG detection + Display-P3 rendering on supported browsers.
 
@@ -178,24 +178,21 @@ Evaluating Movi Player against the ecosystem:
 
 Movi Player's niche is that same WebCodecs + FFmpeg-WASM playback, delivered as a **drop-in `<movi-player>` web component** with a batteries-included UI — HDR, chapters, multi-audio, built-in subtitles, ambient mode, Document PiP and encrypted playback — so it's a practical **alternative to video.js / hls.js / Shaka Player** when your files aren't browser-native, and a friendlier, GPU-accelerated **alternative to ffmpeg.wasm / libmedia** when you want a player, not a toolkit.
 
-## What's New in 0.4.0
+## What's New in 0.4.1
 
 The headline changes — see the [full changelog](CHANGELOG.md) for everything:
 
-- **[Custom controls API](#custom-controls-and-overlays)** — `addControl()` puts your own buttons in the player's bar and context menu (toggles, hotkeys, nested submenus); `showOverlay()` layers your own panels (end screens, up-next) over the picture, including in fullscreen.
-- **[Engine selection](#engine-selection-and-native-fallback)** — the `engine` attribute picks which playback engine leads (`wasm`, `shaka`, `dashjs`, `hlsjs`, `native`) and what follows it; `fallback="native"` hands unplayable sources to a wrapped `<video>` instead of a dead end.
-- **Seamless quality switching + true Auto quality** — manual and adaptive rendition changes swap in place with no reload, no dropped playhead; Auto mode measures real link throughput and opens on the right rung, on HLS/DASH and plain multi-file ladders alike.
-- **Full native `<video>` parity** — all 78 `HTMLMediaElement`/`HTMLVideoElement` members answer, ten more standard events fire, and every documented attribute reflects as a JS property.
-- **[External chapters](#chapters)** — a `chapters` attribute/property for sources that keep chapters outside the container (CMS, watch page).
-- **`cropbars`** — strips letterbox/pillarbox padding baked into the source pixels before `cover`/`fill`/`zoom`.
-- **`titlemode` and granular `fastseek`** — control where the title bar appears (with an optional back arrow firing a cancelable `back` event), and which skip affordances (`buttons` / `keys` / `gestures`) are on.
-- **[Slim build](#slim-build)** — `movi-player/element/slim` ships the FFmpeg WASM as a separate cacheable `movi.wasm` (4.2MB JS vs. 11.4MB), with slim twins for the React/Vue/Svelte wrappers.
-- **Firefox extension** — the same player-in-a-tab experience as the Chrome extension, built from one shared codebase.
-- **Host-supplied error screen** — restyle via `::part()`, replace via `slot="error"`, observe via the `errordisplay` event.
-- **Pluggable `SubtitleRenderer`** — plug in a custom ASS/SSA renderer (e.g. jassub) for full styling.
-- **`registerSourceAdapter()`** — teach the player custom `src` schemes (`s3://`, `ipfs://`, `ws://`) globally.
-- **Settings-change events** — `aspectchange`, `loopchange`, `shufflechange`, `stablevolumechange`, `hdrchange`, `ambientchange`, `rotatechange`, `audioonlychange`.
-- **VS Code IntelliSense** — attribute/value completion with hover docs for `<movi-player>`, plus CSS completion for the `--movi-*` theme variables.
+- **[Playlists and queues](#playlists)** — `playlist` hands the element a list and an index: Next/Previous in the bar, `Shift+N`/`Shift+P`, and the skip pair on the lock screen and headset button, which a page could never draw for itself. `autoadvance` plays through, `shuffle` plays in a random order.
+- **[Take over the `<video>` a page already has](#existing-video-tags)** — `upgradeVideoElements()`, or a `data-upgrade` script tag, drops a `<movi-player>` in place of an existing element (including one driven by video.js) and keeps the original as a live proxy, so the page's own `video.play()` and listeners go on meaning what they meant. The browser extensions do it on any page, for a file at a URL, at the flick of a switch.
+- **Auto English captions, made in the browser** — `decodeAudio()` hands back the soundtrack as 16 kHz mono PCM without playing it, `addSubtitleTrack()` takes cues as they are heard, and the web app puts the two together.
+- **`smoothwarning` and `canPlaySmoothly()`** — tell a viewer that what is loaded will not play smoothly at this speed on this machine *before* it starts stuttering, or ask the question yourself and decide what to do about it.
+- **`thumb="precise"` and standard thumbnail tracks** — previews decode forward to the frame under the pointer instead of showing the keyframe before it, and a storyboard is read the way video.js and JW Player already write one (`<track kind="metadata" label="thumbnails">`).
+- **More places to put a control** — `placement: "top"` for the corner, `placement: "center"` for the middle of the bar, and `screen: "fullscreen" | "windowed"` for a control that belongs to only one of them.
+- **Subtitles the viewer owns** — an "Add subtitle file…" picker for a file sitting next to the video (`subtitlepicker`), and captions that can be dragged anywhere in the picture and stay there, with a double-click to reset.
+- **A build a plain `<script>` tag can load** — `dist/element.global.js` registers `<movi-player>` with no module anywhere in sight.
+- **A loop with no seam** — `loop` turns a file over without stopping first, and says so with a `looped` event.
+- **DRM-protected content says so** — "Protected Video" with a plain explanation instead of a generic loading error, and a packager's clear lead plays rather than stalling.
+- **`posterdelay` and a spinner that waits** — hold the opening poster back by a moment, and report a stall only once it is really a stall (`spinnerdelay`).
 
 ## Getting Started
 

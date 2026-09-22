@@ -5,7 +5,7 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [0.4.1] - 2026-09-08
+## [0.4.1] - 2026-09-22
 
 ### Added
 - **Playlist / queue**: `playlist` + `autoadvance` — Next/Previous, `Shift+N`/`Shift+P`, and lock-screen/headset skip, all wired up for free. A `src`-less item hands loading back to the host while the element keeps the transport controls.
@@ -31,6 +31,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Dividers on the control bar are public.** The line between the track controls and the viewing controls can be switched off (`controlslist="nodivider"`), restyled (`--movi-divider-color`, `--movi-divider-width`, `--movi-divider-height`, `--movi-divider-gap`, `::part(controls-divider)`), and used as an anchor (`after: "divider"`). A page can add its own with `addControl({ id, divider: true })`, placed like any control — including inside a capsule with `group` — and as a rule in the context menu with `placement: "menu"`. A divider left with nothing visible on one side of it in its capsule hides itself, so a control unavailable for this source doesn't strand a line at the end of a pill.
 - **`posterdelay`**: how long to hold the OPENING poster back, in milliseconds. Default `0` — paint it at once, which is what a player without the attribute has always done. It is for a host that prefetches: when the first frame is already on its way, a poster that appears and is replaced a moment later is a flash the viewer reads as a fault rather than a cover, so a load that finishes inside the wait now shows no poster at all and the picture is simply there. Only the opening poster waits; one replacing a picture already on screen is unaffected.
 
+- **Captions go where the viewer puts them**: drag a subtitle anywhere in the picture and it stays — across seeks, sources and sessions — with a double-click to reset and a hint that says so until the reset is used once. `controlslist="nosubtitledrag"` turns it off.
+- **The browser extensions can hand a page's own video to MoviPlayer**: an opt-in toggle replaces a site's `<video>` in place, for a file at a URL only (MSE/DRM streaming sites are left alone), hides the site's own player chrome, and — with site access — adds the CORS header the file's host never sent so the player can read it.
+- **The audio strip says where the pointer is pointing**: its scrubber shows the time under the pointer on hover and drag.
+- **The home page hands over the install line**: `npm install movi-player`, one click to copy.
+
 ### Changed
 - **The WASM module compiles once and is instantiated many times** — a second player, the preview pipeline, and a post-quality-switch rebuild no longer each pay for their own fetch and compile.
 - **Adaptive load-shedding can lift again**: the frame-rate cap for underpowered devices used to engage and never release; it now retests and lifts itself on a sustained healthy stretch.
@@ -39,6 +44,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **`/embed` runs inside the embedding page's own origin** now (a `srcdoc` iframe) instead of a cross-origin frame that needed CORS headers a host may never send; an old embed explains what happened and offers a one-copy replacement.
 - Built against **FFmpeg 9.0.1**.
 - **The loading spinner waits before it appears**: `spinnerdelay` defaults to `"1 2"` (a stall after 1s, an opening after 2s) instead of `0`, so a fast local open never flashes a ring. `spinnerdelay="0"` restores the old behaviour.
+
+- **The audio strip keeps its controls**: the strip IS the player, so it no longer thins out at rest, and its title row starts on the same line as the controls under it.
+- **Fullscreen ends when the source turns out to be sound alone** — a bar or a sleeve in the middle of a black screen is not what fullscreen was entered for.
+- **The settings panel closes on a press anywhere outside it**, like the other popups — including a press on the picture, which now dismisses it and nothing else.
+- **The adaptive decode ceiling lasts the session**, not the life of the device.
+- The three browser extensions are now called **MoviPlayer**.
 
 ### Fixed
 - **The opening poster no longer fades up out of black.** It was faded in over 220ms on every load, and both the host and the canvas are opaque black before the first frame — so what the fade actually did was ramp a thumbnail out of black on every navigation, measured at opacity 0 to 1 across 158ms to 366ms. That reads as a flash, and it lasted as long as the fade rather than as long as the load. It now cuts to the poster, and the fade is kept for the case it was written for: a poster replacing a picture that is already on screen.
@@ -66,6 +77,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **No spinner over a picture that never stopped**, after a backward seek or a loop turn.
 - **Seek-bar hover right after a resume** is fast on large remote files (it took 4–7s).
 - **A video-only file in a background tab** plays its tail out instead of ending early.
+
+- **A source with no picture shows its captions** — sound-alone and data-saver audio-only ran the caption clock off a renderer that was not running.
+- **A hover on an 8K film no longer stops the page**: the preview decodes at preview size instead of the source's, and gives up cleanly rather than hanging. Thumbnails fill their box instead of sitting letterboxed in it.
+- **An audio track whose link dies says so** instead of leaving the picture running in silence while the reader retried every frame.
+- **A cover-art player's menus are no longer clipped** by the bar's collapse, and the spinner keeps its size and place.
 
 ## [0.4.0] - 2026-08-15
 
