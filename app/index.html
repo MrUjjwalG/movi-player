@@ -4094,6 +4094,11 @@
       .hero {
         border-bottom: var(--rule);
         background: var(--bg-base) !important;
+        /* The bar is 74px. The rest was air: 182px of it, which pushed the
+           player most of a screen down on a laptop. The page's job is to get
+           you to the player. */
+        padding-top: 6.5rem !important;
+        padding-bottom: 0 !important;
       }
       .hero-bg { background: none !important; }
       /* The player section follows immediately, so the hero does not need to
@@ -4117,8 +4122,13 @@
       .format-chips { gap: 0.4rem !important; }
 
       /* ── Section rhythm: one cadence, hairline breaks ───────────── */
+      /* One cadence, enforced. Several sections carry their own
+         "padding: 0 4% 3rem" from the old stylesheet, so their heading sat
+         directly on the line the section above drew — the rule read as a
+         underline for the wrong thing. */
       .features-section {
-        padding-block: 4.5rem;
+        padding-top: 4.5rem !important;
+        padding-bottom: 4.5rem !important;
         border-bottom: var(--rule);
       }
       .section-eyebrow,
@@ -4136,8 +4146,7 @@
       .url-bar,
       .hero-mode-tabs,
       .hero-install,
-      .way-card,
-      .faq-item {
+      .way-card {
         border-radius: var(--r-2) !important;
         border: var(--rule) !important;
         background: var(--bg-elevated) !important;
@@ -4258,6 +4267,116 @@
         border-radius: var(--r-3) !important;
         border: var(--rule) !important;
         background: var(--bg-elevated) !important;
+        box-shadow: none !important;
+      }
+
+      /* ── A question is a row, not a card ────────────────────────
+         The FAQ was a list separated by hairlines, and its summary pads
+         vertically only — so boxing each row (mine) pushed the question
+         hard against its own left border. Rows, as before, with the border
+         doing the separating. */
+      .faq-item {
+        border: 0 !important;
+        border-bottom: var(--rule) !important;
+        border-radius: 0 !important;
+        background: none !important;
+      }
+      .faq-item:last-of-type { border-bottom: 0 !important; }
+
+      /* ── The player wears a hairline, not a bezel ───────────────
+         The wrapper carried a 10px border, a 22px radius and a 75px shadow —
+         a thick pale frame around a black picture, which is the one thing on
+         the page that should be edge to edge. */
+      .player-wrapper {
+        border: var(--rule) !important;
+        border-radius: var(--r-3) !important;
+        box-shadow: none !important;
+      }
+      .player-stage,
+      .player-wrapper movi-player { border-radius: 0 !important; }
+      .player-section { padding-block: 0 4.5rem !important; margin-top: 0 !important; }
+
+      /* ── The hero is one centred column ─────────────────────────
+         Headline, one sentence, and the thing you type into — in that order,
+         down the middle, with the player directly under it. The split hero
+         put the claim on one side and decoration on the other; there is no
+         decoration left to put there, and a centred column reads as one
+         thought instead of two columns arguing. */
+      .hero--split .hero-content,
+      .hero-content {
+        display: block !important;
+        width: 100% !important;
+        max-width: 780px !important;
+        margin: 0 auto !important;
+        padding-block: 2.5rem 2rem !important;
+      }
+      .hero-left,
+      .hero-copy,
+      .hero-panel {
+        width: 100% !important;
+        max-width: 100% !important;
+        margin: 0 auto !important;
+        text-align: center !important;
+      }
+      .hero h1,
+      .hero-tagline,
+      .hero-kicker {
+        max-width: 100% !important;
+        margin-left: auto !important;
+        margin-right: auto !important;
+        text-align: center !important;
+      }
+      .hero-tagline { max-width: 34rem !important; }
+      .hero-kicker { justify-content: center !important; }
+      .hero-install {
+        margin-left: auto !important;
+        margin-right: auto !important;
+      }
+      /* The tabs sit on the field they belong to, sharing its width and
+         splitting it three ways — not a floating group of three with a gap
+         after them. */
+      .hero-mode-tabs {
+        display: flex !important;
+        width: 100% !important;
+        max-width: 620px !important;
+        margin: 1.4rem auto 0.55rem !important;
+      }
+      .hero-mode-tab { flex: 1 1 0 !important; justify-content: center; }
+      /* The one thing to do on this page, in the middle, under the sentence
+         that explains it. */
+      .url-bar {
+        max-width: 620px !important;
+        margin: 0 auto !important;
+        text-align: left !important;
+      }
+      .hero-or { text-align: center !important; }
+      .hero-proof-grid,
+      .hero-trust,
+      .hero-badges {
+        justify-content: center !important;
+        text-align: center;
+      }
+
+      /* ── The formats answer, now its own quiet section ──────────
+         On the player's own measure, directly under it: the picture, then
+         what the picture will open. */
+      /* At the foot of the hero: the claim, the thing you type into, and
+         then — for whoever is still asking — what it opens. */
+      .hero-spec {
+        width: 100%;
+        margin: 2.25rem auto 0;
+        text-align: left;
+      }
+
+      /* ── Tinted cards are not information ───────────────────────
+         The "why won't my browser play this" grid came in mint, powder blue,
+         lilac and peach, one per card, for no reason the reader can act on. */
+      .reason-card,
+      .reason-grid > *,
+      .why-card {
+        background: var(--bg-elevated) !important;
+        border: var(--rule) !important;
+        border-radius: var(--r-3) !important;
         box-shadow: none !important;
       }
 
@@ -6801,7 +6920,7 @@
           </div>
         </div>
 
-        <!-- The question a visitor actually arrives with, answered where they
+                <!-- The question a visitor actually arrives with, answered where they
              arrive: not a picture of a player, a list of what it opens. Same
              facts as the "What can it play?" section further down, in the
              form you can scan in two seconds. -->
@@ -6896,6 +7015,7 @@
     </script>
 
     <!-- ===== PLAYER ===== -->
+    
     <section class="player-section" id="watch">
       <div class="player-section-head">
         <div>
