@@ -10241,6 +10241,398 @@
           e.preventDefault();
         }
       });
+
+      // ── Watch party (unlisted) ────────────────────────────────────────────
+      // Nothing below runs, and nothing is injected into the page, unless the
+      // URL carries ?party=CODE. That is the whole of the feature's
+      // discoverability: there is no button, no menu entry and no CSS for it
+      // in the stylesheet.
+      //
+      // Joining needs only the code. Hosting needs a key checked server-side
+      // (POST /api/party/host) — the feature is not meant to be a public
+      // watch-anything-together service.
+      //
+      // Only URL sources can be shared. A local file cannot travel, so the
+      // host is stopped before a party starts on one rather than being let
+      // into a room where nobody else can see anything.
+      (() => {
+        const partyParams = new URLSearchParams(location.search);
+        const partyCode = (partyParams.get("party") || "").trim();
+        if (!partyCode) return;
+        const wantsHost = partyParams.get("host") === "1";
+
+        // Drift budgets are in WALL time, not media time: at 0.5x a second of
+        // clock is half a second of film, and a budget that ignores that is
+        // twice as loose as it reads.
+        const HARD_DRIFT_S = 1.0;
+        const HEARTBEAT_MS = 4000;
+
+        let ws = null;
+        let me = null;
+        let hostId = null;
+        let iControl = false;
+        let clockOffset = 0;      // serverNow() = Date.now() + clockOffset
+        let bestRtt = Infinity;
+        let applyingRemote = false;
+        let partySrc = "";
+        let lastSent = 0;
+        let heartbeat = null;
+        let reconnectAt = 1000;
+        let closedByUs = false;
+
+        const serverNow = () => Date.now() + clockOffset;
+
+        // ---- panel ---------------------------------------------------------
+        const style = document.createElement("style");
+        // The page's own tokens, by their real names — the panel has to be
+        // legible in the light theme as well, and a token that does not exist
+        // silently falls back to whatever dark value is written beside it.
+        style.textContent = [
+          ".wp{position:fixed;right:16px;bottom:16px;z-index:2147483000;width:270px;",
+          "font:500 13px/1.45 var(--font-family,system-ui);color:var(--text-primary,#e8ecf5);",
+          "background:var(--bg-elevated,#12151c);border:var(--rule,1px solid #333b47);",
+          "border-radius:var(--r-3,6px);padding:12px 13px;box-shadow:0 12px 40px rgba(0,0,0,.28)}",
+          ".wp[hidden]{display:none}",
+          ".wp h4{margin:0 0 8px;font-size:11px;letter-spacing:.08em;text-transform:uppercase;",
+          "color:var(--text-muted,#7f8a99);font-weight:600}",
+          ".wp-code{font-family:ui-monospace,monospace;font-size:14px;color:var(--text-primary,#e8ecf5);",
+          "word-break:break-all;margin-bottom:8px}",
+          ".wp-row{display:flex;align-items:center;gap:8px;padding:3px 0;font-size:12px;",
+          "color:var(--text-secondary,#b6bfcd)}",
+          ".wp-dot{width:6px;height:6px;border-radius:50%;background:var(--border-hover,#4a5462);flex:0 0 auto}",
+          ".wp-dot.on{background:var(--accent,#6366f1)}",
+          ".wp-name{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}",
+          ".wp button{font:600 12px/1 inherit;color:var(--text-primary,#e8ecf5);",
+          "background:var(--bg-surface,#1b2029);border:var(--rule,1px solid #333b47);",
+          "border-radius:var(--r-2,4px);padding:6px 9px;cursor:pointer}",
+          ".wp button:hover{border-color:var(--accent,#6366f1)}",
+          ".wp button.p{background:var(--accent,#6366f1);border-color:var(--accent,#6366f1);color:#fff}",
+          ".wp-msg{font-size:12px;color:var(--text-muted,#7f8a99);margin-top:8px}",
+          ".wp-msg.bad{color:#e5484d}",
+          ".wp-acts{display:flex;gap:6px;margin-top:9px;flex-wrap:wrap}",
+          ".wp-in{width:100%;box-sizing:border-box;font:inherit;padding:7px 8px;margin-top:6px;",
+          "color:var(--text-primary,#e8ecf5);background:var(--bg-card,#1b2029);",
+          "border:var(--rule,1px solid #333b47);border-radius:var(--r-2,4px)}",
+          "@media (max-width:520px){.wp{left:12px;right:12px;width:auto;bottom:12px}}",
+        ].join("");
+        document.head.appendChild(style);
+
+        const panel = document.createElement("div");
+        panel.className = "wp";
+        panel.innerHTML =
+          '<h4>Watch party</h4><div class="wp-code"></div>' +
+          '<div class="wp-people"></div><div class="wp-msg"></div>' +
+          '<div class="wp-acts"></div>';
+        document.body.appendChild(panel);
+        const elCode = panel.querySelector(".wp-code");
+        const elPeople = panel.querySelector(".wp-people");
+        const elMsg = panel.querySelector(".wp-msg");
+        const elActs = panel.querySelector(".wp-acts");
+        elCode.textContent = partyCode;
+
+        const say = (text, bad) => {
+          elMsg.textContent = text || "";
+          elMsg.classList.toggle("bad", !!bad);
+        };
+        const button = (label, primary, onClick) => {
+          const b = document.createElement("button");
+          b.textContent = label;
+          if (primary) b.className = "p";
+          b.addEventListener("click", onClick);
+          elActs.appendChild(b);
+          return b;
+        };
+
+        // ---- hosting gate ---------------------------------------------------
+        const askForKey = () =>
+          new Promise((resolve) => {
+            say("This code is not hosting yet. Enter the host key to start it.");
+            const input = document.createElement("input");
+            input.className = "wp-in";
+            input.type = "password";
+            input.placeholder = "Host key";
+            input.autocomplete = "off";
+            panel.insertBefore(input, elActs);
+            const go = () => {
+              const value = input.value.trim();
+              if (!value) return;
+              input.remove();
+              elActs.textContent = "";
+              resolve(value);
+            };
+            input.addEventListener("keydown", (e) => { if (e.key === "Enter") go(); });
+            button("Start party", true, go);
+            input.focus();
+          });
+
+        const mintHostToken = async (key) => {
+          const res = await fetch("/api/party/host", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ code: partyCode, key }),
+          });
+          if (!res.ok) return null;
+          return res.json().catch(() => null);
+        };
+
+        // ---- playback plumbing ----------------------------------------------
+        // A follower's play() is an autoplay attempt with no gesture behind it,
+        // and a browser is entitled to refuse. The refusal is not an error
+        // worth logging — it is a prompt, so it becomes one.
+        const needGesture = () => {
+          if (elActs.querySelector("[data-gesture]")) return;
+          const b = button("Tap to join playback", true, () => {
+            b.remove();
+            say("");
+            player.play().catch(() => {});
+          });
+          b.dataset.gesture = "1";
+          say("Your browser is holding playback until you tap.");
+        };
+
+        const loadPartySource = async (src) => {
+          try {
+            urlInput.value = src;
+            currentVideoUrl = src;
+            window.moviScrollToPlayer?.();
+            player.src = await proxyUrl(src);
+          } catch (err) {
+            say("Could not load what the host is playing.", true);
+          }
+        };
+
+        const applyState = async (st) => {
+          applyingRemote = true;
+          try {
+            if (st.src && st.src !== partySrc) {
+              partySrc = st.src;
+              await loadPartySource(st.src);
+            }
+            if (Number.isFinite(st.rate) && player.playbackRate !== st.rate) {
+              player.playbackRate = st.rate;
+            }
+            // Where the host WOULD be now, not where they were when they spoke.
+            const elapsed = st.paused ? 0 : Math.max(0, (serverNow() - st.at) / 1000) * st.rate;
+            const target = st.time + elapsed;
+            if (Math.abs((player.currentTime || 0) - target) > HARD_DRIFT_S) {
+              player.currentTime = target;
+            }
+            if (st.paused && !player.paused) player.pause();
+            else if (!st.paused && player.paused) {
+              try { await player.play(); } catch { needGesture(); }
+            }
+          } finally {
+            // The seek and the pause we just performed will come back as our
+            // own events; without this window they would be rebroadcast and
+            // the two players would chase each other.
+            setTimeout(() => { applyingRemote = false; }, 300);
+          }
+        };
+
+        const sendState = (force) => {
+          if (!iControl || !ws || ws.readyState !== 1 || applyingRemote) return;
+          const now = Date.now();
+          if (!force && now - lastSent < 250) return;
+          if (!partySrc) return;
+          lastSent = now;
+          ws.send(JSON.stringify({
+            t: "state",
+            paused: !!player.paused,
+            time: player.currentTime || 0,
+            rate: player.playbackRate || 1,
+            src: partySrc,
+            title: document.title.slice(0, 120),
+          }));
+        };
+
+        // The element does not dispatch seeked/seeking as DOM events — its
+        // statechange carries the same information under explicit names (see
+        // AGENTS.md §4.3), so a seek is "we were seeking and now we are not".
+        let wasSeeking = false;
+        player.addEventListener("statechange", (e) => {
+          const state = e.detail;
+          if (state === "seeking") { wasSeeking = true; return; }
+          if (wasSeeking) { wasSeeking = false; sendState(true); }
+        });
+        player.addEventListener("play", () => sendState(true));
+        player.addEventListener("pause", () => sendState(true));
+        player.addEventListener("ratechange", () => sendState(true));
+
+        // ---- roster ---------------------------------------------------------
+        const renderPeople = (members) => {
+          elPeople.textContent = "";
+          for (const m of members) {
+            const row = document.createElement("div");
+            row.className = "wp-row";
+            const dot = document.createElement("span");
+            dot.className = "wp-dot" + (m.control ? " on" : "");
+            const name = document.createElement("span");
+            name.className = "wp-name";
+            name.textContent =
+              (m.id === me ? "You" : m.name) + (m.host ? " · host" : m.control ? " · can control" : "");
+            row.append(dot, name);
+            if (hostId === me && !m.host && m.control) {
+              const b = document.createElement("button");
+              b.textContent = "Revoke";
+              b.addEventListener("click", () => ws?.send(JSON.stringify({ t: "revoke", who: m.id })));
+              row.appendChild(b);
+            }
+            elPeople.appendChild(row);
+          }
+        };
+
+        const showGuestActions = () => {
+          elActs.textContent = "";
+          if (iControl) return;
+          button("Ask for the remote", false, (e) => {
+            ws?.send(JSON.stringify({ t: "req" }));
+            e.target.disabled = true;
+            say("Asked the host. Waiting.");
+          });
+        };
+
+        const showRequest = (who, name) => {
+          const row = document.createElement("div");
+          row.className = "wp-row";
+          const label = document.createElement("span");
+          label.className = "wp-name";
+          label.textContent = name + " wants the remote";
+          const yes = document.createElement("button");
+          yes.className = "p";
+          yes.textContent = "Allow";
+          const no = document.createElement("button");
+          no.textContent = "No";
+          const close = () => row.remove();
+          yes.addEventListener("click", () => { ws?.send(JSON.stringify({ t: "grant", who })); close(); });
+          no.addEventListener("click", () => { ws?.send(JSON.stringify({ t: "deny", who })); close(); });
+          row.append(label, yes, no);
+          elPeople.appendChild(row);
+        };
+
+        // ---- clock ----------------------------------------------------------
+        // Both machines' clocks are wrong by different amounts, routinely by
+        // more than the drift being corrected, so the room's object keeps the
+        // time and each client measures its own offset to it. The best sample
+        // is the one with the shortest round trip: that is the one where the
+        // one-way assumption is least wrong.
+        const pings = new Map();
+        const ping = () => {
+          if (!ws || ws.readyState !== 1) return;
+          const id = Math.random().toString(36).slice(2, 8);
+          pings.set(id, Date.now());
+          ws.send(JSON.stringify({ t: "ping", id }));
+        };
+        const onPong = (msg) => {
+          const sent = pings.get(msg.id);
+          if (sent === undefined) return;
+          pings.delete(msg.id);
+          const rtt = Date.now() - sent;
+          if (rtt >= bestRtt) return;
+          bestRtt = rtt;
+          clockOffset = msg.now - (sent + rtt / 2);
+        };
+
+        // ---- socket ----------------------------------------------------------
+        const connect = (auth) => {
+          const proto = location.protocol === "https:" ? "wss:" : "ws:";
+          const url = new URL(proto + "//" + location.host + "/api/party/room");
+          url.searchParams.set("code", partyCode);
+          url.searchParams.set("name", (localStorage.getItem("movi-party-name") || "").slice(0, 24) || "Guest");
+          if (auth) {
+            url.searchParams.set("token", auth.token);
+            url.searchParams.set("exp", String(auth.exp));
+          }
+          ws = new WebSocket(url);
+
+          ws.addEventListener("open", () => {
+            reconnectAt = 1000;
+            say("Connected.");
+            ping();
+            setTimeout(ping, 400);
+            setTimeout(ping, 900);
+            clearInterval(heartbeat);
+            heartbeat = setInterval(() => { ping(); sendState(false); }, HEARTBEAT_MS);
+          });
+
+          ws.addEventListener("message", (event) => {
+            let msg;
+            try { msg = JSON.parse(event.data); } catch { return; }
+            switch (msg.t) {
+              case "welcome":
+                me = msg.you;
+                hostId = msg.host;
+                iControl = !!msg.control;
+                if (iControl && currentVideoUrl) partySrc = currentVideoUrl;
+                say(iControl ? "You are hosting." : "Following the host.");
+                if (!iControl) showGuestActions();
+                if (msg.state) applyState(msg.state);
+                else sendState(true);
+                break;
+              case "pong": onPong(msg); break;
+              // Applied whoever sent it, INCLUDING when we hold the remote
+              // too. Once the host grants a guest control there are two
+              // drivers, and a controller that ignored the other one left the
+              // two of them watching different parts of the same film with
+              // neither ever correcting. The object only relays state from a
+              // controller, and never back to its sender, so anything that
+              // arrives here is both legitimate and not our own echo.
+              case "state": applyState(msg); break;
+              case "roster":
+                hostId = msg.host;
+                renderPeople(msg.members || []);
+                break;
+              case "control":
+                iControl = !!msg.control;
+                say(msg.promoted ? "The host left — the remote is yours." : iControl ? "You can control playback." : "You are following.");
+                showGuestActions();
+                if (iControl) { partySrc = partySrc || currentVideoUrl; sendState(true); }
+                break;
+              case "denied": say("The host said no.", true); showGuestActions(); break;
+              case "req": showRequest(msg.who, msg.name); break;
+            }
+          });
+
+          ws.addEventListener("close", () => {
+            clearInterval(heartbeat);
+            if (closedByUs) return;
+            // The room is other people waiting; coming back matters more than
+            // being tidy about it. Backoff so a worker that is down is not
+            // hammered by every guest at once.
+            say("Reconnecting…");
+            setTimeout(() => connect(auth), reconnectAt);
+            reconnectAt = Math.min(reconnectAt * 2, 20000);
+          });
+        };
+
+        window.addEventListener("pagehide", () => {
+          closedByUs = true;
+          try { ws?.close(1000, "bye"); } catch { /* going away anyway */ }
+        });
+
+        // ---- start ------------------------------------------------------------
+        (async () => {
+          if (!wantsHost) { connect(null); return; }
+
+          // A party on a local file would be a room where only the host can
+          // see anything, so it is refused here rather than discovered by
+          // everyone else a minute later.
+          if (!currentVideoUrl && player.src && !/^https?:/i.test(String(player.src))) {
+            say("A party can only be started on a URL source, not a local file.", true);
+            return;
+          }
+          const key = await askForKey();
+          const auth = await mintHostToken(key);
+          if (!auth) {
+            say("That key was not accepted.", true);
+            elActs.textContent = "";
+            button("Try again", true, () => location.reload());
+            return;
+          }
+          partySrc = currentVideoUrl || "";
+          connect(auth);
+        })();
+      })();
+
     </script>
 
     <!-- ===== AUTO ENGLISH CAPTIONS ===== -->

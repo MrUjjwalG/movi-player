@@ -42,6 +42,23 @@ PROXY_BLOCKED_HOSTS = ""
 # Local dev test key that always passes: 1x00000000000000000000AA
 TURNSTILE_SITE_KEY = "0x4AAAAAAEU9gOLpQnS9mR0D"
 
+# Watch party rooms. One object per room code — `idFromName(code)` means the
+# code two people agree on IS the address, so there is no room registry to
+# keep and nothing to clean up when they leave. See app/watch-party.js.
+#
+# Hosting is gated on a key in D1 (party_host_keys, seeded from the
+# PARTY_HOST_KEYS secret); joining needs only the code.
+[[durable_objects.bindings]]
+name = "PARTY"
+class_name = "WatchParty"
+
+# SQLite-backed class, which is what a new Durable Object namespace has to be.
+# The object keeps no storage of its own — a room lives only as long as its
+# sockets — but the migration is still how the class is registered.
+[[migrations]]
+tag = "v1"
+new_sqlite_classes = ["WatchParty"]
+
 [[r2_buckets]]
 binding = "ASSETS"
 bucket_name = "movi-assets"
@@ -113,8 +130,14 @@ database_id = "ea838cee-312d-46ea-b2f5-94efb870bcd3"   # replace with the id fro
 # class_name = "WrapKeyStore"
 #
 # [[migrations]]
-# tag = "v1"
+# tag = "v2"
 # new_classes = ["NonceTracker", "WrapKeyStore"]
+#
+# NOTE: this said tag = "v1" while nothing was applied. The watch party's
+# migration is v1 now and has been applied, so re-using that tag here would be
+# rejected — hence v2. These two are still `new_classes`, which is the
+# KV-backed kind and paid-only; the watch party's class is `new_sqlite_classes`,
+# which is the kind the free plan does allow.
 
 [[rules]]
 type = "Text"
