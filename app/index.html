@@ -10277,6 +10277,19 @@
         let partySrc = "";
         let lastSent = 0;
         let heartbeat = null;
+        // Who last actually did something. Every controller used to send a
+        // heartbeat, and a heartbeat carries `paused` — so the moment a
+        // follower's own player differed from the room's (a buffer, a refused
+        // play, a throttled tab) its next heartbeat exported that difference
+        // to everyone as an instruction. One stall on one device paused the
+        // whole room, and then both heartbeats kept confirming the pause to
+        // each other for ever. Only the driver speaks unprompted; the others
+        // follow until they do something.
+        let driver = null;
+        // The room stamps every state with its own clock, and that clock only
+        // goes forward. Anything older than what we have already applied is a
+        // message that crossed a newer one, and applying it would undo it.
+        let lastStateAt = 0;
         let reconnectAt = 1000;
         let closedByUs = false;
 
@@ -10509,6 +10522,12 @@
         // whenever the track list changes, which is when it can finally work.
         let wantAudio;
         let wantSub;
+        // What we were last TOLD to do about playing, so our own obedience
+        // coming back as an event is not mistaken for someone's decision.
+        // A 300ms window did not hold: play() on a second device can take
+        // seconds to become a `play` event, and by then the guard had
+        // expired and the echo went out as a fresh command.
+        let expectPaused = null;
         let settingTracks = false;
 
         const applyTracks = () => {
@@ -10558,9 +10577,16 @@
             if (st.atrack !== undefined) wantAudio = st.atrack;
             if (st.strack !== undefined) wantSub = st.strack;
             applyTracks();
-            if (st.paused && !player.paused) player.pause();
-            else if (!st.paused && player.paused) {
-              try { await player.play(); } catch { needGesture(); }
+            if (st.paused !== player.paused) {
+              expectPaused = { paused: st.paused, at: Date.now() };
+              if (st.paused) player.pause();
+              else {
+                // A refused play leaves us paused. That is this browser's
+                // decision about this tab, not a decision about the room, so
+                // it must never travel — which it cannot, because only the
+                // driver speaks unprompted and we are not it.
+                try { await player.play(); } catch { needGesture(); }
+              }
             }
           } finally {
             // The seek and the pause we just performed will come back as our
@@ -10613,6 +10639,7 @@
           // doing has to be said here or it is the one thing this panel does
           // not report.
           if (action) {
+            driver = me;
             describe(
               { action, time: player.currentTime || 0, rate: player.playbackRate || 1,
                 strack: currentTracks().strack },
@@ -10646,8 +10673,17 @@
         player.addEventListener("loadeddata", () => sendState(true, "source"));
         player.addEventListener("audiotrackchange", () => sendState(true, "audio"));
         player.addEventListener("subtitletrackchange", () => sendState(true, "subtitle"));
-        player.addEventListener("play", () => sendState(true, "play"));
-        player.addEventListener("pause", () => sendState(true, "pause"));
+        // An event that is exactly what we were just told to do is the echo
+        // of that instruction, not a new one.
+        const isEcho = () => {
+          if (!expectPaused) return false;
+          if (expectPaused.paused !== player.paused) return false;
+          if (Date.now() - expectPaused.at > 15000) { expectPaused = null; return false; }
+          expectPaused = null;
+          return true;
+        };
+        player.addEventListener("play", () => { if (!isEcho()) sendState(true, "play"); });
+        player.addEventListener("pause", () => { if (!isEcho()) sendState(true, "pause"); });
         player.addEventListener("ratechange", () => sendState(true, "rate"));
 
         // ---- roster ---------------------------------------------------------
@@ -10864,7 +10900,10 @@
             setTimeout(ping, 400);
             setTimeout(ping, 900);
             clearInterval(heartbeat);
-            heartbeat = setInterval(() => { ping(); sendState(false); }, HEARTBEAT_MS);
+            heartbeat = setInterval(() => {
+              ping();
+              if (driver === me) sendState(false);
+            }, HEARTBEAT_MS);
           });
 
           sock.addEventListener("message", (event) => {
@@ -10877,6 +10916,8 @@
                 hostId = msg.host;
                 iControl = !!msg.control;
                 if (iControl && currentVideoUrl) partySrc = currentVideoUrl;
+                driver = msg.state ? msg.state.by : (iControl ? me : null);
+                lastStateAt = msg.state && typeof msg.state.at === "number" ? msg.state.at : 0;
                 say(statusLine());
                 renderActions();
                 if (msg.state) applyState(msg.state);
@@ -10891,6 +10932,11 @@
               // controller, and never back to its sender, so anything that
               // arrives here is both legitimate and not our own echo.
               case "state":
+                if (typeof msg.at === "number") {
+                  if (msg.at <= lastStateAt) break;   // crossed a newer one
+                  lastStateAt = msg.at;
+                }
+                if (msg.action) driver = msg.by;
                 applyState(msg);
                 describe(msg, speaker(msg));
                 break;
@@ -10899,6 +10945,11 @@
                 // may be the one who has the key — so the actions and the
                 // status are re-derived every time the roster moves.
                 hostId = msg.host;
+                if (driver && !(msg.members || []).some((m) => m.id === driver)) {
+                  // The one who last acted has gone. Nobody would send a
+                  // heartbeat again, so the room would stop correcting drift.
+                  driver = hostId;
+                }
                 renderPeople(msg.members || []);
                 say(statusLine());
                 renderActions();
