@@ -119,6 +119,12 @@ database_id = "ea838cee-312d-46ea-b2f5-94efb870bcd3"   # replace with the id fro
 [[rules]]
 type = "Text"
 globs = ["**/*.html", "**/*.xml", "**/*.txt", "**/*.css"]
+# This replaces wrangler's built-in Text rule rather than adding to it, and
+# without saying so wrangler warns that the default is being shadowed. The
+# only glob the default carries that this one does not is **/*.sql, and
+# nothing here imports one — app/schema.sql is applied to D1 by hand, not
+# bundled. So: replace it, deliberately, and say so.
+fallthrough = false
 
 [[rules]]
 type = "Data"

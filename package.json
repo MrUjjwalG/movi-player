@@ -10,41 +10,41 @@
   "types": "dist/index.d.ts",
   "exports": {
     ".": {
+      "types": "./dist/index.d.ts",
       "import": "./dist/index.js",
-      "require": "./dist/index.cjs",
-      "types": "./dist/index.d.ts"
+      "require": "./dist/index.cjs"
     },
     "./demuxer": {
+      "types": "./dist/demuxer.d.ts",
       "import": "./dist/demuxer.js",
-      "require": "./dist/demuxer.cjs",
-      "types": "./dist/demuxer.d.ts"
+      "require": "./dist/demuxer.cjs"
     },
     "./player": {
+      "types": "./dist/player.d.ts",
       "import": "./dist/player.js",
-      "require": "./dist/player.cjs",
-      "types": "./dist/player.d.ts"
+      "require": "./dist/player.cjs"
     },
     "./element": {
+      "types": "./dist/element.d.ts",
       "import": "./dist/element.js",
-      "require": "./dist/element.cjs",
-      "types": "./dist/element.d.ts"
+      "require": "./dist/element.cjs"
     },
     "./element/slim": {
+      "types": "./dist/element.d.ts",
       "import": "./dist/element.slim.js",
-      "require": "./dist/element.slim.cjs",
-      "types": "./dist/element.d.ts"
+      "require": "./dist/element.slim.cjs"
     },
     "./element/global": {
+      "types": "./dist/element.d.ts",
       "import": "./dist/element.global.js",
       "require": "./dist/element.global.js",
-      "default": "./dist/element.global.js",
-      "types": "./dist/element.d.ts"
+      "default": "./dist/element.global.js"
     },
     "./element/slim/global": {
+      "types": "./dist/element.d.ts",
       "import": "./dist/element.slim.global.js",
       "require": "./dist/element.slim.global.js",
-      "default": "./dist/element.slim.global.js",
-      "types": "./dist/element.d.ts"
+      "default": "./dist/element.slim.global.js"
     },
     "./movi.wasm": "./dist/movi.wasm",
     "./react": {
