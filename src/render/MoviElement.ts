@@ -16839,6 +16839,14 @@ export class MoviElement extends HTMLElement {
       container.style.display = "block";
       container.classList.toggle("movi-controls-visible", strip);
       container.classList.toggle("movi-controls-hidden", !strip);
+      // The corner row goes with the bar. This is the one place that puts the
+      // bar into the hidden state directly rather than through hideControls(),
+      // and it used to leave the three-dots behind: a source change on touch
+      // showed the chrome, this hid the bar, and the corner stayed lit on its
+      // own until the inactivity timer got round to it two seconds later.
+      this.shadowRoot
+        ?.querySelector(".movi-top-controls")
+        ?.classList.toggle("movi-gear-visible", strip && this.hasMediaSource());
     } else {
       container.style.display = "none";
       if (centerPlayPause) centerPlayPause.classList.remove("movi-center-visible");
