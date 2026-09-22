@@ -142,6 +142,12 @@ export class WatchParty {
         }
         state.at = Date.now();
         state.by = id;
+        // Carried so a follower can say WHO, not just what. The room is the
+        // only thing that knows the sender's current name — it can change
+        // after the socket opened — so it is stamped here rather than trusted
+        // from the message.
+        state.byName = member.name;
+        state.action = typeof msg.action === "string" ? msg.action.slice(0, 24) : "";
         this.last = state;
         this.broadcast({ t: "state", ...state }, id);
         return;
