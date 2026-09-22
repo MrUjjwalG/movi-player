@@ -4325,7 +4325,30 @@
          a thing you flick. It belongs nearer the hand, so the dev switch
          moves to the theme button's left. */
       .nav-right { display: flex; align-items: center; }
-      .dev-mode-switch { order: 1; }
+      /* The developer switch is a control, so it gets a control's box: the
+         same height as the round buttons either side of it, with its own
+         word inside the box rather than floating beside it. */
+      .dev-mode-switch {
+        order: 1;
+        display: inline-flex !important;
+        align-items: center;
+        gap: 0.45rem !important;
+        height: 38px;
+        padding: 0 0.6rem !important;
+        border: var(--rule) !important;
+        border-radius: 999px !important;
+        background: var(--bg-elevated) !important;
+      }
+      .dev-mode-switch .label {
+        display: inline !important;
+        font: 600 0.62rem/1 "DM Mono", ui-monospace, monospace !important;
+        letter-spacing: 0.08em;
+        color: var(--text-muted) !important;
+      }
+      .dev-mode-switch[aria-checked="true"] {
+        border-color: var(--accent) !important;
+      }
+      .dev-mode-switch[aria-checked="true"] .label { color: var(--accent) !important; }
       #theme-toggle,
       .nav-icon-btn#theme-toggle { order: 2; }
       .nav-extension-cta { order: 3; }
@@ -4454,6 +4477,40 @@
         border: var(--rule) !important;
         border-radius: var(--r-3) !important;
         box-shadow: none !important;
+      }
+
+      /* ── The bar on a phone ─────────────────────────────────────
+         A switch with no word on it is a mystery; "DEV" is eleven pixels of
+         mono and it can stay. The room for it comes from the extension
+         button, which keeps its Chrome mark and drops its label — on a phone
+         that button leads to something Chrome itself cannot install. */
+      @media (max-width: 720px) {
+        /* The repository link is the first thing this bar drops at width
+           (.nav-right > .nav-icon-link:not(.nav-chrome-icon) { display: none }
+           further down) — and it is the one link on the bar a developer came
+           for. It stays, in its place on the right. */
+        .nav-right > .nav-icon-link:not(.nav-chrome-icon) {
+          display: inline-flex !important;
+        }
+        .dev-mode-switch .label {
+          display: inline !important;
+          font: 600 0.6rem/1 "DM Mono", ui-monospace, monospace !important;
+          letter-spacing: 0.08em;
+          color: var(--text-muted) !important;
+        }
+        .nav-cta-label { display: none !important; }
+        .nav-extension-cta { padding-left: 0.55rem !important; padding-right: 0.55rem !important; }
+        /* Five controls and a wordmark in 390px: the bar keeps them all by
+           giving up the space between them rather than one of them. */
+        .navbar { padding-left: 0.9rem !important; padding-right: 0.9rem !important; gap: 0.5rem !important; }
+        .nav-right { gap: 0.4rem !important; }
+        .nav-right > .nav-icon-link,
+        .nav-icon-btn { width: 34px !important; height: 34px !important; }
+        .dev-mode-switch {
+          height: 34px;
+          gap: 0.35rem !important;
+          padding: 0 0.5rem !important;
+        }
       }
 
       /* ── Tabular numerals: a running time that does not wobble ──── */
@@ -6559,7 +6616,7 @@
           <span class="track" aria-hidden="true"><span class="thumb"></span></span>
         </button>
         <a class="nav-extension-cta" href="https://chromewebstore.google.com/detail/movi-player/ckleeigcopjnpehkjokijokjegknfgej" target="_blank" rel="noopener">
-          <span class="chrome-badge"><svg class="chrome-logo" viewBox="0 0 48 48" aria-hidden="true"><circle cx="24" cy="24" r="12" fill="#fff"/><path d="M24 12h20.78A24 24 0 0 0 3.22 12L13.61 30A12 12 0 0 1 24 12Z" fill="#ea4335"/><path d="M34.39 30 24 48A24 24 0 0 0 44.78 12H24a12 12 0 0 1 10.39 18Z" fill="#fbbc04"/><path d="M13.61 30 3.22 12A24 24 0 0 0 24 48l10.39-18a12 12 0 0 1-20.78 0Z" fill="#34a853"/><circle cx="24" cy="24" r="9.5" fill="#1a73e8"/></svg></span> Get Extension
+          <span class="chrome-badge"><svg class="chrome-logo" viewBox="0 0 48 48" aria-hidden="true"><circle cx="24" cy="24" r="12" fill="#fff"/><path d="M24 12h20.78A24 24 0 0 0 3.22 12L13.61 30A12 12 0 0 1 24 12Z" fill="#ea4335"/><path d="M34.39 30 24 48A24 24 0 0 0 44.78 12H24a12 12 0 0 1 10.39 18Z" fill="#fbbc04"/><path d="M13.61 30 3.22 12A24 24 0 0 0 24 48l10.39-18a12 12 0 0 1-20.78 0Z" fill="#34a853"/><circle cx="24" cy="24" r="9.5" fill="#1a73e8"/></svg></span> <span class="nav-cta-label">Get Extension</span>
         </a>
       </div>
     </nav>
