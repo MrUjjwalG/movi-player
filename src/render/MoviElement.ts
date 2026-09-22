@@ -22953,13 +22953,23 @@ export class MoviElement extends HTMLElement {
            opacity: 1 !important;
         }
 
-        /* Center button focus/hover reset for touch devices */
+        /* Center button focus/hover reset for touch devices.
+           :hover and :focus both STICK to this element after a tap — until
+           something else is tapped — so whatever they say here is what the
+           button wears for the rest of the session. They therefore say the
+           resting look, not a brighter one: a tapped button that keeps a
+           halo reads as a button still being pressed. */
         .movi-center-play-pause:hover,
         .movi-center-play-pause:focus,
         .movi-center-play-pause:active {
            background: transparent !important;
-           border-color: color-mix(in srgb, var(--movi-accent, var(--movi-primary)) 60%, transparent) !important;
-           box-shadow: 0 8px 32px color-mix(in srgb, var(--movi-accent, var(--movi-primary)) 40%, transparent) !important;
+           border-color: color-mix(in srgb, var(--movi-accent, var(--movi-primary)) 40%, transparent) !important;
+           /* Measured on a phone: the button rests here with no shadow at
+              all — this block flattens it with the rest of the touch
+              chrome. So a press must not hand one back, or the halo it
+              leaves behind is the only thing on screen that says the button
+              was touched, minutes after it was. */
+           box-shadow: none !important;
         }
 
         .movi-center-play-pause svg {
@@ -23213,13 +23223,20 @@ export class MoviElement extends HTMLElement {
         pointer-events: none;
         transition: opacity var(--movi-transition-normal);
       }
-      .movi-center-play-pause:hover::before {
-        opacity: 0.48;
-      }
+      /* Both of these are what a POINTER hovering says. A tap leaves :hover
+         stuck on the element until the next tap lands somewhere else, so on
+         touch the disc darkened from 0.3 to 0.48 the moment it was pressed
+         and stayed that way — a dark blob sitting over the picture. The
+         scale below is already gated for the same reason. */
+      @media (hover: hover) {
+        .movi-center-play-pause:hover::before {
+          opacity: 0.48;
+        }
 
-      .movi-center-play-pause:hover {
-        border-color: color-mix(in srgb, var(--movi-accent, var(--movi-primary)) 60%, transparent);
-        box-shadow: 0 8px 40px color-mix(in srgb, var(--movi-accent, var(--movi-primary)) 40%, transparent), inset 0 0 0 1px rgba(255, 255, 255, 0.15);
+        .movi-center-play-pause:hover {
+          border-color: color-mix(in srgb, var(--movi-accent, var(--movi-primary)) 60%, transparent);
+          box-shadow: 0 8px 40px color-mix(in srgb, var(--movi-accent, var(--movi-primary)) 40%, transparent), inset 0 0 0 1px rgba(255, 255, 255, 0.15);
+        }
       }
 
       /* Toggle receipt: pop in, fade out, gone. Carries !important because the
