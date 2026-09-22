@@ -7799,12 +7799,33 @@
         // idea what you had arrived at. "Now playing / Your screen" is the
         // start of that thought, so the scroll lands there and the player
         // follows underneath it.
-        var target =
-          document.querySelector(".player-section") ||
-          document.querySelector(".player-wrapper");
-        if (!target) return;
-        var navbarH = 64;
-        var top = target.getBoundingClientRect().top + window.scrollY - navbarH - 16;
+        var section = document.querySelector(".player-section");
+        var head = document.querySelector(".player-section-head") || section;
+        var player = document.querySelector(".player-wrapper");
+        if (!section) return;
+        var nav = document.querySelector(".navbar");
+        var navbarH = nav ? nav.getBoundingClientRect().height : 64;
+        var y = window.scrollY;
+        // Land with the heading just under the bar — enough to read "Now
+        // playing / Your screen", not so much that the picture starts below
+        // the fold.
+        var top = section.getBoundingClientRect().top + y - navbarH - 12;
+
+        // …then, if the player would still hang past the bottom of the
+        // window, go a little further — but never far enough to take the
+        // heading back under the bar. Arriving at a picture whose bottom
+        // edge (and control bar) is off screen is the thing this button is
+        // for avoiding.
+        if (player) {
+          var margin = 16;
+          var playerBottom = player.getBoundingClientRect().bottom + y - top;
+          var overflow = playerBottom - window.innerHeight + margin;
+          if (overflow > 0) {
+            var headTop = head.getBoundingClientRect().top + y - top;
+            var room = headTop - navbarH - 4;
+            if (room > 0) top += Math.min(overflow, room);
+          }
+        }
         window.scrollTo({ top: Math.max(0, top), behavior: "smooth" });
       };
 
