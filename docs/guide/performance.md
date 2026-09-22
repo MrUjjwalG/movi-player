@@ -303,6 +303,98 @@ function logMemoryUsage() {
 setInterval(logMemoryUsage, 5000);
 ```
 
+## Starting Fast
+
+Everything above is about playback. This is about the gap before it — the stretch
+between "the viewer asked for this video" and "there is a picture", which is the
+part they read as the player being slow.
+
+### Where the time goes
+
+Measured on a warm navigation in a React host, same video, fully cached, six runs:
+
+| Stage | Cost |
+|---|---|
+| handing the element a new source | ~66 ms |
+| opening the container, demuxing, configuring the decoder, decoding frame 1 | ~217 ms |
+| **click to first frame** | **~285 ms median** |
+
+The second row is work that can only start once the element has the source. No
+amount of prefetching removes it. What prefetching removes is everything that
+would otherwise be *added* to it — and on a cold open that is seconds, not
+milliseconds.
+
+### Prefetch the first ranges — exactly
+
+The player's opening reads are a fixed size, and a cached `206` only answers a
+request the cache can cover. A prefetch that asks for a different span is a
+download the player then repeats in full.
+
+```js
+// HttpSource.FIRST_RANGE_CHUNK_SIZE
+const VIDEO_RANGE = "bytes=0-4194303";   // 4 MB
+// MoviPlayer calls setFirstRangeBytes(1_000_000) on a split-audio source
+const AUDIO_RANGE = "bytes=0-999999";    // 1 MB
+
+const grab = (url, range) =>
+  fetch(url, { headers: { Range: range } })
+    // Read it to the end — an unread body is a cache entry that never
+    // finishes being written, so the download buys nothing.
+    .then((r) => r.arrayBuffer());
+
+await Promise.all([grab(videoUrl, VIDEO_RANGE), grab(audioUrl, AUDIO_RANGE)]);
+```
+
+Getting this wrong is quiet: the prefetch succeeds, the bytes sit in the cache,
+and the player still goes to the network. One integration primed 3 MB of video
+against the player's 4 MB read and paid 129 ms of `Read: waiting for data…` on
+every "cached" open.
+
+These sizes are not tuning knobs. 4 MB was measured against the alternative —
+shrinking the opening read to 512 KB moved `loadedmetadata` from 1.6 s to 28.8 s
+on the same click, because whatever the demuxer needs to open is not answered by
+one small range.
+
+### Prefetch the rung the player will actually open
+
+On Auto the player does not open the top rung. It runs a pre-play speed test and
+opens what the link measures, so a prefetch aimed at "best quality" can miss
+entirely — one integration primed itag 399 (1920p) while the player asked for
+itag 398 (1280p) on the same signed URL, and the whole 4 MB was wasted.
+
+Aim at the height the player is **currently playing** — listen for
+[`qualitychange`](/api/events) and remember `detail.height`. It is the best
+available answer to what it will pick a moment later, because the thing it
+measures is the same link.
+
+### Don't cover a video that is about to appear
+
+A poster is the honest thing to show while a video loads, and noise when it does
+not need loading — it appears and is replaced before it has been read, which
+looks like a fault rather than a cover. Set
+[`posterdelay`](/api/element#posterdelay) and a load that finishes inside the
+wait never shows one:
+
+```html
+<movi-player src="video.mp4" poster="cover.jpg" posterdelay="600"></movi-player>
+```
+
+Pick the number from your own measurements: it wants to sit above a prefetched
+open and below a cold one. The default is `0` — paint it at once.
+
+### What you cannot prefetch away
+
+Mounting the next video's player ahead of time does work — it reaches
+`readyState 4` before it is needed, and the frame is ready the instant it is
+shown. It also costs a second decoder and its buffers for as long as it is
+alive, so it is only affordable where "next" is a single known video (a reel
+column, a playlist), never a grid of candidates.
+
+Be aware of what it changes: a host that swaps a pre-mounted player in for the
+visible one is reusing an element that never remounted, so any wiring that
+happens on mount — including the handle the element hands back — does not run
+again. See AGENTS.md §7.10.
+
 ## Best Practices
 
 1. **Destroy players when done**

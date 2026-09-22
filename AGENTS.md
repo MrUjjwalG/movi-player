@@ -323,6 +323,74 @@ For lighter sources, dropping a few video packets to keep audio flowing is accep
 - Per-frame `texImage2D` of an 8K `VideoFrame` is the dominant cost. The compositor downscales after.
 - Limiting frame queue depth (see 7.2) is the single highest-leverage knob.
 
+### 7.8 Startup: the opening reads are fixed sizes, and a host will match them
+
+`HttpSource.FIRST_RANGE_CHUNK_SIZE` is 4 MB (`bytes=0-4194303`), and
+`MoviPlayer` calls `setFirstRangeBytes(1_000_000)` on a split-audio source
+(`bytes=0-999999`). Hosts prefetch against these numbers to put the opening
+bytes in the browser's HTTP cache, and a cached `206` only answers a request the
+cache can cover — so **changing either constant silently breaks every host's
+prefetch**. The prefetch keeps succeeding; the player just goes to the network
+anyway. If you move one, say so loudly and update `docs/guide/performance.md`.
+
+4 MB is also not arbitrary: shrinking the opening read to 512 KB moved
+`loadedmetadata` from 1646 ms to 28807 ms on the same warm click. Whatever the
+demuxer needs to open is not answered by one small range, and the fill loop is
+nowhere near as fast as one big request.
+
+### 7.9 The head probe must hand its bytes over before it judges them
+
+`_probeHeadAndWarm()` reads the head of the rung it is about to open, times it,
+and calls `HttpSource.offerWarmHead()` so the source does not fetch the same
+range again. A body that arrives in under 30 ms came from the browser's cache
+and is not a measurement — but it is still bytes, and it used to `return 0`
+*before* the handover. Measured on a prefetched open: the probe read the head in
+23 ms, dropped it, and the open then sat in `Read: waiting for data…` for 129 ms
+of a 345 ms start. `offerWarmHead()` now runs before the cache check. Keep it
+there: "cannot be timed" and "not worth keeping" are different questions.
+
+### 7.10 A reused element does not re-run mount wiring — including `onPlayer`
+
+The element assumes one mount per source. A host that pre-mounts the next
+video's player and swaps it in for the visible one breaks that assumption:
+React reconciles by position and key, so the *same instance* becomes the current
+one, nothing remounts, and every mount-time effect is skipped.
+
+This was measured working and then abandoned mid-flight in a host, so the shape
+of the failure is known:
+
+- the picture is genuinely instant — the pre-mounted player reaches
+  `readyState 4` before the swap, and the frame is ready on the same tick the
+  route changes, with no load during the transition at all;
+- the element handle the host was given on mount is never re-published, so the
+  host keeps driving the *outgoing* element. Playback never starts (reel sits at
+  `currentTime 0`, `paused`, fully decoded), and anything bound to that handle —
+  a custom control bar, a scrubber — is wired to a dead node.
+
+Patching it host-side (guarding on "is this element in the current slide",
+re-publishing on a prop change) did not hold. If this is worth supporting, it
+needs an explicit identity contract on the element — a prop the host changes at
+handover, on which the element re-publishes itself and re-runs the wiring — not
+a heuristic. Until then, treat pre-mounting as unsupported and say so.
+
+### 7.11 The opening poster is a cover, not a transition
+
+`showPoster()` cuts to the opening poster rather than fading it. The host and
+the canvas are both opaque black before the first frame, so a fade ramps the
+thumbnail up out of black — measured in a host, opacity 0 to 1 across 158 ms to
+366 ms on every navigation, which reads as a flash, and which lasts as long as
+the fade rather than as long as the load. The fade is kept for the case it was
+written for: a poster replacing a picture that is already on screen
+(`_hasEverPlayed`).
+
+`posterdelay` (ms, default `0`) holds the opening poster back so a load that
+finishes inside the wait shows no poster at all. It is parsed in
+`attributeChangedCallback` as well as at init, for the reason the
+`spinnerdelay` case beside it documents: a React or Vue wrapper reflects its
+props a frame after the
+element connected, by which point the poster is already up under the default —
+so a poster standing over an unpainted source is taken down and re-armed.
+
 ---
 
 ## 8. Common pitfalls

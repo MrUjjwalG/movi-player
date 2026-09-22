@@ -537,7 +537,7 @@ The custom element re-exposes player activity as DOM events so you can wire `add
 | `pipchange`            | `{ pip: boolean }`                   | Picture-in-Picture window opened/closed            |
 | `enterpictureinpicture` | —                                   | `HTMLVideoElement` alias, fired alongside `pipchange` |
 | `leavepictureinpicture` | —                                   | `HTMLVideoElement` alias, fired alongside `pipchange` |
-| `qualitychange`        | `{ trackId: number }`                | Active video quality / track switched              |
+| `qualitychange`        | `{ trackId }` or `{ src, height, … }` or `{ height, auto }` | Active video quality / track switched. The shape depends on what moved it: a pick from the track menu carries `trackId`, a ladder switch carries `src` and `height`, and an Auto/ABR switch carries `height` and `auto: true`. A host persisting a deliberate choice should ignore `auto === true`; one prefetching the next video should read `height` from any of them and treat its absence as "unchanged" |
 | `subtitledelaychange`  | `{ subtitleDelay: number }`          | Subtitle offset changed via property/attribute     |
 | `playlistchange`       | `{ items: MoviPlaylistItem[] }`      | The queue was replaced (see [`playlist`](./element.md#playlist)) |
 | `itemchange`           | `{ index, previousIndex, item }`     | **Cancelable** — the queue moved to another item and is about to load it. `preventDefault()` takes back the load, not the move, so a host whose sources are `<source>`/`<track>` children (or whose items are routes) can own what plays. See [Queues the host loads](./element.md#queues-the-host-loads) |
