@@ -7793,13 +7793,19 @@
       // ambient halo has somewhere to live inside its clip, and measuring that
       // box left the picture 100px lower than intended.
       window.moviScrollToPlayer = function () {
+        // To the top of the section, not to the picture. Aiming at the player
+        // itself put its middle somewhere near the middle of the window and
+        // cut the heading off above it — you arrived at a rectangle with no
+        // idea what you had arrived at. "Now playing / Your screen" is the
+        // start of that thought, so the scroll lands there and the player
+        // follows underneath it.
         var target =
-          document.querySelector(".player-wrapper") ||
-          document.querySelector(".player-section");
+          document.querySelector(".player-section") ||
+          document.querySelector(".player-wrapper");
         if (!target) return;
         var navbarH = 64;
-        var top = target.getBoundingClientRect().top + window.scrollY - navbarH - 48;
-        window.scrollTo({ top: top, behavior: "smooth" });
+        var top = target.getBoundingClientRect().top + window.scrollY - navbarH - 16;
+        window.scrollTo({ top: Math.max(0, top), behavior: "smooth" });
       };
 
       (function () {
