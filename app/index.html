@@ -10265,7 +10265,15 @@
         // clock is half a second of film, and a budget that ignores that is
         // twice as loose as it reads.
         const HARD_DRIFT_S = 1.0;
-        const HEARTBEAT_MS = 4000;
+        // The driver's position, for correcting drift. It does not need to be
+        // often: nothing acts on it until the gap passes HARD_DRIFT_S, and a
+        // real command travels immediately on its own event rather than
+        // waiting for one of these.
+        const HEARTBEAT_MS = 10000;
+        // Clock offset, on the other hand, barely moves once measured — two
+        // machines do not drift seconds apart over a film. Measuring it every
+        // four seconds was half of everything this room said.
+        const RESYNC_CLOCK_MS = 60000;
 
         let ws = null;
         let me = null;
@@ -10277,6 +10285,7 @@
         let partySrc = "";
         let lastSent = 0;
         let heartbeat = null;
+        let clockTimer = null;
         // Who last actually did something. Every controller used to send a
         // heartbeat, and a heartbeat carries `paused` — so the moment a
         // follower's own player differed from the room's (a buffer, a refused
@@ -10900,10 +10909,11 @@
             setTimeout(ping, 400);
             setTimeout(ping, 900);
             clearInterval(heartbeat);
+            clearInterval(clockTimer);
             heartbeat = setInterval(() => {
-              ping();
               if (driver === me) sendState(false);
             }, HEARTBEAT_MS);
+            clockTimer = setInterval(ping, RESYNC_CLOCK_MS);
           });
 
           sock.addEventListener("message", (event) => {
@@ -10971,6 +10981,7 @@
             if (ws !== sock) return;
             elLive.classList.remove("on");
             clearInterval(heartbeat);
+            clearInterval(clockTimer);
             if (closedByUs) return;
             // The room is other people waiting; coming back matters more than
             // being tidy about it. Backoff so a worker that is down is not
