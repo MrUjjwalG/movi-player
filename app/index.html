@@ -10248,8 +10248,10 @@
       // discoverability: there is no button, no menu entry and no CSS for it
       // in the stylesheet.
       //
-      // The code is the secret. Whoever opens it first hosts the room and
-      // everyone after that joins — there is nothing else to present.
+      // The code is what people share, and it is NOT a credential: open
+      // someone else's code and you land in their room as a follower. Taking
+      // the chair means presenting the one secret in D1, and only the first
+      // claim on a room is honoured.
       //
       // Only URL sources can be shared. A local file cannot travel, so the
       // host is stopped before a party starts on one rather than being let
@@ -10472,9 +10474,17 @@
           }
         };
 
+        // Arriving first does not make anyone the host. A room with nobody
+        // hosting used to say "Following the host" and offer a button that
+        // asked an empty chair for the remote; it now says what is true and
+        // offers the one thing that would change it.
         const renderActions = () => {
           elActs.textContent = "";
           if (iControl) return;
+          if (hostId === null) {
+            button("Start hosting", true, becomeHost);
+            return;
+          }
           button("Ask for the remote", false, (e) => {
             ws?.send(JSON.stringify({ t: "req" }));
             e.target.disabled = true;
@@ -10485,7 +10495,54 @@
         const statusLine = () => {
           if (hostId === me) return "You are hosting. Share the code.";
           if (iControl) return "You can control playback.";
+          if (hostId === null) return "Nobody is hosting this code yet.";
           return "Following the host.";
+        };
+
+        const askForSecret = () =>
+          new Promise((resolve) => {
+            say("Enter the host secret to take this room.");
+            const input = document.createElement("input");
+            input.className = "wp-in";
+            input.type = "password";
+            input.placeholder = "Host secret";
+            input.autocomplete = "off";
+            panel.insertBefore(input, elActs);
+            const go = () => {
+              const value = input.value;
+              if (!value) return;
+              input.remove();
+              elActs.textContent = "";
+              resolve(value);
+            };
+            input.addEventListener("keydown", (e) => { if (e.key === "Enter") go(); });
+            elActs.textContent = "";
+            button("Take the room", true, go);
+            input.focus();
+          });
+
+        // The room decides who hosts at the door, so the only way to change
+        // that answer is to knock again — this time carrying a token.
+        const becomeHost = async () => {
+          const secret = await askForSecret();
+          let auth = null;
+          try {
+            const res = await fetch("/api/party/host", {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({ code: partyCode, secret }),
+            });
+            if (res.ok) auth = await res.json();
+          } catch { /* offline, or the worker is down — same answer below */ }
+          if (!auth) {
+            say("That secret was not accepted.", true);
+            renderActions();
+            return;
+          }
+          const old = ws;
+          ws = null;
+          try { old?.close(1000, "rehost"); } catch { /* already gone */ }
+          connect(auth);
         };
 
         const showRequest = (who, name) => {
@@ -10530,14 +10587,27 @@
         };
 
         // ---- socket ----------------------------------------------------------
-        const connect = () => {
+        const connect = (auth) => {
           const proto = location.protocol === "https:" ? "wss:" : "ws:";
           const url = new URL(proto + "//" + location.host + "/api/party/room");
           url.searchParams.set("code", partyCode);
           url.searchParams.set("name", (localStorage.getItem("movi-party-name") || "").slice(0, 24) || "Guest");
-          ws = new WebSocket(url);
+          if (auth) {
+            url.searchParams.set("token", auth.token);
+            url.searchParams.set("exp", String(auth.exp));
+          }
+          // Held by name, not read back off `ws`, because this socket can be
+          // superseded while it is still closing — taking the room replaces
+          // it deliberately. Every handler below checks that it still belongs
+          // to the current one; without that, the retiring socket's close
+          // handler fired a reconnect of its own, the room ended up with two
+          // connections from one page, the FIRST became host and the page sat
+          // on the second as a guest. Its own panel said "Following the host".
+          const sock = new WebSocket(url);
+          ws = sock;
 
-          ws.addEventListener("open", () => {
+          sock.addEventListener("open", () => {
+            if (ws !== sock) return;
             reconnectAt = 1000;
             say("Connected.");
             ping();
@@ -10547,7 +10617,8 @@
             heartbeat = setInterval(() => { ping(); sendState(false); }, HEARTBEAT_MS);
           });
 
-          ws.addEventListener("message", (event) => {
+          sock.addEventListener("message", (event) => {
+            if (ws !== sock) return;
             let msg;
             try { msg = JSON.parse(event.data); } catch { return; }
             switch (msg.t) {
@@ -10592,14 +10663,15 @@
             }
           });
 
-          ws.addEventListener("close", () => {
+          sock.addEventListener("close", () => {
+            if (ws !== sock) return;
             clearInterval(heartbeat);
             if (closedByUs) return;
             // The room is other people waiting; coming back matters more than
             // being tidy about it. Backoff so a worker that is down is not
             // hammered by every guest at once.
             say("Reconnecting…");
-            setTimeout(connect, reconnectAt);
+            setTimeout(() => connect(auth), reconnectAt);
             reconnectAt = Math.min(reconnectAt * 2, 20000);
           });
         };

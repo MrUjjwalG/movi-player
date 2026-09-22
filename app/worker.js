@@ -493,6 +493,9 @@ export default {
     }
 
     // --- Watch party (unlisted; see app/watch-party.js) ---
+    if (path === "/api/party/host" && request.method === "POST") {
+      return handlePartyHost(request, env);
+    }
     if (path === "/api/party/room") {
       return handlePartyRoom(request, env, url);
     }
@@ -3388,11 +3391,19 @@ function timingSafeEqualStr(a, b) {
 // ---------------------------------------------------------------------------
 // Watch party
 //
-// The room code is the only secret. The first connection on a code claims the
-// room and hosts it, everyone after that joins — so there is nothing to check
-// here beyond the shape of the code, and nothing to store.
+// Two doors, different sizes. The room code is what people share and is not a
+// credential — anyone may open ?party=movie and will land in it as a
+// follower, able to do nothing. Claiming the chair in that room means
+// presenting the one secret in D1 (party_secret), and only the first claim on
+// a room is honoured.
+//
+// The secret never reaches the Durable Object. It is checked here, and what
+// travels onward is a short-lived HMAC over (code, expiry) — so a token
+// lifted from one room's URL opens neither another room nor the same one
+// tomorrow.
 // ---------------------------------------------------------------------------
 
+const PARTY_TOKEN_TTL_MS = 10 * 60 * 1000;
 const PARTY_CODE_RE = /^[A-Za-z0-9][A-Za-z0-9 _-]{2,39}$/;
 
 function partyCodeKey(code) {
@@ -3402,7 +3413,63 @@ function partyCodeKey(code) {
   return code.trim().toLowerCase().replace(/[\s_-]+/g, "-");
 }
 
-/** GET /api/party/room?code=… — WebSocket upgrade into the room's object. */
+async function sha256Hex(text) {
+  const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(text));
+  let hex = "";
+  for (const b of new Uint8Array(digest)) hex += b.toString(16).padStart(2, "0");
+  return hex;
+}
+
+async function signPartyToken(env, codeKey, expiresAt) {
+  return hmacSha256Hex(env.ENC_SERVER_SECRET, `party:${expiresAt}:${codeKey}`);
+}
+
+/**
+ * POST /api/party/host  { code, secret } -> { token, exp, code }
+ *
+ * Deliberately quiet about which half was wrong: a caller probing for the
+ * secret learns the same thing from a bad one as from a malformed code, and
+ * the same again when no secret has been set at all.
+ */
+async function handlePartyHost(request, env) {
+  if (!env.ENC_SERVER_SECRET || !env.COMMENTS_DB) {
+    return jsonResponse({ error: "Watch party is not configured on this deployment" }, 503);
+  }
+  let body;
+  try {
+    body = await request.json();
+  } catch {
+    return jsonResponse({ error: "Invalid request" }, 400);
+  }
+  const code = typeof body?.code === "string" ? body.code.trim() : "";
+  const secret = typeof body?.secret === "string" ? body.secret : "";
+  if (!PARTY_CODE_RE.test(code) || !secret) {
+    return jsonResponse({ error: "Not allowed" }, 403);
+  }
+
+  const row = await env.COMMENTS_DB.prepare(
+    "SELECT secret_hash FROM party_secret WHERE id = 1",
+  ).first().catch(() => null);
+  // No row means nobody has set a secret, which means nobody can host. That
+  // is the correct fail-closed answer for a gate: an unset gate is shut, not
+  // open.
+  if (!row?.secret_hash) return jsonResponse({ error: "Not allowed" }, 403);
+  if (!constantTimeEqual(await sha256Hex(secret), row.secret_hash)) {
+    return jsonResponse({ error: "Not allowed" }, 403);
+  }
+
+  const codeKey = partyCodeKey(code);
+  const exp = Date.now() + PARTY_TOKEN_TTL_MS;
+  return jsonResponse({ token: await signPartyToken(env, codeKey, exp), exp, code: codeKey });
+}
+
+/**
+ * GET /api/party/room?code=… — WebSocket upgrade into the room's object.
+ *
+ * A guest arrives with no token and follows. A claim arrives with the token
+ * minted above; it is verified HERE, and the object is told the outcome in a
+ * URL only this worker can write.
+ */
 async function handlePartyRoom(request, env, url) {
   if (!env.PARTY) {
     return new Response("Watch party is not configured on this deployment", { status: 503 });
@@ -3412,8 +3479,25 @@ async function handlePartyRoom(request, env, url) {
   }
   const code = url.searchParams.get("code") || "";
   if (!PARTY_CODE_RE.test(code)) return new Response("bad code", { status: 400 });
+  const codeKey = partyCodeKey(code);
+
+  let asHost = false;
+  const token = url.searchParams.get("token");
+  const expRaw = url.searchParams.get("exp");
+  if (token && expRaw) {
+    const exp = Number(expRaw);
+    if (
+      Number.isSafeInteger(exp) &&
+      Date.now() <= exp &&
+      exp <= Date.now() + PARTY_TOKEN_TTL_MS &&
+      constantTimeEqual(token, await signPartyToken(env, codeKey, exp))
+    ) {
+      asHost = true;
+    }
+  }
 
   const room = new URL("https://party.invalid/room");
+  room.searchParams.set("host", asHost ? "1" : "0");
   room.searchParams.set("name", (url.searchParams.get("name") || "").slice(0, 24));
-  return env.PARTY.get(env.PARTY.idFromName(partyCodeKey(code))).fetch(new Request(room, request));
+  return env.PARTY.get(env.PARTY.idFromName(codeKey)).fetch(new Request(room, request));
 }

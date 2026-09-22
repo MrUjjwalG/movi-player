@@ -12,10 +12,11 @@
  * bytes themselves; a local file cannot be shared this way and the client
  * refuses to start a party on one.
  *
- * The code is the only secret there is. The first connection on a code
- * claims the room and hosts it; everyone who follows joins it. There is no
- * second credential to present, which means a code worth keeping is a code
- * worth choosing — "movie" is not one.
+ * The room code is what people share and is NOT a credential — open
+ * ?party=movie and you land in that room as a follower, able to do nothing.
+ * Claiming the chair means presenting the one secret in D1, checked by the
+ * worker before it ever reaches here (see handlePartyHost). So a stranger
+ * who guesses a code joins; they do not take it over.
  *
  * Time is kept by this object, not by either browser. Two machines' clocks
  * routinely differ by seconds, which is far more than the drift we are trying
@@ -59,6 +60,10 @@ export class WatchParty {
       return new Response("room is full", { status: 503 });
     }
 
+    // The worker has already checked the secret before proxying here, and says
+    // so in a URL a client cannot write. By the time we read this flag it is
+    // trustworthy.
+    const asHost = url.searchParams.get("host") === "1";
     const name = (url.searchParams.get("name") || "").slice(0, 24) || "Guest";
 
     const pair = new WebSocketPair();
@@ -66,11 +71,19 @@ export class WatchParty {
     server.accept();
 
     const id = crypto.randomUUID().slice(0, 8);
-    // Whoever gets here first owns the room. The code is the secret and
-    // claiming it is the whole of hosting: there is nothing else to present.
-    // Everyone who arrives afterwards finds the chair taken and follows.
-    const isHost = this.hostId === null;
-    const member = { ws: server, name, control: isHost, host: isHost, alive: Date.now() };
+    // Hosting is claimed, not inherited from arriving early: the claim needs
+    // the secret, and only the FIRST claim on a room is honoured. A second
+    // one would give two people the power to approve each other, which is the
+    // gate defeated.
+    const isHost = asHost && this.hostId === null;
+    // `keyed` is "this one presented the secret", which is not the same as
+    // "this one can drive". An heir promoted when the host leaves gets the
+    // remote so the room is not left unpausable, but it never presented
+    // anything — and moving everyone to a different SOURCE stays a keyed
+    // privilege. Otherwise a room one host opened becomes a way to put new
+    // material in front of people long after that host has gone, which is
+    // the thing the gate exists to prevent.
+    const member = { ws: server, name, control: isHost, host: isHost, keyed: isHost, alive: Date.now() };
     this.members.set(id, member);
     if (isHost) this.hostId = id;
 
@@ -118,6 +131,11 @@ export class WatchParty {
         if (!member.control) return;
         const state = sanitizeState(msg);
         if (!state) return;
+        if (!member.keyed && this.last && state.src && state.src !== this.last.src) {
+          // Not refused loudly: this one is allowed to be here and allowed to
+          // pause. It is only the source that does not move.
+          state.src = this.last.src;
+        }
         state.at = Date.now();
         state.by = id;
         this.last = state;
