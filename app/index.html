@@ -10369,6 +10369,57 @@
           }
         };
 
+        // Tracks live on the inner player, not on the element — the element
+        // has no audioTracks getter (AGENTS.md 4.2), so everything here goes
+        // through player.player.
+        const core = () => player.player || null;
+
+        const currentTracks = () => {
+          const p = core();
+          const tm = p && p.trackManager;
+          if (!tm) return { atrack: null, strack: null };
+          const a = tm.getActiveAudioTrack ? tm.getActiveAudioTrack() : null;
+          const sub = tm.getActiveSubtitleTrack ? tm.getActiveSubtitleTrack() : null;
+          return { atrack: a ? a.id : null, strack: sub ? sub.id : null };
+        };
+
+        // What the room last said it was watching WITH. Held rather than
+        // applied once, because a follower is usually told which audio track
+        // to use before that file has any: the source has only just been
+        // given to the player and nothing is demuxed yet. So it is re-applied
+        // whenever the track list changes, which is when it can finally work.
+        let wantAudio;
+        let wantSub;
+        let settingTracks = false;
+
+        const applyTracks = () => {
+          const p = core();
+          if (!p) return;
+          const have = currentTracks();
+          const list = (fn) => { try { return fn.call(p) || []; } catch { return []; } };
+
+          if (wantAudio !== undefined && wantAudio !== null && have.atrack !== wantAudio) {
+            if (list(p.getAudioTracks).some((t) => t.id === wantAudio)) {
+              settingTracks = true;
+              try { p.selectAudioTrack(wantAudio); } catch { /* gone mid-swap */ }
+            }
+          }
+          if (wantSub !== undefined && have.strack !== wantSub) {
+            const exists = wantSub === null || list(p.getSubtitleTracks).some((t) => t.id === wantSub);
+            if (exists) {
+              settingTracks = true;
+              // null is off, and has to be passed as null — not as a missing
+              // argument, which would read as "no change".
+              try { p.selectSubtitleTrack(wantSub === null ? null : wantSub); } catch { /* gone mid-swap */ }
+            }
+          }
+          if (settingTracks) setTimeout(() => { settingTracks = false; }, 400);
+        };
+
+        // The list arrives late on every source, so this is the event that
+        // makes a remembered choice stick.
+        player.addEventListener("trackschange", applyTracks);
+
         const applyState = async (st) => {
           applyingRemote = true;
           try {
@@ -10385,6 +10436,9 @@
             if (Math.abs((player.currentTime || 0) - target) > HARD_DRIFT_S) {
               player.currentTime = target;
             }
+            if (st.atrack !== undefined) wantAudio = st.atrack;
+            if (st.strack !== undefined) wantSub = st.strack;
+            applyTracks();
             if (st.paused && !player.paused) player.pause();
             else if (!st.paused && player.paused) {
               try { await player.play(); } catch { needGesture(); }
@@ -10409,7 +10463,7 @@
 
         let warnedLocal = false;
         const sendState = (force) => {
-          if (!iControl || !ws || ws.readyState !== 1 || applyingRemote) return;
+          if (!iControl || !ws || ws.readyState !== 1 || applyingRemote || settingTracks) return;
           const now = Date.now();
           if (!force && now - lastSent < 250) return;
           const src = shareableSrc();
@@ -10432,6 +10486,7 @@
             time: player.currentTime || 0,
             rate: player.playbackRate || 1,
             src,
+            ...currentTracks(),
             title: document.title.slice(0, 120),
           }));
         };
@@ -10445,8 +10500,12 @@
           if (state === "seeking") { wasSeeking = true; return; }
           if (wasSeeking) { wasSeeking = false; sendState(true); }
         });
-        // Loading a new URL is a change the room needs as much as a pause is.
+        // Loading a new URL is a change the room needs as much as a pause is,
+        // and so is which audio you are hearing it in or which subtitles are
+        // up — a party watching one film in two languages is two parties.
         player.addEventListener("loadeddata", () => sendState(true));
+        player.addEventListener("audiotrackchange", () => sendState(true));
+        player.addEventListener("subtitletrackchange", () => sendState(true));
         player.addEventListener("play", () => sendState(true));
         player.addEventListener("pause", () => sendState(true));
         player.addEventListener("ratechange", () => sendState(true));

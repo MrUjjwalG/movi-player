@@ -97,7 +97,11 @@ export class WatchParty {
       host: this.hostId,
       control: member.control,
       now: Date.now(),
-      state: this.last,
+      // Only replayed when somebody is actually hosting. A room with no host
+      // is not a paused party, it is over — and handing its last state to the
+      // next person to type the code started that video playing in front of
+      // someone nobody had invited, long after everyone had left.
+      state: this.hostId === null ? null : this.last,
     });
     this.broadcastRoster();
     this.ensureTimer();
@@ -216,7 +220,14 @@ export class WatchParty {
 
     try { member.ws.close(1000, "bye"); } catch { /* already gone */ }
     this.broadcastRoster();
-    if (this.members.size === 0) this.stopTimer();
+    if (this.members.size === 0) {
+      // The last person left, so there is nothing to come back to. The object
+      // itself lingers for a while before the platform evicts it, and for
+      // that whole window it was still holding the film — which is how an
+      // empty room went on serving it.
+      this.last = null;
+      this.stopTimer();
+    }
   }
 
   send(id, obj) {
@@ -268,7 +279,7 @@ export class WatchParty {
 }
 
 /**
- * A controller can only say four things about playback, and each has to be
+ * A controller can only say so much about playback, and each part has to be
  * the right shape before it reaches everyone else's player — a NaN time or a
  * rate of 40 would be applied verbatim by every follower.
  */
@@ -277,10 +288,23 @@ function sanitizeState(msg) {
   const rate = Number(msg.rate);
   if (!Number.isFinite(time) || time < 0 || time > 86400) return null;
   if (!Number.isFinite(rate) || rate < 0.25 || rate > 4) return null;
+  // Track ids are stream indices the demuxer hands out, so the same file
+  // gives both sides the same numbers. null is a real value for subtitles —
+  // it is "off" — and must survive the trip as itself rather than as 0.
+  const trackId = (v) =>
+    v === null || v === undefined ? null : (Number.isInteger(v) && v >= -1 && v < 256 ? v : null);
   const src = typeof msg.src === "string" ? msg.src.slice(0, 2048) : "";
   // Only what both sides can fetch themselves. A blob: or file: source means
   // the host opened something local, which cannot travel — the client blocks
   // that before it gets here, and this is the second door.
   if (src && !/^https?:\/\//i.test(src)) return null;
-  return { paused: !!msg.paused, time, rate, src, title: typeof msg.title === "string" ? msg.title.slice(0, 120) : "" };
+  return {
+    paused: !!msg.paused,
+    time,
+    rate,
+    src,
+    atrack: trackId(msg.atrack),
+    strack: trackId(msg.strack),
+    title: typeof msg.title === "string" ? msg.title.slice(0, 120) : "",
+  };
 }
