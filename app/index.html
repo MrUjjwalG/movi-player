@@ -4388,6 +4388,17 @@
         margin-top: 0 !important;
       }
       .player-section-head { margin-bottom: 1.5rem !important; }
+      /* …and the picture is never taller than what is left of the window.
+         It was as wide as the column allowed, which on a laptop put its
+         bottom edge — and the control bar with it — on the fold, or under
+         the dock: a player you have to scroll to use. Capped by height and
+         let back to 16:9 by the stage, so it shrinks in both directions
+         instead of growing black bands. svh, not vh, so a phone's own
+         disappearing chrome is counted. */
+      .player-frame {
+        max-width: calc((100svh - 15rem) * 16 / 9);
+        margin-inline: auto;
+      }
 
       /* ── The hero is one centred column ─────────────────────────
          Headline, one sentence, and the thing you type into — in that order,
@@ -7815,7 +7826,7 @@
         // where nothing below needs the room, and none of it on a laptop,
         // where the fit rule below eats it. The heading is the thing that
         // should be in the same place at every size.
-        var top = head.getBoundingClientRect().top + y - navbarH - 16;
+        var top = head.getBoundingClientRect().top + y - navbarH - 4;
 
         // …then, if the player would still hang past the bottom of the
         // window, go a little further — but never far enough to take the
