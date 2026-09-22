@@ -3946,7 +3946,10 @@
          judged, and folded in or dropped, in one piece.
          ════════════════════════════════════════════════════════════════ -->
     <style id="precision-pass">
-      :root {
+      /* html:root, not :root — this file carries stylesheets inside <body>,
+         which come later in the document and win at equal specificity. One
+         extra element in the selector puts these tokens above them. */
+      html:root {
         --bg-base: #0b0d11;
         --bg-elevated: #12151a;
         --bg-card: #12151a;
@@ -3969,18 +3972,38 @@
         --r-3: 6px;
         --rule: 1px solid var(--border-subtle);
       }
-      [data-theme="light"] {
-        --bg-base: #ffffff;
+      /* Light: a canvas that is not paper, so the things standing on it can
+         be paper. Everything was #fff on #fff with a hairline between —
+         technically correct, and nothing to look at: no field, no panel and
+         no player had an edge the eye could find. The page is a light grey
+         field; the input, the spec block and the player are white objects on
+         it; the rules are a shade firmer so they read as edges rather than
+         as smudges. */
+      html[data-theme="light"] {
+        --bg-base: #f4f6f8;
         --bg-elevated: #ffffff;
         --bg-card: #ffffff;
-        --bg-surface: #f6f7f9;
-        --text-primary: #0e1116;
-        --text-secondary: #55606f;
-        --text-muted: #8b94a3;
-        --border-subtle: #e3e6ec;
-        --border-hover: #ccd2dc;
+        --bg-surface: #eceff3;
+        --text-primary: #0d1117;
+        --text-secondary: #4a5567;
+        --text-muted: #798393;
+        --border-subtle: #dbe0e8;
+        --border-hover: #c2cad6;
         --accent: #4f46e5;
         --accent-hover: #4338ca;
+      }
+      /* The panels that should read as objects on that field. */
+      [data-theme="light"] .url-bar,
+      [data-theme="light"] .hero-mode-tabs,
+      [data-theme="light"] .hero-install,
+      [data-theme="light"] .hero-spec,
+      [data-theme="light"] .faq-item,
+      [data-theme="light"] .way-card {
+        background: var(--bg-elevated) !important;
+      }
+      [data-theme="light"] .hero-mode-tab:not(.active) {
+        background: var(--bg-surface) !important;
+        color: var(--text-secondary) !important;
       }
 
       /* ── Ornament, gone ─────────────────────────────────────────── */
@@ -4219,10 +4242,16 @@
       .watch-rail::after {
         display: none !important;
       }
+      html:root body,
       body,
       .features-section,
       .player-section,
       .watch-rail { background-image: none !important; }
+      /* The page's own background is written as a literal further down the
+         file; the field has to come from the token or the hero sits on a
+         different white from everything under it. */
+      html:root,
+      html:root body { background-color: var(--bg-base) !important; }
 
       /* ── The hero, tightened ────────────────────────────────────── */
       .hero-kicker { margin-bottom: 0.75rem !important; }
@@ -4294,7 +4323,16 @@
       }
       .player-stage,
       .player-wrapper movi-player { border-radius: 0 !important; }
-      .player-section { padding-block: 0 4.5rem !important; margin-top: 0 !important; }
+      /* The player section's eyebrow was landing on the hero's bottom rule —
+         the old layout pulled this section up by 100px to overlap the hero,
+         which only worked while the hero ended in a picture. It keeps the
+         page's cadence now, like every other section. */
+      .player-section {
+        padding-top: 4.5rem !important;
+        padding-bottom: 4.5rem !important;
+        margin-top: 0 !important;
+      }
+      .player-section-head { margin-bottom: 1.5rem !important; }
 
       /* ── The hero is one centred column ─────────────────────────
          Headline, one sentence, and the thing you type into — in that order,
