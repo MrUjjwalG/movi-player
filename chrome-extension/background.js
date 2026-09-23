@@ -160,10 +160,12 @@ async function allowMediaCors(urls, tabId) {
   // that is the response the header has to be added to. The rule matches a
   // request by its own URL, so the redirect needs one of its own.
   const wanted = corsWanted.get(tabId) ?? new Set();
+  const verdicts = {};
   for (const url of urls.slice(0, 12)) {
     if (wanted.has(url)) continue;          // already resolved for this tab
     wanted.add(url);
-    const landed = await finalUrl(url);
+    const { landed, verdict } = await probeUrl(url);
+    verdicts[url] = verdict;
     if (landed) wanted.add(landed);
   }
   // A cap, because this set only ever grows within a tab and each entry is a
@@ -197,18 +199,43 @@ async function allowMediaCors(urls, tabId) {
     addRules,
   });
   corsRuleIds.set(tabId, addRules.map((rule) => rule.id));
-  return { ok: true, rules: addRules.length };
+  return { ok: true, rules: addRules.length, verdicts };
 }
 
 /**
- * Follow a media URL to wherever it ends, without reading a byte of it.
+ * Follow a media URL to wherever it ends, and say what came back.
  *
  * From here rather than from the page: this side has the host permission, so
  * the redirect can be followed without the CORS the page is missing in the
  * first place. HEAD where the server answers one; a single byte where it does
  * not, which is every server that answers HEAD with 405.
+ *
+ * Returns { landed, verdict }. The verdict is the same round trip the
+ * redirect needed, read for a second thing: is there media at the end of this
+ * link at all. It has three values and only one of them is a refusal —
+ *
+ *   "media"     the server said so, or served a range of bytes
+ *   "notmedia"  the server said HTML, or said no such thing exists
+ *   "unknown"   no answer worth acting on
+ *
+ * — because a gate that guesses wrong here stops the takeover working on a
+ * site that was fine. Only a positive "this is not media" is acted on.
  */
-async function finalUrl(url) {
+const MEDIA_TYPE = /^(video|audio)\/|^application\/(octet-stream|vnd\.apple\.mpegurl|x-mpegurl|dash\+xml|mp4|ogg)/i;
+const PAGE_TYPE = /^(text\/|application\/(json|xhtml))/i;
+
+function verdictFor(response) {
+  if (response.status >= 400) return "notmedia";
+  const type = (response.headers.get("content-type") || "").trim().toLowerCase();
+  if (MEDIA_TYPE.test(type)) return "media";
+  if (PAGE_TYPE.test(type)) return "notmedia";
+  // A 206 with no type worth reading is still a server handing out ranges of
+  // a file, which is the shape of media whatever it calls itself.
+  if (response.status === 206) return "media";
+  return "unknown";
+}
+
+async function probeUrl(url) {
   for (const init of [
     { method: "HEAD" },
     { method: "GET", headers: { Range: "bytes=0-0" } },
@@ -216,14 +243,17 @@ async function finalUrl(url) {
     try {
       const response = await fetch(url, { ...init, redirect: "follow" });
       if (init.method === "GET") response.body?.cancel?.();
-      if (response.url && response.url !== url) return response.url;
-      if (response.ok || response.status === 206) return "";
+      const verdict = verdictFor(response);
+      const landed = response.url && response.url !== url ? response.url : "";
+      // A HEAD that 405s tells us nothing; go round again as a GET.
+      if (init.method === "HEAD" && response.status === 405) continue;
+      return { landed, verdict };
     } catch {
       /* try the next shape, then give up — the rule for the URL we were
          given still stands */
     }
   }
-  return "";
+  return { landed: "", verdict: "unknown" };
 }
 
 // A rule belongs to the page that asked for it.

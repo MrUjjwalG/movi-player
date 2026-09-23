@@ -328,7 +328,7 @@ function askForMediaCors() {
       }
     }
   }
-  if (urls.length === 0) return Promise.resolve();
+  if (urls.length === 0) return Promise.resolve({});
   return new Promise((resolve) => {
     try {
       chrome.runtime.sendMessage({ action: "allowMediaCors", urls }, (reply) => {
@@ -342,19 +342,50 @@ function askForMediaCors() {
             "[movi] Take over page videos: no site access, so this page's video files are read by the browser instead. Turn on site access in the movi-player extension to change that.",
           );
         }
-        resolve();
+        resolve((reply && reply.verdicts) || {});
       });
     } catch {
-      resolve();
+      resolve({});
     }
   });
+}
+
+/**
+ * Is there actually media at the end of the links this page declares?
+ *
+ * The takeover reads the bytes itself, so a link that does not lead to media
+ * is a player with nothing to play — where the native element would at least
+ * have shown the page's own error. A dead source, an expired signed URL, a
+ * paywall that answers with HTML: all of them look like a perfectly good
+ * <video src> from the DOM.
+ *
+ * The answer comes from the round trip the CORS rules already make, so this
+ * costs nothing extra.
+ *
+ * FAILS OPEN, deliberately and in two ways. Only a positive "this is not
+ * media" counts against a page — silence, a server that answers nothing
+ * useful, or no host permission at all leaves the takeover exactly as it was.
+ * And one bad source among several does not condemn the page: a <video> with
+ * an mp4 and an ogg beside it is the oldest shape on the web, and the first
+ * of them 404ing is what the second is there for.
+ */
+function anySourcePlayable(verdicts) {
+  const seen = Object.values(verdicts);
+  if (seen.length === 0) return true;
+  return seen.some((v) => v !== "notmedia");
 }
 
 function injectTakeover() {
   if (takeoverInjected) return;
   takeoverInjected = true;
   // The header rule has to exist before the first read, not after it.
-  askForMediaCors().then(() => {
+  askForMediaCors().then((verdicts) => {
+    if (!anySourcePlayable(verdicts)) {
+      console.info(
+        "[movi] Take over page videos: this page's video links do not lead to media, so the page has been left as it is.",
+      );
+      return;
+    }
     const script = document.createElement("script");
     script.type = "module";
     script.src = chrome.runtime.getURL("upgrade.js");
