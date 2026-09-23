@@ -25958,7 +25958,6 @@ export class MoviElement extends HTMLElement {
       :host(.movi-audio-strip) video,
       :host(.movi-audio-strip) .movi-poster-overlay,
       :host(.movi-audio-strip) .movi-cover-art-overlay,
-      :host(.movi-audio-strip) .movi-subtitle-overlay,
       :host(.movi-audio-strip) .movi-loading-indicator,
       :host(.movi-audio-strip) .movi-loader-container,
       :host(.movi-audio-strip) .movi-center-play-pause,
@@ -25966,6 +25965,94 @@ export class MoviElement extends HTMLElement {
       :host(.movi-audio-strip) .movi-broken-indicator,
       :host(.movi-audio-strip) .movi-empty-state {
         display: none !important;
+      }
+      /* Everything above is picture furniture, which a 56px bar has no room
+         for and no use for. A caption is not furniture — it is the content of
+         a track the viewer asked for — so it was the one entry in that list
+         that made a selected subtitle track produce nothing anywhere. It was
+         being rendered all along: the cue matched, the clock ran, the text was
+         written into the overlay, and "display: none !important" beat the
+         inline "display: flex" the renderer sets every 100ms.
+         It still hides while nothing is selected, which is the ordinary case. */
+      :host(.movi-audio-strip:not(.movi-has-caption)) .movi-subtitle-overlay {
+        display: none !important;
+      }
+      /* The caption band. The strip only grows when a track is on, so an
+         audio file nobody has asked for subtitles on is the same bar it was.
+         Laid out like the title band above it — absolutely placed inside the
+         host, with the control row pushed below — rather than floated over
+         the page: the OSD is allowed to do that because it is gone in a
+         second, and a caption is not.
+         The geometry is !important because CanvasRenderer rewrites this
+         element's position, width, height and padding inline on every pass of
+         the subtitle clock, sized to a canvas that strip mode has hidden. */
+      :host(.movi-audio-strip.movi-has-caption) .movi-subtitle-overlay {
+        position: absolute !important;
+        left: 12px !important;
+        right: 14px !important;
+        width: auto !important;
+        height: var(--movi-strip-caption-h, 24px) !important;
+        bottom: auto !important;
+        padding: 0 !important;
+        margin: 0 !important;
+        transform: none !important;
+        display: flex !important;
+        flex-direction: row !important;
+        align-items: center !important;
+        justify-content: center !important;
+        z-index: 6;
+      }
+      :host(.movi-audio-strip.movi-has-caption) .movi-subtitle-line {
+        /* The normal size is a fraction of the player's width, which in a
+           full-width strip is far taller than the band. */
+        font-size: 13px !important;
+        line-height: 1.3 !important;
+        white-space: nowrap;
+        overflow: hidden;
+        text-overflow: ellipsis;
+      }
+      /* A caption is white by default because it is normally read against a
+         picture. The strip is a surface that follows the theme, and on the
+         light one that is white on near-white. The colour itself is the
+         viewer's setting, so it is not overridden — instead the band wears
+         the backdrop the player already derives FROM that colour for exactly
+         this purpose (contrastBackdropRgb), which the video path applies over
+         the picture and this one had nothing to apply it to. */
+      :host(.movi-audio-strip.movi-has-caption) .movi-subtitle-block {
+        background: rgba(
+          var(--movi-sub-bg-rgb, 8, 8, 8),
+          var(--movi-sub-bg-alpha, 0.75)
+        ) !important;
+        padding: 1px 10px !important;
+        max-width: 100% !important;
+      }
+
+      /* Untitled + caption: band at the top, controls below it. */
+      :host(.movi-audio-strip.movi-has-caption) {
+        min-height: 84px !important;
+        height: 84px !important;
+        max-height: 84px !important;
+      }
+      :host(.movi-audio-strip.movi-has-caption) .movi-subtitle-overlay {
+        top: 6px !important;
+      }
+      :host(.movi-audio-strip.movi-has-caption) .movi-controls-container,
+      :host(.movi-audio-strip.movi-has-caption) .movi-controls-container.movi-controls-hidden {
+        top: 28px !important;
+      }
+
+      /* Titled + caption: title, then caption, then controls. */
+      :host(.movi-audio-strip.movi-has-title.movi-has-caption) {
+        min-height: 106px !important;
+        height: 106px !important;
+        max-height: 106px !important;
+      }
+      :host(.movi-audio-strip.movi-has-title.movi-has-caption) .movi-subtitle-overlay {
+        top: 32px !important;
+      }
+      :host(.movi-audio-strip.movi-has-title.movi-has-caption) .movi-controls-container,
+      :host(.movi-audio-strip.movi-has-title.movi-has-caption) .movi-controls-container.movi-controls-hidden {
+        top: 54px !important;
       }
       /* Title + OSD in strip mode.
          Floating the title ABOVE the host collided with whatever sits above
@@ -28933,6 +29020,10 @@ export class MoviElement extends HTMLElement {
       audioMode && !bitmap && !coverArtPending && !posterCoverPending;
     this.classList.toggle("movi-audio-mode", audioMode);
     this.classList.toggle("movi-audio-strip", stripMode);
+    // Strip mode and the caption band arrive together on an audio-only source
+    // that already had a track selected, so the band has to be reconsidered
+    // here as well as on a track change.
+    this.updateStripCaptionBand();
     // Fullscreen is for a picture, and this is the moment it turns out there
     // isn't one — a source that is sound alone, or audioOnly switched on while
     // a film was filling the screen. What is left is a bar or a sleeve in the
@@ -30604,6 +30695,7 @@ export class MoviElement extends HTMLElement {
     // Handle subtitle track changes
     const subtitleTrackChangeHandler = () => {
       this.updateSubtitleTrackMenu();
+      this.updateStripCaptionBand();
       this.dispatchEvent(new Event("subtitletrackchange"));
       // The docs have always listed the camelCase spelling for this one (with a
       // note about keeping it for backward compatibility) while the code only
@@ -39170,6 +39262,22 @@ export class MoviElement extends HTMLElement {
     }
       // Keep an open panel / context menu in step - see the method's note.
     this.refreshOpenSettingsSurfaces();
+  }
+
+  /**
+   * Grow the strip for a caption row, and only then.
+   *
+   * The bar is 56px, or 78 with a title, and a caption needs a row of its
+   * own. Reserving it always would make every audio file taller for a track
+   * most of them do not have; reserving it per CUE would make the bar twitch
+   * as lines come and go. So it follows the TRACK: turn subtitles on and the
+   * strip grows once, turn them off and it goes back.
+   */
+  private updateStripCaptionBand(): void {
+    const active =
+      this.classList.contains("movi-audio-strip") &&
+      !!this.player?.trackManager?.getActiveSubtitleTrack?.();
+    this.classList.toggle("movi-has-caption", active);
   }
 
   /**
