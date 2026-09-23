@@ -26002,9 +26002,23 @@ export class MoviElement extends HTMLElement {
         justify-content: center !important;
         z-index: 6;
       }
+      /* Centre it in the BAND, not where the renderer thinks the picture is.
+         CanvasRenderer centres a caption by writing padding-left on the
+         anchor, computed from the overlay's own inline width — which is the
+         canvas box it sized the overlay to, and in strip mode that canvas is
+         hidden and a different width from this band. The caption came out
+         pushed off to one side by exactly that difference. Flex on the
+         overlay could not correct it because the offset is padding inside a
+         full-width child, not the child's position. */
+      :host(.movi-audio-strip.movi-has-caption) .movi-subtitle-anchor {
+        padding-left: 0 !important;
+        width: 100% !important;
+        text-align: center !important;
+      }
       :host(.movi-audio-strip.movi-has-caption) .movi-subtitle-line {
         /* The normal size is a fraction of the player's width, which in a
            full-width strip is far taller than the band. */
+        text-align: center !important;
         font-size: 13px !important;
         line-height: 1.3 !important;
         white-space: nowrap;
@@ -26025,6 +26039,7 @@ export class MoviElement extends HTMLElement {
         ) !important;
         padding: 1px 10px !important;
         max-width: 100% !important;
+        text-align: center !important;
       }
 
       /* Untitled + caption: band at the top, controls below it. */
