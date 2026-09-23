@@ -22332,7 +22332,10 @@ export class MoviElement extends HTMLElement {
         }
         .movi-center-icon-play {
            margin-left: 0 !important;
-           transform: translateX(2.75px) scale(1.15) !important;
+           /* The same proportion as the base rule — see the note there for why
+              it cannot be a constant. This override exists for the margin; it
+              has to restate the transform because it is !important. */
+           transform: translateX(4.58%) scale(1.15) !important;
         }
         .movi-progress-handle {
             /* Handle needs transform for centering and positioning */
@@ -23416,10 +23419,26 @@ export class MoviElement extends HTMLElement {
          right — by an eighth of its own width, the same proportion the bar's
          play icon uses. The nudge was 4px when the icon was a bare triangle;
          rounding the tip pushed its outline a further 1.2px right and the two
-         together put it visibly off centre against the pause icon. */
+         together put it visibly off centre against the pause icon.
+
+         A PROPORTION, so it cannot be a constant. This button scales with the
+         player, and 2.75px was only ever right at one size: measured against
+         the glyph's own ink, it came to a full sixth of it on a 72px button —
+         the whole centroid correction, which reads as pushed right, gaps of
+         28.0 and 20.7 — and barely two thirds of that at 112px, where the mass
+         instead fell 1.96px LEFT of the circle's middle. One value, opposite
+         errors at the two ends of the range.
+
+         A percentage resolves against this SVG's own layout width, which is
+         what scales, so the same fraction holds everywhere. 4.58% is the 112px
+         button's number kept exactly: the shape that was being aimed for is
+         the one the big players were already drawing, so desktop does not move
+         and every smaller size comes to meet it. The glyph's outline carries
+         about 3.9% of its ink rightward on its own (the rounded tip), and this
+         sits on top of that. */
       .movi-center-icon-play {
         display: block;
-        transform: translateX(2.75px) scale(1.15);
+        transform: translateX(4.58%) scale(1.15);
       }
 
       .movi-center-play-pause:focus {

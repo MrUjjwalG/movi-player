@@ -82,15 +82,23 @@ export const loadingIndicatorStyles = `
     display: block;
     /* Sat where the centre play button's triangle sits, not where the box's
        middle is. That button nudges its glyph right — a triangle centred by its
-       box reads as leaning left — and the nudge is part fixed (translateX
-       2.75px) and part scaled with the glyph, which measures +5.0px on a 96px
-       button, +6.0 at 104 and +6.5 at 112: about 5.5% of the button's box
-       either way. So the same fraction of the same expression the button is
-       sized from, and the two marks land on each other at every width instead
-       of the spinner appearing a few pixels to the left of the thing it
-       replaces. On the mark rather than the container, which the arrival
-       animation already owns. */
-    transform: translateX(clamp(5.28px, 0.55cqw, 6.16px));
+       box reads as leaning left — and this mark has to land on the triangle it
+       stands in for, or the ring-to-play swap slides sideways.
+
+       Measured, mark silhouette against triangle ink, both from the canvas
+       centre: the old numbers put this 1.4px right of the triangle at 375,
+       2.6px at 700 and 2.9px at 1440. They were derived from a nudge the
+       button no longer has — it used to be a flat 2.75px there, which was a
+       proportion written as a constant, so it was only ever right at one size.
+
+       The triangle's ink now sits at 3.74% of the button's width right of
+       centre, at every width. This is that, off the button's own size
+       expression — clamp(96px, 10cqw, 112px) — so the two track together
+       rather than being tuned to each other once. The two bands below take
+       over where the button steps out of that clamp, and each is the exact
+       figure for the button size that band pins. On the mark rather than the
+       container, which the arrival animation already owns. */
+    transform: translateX(clamp(3.59px, 0.374cqw, 4.19px));
   }
 
   .movi-loader-flow {
@@ -129,12 +137,19 @@ export const loadingIndicatorStyles = `
 
   @container movi-host (max-width: 720px) {
     .movi-loader-container { width: 52px; height: 52px; }
+    /* The button is pinned to the clamp's 96px floor for this whole band (10cqw
+       cannot reach it under 720), and its glyph is smaller here than at the
+       same 96px above the breakpoint — so the triangle lands at 3.48px, not the
+       3.59px the base clamp would give. */
+    .movi-loader-mark { transform: translateX(3.48px); }
   }
 
   /* The button steps out of its clamp here — 72px — so the nudge that follows
      it has to step too, or the spinner lands a pixel and a half right of the
-     triangle it stands in for. */
+     triangle it stands in for. A viewport query, deliberately: it is the pin on
+     the button that this tracks, and that pin is a viewport query too. Last in
+     the file so it wins over the container band above, which it overlaps. */
   @media (max-width: 480px) {
-    .movi-loader-mark { transform: translateX(4px); }
+    .movi-loader-mark { transform: translateX(2.64px); }
   }
 `;
