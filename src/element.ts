@@ -182,6 +182,8 @@ export interface MoviPlayerAttributes {
   stablevolume?: boolean | "";
   ambientmode?: boolean | "";
   resume?: boolean | "";
+  /** What the resume position is filed under. Default: the title. */
+  resumekey?: string;
   drm?: string;
   licenseurl?: string;
   /** Extra HTTP headers for the DRM license request only (JSON object string). */

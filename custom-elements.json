@@ -235,6 +235,10 @@
               "description": "Saves playback position to localStorage and shows a resume dialog on reload."
             },
             {
+              "name": "resumekey",
+              "description": "Files the resume position under a name you choose instead of the title."
+            },
+            {
               "name": "stablevolume",
               "description": "Enables loudness normalization (DynamicsCompressorNode). Reduces loud scenes and boosts quiet ones."
             },

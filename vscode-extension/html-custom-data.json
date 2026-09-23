@@ -784,6 +784,19 @@
           ]
         },
         {
+          "name": "resumekey",
+          "description": {
+            "kind": "markdown",
+            "value": "Files the resume position under a name you choose instead of the title."
+          },
+          "references": [
+            {
+              "name": "Documentation",
+              "url": "https://moviplayer.com/docs/api/element#resumekey"
+            }
+          ]
+        },
+        {
           "name": "stablevolume",
           "description": {
             "kind": "markdown",
