@@ -25986,12 +25986,29 @@ export class MoviElement extends HTMLElement {
          The geometry is !important because CanvasRenderer rewrites this
          element's position, width, height and padding inline on every pass of
          the subtitle clock, sized to a canvas that strip mode has hidden. */
+      /* The band is sized FROM the caption, so the viewer's font-size
+         setting still means something here. It was pinned at 13px, which
+         made the size slider do nothing at all in strip mode — the one
+         setting that could not simply be inherited, because the normal size
+         is a fraction of the player's WIDTH (20-40px) and a full-width strip
+         would put 40px type in a 24px band. So: the same multiplier, applied
+         to a base the band can hold, and a band that grows with it. Clamped
+         so an extreme setting cannot turn the bar into a page.
+         Colour and edge style need none of this — they are inherited through
+         --movi-sub-color and --movi-sub-edge and were working already. */
+      :host(.movi-audio-strip.movi-has-caption) {
+        --movi-strip-cap-h: clamp(
+          20px,
+          calc(24px * var(--movi-sub-size-mult, 1)),
+          64px
+        );
+      }
       :host(.movi-audio-strip.movi-has-caption) .movi-subtitle-overlay {
         position: absolute !important;
         left: 12px !important;
         right: 14px !important;
         width: auto !important;
-        height: var(--movi-strip-caption-h, 24px) !important;
+        height: var(--movi-strip-cap-h, 24px) !important;
         bottom: auto !important;
         padding: 0 !important;
         margin: 0 !important;
@@ -26019,7 +26036,11 @@ export class MoviElement extends HTMLElement {
         /* The normal size is a fraction of the player's width, which in a
            full-width strip is far taller than the band. */
         text-align: center !important;
-        font-size: 13px !important;
+        font-size: clamp(
+          11px,
+          calc(13px * var(--movi-sub-size-mult, 1)),
+          34px
+        ) !important;
         line-height: 1.3 !important;
         white-space: nowrap;
         overflow: hidden;
@@ -26044,30 +26065,30 @@ export class MoviElement extends HTMLElement {
 
       /* Untitled + caption: band at the top, controls below it. */
       :host(.movi-audio-strip.movi-has-caption) {
-        min-height: 84px !important;
-        height: 84px !important;
-        max-height: 84px !important;
+        min-height: calc(60px + var(--movi-strip-cap-h)) !important;
+        height: calc(60px + var(--movi-strip-cap-h)) !important;
+        max-height: calc(60px + var(--movi-strip-cap-h)) !important;
       }
       :host(.movi-audio-strip.movi-has-caption) .movi-subtitle-overlay {
         top: 6px !important;
       }
       :host(.movi-audio-strip.movi-has-caption) .movi-controls-container,
       :host(.movi-audio-strip.movi-has-caption) .movi-controls-container.movi-controls-hidden {
-        top: 28px !important;
+        top: calc(4px + var(--movi-strip-cap-h)) !important;
       }
 
       /* Titled + caption: title, then caption, then controls. */
       :host(.movi-audio-strip.movi-has-title.movi-has-caption) {
-        min-height: 106px !important;
-        height: 106px !important;
-        max-height: 106px !important;
+        min-height: calc(82px + var(--movi-strip-cap-h)) !important;
+        height: calc(82px + var(--movi-strip-cap-h)) !important;
+        max-height: calc(82px + var(--movi-strip-cap-h)) !important;
       }
       :host(.movi-audio-strip.movi-has-title.movi-has-caption) .movi-subtitle-overlay {
         top: 32px !important;
       }
       :host(.movi-audio-strip.movi-has-title.movi-has-caption) .movi-controls-container,
       :host(.movi-audio-strip.movi-has-title.movi-has-caption) .movi-controls-container.movi-controls-hidden {
-        top: 54px !important;
+        top: calc(30px + var(--movi-strip-cap-h)) !important;
       }
       /* Title + OSD in strip mode.
          Floating the title ABOVE the host collided with whatever sits above
