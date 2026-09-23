@@ -1,0 +1,76 @@
+<!doctype html>
+<meta charset="utf-8" />
+<title>quality ladder from skins</title>
+<body style="margin:0;background:#222;color:#ddd;font:13px system-ui">
+
+<p>JW</p>
+<div id="jwbox" class="jwplayer" style="position:relative;width:480px;height:270px">
+  <div class="jw-wrapper" style="position:absolute;inset:0">
+    <video id="jw" class="jw-video" src="http://localhost:5320/withaudio.mp4" style="width:100%;height:100%"></video>
+  </div>
+</div>
+
+<p>video.js</p>
+<div id="vjsbox" class="video-js" style="position:relative;width:480px;height:270px">
+  <video id="vjs" src="http://localhost:5320/withaudio.mp4" style="width:100%;height:100%"></video>
+</div>
+
+<p>plain source children, labelled</p>
+<video id="kids" controls width="480">
+  <source src="http://localhost:5320/withaudio.mp4" type="video/mp4" label="720p" res="720" />
+  <source src="http://localhost:5320/sample-3.webm" type="video/webm" label="360p" res="360" />
+</video>
+
+<p>format fallback, unlabelled</p>
+<video id="fb" controls width="480">
+  <source src="http://localhost:5320/withaudio.mp4" type="video/mp4" />
+  <source src="http://localhost:5320/sample-3.webm" type="video/webm" />
+</video>
+
+<p>one source only (control)</p>
+<div id="solobox" class="jwplayer" style="position:relative;width:480px;height:270px">
+  <video id="solo" class="jw-video" src="http://localhost:5320/withaudio.mp4" style="width:100%;height:100%"></video>
+</div>
+
+<p>plain video, plain src (control)</p>
+<video id="plain" controls width="480" src="http://localhost:5320/withaudio.mp4"></video>
+
+<script>
+  const LADDER = [
+    { file: "http://localhost:5320/sample-3.webm", label: "360p", height: 360, bitrate: 500000 },
+    { file: "http://localhost:5320/withaudio.mp4", label: "720p", height: 720, bitrate: 1500000, default: true },
+    { file: "http://localhost:5320/tracks.mkv", label: "1080p", height: 1080, bitrate: 3000000 },
+    { file: "http://localhost:5320/stream.m3u8", label: "auto" },
+  ];
+  const SOLO = [{ file: "http://localhost:5320/withaudio.mp4", label: "720p", height: 720 }];
+  window.jwplayer = (el) => ({
+    getPlaylistItem: () => ({ sources: el && el.id === "solobox" ? SOLO : LADDER }),
+  });
+  // video.js attaches the player to its own element; the switcher keys are
+  // the plugin's, not video.js's.
+  document.getElementById("vjsbox").player = {
+    currentSources: () => [
+      { src: "http://localhost:5320/withaudio.mp4", type: "video/mp4", res: "720", label: "720p", selected: true },
+      { src: "http://localhost:5320/sample-3.webm", type: "video/webm", res: "360", label: "360p" },
+    ],
+  };
+</script>
+<script type="module">
+  import "../src/element.ts";
+  import { upgradeVideoElements } from "../src/upgrade.ts";
+  window.__go = () => upgradeVideoElements({ attributes: { controls: "" } });
+  window.__read = (id) => {
+    const p = document.getElementById(id);
+    if (!p || p.tagName !== "MOVI-PLAYER") return { tag: p?.tagName || "gone" };
+    return {
+      srcAttr: p.getAttribute("src"),
+      kids: [...p.querySelectorAll("source")].map(
+        (s) => (s.getAttribute("data-label") || "?") + "/" + (s.getAttribute("data-height") || "?") +
+               (s.hasAttribute("data-default") ? "*" : "") + " " + (s.getAttribute("src") || "").split("/").pop()),
+      menu: (p._videoQualities || []).map((q) => q.label + "@" + q.height),
+      opened: (p.player?.getMediaInfo?.()?.duration || 0).toFixed(1),
+      state: p.player?.getState?.() || "?",
+    };
+  };
+</script>
+</body>

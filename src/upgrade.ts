@@ -268,6 +268,11 @@ function upgradeOne(
     player.setAttribute("fallback", "native");
   }
 
+  // Which rung is on screen — read before the children move, because moving
+  // a <video>'s <source> elements out from under it is a change of source,
+  // and currentSrc does not survive the browser reconsidering.
+  const playingNow = player.getAttribute("src") || video.currentSrc || "";
+
   // The children come across rather than being copied: <source> and <track>
   // carry the sources, the captions and the thumbnails, and the page may well
   // hold references to them.
@@ -280,6 +285,42 @@ function upgradeOne(
   if (id) {
     video.setAttribute("id", `${id}-native`);
     player.setAttribute("id", id);
+  }
+
+  // A ladder the skin had and the element could not carry.
+  //
+  // Emitted as <source> children rather than as a src, because that is the
+  // only shape that can say "these are the qualities" — and _parseChildSources
+  // reads them ONLY when there is no src, so the one the video carried has to
+  // come off. The rung the skin had selected stays the one that plays: it is
+  // marked default, and the others become the quality menu.
+  const ladder = ladderFromSkin(video, player);
+  if (ladder.length > 1) {
+    let resolvedPlaying = playingNow;
+    try {
+      resolvedPlaying = new URL(playingNow, document.baseURI).href;
+    } catch {
+      /* not a URL — nothing matches it, and the skin's own default stands */
+    }
+    player.removeAttribute("src");
+    // When the ladder IS the children — a plain multi-source <video> — the
+    // rungs that were read are the elements standing here. They go, and come
+    // back carrying what the reader worked out about them.
+    for (const old of Array.from(player.querySelectorAll("source"))) old.remove();
+    for (const rung of ladder) {
+      const el = document.createElement("source");
+      el.setAttribute("src", rung.src);
+      if (rung.type) el.setAttribute("type", rung.type);
+      if (rung.label) el.setAttribute("data-label", rung.label);
+      if (rung.height) el.setAttribute("data-height", String(rung.height));
+      if (rung.bandwidth) el.setAttribute("data-bandwidth", String(rung.bandwidth));
+      // What is on screen right now wins over what the config called default:
+      // the viewer may have picked a rung before the upgrade reached them.
+      if (rung.src === resolvedPlaying || (!resolvedPlaying && rung.isDefault)) {
+        el.setAttribute("data-default", "");
+      }
+      player.appendChild(el);
+    }
   }
 
   // Sit where the element being replaced sat.
@@ -409,6 +450,178 @@ function posterFromSkin(video: HTMLVideoElement): string {
   } catch {
     return "";
   }
+}
+
+/**
+ * The quality ladder a page was given, when it was given more than one.
+ *
+ * A <video> carries one file at a time: whichever rung the skin picked. The
+ * rest of the ladder lives in the skin's own configuration, so an upgrade that
+ * reads only the element inherits a single quality and no way to change it —
+ * the player's quality menu is empty on a page that plainly had one, and the
+ * viewer loses a control the site had given them.
+ *
+ * Three places to ask, because three shapes exist:
+ *
+ *  - JW keeps it on its playlist item: sources[] of { file, label, height,
+ *    bitrate, default }. Its API is on the page, and so is this code.
+ *  - video.js hangs the player off its own element (`el.player`), and
+ *    currentSources() hands back every source it was configured with. The
+ *    quality keys are not video.js's own — `label`, `res`, `size` come from
+ *    whichever switcher plugin the site uses — so all of them are read.
+ *  - Failing both, the <video>'s own <source> children, which is the ladder
+ *    written in plain HTML and the one every skin is built over anyway.
+ *
+ * The first of those to offer more than one rung wins; a single rung is not a
+ * ladder and leaves the ordinary src path alone.
+ *
+ * Manifests are left out. An .m3u8 or .mpd among the sources is an adaptive
+ * stream with its own ladder inside it, and mixing the two would offer the
+ * same qualities twice — once as rungs, once as whatever the manifest lists.
+ */
+interface SkinRung {
+  src: string;
+  label: string;
+  height: number;
+  bandwidth: number;
+  type: string;
+  isDefault: boolean;
+}
+
+/** A height out of whatever the page called the rung: "720p HD", "1080". */
+function heightFromLabel(label: string): number {
+  const found = /(\d{3,4})\s*p?\b/i.exec(label);
+  return found ? Number(found[1]) : 0;
+}
+
+/**
+ * One entry of a ladder, whatever shape the page wrote it in.
+ *
+ * Every key here is some player's spelling of the same four facts, so they
+ * are all tried rather than branching per framework: JW says file/bitrate,
+ * video.js says src/type, a switcher plugin says res or size, Plyr says size,
+ * and a plain <source> says whatever its author felt like.
+ */
+function rungFrom(one: Record<string, unknown>): SkinRung | null {
+  const raw =
+    (typeof one.src === "string" && one.src) ||
+    (typeof one.file === "string" && one.file) ||
+    "";
+  if (!raw || /\.(m3u8|mpd|ism)(\?|$)/i.test(raw)) return null;
+  let href: string;
+  try {
+    href = new URL(raw, document.baseURI).href;
+  } catch {
+    return null;
+  }
+  const label = String(one.label ?? one.title ?? one.res ?? one.size ?? "");
+  return {
+    src: href,
+    label,
+    height: Number(one.height) || Number(one.res) || Number(one.size) ||
+      heightFromLabel(label),
+    bandwidth: Number(one.bitrate) || Number(one.bandwidth) || 0,
+    type: typeof one.type === "string" ? one.type : "",
+    isDefault: one.default === true || one.selected === true,
+  };
+}
+
+function normaliseLadder(entries: unknown): SkinRung[] {
+  if (!Array.isArray(entries) || entries.length < 2) return [];
+  const rungs: SkinRung[] = [];
+  for (const entry of entries) {
+    if (!entry || typeof entry !== "object") continue;
+    const rung = rungFrom(entry as Record<string, unknown>);
+    // A file offered twice is one rung: a page that lists the same mp4 under
+    // two labels has a ladder of one, whatever it says.
+    if (rung && !rungs.some((r) => r.src === rung.src)) rungs.push(rung);
+  }
+  // Several sources are not automatically a ladder. An mp4 with a webm beside
+  // it is the oldest shape on the web — one film, written twice, so that
+  // whichever the browser can open is the one it opens. Offering those as a
+  // quality menu invents a choice the page never made, and labels it with
+  // nothing, because a format fallback carries no height, no bitrate and no
+  // name. A ladder says which rung is which; that is what tells them apart.
+  const named = rungs.filter((r) => r.height || r.bandwidth || r.label);
+  return named.length > 1 ? rungs : [];
+}
+
+/** What JW was configured with, asked of JW. */
+function ladderFromJw(video: HTMLVideoElement): SkinRung[] {
+  const container = video.closest?.(".jwplayer");
+  if (!container) return [];
+  const jw = (window as unknown as { jwplayer?: (id?: unknown) => unknown })
+    .jwplayer;
+  if (typeof jw !== "function") return [];
+  try {
+    // By element, not bare: jwplayer() with no argument hands back whichever
+    // instance was made last, which on a page with more than one player is
+    // not the one that owns this video.
+    const instance = jw(container) as {
+      getPlaylistItem?: () => { sources?: unknown };
+    } | null;
+    return normaliseLadder(instance?.getPlaylistItem?.()?.sources);
+  } catch {
+    return [];
+  }
+}
+
+/** What video.js was configured with, asked of the player on its own element. */
+function ladderFromVideoJs(video: HTMLVideoElement): SkinRung[] {
+  const container = video.closest?.(".video-js, .vjs-container");
+  if (!container) return [];
+  // Reached through the element rather than the videojs global on purpose:
+  // the player is attached there by video.js itself, so this works on a page
+  // that keeps its copy of videojs to itself, and it cannot pick up the
+  // wrong instance.
+  const player = (container as { player?: unknown }).player as {
+    currentSources?: () => unknown;
+    options_?: { sources?: unknown };
+  } | null;
+  if (!player) return [];
+  try {
+    const ladder = normaliseLadder(player.currentSources?.());
+    return ladder.length > 1 ? ladder : normaliseLadder(player.options_?.sources);
+  } catch {
+    return [];
+  }
+}
+
+/**
+ * The ladder in plain HTML, which is what a skin is usually built over.
+ *
+ * Read off the PLAYER, not the video: by the time this is asked the children
+ * have already moved across, and the element they came from is empty.
+ */
+function ladderFromChildren(player: HTMLElement): SkinRung[] {
+  const kids = player.querySelectorAll?.("source");
+  if (!kids || kids.length < 2) return [];
+  const entries: Record<string, unknown>[] = [];
+  for (const kid of Array.from(kids)) {
+    const attr = (name: string) => kid.getAttribute(name) ?? undefined;
+    entries.push({
+      src: attr("src"),
+      type: attr("type"),
+      label: attr("label") ?? attr("data-label") ?? attr("title"),
+      res: attr("res") ?? attr("data-res"),
+      size: attr("size") ?? attr("data-size"),
+      height: attr("data-height"),
+      bitrate: attr("data-bandwidth") ?? attr("data-bitrate"),
+      default: kid.hasAttribute("default") || kid.hasAttribute("data-default"),
+    });
+  }
+  return normaliseLadder(entries);
+}
+
+function ladderFromSkin(
+  video: HTMLVideoElement,
+  player: HTMLElement,
+): SkinRung[] {
+  const jw = ladderFromJw(video);
+  if (jw.length > 1) return jw;
+  const vjs = ladderFromVideoJs(video);
+  if (vjs.length > 1) return vjs;
+  return ladderFromChildren(player);
 }
 
 /**
