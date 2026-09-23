@@ -245,6 +245,11 @@ function upgradeOne(
   if (!player.hasAttribute("src") && video.src) {
     player.setAttribute("src", video.src);
   }
+  // Before the caller's own attributes, so an explicit poster still wins.
+  if (!player.hasAttribute("poster")) {
+    const fromSkin = posterFromSkin(video);
+    if (fromSkin) player.setAttribute("poster", fromSkin);
+  }
   for (const [name, value] of Object.entries(options.attributes ?? {})) {
     player.setAttribute(name, value);
   }
@@ -370,6 +375,41 @@ function upgradeOne(
  */
 /** The skins that own the box their video sits in. */
 const HOST_SKINS = ".video-js, .vjs-container, .plyr, .jwplayer, .flowplayer, .shaka-video-container, .mejs__container";
+
+/**
+ * The picture a skin was showing before anyone pressed play.
+ *
+ * A `<video poster="…">` comes across with the rest of the attributes. A skin
+ * does not use that attribute: video.js paints its own `.vjs-poster` div and
+ * puts the image in its background, Plyr does the same with
+ * `.plyr__poster`. The upgrade hides that div along with the rest of the
+ * skin's furniture — correctly, it is the skin's chrome — and the poster went
+ * with it, so a player that had a still frame a moment ago was a black box.
+ *
+ * Read from the computed style rather than the attribute, because that is
+ * where the skin put it, and only the first url() of it: a background can be
+ * a stack, and the poster is the image in it.
+ */
+function posterFromSkin(video: HTMLVideoElement): string {
+  const skin = video.closest?.(HOST_SKINS);
+  if (!skin) return "";
+  const holder = skin.querySelector(".vjs-poster, .plyr__poster");
+  if (!holder) return "";
+  let image = "";
+  try {
+    image = getComputedStyle(holder).backgroundImage || "";
+  } catch {
+    return "";
+  }
+  const found = /url\(\s*(['"]?)(.*?)\1\s*\)/.exec(image);
+  const raw = found?.[2]?.trim();
+  if (!raw || raw === "none") return "";
+  try {
+    return new URL(raw, document.baseURI).href;
+  } catch {
+    return "";
+  }
+}
 
 /**
  * Inside a skin, the page owns the box — say so, in the only way that is
