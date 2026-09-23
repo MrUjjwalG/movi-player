@@ -30714,6 +30714,18 @@ export class MoviElement extends HTMLElement {
         subtitleTrackChangeHandler,
       ),
     );
+    // An EXTERNAL subtitle never reaches the track manager — exactly the gap
+    // the audio handler above documents for a language switch. selectSubtitleLang
+    // fetches and parses the file itself and announces it on the PLAYER, and
+    // nothing was listening: an SRT the viewer picked fired no
+    // `subtitletrackchange` at the host at all, and the menu only looked
+    // right because the click that opened it redrew it. Same handler, both
+    // emitters, whichever kind of subtitle changed.
+    const subPlayer = this.player;
+    subPlayer.on("subtitleTrackChange" as any, subtitleTrackChangeHandler);
+    this.eventHandlers.set("subtitleTrackChangePlayer", () =>
+      subPlayer.off("subtitleTrackChange" as any, subtitleTrackChangeHandler),
+    );
 
     // Handle tracks change (when media loads)
     const tracksChangeHandler = () => this.handleTracksChange();
@@ -39274,10 +39286,22 @@ export class MoviElement extends HTMLElement {
    * strip grows once, turn them off and it goes back.
    */
   private updateStripCaptionBand(): void {
-    const active =
-      this.classList.contains("movi-audio-strip") &&
-      !!this.player?.trackManager?.getActiveSubtitleTrack?.();
-    this.classList.toggle("movi-has-caption", active);
+    if (!this.classList.contains("movi-audio-strip")) {
+      this.classList.toggle("movi-has-caption", false);
+      return;
+    }
+    // Two kinds of subtitle, and only one of them is a TrackManager track.
+    // An SRT the viewer picked is an EXTERNAL track: it is fetched and parsed
+    // by selectSubtitleLang and its cues go straight to the renderer, while
+    // TrackManager is told subtitles are off — which is exactly what the log
+    // of the reported case said one line after "External subtitle added".
+    // Asking only the track manager meant the band never appeared for the
+    // commonest way anyone adds subtitles to a song.
+    const embedded = !!this.player?.trackManager?.getActiveSubtitleTrack?.();
+    const external = !!this.player
+      ?.getSubtitleLangs?.()
+      ?.some((t) => t.active);
+    this.classList.toggle("movi-has-caption", embedded || external);
   }
 
   /**
