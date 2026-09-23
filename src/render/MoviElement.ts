@@ -4647,6 +4647,35 @@ export class MoviElement extends HTMLElement {
 
     // Mouse Hover Logic for Thumbnail (Desktop)
     if (progressBar && thumbnail) {
+      /**
+       * Is this position's picture already in memory?
+       *
+       * The same question the storyboard carve-out below asks, for the other
+       * way of already having a frame. Leaving the bar hides the card, so the
+       * next hover took the intent delay again — 150ms before it even looked
+       * — for a picture that was in hand and answered in 0ms once asked.
+       * Measured: 54ms while staying on the bar against 162ms after stepping
+       * off and back onto the same spot, with no fetch in either case.
+       *
+       * The rect read is a layout, so it is deliberately on the branch where
+       * the card is NOT already up: during a walk the first branch takes over
+       * and this never runs.
+       */
+      const previewAlreadyHeld = (clientX: number): boolean => {
+        if (this._vr360) return false;
+        const duration = this.duration;
+        if (!(duration > 0)) return false;
+        const rect = progressBar.getBoundingClientRect();
+        if (!(rect.width > 0)) return false;
+        const percent = Math.max(
+          0,
+          Math.min(1, (clientX - rect.left) / rect.width),
+        );
+        return (
+          (this.player as any)?.hasPreviewFor?.(percent * duration) ?? false
+        );
+      };
+
       progressBar.addEventListener("mousemove", (e) => {
         // Ignore if dragging OR recent click
         if (this.isDragging || ignoreHover) return;
@@ -4661,12 +4690,16 @@ export class MoviElement extends HTMLElement {
         // Hover Logic
         if (thumbnail.classList.contains("visible")) {
           updateScrubbingUI(e.clientX);
-        } else if (this.hasInstantPreviews()) {
+        } else if (this.hasInstantPreviews() || previewAlreadyHeld(e.clientX)) {
           // Nothing to wait and see about. The intent delay is there so a
           // pointer merely crossing the bar doesn't start work — and with a
           // storyboard there is no work to start: the tile is a rectangle in
           // an image already in hand. Waiting 150ms to show a picture that is
           // ready now is the whole of what makes the first hover feel slow.
+          //
+          // A remembered frame is ready in exactly the same sense, and that is
+          // the case this carve-out was missing: it is why coming back to a
+          // spot you have already looked at loaded all over again.
           updateScrubbingUI(e.clientX);
         } else {
           if (!hoverIntentTimer) {

@@ -1753,6 +1753,21 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
     return Math.round(time / MoviPlayer.PREVIEW_CACHE_STEP_S);
   }
 
+  /**
+   * Is this position's picture already in hand?
+   *
+   * Asked BEFORE a preview is dispatched, by the pacer that otherwise waits
+   * for the pointer to settle. That wait exists to stop a scrub spending a
+   * 2MB range fetch at every position it crosses — but a frame that is
+   * already remembered costs nothing to produce, so waiting for it buys
+   * nothing and is simply 180ms of delay. Synchronous on purpose: a pacer
+   * that had to await this could not decide in the same tick as the move.
+   */
+  hasPreviewFor(time: number, view?: VRView | null): boolean {
+    const key = this.previewKey(time, view);
+    return key !== null && this.previewCache.has(key);
+  }
+
   private rememberPreview(key: number, blob: Blob): void {
     this.previewCache.set(key, blob);
     while (this.previewCache.size > MoviPlayer.PREVIEW_CACHE_MAX) {
