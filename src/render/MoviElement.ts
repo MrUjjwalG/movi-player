@@ -14438,6 +14438,17 @@ export class MoviElement extends HTMLElement {
       !this.isTimelineOpen()
     ) {
       this.controlsTimeout = window.setTimeout(() => {
+        this.controlsTimeout = null;
+        // Still spinning through the opening load: the bar is the only
+        // play/pause control on screen (see openingLoadHoldsControls), so
+        // hold it and ask again rather than leaving a spinner at 00:00 with
+        // nothing to press. Re-arming through showControls rather than
+        // skipping the timer means the auto-hide starts for real the moment
+        // the ring clears, without every isLoading exit having to say so.
+        if (this.openingLoadHoldsControls()) {
+          this.showControls();
+          return;
+        }
         // Re-check gating conditions before hiding — a menu may have
         // been opened, the cursor may have moved over the bar, the 360°
         // joystick may now be in use, etc.
@@ -14451,7 +14462,6 @@ export class MoviElement extends HTMLElement {
         ) {
           this.hideControls();
         }
-        this.controlsTimeout = null;
       }, 3000); // 3 seconds of inactivity
     }
   }
@@ -16442,7 +16452,19 @@ export class MoviElement extends HTMLElement {
     //
     // So: always flash, and let the button's resting state decide only whether
     // the flash FADES at the end. See `persistent` below.
-    const persistent = btn.classList.contains("movi-center-visible");
+    //
+    // "On screen" is the class AND no ring overriding it. A ring up, or one
+    // still inside its wait, hides this button with !important whatever the
+    // class says — so during a load the class alone read a button the viewer
+    // could not see as already there, and the receipt used the exit shape:
+    // no pop, a shorter hold, and an icon that appeared and left without ever
+    // arriving. Coming from nowhere is exactly what it is doing there.
+    const spinnerWasUp = this.centerHiddenBySpinner();
+    const spinnerWasPending = this.classList.contains("is-spinner-pending");
+    const persistent =
+      btn.classList.contains("movi-center-visible") &&
+      !spinnerWasUp &&
+      !spinnerWasPending;
 
     const playIcon = btn.querySelector(
       ".movi-center-icon-play",
@@ -16468,8 +16490,14 @@ export class MoviElement extends HTMLElement {
     // not ending the load. Routing it through setSpinnerVisible would end the
     // run, and done() below would then make the viewer wait the whole delay
     // over again to get back a spinner that never actually left.
-    const spinnerWasUp = this.centerHiddenBySpinner();
+    // A ring still inside its `spinnerdelay` wait hides this button just as
+    // hard — :host(.is-spinner-pending) carries the same !important rule, for
+    // the reason the stylesheet gives — and nothing here used to take that one
+    // off, so on a page with a delay the whole receipt ran invisibly. Only the
+    // CLASS goes; the wait keeps running, and the show it eventually asks for
+    // is deferred behind the flash like any other.
     if (spinnerWasUp) this.applySpinnerVisible(false);
+    else if (spinnerWasPending) this.applySpinnerPending(false);
 
     // Feedback must never swallow a click meant for the video underneath.
     //
@@ -16557,7 +16585,7 @@ export class MoviElement extends HTMLElement {
     // Set after the animation exists, because setSpinnerVisible(false) above
     // clears this flag — and it is what tells done() to ask for the spinner
     // back. (A spinner that wants to appear DURING the flash sets it too.)
-    if (spinnerWasUp) this._spinnerDeferredByFlash = true;
+    if (spinnerWasUp || spinnerWasPending) this._spinnerDeferredByFlash = true;
     const done = () => {
       if (this._centerFlashAnim === anim) {
         this._centerFlashAnim = null;
@@ -32523,7 +32551,20 @@ export class MoviElement extends HTMLElement {
     const loadingIndicator = this.shadowRoot?.querySelector(
       ".movi-loading-indicator",
     ) as HTMLElement;
-    const isLoading = loadingIndicator?.style.display === "flex";
+    // …or a ring that is only down because a receipt is covering it.
+    //
+    // flashCenterIcon takes the spinner off for the length of its animation,
+    // which means the display it leaves behind says "not loading" for ~800ms
+    // of a load that is still running. A tick landing in that gap took the
+    // else-branch below, found `!_hasEverPlayed`, and added movi-center-visible
+    // — declaring the receipt a persistent control. settleCenterFlashSolid then
+    // did what that class asks for and dropped the fade tail, and the returning
+    // ring's !important rule snapped the button off instead: pause during the
+    // opening load popped, held, and then vanished on one frame rather than
+    // fading, which is not the receipt every other pause draws. The flag the
+    // flash already sets says what the display cannot.
+    const isLoading =
+      loadingIndicator?.style.display === "flex" || this._spinnerDeferredByFlash;
 
     // Through contextMenuRoot(): this runs on the UI tick, and the desktop
     // menu spends its whole visible life in the body portal — which is exactly
@@ -33954,6 +33995,36 @@ export class MoviElement extends HTMLElement {
   }
 
   /**
+   * Is the bar the only play/pause control on screen right now?
+   *
+   * Exactly one moment answers yes: a ring up over the OPENING load. The
+   * centre button is off whenever a spinner is up (centerHiddenBySpinner says
+   * why), and before the first play there is no picture for the bar to be in
+   * the way of — so the auto-hide has nothing to protect and everything to
+   * take away. Measured on a ~8s open: the bar was never raised at all, so a
+   * viewer watching a spinner at 00:00 had nothing to press, and on touch,
+   * where a tap on the picture only toggles the chrome, that meant no way at
+   * all to stop a start they had changed their mind about. The press itself
+   * has worked since isStartPending() landed; there was simply no button.
+   *
+   * Keyed to the RING, not to `isLoading`: a load that resolves inside
+   * `spinnerdelay` never tells the viewer to wait, so it must not pop the
+   * chrome either — an autoplay embed that opens in 300ms still opens bare.
+   * And `_hasEverPlayed` keeps it to the opening load: a mid-play stall or a
+   * quality switch has a picture on screen and a bar the viewer already knows
+   * how to summon.
+   */
+  private openingLoadHoldsControls(): boolean {
+    return (
+      this._controls &&
+      !this._isUnsupported &&
+      !this._hasEverPlayed &&
+      this.hasMediaSource() &&
+      this.centerHiddenBySpinner()
+    );
+  }
+
+  /**
    * How long the player has to keep saying "loading" before the viewer is
    * told. `spinnerdelay`, in seconds; 0 — the default — is no wait at all.
    *
@@ -34068,8 +34139,15 @@ export class MoviElement extends HTMLElement {
       this.applySpinnerVisible(true);
       return;
     }
-    // A wait is already running for this run. Let it finish.
-    if (this._spinnerDelayTimer !== null) return;
+    // A wait is already running for this run. Let it finish — but say so again,
+    // because a receipt that cleared the pending class on its way past (see
+    // flashCenterIcon) asks through here to have it back, and the timer it is
+    // waiting on cannot re-assert it: that timer only ever fires once, at the
+    // end.
+    if (this._spinnerDelayTimer !== null) {
+      this.applySpinnerPending(true);
+      return;
+    }
 
     const wait = this.spinnerDelayMs();
     if (wait <= 0) {
@@ -34129,6 +34207,12 @@ export class MoviElement extends HTMLElement {
     // wait is over both ways.
     this.applySpinnerPending(false);
     this.classList.toggle("is-buffering", on);
+    // The ring is what takes the centre button off the screen, so the ring is
+    // what has to put the bar up in its place — but only where the bar is the
+    // last control left, which openingLoadHoldsControls decides. Raised here,
+    // at the one choke point every spinner goes through, so the delayed ring
+    // and the immediate one both bring the chrome with them.
+    if (on && this.openingLoadHoldsControls()) this.showControls();
   }
 
   /**
