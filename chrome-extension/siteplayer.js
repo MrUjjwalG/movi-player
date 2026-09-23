@@ -93,9 +93,22 @@
   });
   schedule();
 
-  // A page that has none by the time it has settled is not going to grow one
-  // later in a way worth watching the whole document for.
-  const stop = () => setTimeout(() => observer.disconnect(), 10000);
-  if (document.readyState === "complete") stop();
-  else window.addEventListener("load", stop, { once: true });
+  // A page with no player by the time it has settled is not going to grow one
+  // later in a way worth watching the whole document for — and that is every
+  // page on the web, which is the only reason this stops watching at all.
+  //
+  // A page that HAS one keeps being watched, for as long as it is open. The
+  // thing being waited for is not the element, it is its SOURCE, and that
+  // arrives whenever the viewer says so: the examples page carries an empty
+  // <movi-player> from the first byte and gets its src when someone pastes a
+  // link into it and presses play. Measured against it with site access
+  // granted — a src set 2s after load was offered CORS, the same src set 15s
+  // after load was not, because the observer had already gone. Which is to
+  // say the feature did nothing at all on the most ordinary way of using it.
+  const settle = () =>
+    setTimeout(() => {
+      if (!document.querySelector("movi-player")) observer.disconnect();
+    }, 10000);
+  if (document.readyState === "complete") settle();
+  else window.addEventListener("load", settle, { once: true });
 })();
