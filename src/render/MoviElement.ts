@@ -2174,9 +2174,25 @@ export class MoviElement extends HTMLElement {
         // otherwise the one poster that arrives after a failure is the one that
         // paints in stripes.
         void this.showPoster(`https://i.ytimg.com/vi/${m[1]}/hqdefault.jpg`);
-      } else {
-        this.hidePoster();
+        return;
       }
+      // CORS is asked for above because a COEP page cannot load a cross-origin
+      // image without it — not because anything here reads these pixels. A
+      // site's own poster is very often on a CDN that sends no CORS header at
+      // all, and then the only thing wrong with the request is the thing we
+      // added to it: measured on a page whose poster host answers with no
+      // Access-Control-Allow-Origin, where every attempt failed and the
+      // overlay went black.
+      //
+      // So ask once more without it. Once per URL, so a poster that is simply
+      // missing still ends at hidePoster rather than looping.
+      if (this.posterElement.crossOrigin && this._posterNoCorsUrl !== url) {
+        this._posterNoCorsUrl = url;
+        this.posterElement.crossOrigin = null;
+        this.posterElement.src = url;
+        return;
+      }
+      this.hidePoster();
     });
     this.posterElement.style.position = "absolute";
     this.posterElement.style.top = "0";
@@ -41180,6 +41196,8 @@ export class MoviElement extends HTMLElement {
   /** Bumped on every poster change, so a slow decode can tell it has been
    *  overtaken and drop its result instead of painting a stale image. */
   private _posterToken = 0;
+  /** The poster URL already retried without CORS — see the error handler. */
+  private _posterNoCorsUrl = "";
 
   /**
    * Put a poster up only once it is fully decoded.
@@ -41199,6 +41217,12 @@ export class MoviElement extends HTMLElement {
     const el = this.posterElement;
     if (!el || !url) return;
     const token = ++this._posterToken;
+    // Every new poster asks for CORS first; only the one that failed for that
+    // reason goes without (see the error handler). Restored here so a retry
+    // for one URL does not quietly disable it for the next.
+    if (el.src && el.src !== this._posterNoCorsUrl) {
+      el.crossOrigin = "anonymous";
+    }
     // Resolved, not as written: el.src reads back absolute while the caller
     // hands in whatever the host wrote. Comparing the two raw strings never
     // matched, so a poster set twice — the attribute and the source both run
