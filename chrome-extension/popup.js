@@ -34,6 +34,7 @@ function hostOf(url) {
 }
 
 const state = {
+  tabId: null,
   host: "",
   takeoverOn: false,
   exempt: [],
@@ -73,13 +74,14 @@ function render() {
   els.note.hidden = !show;
   if (show) {
     els.note.textContent = isExempt()
-      ? "Videos on this site play in the browser's own player. Reload to apply."
-      : "Videos on this site open in MoviPlayer. Reload to apply.";
+      ? "Videos on this site play in the browser's own player."
+      : "Videos on this site open in MoviPlayer.";
   }
 }
 
 async function load() {
   const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+  state.tabId = tab?.id ?? null;
   state.host = hostOf(tab?.url || "");
   const data = await chrome.storage.local.get([TAKEOVER_KEY, EXEMPT_KEY]);
   state.takeoverOn = !!data[TAKEOVER_KEY];
@@ -89,11 +91,25 @@ async function load() {
 
 els.power.addEventListener("click", async () => {
   if (!state.host || !state.takeoverOn) return;
-  state.exempt = isExempt()
-    ? state.exempt.filter((h) => h !== state.host)
-    : [...state.exempt, state.host];
+  const turningOff = !isExempt();
+  state.exempt = turningOff
+    ? [...state.exempt, state.host]
+    : state.exempt.filter((h) => h !== state.host);
   await chrome.storage.local.set({ [EXEMPT_KEY]: state.exempt });
   render();
+
+  // Turning it ON reaches the page by itself: the content script is watching
+  // the same store and injects from there. Turning it OFF cannot — the page's
+  // own <video> elements were replaced and are gone, so there is nothing left
+  // to hand the page back. A reload is the only thing that restores them, and
+  // telling someone to do it themselves is asking them to finish the job.
+  if (turningOff && state.tabId != null) {
+    try {
+      await chrome.tabs.reload(state.tabId);
+    } catch {
+      /* the tab went away while the popup was open */
+    }
+  }
 });
 
 els.open.addEventListener("click", async () => {
