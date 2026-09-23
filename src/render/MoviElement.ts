@@ -14178,7 +14178,19 @@ export class MoviElement extends HTMLElement {
     this._forcedDashRendition = null;
     const isRebuild =
       this._qualitySwitchInProgress || this._fullRecreateInFlight;
-    if (!isRebuild) this._hasEverPlayed = false;
+    if (!isRebuild) {
+      this._hasEverPlayed = false;
+      // …and with it the lift that flag grants. `movi-bar-visible` raises the
+      // centre button and the spinner clear of the bar on a short player, and
+      // it is only ever meant to be on once playback has started — but nothing
+      // re-read the flag at the moment it changed, so the class sat there until
+      // the next showControls/hideControls happened along. Measured on a phone
+      // swapping sources with the chrome up: the button stayed 18px high for
+      // two seconds after the new src landed and then dropped on its own, which
+      // is the "upar hota hai, then neeche" — and reads as the bar being there
+      // invisibly, because the lift is the only thing the bar was still doing.
+      this.classList.remove("movi-bar-visible");
+    }
   }
 
   private resetToEmptyState(): void {
