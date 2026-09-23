@@ -393,7 +393,7 @@ const HOST_SKINS = ".video-js, .vjs-container, .plyr, .jwplayer, .flowplayer, .s
 function posterFromSkin(video: HTMLVideoElement): string {
   const skin = video.closest?.(HOST_SKINS);
   if (!skin) return "";
-  const holder = skin.querySelector(".vjs-poster, .plyr__poster");
+  const holder = skin.querySelector(".vjs-poster, .plyr__poster, .jw-preview");
   if (!holder) return "";
   let image = "";
   try {
@@ -446,6 +446,13 @@ function hideHostChrome(): void {
   // to rebuild around is a class that will not be there afterwards.
   const vjs = ".video-js:has(> movi-player)";
   const plyr = ".plyr:has(movi-player)";
+  // JW nests the media: <div.jwplayer> holds <div.jw-media> and the <video>
+  // is inside THAT, with every piece of chrome a sibling of .jw-media. So the
+  // skin is matched by a descendant rather than a direct child — the pattern
+  // the other two use would never have matched here — and what is hidden is
+  // its direct children, which cannot catch our element because ours is a
+  // level deeper.
+  const jw = ".jwplayer:has(movi-player)";
   const style = document.createElement("style");
   style.id = HOST_CHROME_STYLE_ID;
   style.textContent = [
@@ -460,11 +467,23 @@ function hideHostChrome(): void {
       `${vjs} > .vjs-error-display`,
       `${plyr} > .plyr__controls`,
       `${plyr} > .plyr__control--overlaid`,
+      // Everything JW paints over its media: the poster, the whole controls
+      // layer (big play button and bar alike), the title, the captions it
+      // renders itself, the overlay stack, the logo and its error card.
+      `${jw} > .jw-preview`,
+      `${jw} > .jw-controls`,
+      `${jw} > .jw-controls-backdrop`,
+      `${jw} > .jw-title`,
+      `${jw} > .jw-captions`,
+      `${jw} > .jw-overlays`,
+      `${jw} > .jw-logo`,
+      `${jw} > .jw-error-msg`,
     ].join(",\n") + " { display: none !important; }",
     // The skin hides the pointer while it believes the viewer is idle. Ours
     // decides that for itself now, and its own bar is what the pointer is
     // being moved towards.
     `${vjs} { cursor: auto !important; }`,
+    `${jw} { cursor: auto !important; }`,
     // Plyr sizes its video with a `video` selector, which no longer matches
     // anything, so the player is given the box. NOT for video.js: it sizes
     // whatever carries .vjs-tech, and our element carries it — forcing a size
