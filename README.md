@@ -829,6 +829,7 @@ Every attribute can also be read and set as a JS property (`el.rotate = 90`). Gr
 | `nohotkeys` | `nohotkeys` | Disable all keyboard shortcuts |
 | `controlslist` | `controlslist="nofullscreen nopip nospeed"` | Switch built-in controls off, as `no<name>` tokens (`noplay`, `nocc`, `noquality`, `nosettings`, … or the `id` of an `addControl()` control) |
 | `noerrorscreen` | `noerrorscreen` | Suppress the built-in error overlays (host renders its own) |
+| `autopictureinpicture` | `autopictureinpicture` | Enter Picture-in-Picture by itself when the tab is hidden, like `<video autopictureinpicture>` (native-element playback only) |
 | `disablepictureinpicture` | `disablepictureinpicture` | Refuse Picture-in-Picture, like `<video disablepictureinpicture>` |
 | `disableremoteplayback` | `disableremoteplayback` | Turn off remote playback targets (AirPlay, Cast) |
 | `gesturefs` | — | **Deprecated** — use `playsinline` |

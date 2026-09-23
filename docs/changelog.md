@@ -36,6 +36,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **The audio strip says where the pointer is pointing**: its scrubber shows the time under the pointer on hover and drag.
 - **The home page hands over the install line**: `npm install movi-player`, one click to copy.
 
+- **Watch a film together, from two places.** The web app takes `?party=CODE` — any code — and everyone who opens the same one sees the same moment: play, pause, seek, speed, and which audio and subtitle track. One person drives; anyone else asks for the remote by name and is handed it (or not), and the panel under the player says who did the last thing, so a pause nobody expected has a name on it. Hosting needs a six-digit code from an authenticator app rather than a shared password, so the room code can be guessed without the room being taken over — guessing it gets you a seat, not the chair. URL sources only.
+- **`resumekey`**: files the resume position under a name the host chooses instead of under the title. The title is the player's guess — two episodes can share one, a corrected title is still the same video, and a source the player cannot name got no resume at all. An id is the host's fact, and being an attribute it is known before the file opens, so the position is offered without waiting for metadata.
+- **The takeover brings the site's quality ladder with it.** A `<video>` holds one file — whichever rung the site's player picked — so a page that plainly offered 360/720/1080 used to become a player with one quality and no menu. The qualities are now read from JW's playlist item, from video.js's own player, or from the `<video>`'s `<source>` children, whichever has them. A manifest among them is left out (it has its own ladder inside it), and sources that say nothing about themselves are left alone: an mp4 with a webm beside it is a format fallback, not a choice anyone offered.
+- **A toolbar popup for the browser extensions**, the way an ad blocker's icon works: the site you are on, one switch that turns takeover off for it, and the button that opens the full player. The icon only stops to ask where there is something to ask about — on a page with nothing to take over it opens the player directly, as before. Turning it off for a site reloads the page, because the site's own `<video>` elements were replaced and a reload is what hands them back.
+- **A site that embeds `<movi-player>` itself now gets CORS from the extension too.** That site's player asks for the bytes, the host that serves them sends no header, and the player falls back to the browser's `<video>` — the thing the site embedded it to avoid. The same headers the takeover asks for are now offered for the URLs a page-owned player declares, whether or not takeover is switched off for that site.
+
 ### Changed
 - **The WASM module compiles once and is instantiated many times** — a second player, the preview pipeline, and a post-quality-switch rebuild no longer each pay for their own fetch and compile.
 - **Adaptive load-shedding can lift again**: the frame-rate cap for underpowered devices used to engage and never release; it now retests and lifts itself on a sustained healthy stretch.
@@ -50,6 +56,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **The settings panel closes on a press anywhere outside it**, like the other popups — including a press on the picture, which now dismisses it and nothing else.
 - **The adaptive decode ceiling lasts the session**, not the life of the device.
 - The three browser extensions are now called **MoviPlayer**.
+
+- **The takeover looks before it leaps**: the link a `<video>` declares is checked for actual media before the element is replaced, per element rather than per page, so a page whose `<video>` points at an HTML error page or a dead link keeps the player it had.
+- **The takeover no longer switches `resume` on.** A resume prompt is something a site asks for; arriving over someone else's player uninvited is not.
 
 ### Fixed
 - **The opening poster no longer fades up out of black.** It was faded in over 220ms on every load, and both the host and the canvas are opaque black before the first frame — so what the fade actually did was ramp a thumbnail out of black on every navigation, measured at opacity 0 to 1 across 158ms to 366ms. That reads as a flash, and it lasted as long as the fade rather than as long as the load. It now cuts to the poster, and the fade is kept for the case it was written for: a poster replacing a picture that is already on screen.
@@ -82,6 +91,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **A hover on an 8K film no longer stops the page**: the preview decodes at preview size instead of the source's, and gives up cleanly rather than hanging. Thumbnails fill their box instead of sitting letterboxed in it.
 - **An audio track whose link dies says so** instead of leaving the picture running in silence while the reader retried every frame.
 - **A cover-art player's menus are no longer clipped** by the bar's collapse, and the spinner keeps its size and place.
+
+- **An ordinary film no longer wears the HDR film's colour.** After an HDR source, a plain one played greyish and flat: the canvas kept the wide-gamut tag the HDR pipeline set and nothing put it back for SDR.
+- **Subtitles in the audio strip.** A sound-only source showed no captions at all — not an embedded track, not an SRT the viewer picked. They now appear in a band above the bar that grows for a second line and no further, centred, and the size and colour settings reach them like anywhere else.
+- **Coming back to a spot you already looked at no longer reloads it.** A second hover on the same part of the seek bar re-fetched and re-decoded a picture that was already in hand.
+- **A flush that times out no longer throws away everything it was draining** — 645 decoded frames, on an EOF flush that ran out of a budget fixed at 5 seconds regardless of how much was queued.
+- **A stream whose URL never admits to being one** now plays: an HLS link with no `.m3u8` in it is recognised from what the server says it is serving.
+- **A poster the host refuses to share** is fetched again without CORS rather than left blank; it is a picture, and nothing reads its pixels.
+- **Re-stating the source it already has** — a host or a framework writing the same `src` back — no longer restarts the film from the top.
+- **JW Player's skin comes down properly**, poster and all, and the poster a video.js or Plyr skin was showing carries over to the player instead of leaving a black box.
+- **A video the page had centred stays centred** after the takeover, instead of jumping to the left edge.
+- **The player's corners no longer escape the frame it sits in** on the web app.
+- **A divider no longer strands itself** at the end of a capsule when native fallback leaves nothing visible beside it.
+- **The adaptive quality probe stops reading its own cache**: a measurement answered from bytes it had already fetched could only ever say "faster", so the ladder could climb on a link that never carried it.
 
 ## [0.4.0] - 2026-08-15
 
