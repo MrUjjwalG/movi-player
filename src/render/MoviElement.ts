@@ -25338,9 +25338,13 @@ export class MoviElement extends HTMLElement {
         align-items: center;
         justify-content: center;
         color: var(--movi-chrome-fg, #FFFFFF);
-        /* Subtle primary halo around the icon — keeps the OSD
-           visually anchored to the brand without painting the bg. */
-        filter: drop-shadow(0 0 6px color-mix(in srgb, var(--movi-primary) 45%, transparent));
+        /* Subtle halo around the icon — keeps the OSD visually anchored to the
+           brand without painting the bg. The ACCENT, falling back to the brand
+           colour, the way every other tinted control here reads it: a
+           themecolor with two values sets the accent from the second one, and
+           this was the one glow still reaching past it to --movi-primary, so a
+           player with an accent had an OSD that did not match its own chrome. */
+        filter: drop-shadow(0 0 6px color-mix(in srgb, var(--movi-accent, var(--movi-primary)) 45%, transparent));
       }
 
       .movi-osd-icon svg {
