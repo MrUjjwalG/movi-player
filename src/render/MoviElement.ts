@@ -36989,7 +36989,15 @@ export class MoviElement extends HTMLElement {
     if (value instanceof File) {
       // For File objects, store in memory (can't store in attributes)
       this._src = value;
-      this._hasEverPlayed = false;
+      // Through resetForFreshSource, not by clearing _hasEverPlayed here. This
+      // branch hand-rolled a subset of it, and the rest of what a fresh source
+      // has to forget was simply missed — including the bar lift that rides on
+      // that flag. A file picker or a local playlist reaches the element ONLY
+      // here (a File cannot be an attribute, so attributeChangedCallback never
+      // runs), so the whole path was reset-free: the centre button stayed 18px
+      // high with the title still up and the bar's contents disabled, until the
+      // previous video's auto-hide timer fired a second later and dropped it.
+      this.resetForFreshSource();
       // Remove the src attribute if it was a string
       this.removeAttribute("src");
       // updatePoster gates on hasSource — re-evaluate now that _src is set.
