@@ -665,6 +665,7 @@ export class HttpSource implements SourceAdapter {
         } else {
           // Read the download filename off the HEAD response.
           this.setFilenameFromDisposition(response.headers.get("Content-Disposition"));
+          this.noteContentType(response.headers.get("Content-Type"));
 
           const contentLength = response.headers.get("Content-Length");
           if (contentLength) return parseInt(contentLength, 10);
@@ -757,6 +758,7 @@ export class HttpSource implements SourceAdapter {
     // When HEAD is method-blocked (presigned-GET URLs), this ranged GET is our
     // first successful response — grab the download filename off it too.
     this.setFilenameFromDisposition(res.headers.get("Content-Disposition"));
+    this.noteContentType(res.headers.get("Content-Type"));
 
     const contentRange = res.headers.get("Content-Range");
     if (contentRange) {
@@ -802,6 +804,31 @@ export class HttpSource implements SourceAdapter {
   }
 
   /** Pull a download filename out of a Content-Disposition header, if present. */
+  /**
+   * What the server said this URL is, from whichever response arrived first.
+   *
+   * Kept because the only reliable way to tell an adaptive-streaming MANIFEST
+   * from a media file is to ask the server. The player decides which of the
+   * two it is from the URL, which works while a manifest ends in .m3u8 and
+   * fails the moment one does not — a signed endpoint like
+   * "/share/streaming?type=M3U8_FLV_264_480" serves a playlist and says so in
+   * its Content-Type, while nothing in its path says anything at all.
+   *
+   * Recorded rather than probed: this source already makes these requests, so
+   * reading one more header off them costs nothing, and nobody asks until an
+   * open has already failed.
+   */
+  private contentType = "";
+
+  getContentType(): string {
+    return this.contentType;
+  }
+
+  private noteContentType(value: string | null): void {
+    if (this.contentType || !value) return;
+    this.contentType = value.split(";")[0].trim().toLowerCase();
+  }
+
   private setFilenameFromDisposition(disposition: string | null): void {
     if (!disposition) return;
     // Try filename*= (RFC 5987 encoded) first, then filename=.

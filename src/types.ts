@@ -170,6 +170,22 @@ export interface PlayerConfig {
    */
   forceStreamEngine?: "dashjs" | "hlsjs";
   /**
+   * Treat this URL as an adaptive manifest whatever its path looks like.
+   *
+   * Which of the two a URL is — a manifest or a media file — is normally read
+   * off the URL, and that holds only while a manifest ends in .m3u8 or .mpd.
+   * Plenty do not: a signed endpoint like
+   * "/share/streaming?type=M3U8_FLV_264_480" serves a playlist and says so in
+   * its Content-Type, while nothing in its path says anything at all. Such a
+   * URL is handed to the demuxer, which is given a text playlist where it
+   * expected a container, and the open fails.
+   *
+   * Set by the caller that has since found out — see the retry in MoviElement,
+   * which asks the source what the server called it once an open has already
+   * failed. Not a probe: nothing is fetched to answer this.
+   */
+  forceStream?: "hls" | "dash";
+  /**
    * When force-demuxing a DASH source, use this specific video Representation
    * file instead of the best one — set when the user picks a quality in the
    * demuxer-mode quality menu, so the re-load lands on the chosen rendition.

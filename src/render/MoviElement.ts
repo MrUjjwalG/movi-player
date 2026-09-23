@@ -61,6 +61,21 @@ import { generateFingerprint } from "../utils/Fingerprint";
 const TAG = "MoviElement";
 
 /**
+ * Content types that mean "this is a playlist, not a file".
+ *
+ * The ones servers actually send. Apple's own spelling is
+ * application/vnd.apple.mpegurl; application/x-mpegURL is what most CDNs
+ * emit; the audio/ pair is old but still in the wild.
+ */
+const MANIFEST_CONTENT_TYPES: Record<string, "hls" | "dash"> = {
+  "application/vnd.apple.mpegurl": "hls",
+  "application/x-mpegurl": "hls",
+  "audio/mpegurl": "hls",
+  "audio/x-mpegurl": "hls",
+  "application/dash+xml": "dash",
+};
+
+/**
  * The engines that can play a source, in the order the `engine` attribute may
  * name them: Movi's own WASM demuxer + WebCodecs pipeline, the three MSE stream
  * engines, and the browser's own `<video>`.
@@ -1411,6 +1426,11 @@ export class MoviElement extends HTMLElement {
   // escalation walks the author's list once instead of retrying the same one.
   private _engineTried = new Set<EngineName>();
   private _streamEngineNext: "dashjs" | "hlsjs" | null = null;
+  // A manifest whose URL never admitted to being one. `_forcedStreamTried` is
+  // the one-shot guard (reset on a new source); `_forcedStreamNext` is
+  // consumed into the next load's config, exactly like the pair above.
+  private _forcedStreamTried = false;
+  private _forcedStreamNext: "hls" | "dash" | null = null;
   // Video Representation URL the user picked in the demuxer-mode DASH quality
   // menu. Carried into the next initializePlayer() as config.forceVideoRendition
   // so the re-load lands on that rendition. Reset on a genuine src change.
@@ -9963,6 +9983,7 @@ export class MoviElement extends HTMLElement {
     // forced rung.
     this._streamDemuxTried = false;
     this._streamEngineTried = false;
+    this._forcedStreamTried = false;
     this._engineTried.clear();
     this._startProbeDone = false;
     this._startPickConfirmed = false;
@@ -14048,6 +14069,7 @@ export class MoviElement extends HTMLElement {
   private resetForFreshSource(): void {
     this._streamDemuxTried = false;
     this._streamEngineTried = false;
+    this._forcedStreamTried = false;
     this._engineTried.clear();
     this._startProbeDone = false;
     this._startPickConfirmed = false;
@@ -30082,6 +30104,11 @@ export class MoviElement extends HTMLElement {
         playerConfig.forceStreamEngine = this._streamEngineNext;
         this._streamEngineNext = null;
       }
+      // Re-load knowing what the server said this URL is.
+      if (this._forcedStreamNext) {
+        playerConfig.forceStream = this._forcedStreamNext;
+        this._forcedStreamNext = null;
+      }
       // A DASH quality pick forces that Representation on the demuxer re-load.
       if (this._forcedDashRendition) {
         playerConfig.forceVideoRendition = this._forcedDashRendition;
@@ -34783,6 +34810,33 @@ export class MoviElement extends HTMLElement {
           this.load().catch(() => {});
           return;
         }
+      }
+    }
+
+    // A manifest the URL never admitted to.
+    //
+    // Which of the two a source is — a playlist or a media file — is read off
+    // the URL, and that holds only while a manifest ends in .m3u8 or .mpd. A
+    // signed endpoint like "/share/streaming?type=M3U8_FLV_264_480" serves a
+    // playlist and says so in its Content-Type, while its path says nothing;
+    // it goes to the demuxer, which is handed a text playlist where it
+    // expected a container, and the open fails.
+    //
+    // Asked only now, and only of a source that has already failed, so a URL
+    // that works never pays for the question — the answer comes from a header
+    // on a request HttpSource had already made, not from a probe of our own.
+    if (!this.player?.isStreamPlayback?.() && !this._forcedStreamTried) {
+      const served = this.player?.getSourceContentType?.() || "";
+      const kind = MANIFEST_CONTENT_TYPES[served];
+      if (kind) {
+        this._forcedStreamTried = true;
+        this._forcedStreamNext = kind;
+        Logger.info(
+          TAG,
+          `Server calls this ${served} — re-loading as ${kind.toUpperCase()} rather than as a file`,
+        );
+        this.load().catch(() => {});
+        return;
       }
     }
 

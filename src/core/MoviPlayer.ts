@@ -3277,16 +3277,24 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
     const lowerUrl = streamUrl?.toLowerCase() ?? "";
     // HLS (.m3u8), DASH (.mpd), and Smooth Streaming (.ism/.isml) all go
     // through Shaka. `.ism` also matches `.isml/manifest`.
+    // `forceStream` is the same question answered by the server rather than by
+    // the URL — a manifest whose path says nothing (see the option's note).
+    const forced = this.config.forceStream;
     const isStream =
       !!streamUrl &&
       (lowerUrl.includes(".m3u8") ||
         lowerUrl.includes(".mpd") ||
-        lowerUrl.includes(".ism"));
+        lowerUrl.includes(".ism") ||
+        !!forced);
 
     if (isStream) {
-      const isHls = lowerUrl.includes(".m3u8");
-      const isDash = lowerUrl.includes(".mpd");
-      const kind = isHls ? "HLS" : lowerUrl.includes(".ism") ? "Smooth Streaming" : "DASH";
+      const isHls = lowerUrl.includes(".m3u8") || forced === "hls";
+      const isDash = lowerUrl.includes(".mpd") || forced === "dash";
+      const kind = isHls
+        ? "HLS"
+        : lowerUrl.includes(".ism")
+          ? "Smooth Streaming"
+          : "DASH";
 
       // Forward track selections from the main TrackManager to whichever stream
       // wrapper is currently active (added once; resolves the live field).
@@ -10518,6 +10526,20 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
     return (
       (this.source as { getFatalError?: () => Error | null } | null)
         ?.getFatalError?.() ?? null
+    );
+  }
+
+  /**
+   * What the server called this source, from a request it had already made.
+   *
+   * Asked after an open has failed, to tell the one case the URL cannot: a
+   * manifest served from a path with no extension. Empty for a source that
+   * never saw an HTTP header — a file, an adapter, a stream already playing.
+   */
+  getSourceContentType(): string {
+    return (
+      (this.source as { getContentType?: () => string } | null)
+        ?.getContentType?.() ?? ""
     );
   }
 
