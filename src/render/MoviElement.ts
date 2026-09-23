@@ -1495,6 +1495,9 @@ export class MoviElement extends HTMLElement {
   /** Back arrow dropped in fullscreen (`titlemode` "back-windowed"). */
   private _titleBackWindowedOnly: boolean = false;
   private _resume: boolean = false; // Resume playback from last position (opt-in)
+  // What the saved position is filed under, when the host would rather say so
+  // itself than let the title decide (see getResumeKey).
+  private _resumeKey: string = "";
   /** Crop the black bars that are baked into the picture — see `cropbars`. */
   private _cropBars = false;
   /** Let autoplay start while the tab is hidden — see `backgroundplay`. */
@@ -2066,6 +2069,7 @@ export class MoviElement extends HTMLElement {
       "subtitlepicker",
       "chapters",
       "resume",
+      "resumekey",
       "stablevolume",
       "encrypted",
       "tokenurl",
@@ -27401,6 +27405,7 @@ export class MoviElement extends HTMLElement {
     this._videoUrl = this.getAttribute("videourl") || "";
     this._videoId = this.getAttribute("videoid") || "";
     this._resume = this.hasAttribute("resume");
+    this._resumeKey = (this.getAttribute("resumekey") || "").trim();
     this._stableVolume = this.hasAttribute("stablevolume");
     this._bindAV = MoviElement.readBindAV(this.getAttribute("bindav"));
     this._audioOnly = this.hasAttribute("audioonly");
@@ -27850,6 +27855,9 @@ export class MoviElement extends HTMLElement {
       }
       case "resume":
         this._resume = newValue !== null;
+        break;
+      case "resumekey":
+        this._resumeKey = (newValue || "").trim();
         break;
       case "vr": {
         // Tokens: (bare)/360 → 360°, 180 → VR180, sbs/3d → stereo SBS,
@@ -40335,12 +40343,23 @@ export class MoviElement extends HTMLElement {
 
   /**
    * Get a unique key for the current source (for localStorage)
+   *
+   * The title by default, because it is the one thing about a source that
+   * survives the URL changing underneath it — a signed link, a proxy, a CDN
+   * that rewrites the path on every load. Keying on the URL would lose the
+   * position each time any of those moved.
+   *
+   * But the title is the player's guess, not the host's fact. A host with a
+   * catalogue knows the id, and an id is what it wants the position filed
+   * under: two episodes that happen to share a title are not the same video,
+   * and one video whose title it later corrects is still the same video. So
+   * `resumekey` takes it over outright — and, unlike the title, it is known
+   * before the file opens, so the position is there on the first check rather
+   * than waiting for metadata.
    */
   private getResumeKey(): string {
-    // Use the final clean title — consistent regardless of URL/proxy/CDN variations.
-    if (this._title) {
-      return `movi-resume:${this._title}`;
-    }
+    if (this._resumeKey) return `movi-resume:${this._resumeKey}`;
+    if (this._title) return `movi-resume:${this._title}`;
     return "";
   }
 
@@ -41492,6 +41511,14 @@ export class MoviElement extends HTMLElement {
   }
   set resume(value: boolean) {
     this._reflectBool("resume", value);
+  }
+
+  /** What the resume position is filed under. Empty = the title decides. */
+  get resumeKey(): string {
+    return this.getAttribute("resumekey") || "";
+  }
+  set resumeKey(value: string | null) {
+    this._reflectStr("resumekey", value);
   }
 
   /** Encrypted (token-authenticated) source mode. */
@@ -42880,7 +42907,15 @@ export class MoviElement extends HTMLElement {
         if (this._title) {
           this.dispatchEvent(new CustomEvent("titlechange", { detail: { title: this._title } }));
           // Re-check resume now that title is available (resume key depends on _title)
-          if (this._resume && this.player && !this._resumeCheckedWithTitle) {
+          // Only when the title is what the key is made of. A host that named
+          // the key had its position looked up at the ordinary time, and this
+          // would be a second prompt for the same one.
+          if (
+            this._resume &&
+            this.player &&
+            !this._resumeKey &&
+            !this._resumeCheckedWithTitle
+          ) {
             this._resumeCheckedWithTitle = true;
             const savedTime = this.getResumePosition();
             if (savedTime > 2 && savedTime < this.duration - 5) {

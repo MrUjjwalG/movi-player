@@ -53,6 +53,7 @@ The `<movi-player>` custom element is a drop-in replacement for the native `<vid
 | `subtitlepicker` | `boolean` | `false` | Adds an "Add subtitle file…" row to the subtitle menu for picking a local SRT/VTT/TTML. Read in the page, never uploaded |
 | `chapters`    | `string`            | -                                  | Chapters from outside the media, as JSON `[{title, start}]` (or set the `chapters` property) |
 | `resume`      | `boolean`           | -                                  | Resume from last position                         |
+| `resumekey`   | `string`            | -                                  | Key the resume position is filed under            |
 | `stablevolume`| `boolean`           | -                                  | Loudness normalization                            |
 | `startat`     | `number`            | -                                  | Start at time (seconds)                           |
 | `playsinline` | `boolean`           | -                                  | Play inline (no iOS auto-fullscreen); on any touch device, suppress swipe/volume gestures while inline so they don't fight page scroll (fullscreen unaffected) |

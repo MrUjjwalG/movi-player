@@ -782,6 +782,7 @@ Every attribute can also be read and set as a JS property (`el.rotate = 90`). Gr
 | `startat` | `startat="30"` | Start playback at this time, in seconds |
 | `playsinline` | `playsinline` | Play inline (no auto-fullscreen on iOS); on touch devices, suppresses swipe/volume gestures while inline so they don't fight page scroll |
 | `resume` | `resume` | Save position to localStorage; show a resume dialog on reload |
+| `resumekey` | `resumeKey` | What that position is filed under (default: the title) |
 
 </details>
 

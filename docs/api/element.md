@@ -1313,7 +1313,31 @@ Saves playback position to localStorage and shows a resume dialog on reload.
 <movi-player src="video.mp4" resume></movi-player>
 ```
 
-Position is saved every 5 seconds and on pause. Cleared when video ends. Uses URL as key for streams, filename+size for local files.
+Position is saved every 5 seconds and on pause. Cleared when video ends.
+
+The position is filed under the **title** — the one thing about a source that
+survives the URL changing underneath it, which a signed link, a proxy or a CDN
+that rewrites the path all do. A source with no title resolved yet has nowhere
+to file it, so nothing is saved.
+
+---
+
+#### `resumekey`
+
+Files the resume position under a name you choose instead of the title.
+
+```html
+<movi-player src="/signed/abc123.mp4" resume resumekey="episode-42"></movi-player>
+```
+
+The title is the player's guess; a host with a catalogue has the fact. Two
+episodes that share a title are not the same video, a title the host later
+corrects is still the same video, and a source whose title never resolves gets
+no resume at all without this. The key is also known before the file opens, so
+the position is offered on the first check rather than after metadata arrives.
+
+Also a property: `el.resumeKey = "episode-42"`. Empty or absent means the title
+decides, as before. Needs `resume` — on its own it does nothing.
 
 **Not needed for a discarded tab.** When the browser takes a background tab's
 memory back (Chrome's Memory Saver) and the viewer returns, the page reloads —

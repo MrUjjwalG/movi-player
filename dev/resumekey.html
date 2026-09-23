@@ -1,0 +1,29 @@
+<!doctype html>
+<meta charset="utf-8" />
+<title>resumekey</title>
+<body style="margin:0;background:#111;color:#ddd;font:13px system-ui">
+<div id="slot"></div>
+<script type="module">
+  import "../src/element.ts";
+  window.__mount = (attrs) => {
+    const slot = document.getElementById("slot");
+    slot.innerHTML = "";
+    const p = document.createElement("movi-player");
+    for (const [k, v] of Object.entries(attrs)) p.setAttribute(k, v);
+    p.style.width = "480px";
+    p.style.height = "270px";
+    slot.appendChild(p);
+    window.__p = p;
+    return true;
+  };
+  window.__keys = () =>
+    Object.keys(localStorage).filter((k) => k.startsWith("movi-resume:"))
+      .map((k) => k + " = " + localStorage.getItem(k));
+  window.__dialog = () => {
+    const d = window.__p?.shadowRoot?.querySelector(".movi-resume-dialog");
+    if (!d) return "no dialog element";
+    return d.style.display === "none" ? "hidden" : ("SHOWN " + (d.querySelector(".movi-resume-time")?.textContent || ""));
+  };
+  window.__title = () => window.__p?._title || "(none)";
+</script>
+</body>
