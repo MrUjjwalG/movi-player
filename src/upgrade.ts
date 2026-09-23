@@ -446,12 +446,10 @@ function hideHostChrome(): void {
   // to rebuild around is a class that will not be there afterwards.
   const vjs = ".video-js:has(> movi-player)";
   const plyr = ".plyr:has(movi-player)";
-  // JW nests the media: <div.jwplayer> holds <div.jw-media> and the <video>
-  // is inside THAT, with every piece of chrome a sibling of .jw-media. So the
-  // skin is matched by a descendant rather than a direct child — the pattern
-  // the other two use would never have matched here — and what is hidden is
-  // its direct children, which cannot catch our element because ours is a
-  // level deeper.
+  // JW nests the media, and deeper than it looks: .jwplayer holds a
+  // .jw-wrapper, that holds .jw-media, and the <video> is inside THAT, with
+  // every piece of chrome a sibling of .jw-media. So neither the skin nor its
+  // chrome is reachable by the direct-child pattern the other two use.
   const jw = ".jwplayer:has(movi-player)";
   const style = document.createElement("style");
   style.id = HOST_CHROME_STYLE_ID;
@@ -470,14 +468,20 @@ function hideHostChrome(): void {
       // Everything JW paints over its media: the poster, the whole controls
       // layer (big play button and bar alike), the title, the captions it
       // renders itself, the overlay stack, the logo and its error card.
-      `${jw} > .jw-preview`,
-      `${jw} > .jw-controls`,
-      `${jw} > .jw-controls-backdrop`,
-      `${jw} > .jw-title`,
-      `${jw} > .jw-captions`,
-      `${jw} > .jw-overlays`,
-      `${jw} > .jw-logo`,
-      `${jw} > .jw-error-msg`,
+      // DESCENDANTS, not children. JW 8 puts everything inside a .jw-wrapper
+      // — .jwplayer > .jw-wrapper > { .jw-media, .jw-preview, .jw-controls,
+      // … } — so a direct-child rule written against .jwplayer matches none of
+      // it. Measured on a page with the real wrapper: every one of these was
+      // still on screen. Safe as a descendant because our element is a
+      // <movi-player> and every class below is JW's own.
+      `${jw} .jw-preview`,
+      `${jw} .jw-controls`,
+      `${jw} .jw-controls-backdrop`,
+      `${jw} .jw-title`,
+      `${jw} .jw-captions`,
+      `${jw} .jw-overlays`,
+      `${jw} .jw-logo`,
+      `${jw} .jw-error-msg`,
     ].join(",\n") + " { display: none !important; }",
     // The skin hides the pointer while it believes the viewer is idle. Ours
     // decides that for itself now, and its own bar is what the pointer is
