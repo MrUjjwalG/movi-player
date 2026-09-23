@@ -523,6 +523,34 @@ function hideHostChrome(): void {
  */
 const SKIN_UNSAFE_PROPS = new Set(["videoWidth", "videoHeight"]);
 
+/**
+ * Is this src write asking for a different film, or re-stating the one that is
+ * already playing?
+ *
+ * A skin re-asserts its own source as a matter of course — on a state change,
+ * when an ad break ends, when it re-runs its setup. The player's own setter
+ * disposes and re-initialises on every assignment, because a host writing to
+ * it means a new source; forwarded from a skin the same write means nothing
+ * of the kind. Measured on an upgraded element: three re-assertions of the
+ * identical URL, three restarts, the position back to zero each time.
+ *
+ * Compared resolved, because a skin may write the relative form of the URL it
+ * was given absolutely.
+ */
+function sameSource(current: unknown, next: unknown): boolean {
+  if (current === next) return true;
+  if (typeof current !== "string" || typeof next !== "string") return false;
+  if (!current || !next) return false;
+  try {
+    return (
+      new URL(current, document.baseURI).href ===
+      new URL(next, document.baseURI).href
+    );
+  } catch {
+    return false;
+  }
+}
+
 function forwardTo(
   video: HTMLVideoElement,
   player: HTMLElement,
@@ -536,6 +564,9 @@ function forwardTo(
         configurable: true,
         get: () => target[name],
         set: (value: unknown) => {
+          // Re-stating the current source is not a request to start over.
+          // Only src: every other forwarded property is cheap to set again.
+          if (name === "src" && sameSource(target[name], value)) return;
           target[name] = value;
         },
       });
