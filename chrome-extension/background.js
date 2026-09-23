@@ -23,6 +23,10 @@ ensureContextMenu();
 // to hold — paste a link, the right-click tip, the two settings — lives on
 // the player page, which has room for it and can show a real URL field
 // instead of a clipboard read that fails silently when permission is denied.
+// The icon opens popup.html now (see the action block in manifest.json), so
+// onClicked never fires — Chrome only sends it to an action with no popup.
+// Kept as the fallback for a browser that ignores default_popup, where the old
+// behaviour is better than nothing happening at all.
 chrome.action.onClicked.addListener(() => {
   chrome.tabs.create({ url: chrome.runtime.getURL("player.html") });
 });
@@ -103,6 +107,16 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
 const corsRuleIds = new Map(); // tabId → [ruleId]
 let nextCorsRuleId = 9000;
 
+/**
+ * Every media URL this tab has asked to have a header added to.
+ *
+ * Kept because the rules are rebuilt wholesale on each call — the update
+ * removes the tab's previous rule ids — so two callers would cancel each
+ * other. There are two: the takeover path, and a page that embeds
+ * <movi-player> itself. A page can be both at once.
+ */
+const corsWanted = new Map();
+
 async function allowMediaCors(urls, tabId) {
   if (!Array.isArray(urls) || urls.length === 0 || tabId == null) {
     return { ok: false };
@@ -116,12 +130,18 @@ async function allowMediaCors(urls, tabId) {
   // host handing off to a CDN — is answered by the address it lands on, and
   // that is the response the header has to be added to. The rule matches a
   // request by its own URL, so the redirect needs one of its own.
-  const wanted = new Set();
+  const wanted = corsWanted.get(tabId) ?? new Set();
   for (const url of urls.slice(0, 12)) {
+    if (wanted.has(url)) continue;          // already resolved for this tab
     wanted.add(url);
     const landed = await finalUrl(url);
     if (landed) wanted.add(landed);
   }
+  // A cap, because this set only ever grows within a tab and each entry is a
+  // session rule. A page with more media than this is a page the takeover
+  // heuristics would not have touched anyway.
+  while (wanted.size > 48) wanted.delete(wanted.values().next().value);
+  corsWanted.set(tabId, wanted);
 
   const addRules = [];
   for (const url of wanted) {
@@ -184,6 +204,10 @@ chrome.tabs.onUpdated.addListener((tabId, info) => {
 });
 
 async function dropCorsRules(tabId) {
+  // The remembered URLs go with the rules. A tab that navigates is a
+  // different page, and carrying the last one's media into it would keep
+  // writing headers for files nothing is going to ask for.
+  corsWanted.delete(tabId);
   const ids = corsRuleIds.get(tabId);
   if (!ids || ids.length === 0) return;
   corsRuleIds.delete(tabId);

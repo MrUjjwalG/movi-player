@@ -394,13 +394,49 @@ function watchForTakeover() {
   setTimeout(() => observer.disconnect(), 60000);
 }
 
+/**
+ * Sites the viewer has turned takeover off for, from the toolbar popup.
+ *
+ * A site-level exemption, not a page one: the decision is about a place, and
+ * every page of it. Held as a list of hostnames so the answer is one read
+ * rather than a key per site.
+ *
+ * Checked once, at the top. Nothing is watched, no player is injected and no
+ * CORS rule is asked for on an exempt site — which is the point: "off here"
+ * has to mean the extension does nothing here, not that it does everything
+ * quietly.
+ */
+const EXEMPT_KEY = "takeoverExemptHosts";
+
+function exemptHere(list) {
+  if (!Array.isArray(list) || list.length === 0) return false;
+  try {
+    const { protocol, hostname } = location;
+    if (protocol !== "http:" && protocol !== "https:") return false;
+    return list.includes(hostname);
+  } catch {
+    return false;
+  }
+}
+
 try {
-  chrome.storage?.local.get(TAKEOVER_KEY, (data) => {
-    if (data && data[TAKEOVER_KEY]) watchForTakeover();
+  chrome.storage?.local.get([TAKEOVER_KEY, EXEMPT_KEY], (data) => {
+    if (!data || !data[TAKEOVER_KEY]) return;
+    if (exemptHere(data[EXEMPT_KEY])) return;
+    watchForTakeover();
   });
   // Switched on while this page is open: from here, not after a reload.
+  // Turning it off again cannot un-take-over a page that has already been
+  // upgraded — the page's own elements are gone — so the popup says to
+  // reload rather than pretending otherwise.
   chrome.storage?.onChanged.addListener((changes, area) => {
-    if (area === "local" && changes[TAKEOVER_KEY]?.newValue) watchForTakeover();
+    if (area !== "local") return;
+    if (!changes[TAKEOVER_KEY]?.newValue && !changes[EXEMPT_KEY]) return;
+    chrome.storage.local.get([TAKEOVER_KEY, EXEMPT_KEY], (data) => {
+      if (!data || !data[TAKEOVER_KEY]) return;
+      if (exemptHere(data[EXEMPT_KEY])) return;
+      watchForTakeover();
+    });
   });
 } catch {
   /* no storage access in this context — the setting simply stays off */

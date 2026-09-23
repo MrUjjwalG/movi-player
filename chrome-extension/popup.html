@@ -1,0 +1,176 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <title>MoviPlayer</title>
+    <style>
+      @font-face {
+        font-family: "Manrope";
+        src: url("fonts/manrope-latin.woff2") format("woff2");
+        font-weight: 400 800;
+        font-display: swap;
+      }
+      :root {
+        --bg: #0a0f1e;
+        --bg-surface: #141d31;
+        --border-subtle: rgba(255, 255, 255, 0.08);
+        --text-primary: #eef2ff;
+        --text-secondary: #aab4cc;
+        --text-muted: #7c88a3;
+        --accent: #7c75ff;
+        --accent-grad: linear-gradient(110deg, #674cff, #3c6df5);
+        --off: #6b7488;
+      }
+      * { box-sizing: border-box; }
+      html, body { margin: 0; }
+      body {
+        width: 296px;
+        background: var(--bg);
+        color: var(--text-primary);
+        font: 400 13px/1.45 "Manrope", system-ui, -apple-system, "Segoe UI", sans-serif;
+        -webkit-font-smoothing: antialiased;
+      }
+
+      .head {
+        display: flex;
+        align-items: center;
+        gap: 9px;
+        padding: 13px 14px 11px;
+        border-bottom: 1px solid var(--border-subtle);
+      }
+      .head img { width: 20px; height: 20px; display: block; }
+      .head .name { font-weight: 700; letter-spacing: -0.01em; }
+
+      .site {
+        padding: 12px 14px 4px;
+        font-size: 11px;
+        letter-spacing: 0.07em;
+        text-transform: uppercase;
+        color: var(--text-muted);
+        font-weight: 600;
+      }
+      .host {
+        padding: 0 14px 12px;
+        font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+        font-size: 13px;
+        color: var(--text-secondary);
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+      }
+
+      /* The power row — the whole strip is the control, like an ad blocker's.
+         A 44px target rather than a 20px switch: this is the thing people
+         come here to press. */
+      .power {
+        display: flex;
+        align-items: center;
+        gap: 11px;
+        width: 100%;
+        padding: 11px 14px;
+        border: 0;
+        border-top: 1px solid var(--border-subtle);
+        border-bottom: 1px solid var(--border-subtle);
+        background: transparent;
+        color: inherit;
+        font: inherit;
+        text-align: left;
+        cursor: pointer;
+      }
+      .power:hover { background: rgba(255, 255, 255, 0.035); }
+      .power:disabled { cursor: default; opacity: 0.55; }
+      .power:disabled:hover { background: transparent; }
+      .dot {
+        width: 32px;
+        height: 32px;
+        flex: 0 0 auto;
+        border-radius: 50%;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        background: rgba(255, 255, 255, 0.06);
+        color: var(--off);
+        transition: background 0.15s, color 0.15s;
+      }
+      .power.on .dot { background: var(--accent-grad); color: #fff; }
+      .dot svg { width: 17px; height: 17px; display: block; }
+      .power .label { flex: 1 1 auto; min-width: 0; }
+      .power .label b { display: block; font-weight: 700; letter-spacing: -0.01em; }
+      .power .label span {
+        display: block;
+        color: var(--text-muted);
+        font-size: 12px;
+        margin-top: 1px;
+      }
+
+      .actions { padding: 12px 14px 14px; display: grid; gap: 8px; }
+      .btn {
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        gap: 8px;
+        width: 100%;
+        padding: 10px 12px;
+        border-radius: 9px;
+        border: 1px solid var(--border-subtle);
+        background: var(--bg-surface);
+        color: var(--text-primary);
+        font: 600 13px/1 inherit;
+        cursor: pointer;
+      }
+      .btn:hover { border-color: rgba(124, 117, 255, 0.55); }
+      .btn.primary {
+        background: var(--accent-grad);
+        border-color: transparent;
+        color: #fff;
+      }
+      .btn svg { width: 15px; height: 15px; display: block; }
+
+      .note {
+        padding: 0 14px 13px;
+        color: var(--text-muted);
+        font-size: 11.5px;
+        line-height: 1.4;
+      }
+      .note[hidden] { display: none; }
+      .note a { color: var(--accent); text-decoration: none; }
+      .note a:hover { text-decoration: underline; }
+    </style>
+  </head>
+  <body>
+    <div class="head">
+      <img src="icons/icon48.png" alt="" />
+      <span class="name">MoviPlayer</span>
+    </div>
+
+    <div class="site">This site</div>
+    <div class="host" id="host">—</div>
+
+    <button class="power" id="power" type="button" aria-pressed="false">
+      <span class="dot" id="dot">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"
+             stroke-linecap="round" aria-hidden="true">
+          <path d="M12 3v9" />
+          <path d="M18.4 6.6a9 9 0 1 1-12.8 0" />
+        </svg>
+      </span>
+      <span class="label">
+        <b id="power-title">Take over videos here</b>
+        <span id="power-sub">Loading…</span>
+      </span>
+    </button>
+
+    <div class="actions">
+      <button class="btn primary" id="open" type="button">
+        <svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
+          <path d="M8 5v14l11-7z" />
+        </svg>
+        Open MoviPlayer
+      </button>
+    </div>
+
+    <p class="note" id="note" hidden></p>
+
+    <script src="popup.js"></script>
+  </body>
+</html>

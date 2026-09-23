@@ -55,6 +55,15 @@
       ],
       "run_at": "document_start",
       "world": "MAIN"
+    },
+    {
+      "matches": [
+        "<all_urls>"
+      ],
+      "js": [
+        "siteplayer.js"
+      ],
+      "run_at": "document_start"
     }
   ],
   "web_accessible_resources": [
@@ -115,6 +124,7 @@
     }
   ],
   "action": {
-    "default_title": "Open MoviPlayer"
+    "default_title": "MoviPlayer",
+    "default_popup": "popup.html"
   }
 }
