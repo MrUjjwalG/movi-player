@@ -363,11 +363,40 @@ function injectTakeover() {
   });
 }
 
-function watchForTakeover() {
+/**
+ * Tell the background this page is one the popup has something to say about.
+ *
+ * Sent whether or not the takeover actually runs. On an exempt site nothing
+ * is injected, but the popup still has to be reachable — it holds the switch
+ * that turned the site off, and hiding it there would leave no way back.
+ */
+let toldBackground = false;
+function reportTakeoverRelevant() {
+  if (toldBackground) return;
+  toldBackground = true;
+  try {
+    chrome.runtime.sendMessage({ action: "takeoverRelevant" }, () => {
+      void chrome.runtime.lastError;
+    });
+  } catch {
+    /* the extension context went away mid-navigation */
+  }
+}
+
+/**
+ * Watch for a video worth acting on, and act — or, on an exempt site, only
+ * report it.
+ *
+ * `inject` is what separates the two. Everything about deciding WHICH videos
+ * count stays in one place either way, so an exempt site and a live one
+ * answer the same question and differ only in what happens next.
+ */
+function watchForTakeover(inject = true) {
   const look = () => {
     if (takeoverInjected) return true;
     if (Array.from(document.querySelectorAll("video")).some(videoWorthTakingOver)) {
-      injectTakeover();
+      reportTakeoverRelevant();
+      if (inject) injectTakeover();
       return true;
     }
     return false;
@@ -422,8 +451,7 @@ function exemptHere(list) {
 try {
   chrome.storage?.local.get([TAKEOVER_KEY, EXEMPT_KEY], (data) => {
     if (!data || !data[TAKEOVER_KEY]) return;
-    if (exemptHere(data[EXEMPT_KEY])) return;
-    watchForTakeover();
+    watchForTakeover(!exemptHere(data[EXEMPT_KEY]));
   });
   // Switched on while this page is open: from here, not after a reload.
   // Turning it off again cannot un-take-over a page that has already been
@@ -434,8 +462,7 @@ try {
     if (!changes[TAKEOVER_KEY]?.newValue && !changes[EXEMPT_KEY]) return;
     chrome.storage.local.get([TAKEOVER_KEY, EXEMPT_KEY], (data) => {
       if (!data || !data[TAKEOVER_KEY]) return;
-      if (exemptHere(data[EXEMPT_KEY])) return;
-      watchForTakeover();
+      watchForTakeover(!exemptHere(data[EXEMPT_KEY]));
     });
   });
 } catch {

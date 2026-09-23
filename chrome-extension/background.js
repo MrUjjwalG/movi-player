@@ -23,13 +23,33 @@ ensureContextMenu();
 // to hold — paste a link, the right-click tip, the two settings — lives on
 // the player page, which has room for it and can show a real URL field
 // instead of a clipboard read that fails silently when permission is denied.
-// The icon opens popup.html now (see the action block in manifest.json), so
-// onClicked never fires — Chrome only sends it to an action with no popup.
-// Kept as the fallback for a browser that ignores default_popup, where the old
-// behaviour is better than nothing happening at all.
+/**
+ * The icon does one of two things, and which one depends on the page.
+ *
+ * On a page the extension has nothing to say about — no video it would take
+ * over, or takeover switched off altogether — it opens the player, which is
+ * what it has always done and what anyone pressing it there wants.
+ *
+ * On a page where takeover is in play it opens the popup instead, because
+ * that is where "not on this site" lives.
+ *
+ * The switch is per tab: an action with a popup never fires onClicked, so the
+ * popup is attached only to the tabs that need it (see takeoverRelevant
+ * below) and this listener answers everywhere else. It cannot be done with
+ * default_popup, which is one setting for every page at once.
+ */
 chrome.action.onClicked.addListener(() => {
   chrome.tabs.create({ url: chrome.runtime.getURL("player.html") });
 });
+
+function setPopupFor(tabId, on) {
+  if (tabId == null) return;
+  try {
+    chrome.action.setPopup({ tabId, popup: on ? "popup.html" : "" });
+  } catch {
+    /* the tab closed while we were deciding */
+  }
+}
 
 // Keep the probeBlankLinks storage flag in sync with the actual permission
 // state. The player page triggers chrome.permissions.request(); listening
@@ -76,6 +96,15 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   if (message.action === "probeVideo") {
     probeVideoUrl(message.url).then(sendResponse).catch(() => sendResponse({ isVideo: false }));
     return true; // keep channel open for async response
+  }
+
+  // "There is a video here that takeover is about to act on — or would be,
+  // if this site were not exempt." The exempt case matters as much as the
+  // other: with the popup hidden there, the switch that turned the site off
+  // would be the one thing you could no longer reach to turn back on.
+  if (message.action === "takeoverRelevant") {
+    setPopupFor(sender.tab?.id, true);
+    return false;
   }
 
   if (message.action === "allowMediaCors") {
@@ -200,7 +229,12 @@ async function finalUrl(url) {
 // A rule belongs to the page that asked for it.
 chrome.tabs.onRemoved.addListener((tabId) => void dropCorsRules(tabId));
 chrome.tabs.onUpdated.addListener((tabId, info) => {
-  if (info.status === "loading") void dropCorsRules(tabId);
+  if (info.status === "loading") {
+    void dropCorsRules(tabId);
+    // A new page decides for itself. Left set, the popup would follow the tab
+    // to a site with no video on it.
+    setPopupFor(tabId, false);
+  }
 });
 
 async function dropCorsRules(tabId) {

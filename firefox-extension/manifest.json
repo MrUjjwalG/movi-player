@@ -90,7 +90,6 @@
     }
   ],
   "action": {
-    "default_title": "MoviPlayer",
-    "default_popup": "popup.html"
+    "default_title": "MoviPlayer"
   }
 }
