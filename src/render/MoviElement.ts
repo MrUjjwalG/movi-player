@@ -16439,6 +16439,23 @@ export class MoviElement extends HTMLElement {
    *  is reported honestly — see _iconHeldForSeek. */
   private static readonly SEEK_ICON_HOLD_MS = 5000;
   private _centerFlashAnim: Animation | null = null;
+  /**
+   * Does the flash in flight own the centre GLYPH?
+   *
+   * Only the pop does. That shape is a receipt over the picture — it shows the
+   * ACTION taken, the pause bars when you paused, and it has to keep them for
+   * its whole run or the 250ms tick would reconcile them to the resulting state
+   * halfway through.
+   *
+   * The press does not. There the button is a persistent CONTROL, and a control
+   * says what pressing it will do NEXT — which is what the bar's icon does, at
+   * once. Pinning the action glyph there made the centre button lag the bar by
+   * the whole animation and then snap: measured on a phone, the bar read "play"
+   * 24ms after the tap while the centre button was still showing pause bars
+   * until 664ms, when the press ended. So the press leaves the glyph to
+   * updatePlayPauseIcon and animates the button around it.
+   */
+  private _centerFlashOwnsGlyph = false;
   private _centerFlashTimer: number | null = null;
   /** When the flash in flight starts fading, in ms from its own start. Stored
    *  per flash because the two shapes hold for different lengths. */
@@ -16472,6 +16489,7 @@ export class MoviElement extends HTMLElement {
     this._centerFlashAnim?.cancel();
     this._centerFlashAnim = null;
     this._centerFlashFadeAtMs = 0;
+    this._centerFlashOwnsGlyph = false;
     if (this._centerFlashTimer) {
       clearTimeout(this._centerFlashTimer);
       this._centerFlashTimer = null;
@@ -16571,8 +16589,12 @@ export class MoviElement extends HTMLElement {
     const pauseIcon = btn.querySelector(
       ".movi-center-icon-pause",
     ) as HTMLElement | null;
-    playIcon?.style.setProperty("display", kind === "play" ? "block" : "none");
-    pauseIcon?.style.setProperty("display", kind === "play" ? "none" : "block");
+    // The action glyph belongs to the pop alone — see _centerFlashOwnsGlyph.
+    this._centerFlashOwnsGlyph = !persistent;
+    if (!persistent) {
+      playIcon?.style.setProperty("display", kind === "play" ? "block" : "none");
+      pauseIcon?.style.setProperty("display", kind === "play" ? "none" : "block");
+    }
 
     // A repeated toggle restarts cleanly — cancel() drops the old one outright
     // rather than leaving two animations compositing against each other.
@@ -16729,6 +16751,7 @@ export class MoviElement extends HTMLElement {
       if (this._centerFlashAnim === anim) {
         this._centerFlashAnim = null;
         this._centerFlashFadeAtMs = 0;
+        this._centerFlashOwnsGlyph = false;
       }
       // Retire this flash's settle timer. It already checks that the animation
       // it fires for is still the current one, so it cannot cancel a later
@@ -32835,10 +32858,11 @@ export class MoviElement extends HTMLElement {
       // is the small bar icon. So on touch it rides with the chrome, the way it
       // does in every phone player.
       if (centerPlayPauseBtn) {
-        // A flash owns the glyph while it runs — it shows the ACTION taken
-        // (the pause bars when you paused), which is the opposite of what the
-        // resulting state would draw here.
-        if (!this._centerFlashAnim) {
+        // A POP owns the glyph while it runs — it shows the ACTION taken (the
+        // pause bars when you paused), which is the opposite of what the
+        // resulting state would draw here. A press does not; see
+        // _centerFlashOwnsGlyph for why this button must not wait for it.
+        if (!this._centerFlashOwnsGlyph) {
           centerPlayIcon?.style.setProperty("display", "none");
           centerPauseIcon?.style.setProperty("display", "block");
         }
@@ -32890,14 +32914,14 @@ export class MoviElement extends HTMLElement {
           // glyph from the receipt. Guarded on the flash for the same reason
           // as below: while one runs it owns the glyph, because it shows the
           // action taken rather than the resulting state.
-          if (!this._centerFlashAnim) {
+          if (!this._centerFlashOwnsGlyph) {
             centerPlayIcon?.style.setProperty("display", "block");
             centerPauseIcon?.style.setProperty("display", "none");
           }
         }
       } else {
         if (centerPlayPauseBtn) {
-          if (!this._centerFlashAnim) {
+          if (!this._centerFlashOwnsGlyph) {
             centerPlayIcon?.style.setProperty("display", "block");
             centerPauseIcon?.style.setProperty("display", "none");
           }
