@@ -18225,18 +18225,27 @@ export class MoviElement extends HTMLElement {
         box-shadow: 0 8px 32px color-mix(in srgb, var(--movi-accent, var(--movi-primary)) 20%, transparent), inset 0 0 0 1px color-mix(in srgb, var(--movi-accent, var(--movi-primary)) 10%, transparent) !important;
       }
 
-      :host([theme="light"]) .movi-center-play-pause:hover {
-        background: color-mix(in srgb, var(--movi-accent, var(--movi-primary)) 25%, transparent) !important;
-        border-color: color-mix(in srgb, var(--movi-accent, var(--movi-primary)) 50%, transparent) !important;
-        box-shadow: 0 8px 40px color-mix(in srgb, var(--movi-accent, var(--movi-primary)) 30%, transparent), inset 0 0 0 1px color-mix(in srgb, var(--movi-accent, var(--movi-primary)) 15%, transparent) !important;
-      }
-
       :host([theme="light"]) .movi-center-play-pause svg {
         filter: drop-shadow(0 0 4px color-mix(in srgb, var(--movi-accent, var(--movi-primary)) 30%, transparent)) !important;
       }
 
-      :host([theme="light"]) .movi-center-play-pause:hover svg {
-        filter: drop-shadow(0 0 8px color-mix(in srgb, var(--movi-accent, var(--movi-primary)) 50%, transparent)) !important;
+      /* Both hovers behind a real hovering pointer, the way the dark theme's
+         are. A tap leaves :hover stuck on the element until the next tap lands
+         elsewhere, and these two are !important AND more specific than the
+         touch block's reset — so they won inside it. Measured on a phone: the
+         disc went from a transparent fill to a 25% accent one on the tap and
+         stayed there, which is the "hover pe zyada dark" report. The reset is
+         left where it is; this simply stops there being anything to reset. */
+      @media (hover: hover) {
+        :host([theme="light"]) .movi-center-play-pause:hover {
+          background: color-mix(in srgb, var(--movi-accent, var(--movi-primary)) 25%, transparent) !important;
+          border-color: color-mix(in srgb, var(--movi-accent, var(--movi-primary)) 50%, transparent) !important;
+          box-shadow: 0 8px 40px color-mix(in srgb, var(--movi-accent, var(--movi-primary)) 30%, transparent), inset 0 0 0 1px color-mix(in srgb, var(--movi-accent, var(--movi-primary)) 15%, transparent) !important;
+        }
+
+        :host([theme="light"]) .movi-center-play-pause:hover svg {
+          filter: drop-shadow(0 0 8px color-mix(in srgb, var(--movi-accent, var(--movi-primary)) 50%, transparent)) !important;
+        }
       }
 
       /* Light Theme Context Menu */
@@ -23221,7 +23230,12 @@ export class MoviElement extends HTMLElement {
         .movi-center-play-pause:focus,
         .movi-center-play-pause:active {
            background: transparent !important;
-           border-color: color-mix(in srgb, var(--movi-accent, var(--movi-primary)) 40%, transparent) !important;
+           /* No border-color here. Stating one made this block the thing that
+              changed the button: on the dark theme the disc rests on a border
+              this rule does not name, so a tap moved it OFF the resting colour
+              rather than holding it there. Everything it used to undo is now
+              gated — the hovers behind (hover: hover), the ring behind
+              :focus-visible — so the resting rule can simply stand. */
            /* Measured on a phone: the button rests here with no shadow at
               all — this block flattens it with the rest of the touch
               chrome. So a press must not hand one back, or the halo it
@@ -23246,11 +23260,15 @@ export class MoviElement extends HTMLElement {
         .movi-center-play-pause:focus svg {
            color: var(--movi-controls-color) !important;
            fill: var(--movi-controls-color) !important;
-           /* Outline restated — see the base hover rule. */
+           /* The RESTING outline, not the hover one. Both states stick here
+              after a tap, so an accent glow handed back on :hover is a glow the
+              glyph then wears for the rest of the session — the same stuck
+              hover the block above it exists to undo, arriving by way of the
+              filter instead of the background. */
            filter:
              drop-shadow(0 0 1px rgba(0, 0, 0, 0.5))
              drop-shadow(0 1px 1px rgba(0, 0, 0, 0.35))
-             drop-shadow(0 0 8px color-mix(in srgb, var(--movi-accent, var(--movi-primary)) 60%, transparent)) !important;
+             drop-shadow(0 2px 4px rgba(0, 0, 0, 0.3)) !important;
         }
 
         .movi-btn:hover svg,
@@ -23580,8 +23598,16 @@ export class MoviElement extends HTMLElement {
         transform: translateX(4.58%) scale(1.15);
       }
 
+      /* :focus-visible, not :focus. A tap focuses this button and the focus
+         stays until something else takes it, so a plain :focus ring is a
+         pointer-less decoration the viewer then wears for the rest of the
+         session. :focus-visible is the same ring for the people it is actually
+         for — keyboard — and nothing at all for a tap or a click. */
       .movi-center-play-pause:focus {
         outline: none !important;
+      }
+
+      .movi-center-play-pause:focus-visible {
         border-color: color-mix(in srgb, var(--movi-accent, var(--movi-primary)) 50%, transparent);
         box-shadow: 0 0 0 3px color-mix(in srgb, var(--movi-accent, var(--movi-primary)) 30%, transparent), 0 8px 32px rgba(0, 0, 0, 0.4);
       }
