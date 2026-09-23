@@ -64,6 +64,27 @@ export interface UpgradeOptions {
    */
   filter?: (video: HTMLVideoElement) => boolean;
   /**
+   * Is there media at the end of this element's links?
+   *
+   * An upgraded player reads the bytes itself, so a link that leads to
+   * something else — a dead file, an expired signed URL, a paywall answering
+   * with HTML — becomes a player with nothing to play, where the native
+   * element would at least have shown the page's own error. From the DOM all
+   * of those look like a perfectly good `<video src>`, so nothing here can
+   * tell them apart.
+   *
+   * Whoever CAN is the caller. A browser extension has host permission and
+   * can ask the server what is there; a page cannot, which is the same CORS
+   * wall that makes the takeover necessary in the first place. So the
+   * question is asked rather than answered: called with every URL this
+   * element declares, absolute and in the order the page wrote them, return
+   * false to leave the element alone.
+   *
+   * Not called at all when it is not supplied, which is the honest default —
+   * an unanswerable question should not stop anything.
+   */
+  sourceCheck?: (urls: string[], video: HTMLVideoElement) => boolean;
+  /**
    * Which sources may be taken over.
    *
    * "static" — the default — takes over a `<video>` that is playing a FILE at
@@ -164,6 +185,36 @@ export function hasStaticSource(video: HTMLVideoElement): boolean {
     /^(\/|\.\.?\/)/.test(source);
 }
 
+/**
+ * Every URL this element points at, absolute, in the order the page wrote
+ * them.
+ *
+ * All of them, not only the one the browser settled on: a `<video>` with an
+ * mp4 and an ogg beside it is the oldest shape on the web, and which one
+ * `currentSrc` names depends on what this browser can play — which is not the
+ * question being asked.
+ */
+function declaredSources(video: HTMLVideoElement): string[] {
+  const out: string[] = [];
+  const raw = [
+    video.currentSrc,
+    video.getAttribute("src"),
+    ...Array.from(video.querySelectorAll("source")).map((s) =>
+      s.getAttribute("src"),
+    ),
+  ];
+  for (const one of raw) {
+    if (!one) continue;
+    try {
+      const href = new URL(one, document.baseURI).href;
+      if (!out.includes(href)) out.push(href);
+    } catch {
+      /* a source the page wrote that is not a URL */
+    }
+  }
+  return out;
+}
+
 function upgradeOne(
   video: HTMLVideoElement,
   options: UpgradeOptions,
@@ -172,6 +223,9 @@ function upgradeOne(
   if (options.skip && video.matches(options.skip)) return null;
   if (options.sources !== "any" && !hasStaticSource(video)) return null;
   if (options.filter && !options.filter(video)) return null;
+  if (options.sourceCheck && !options.sourceCheck(declaredSources(video), video)) {
+    return null;
+  }
   if (!video.parentNode) return null;
 
   const player = document.createElement("movi-player");

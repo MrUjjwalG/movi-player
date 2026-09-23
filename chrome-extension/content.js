@@ -234,6 +234,7 @@ if (document.body instanceof HTMLElement) {
 //     that is not a file at a URL alone (MSE, MediaStream, DRM, no source
 //     yet), which is what keeps YouTube and Netflix working.
 const TAKEOVER_KEY = "takeOverPageVideos";
+const UPGRADE_SCRIPT_ID = "movi-upgrade-script";
 let takeoverInjected = false;
 
 /**
@@ -380,6 +381,9 @@ function injectTakeover() {
   takeoverInjected = true;
   // The header rule has to exist before the first read, not after it.
   askForMediaCors().then((verdicts) => {
+    // A whole page of dead links is not worth loading a decoding engine for.
+    // The finer decision — which of several elements to leave alone — is the
+    // upgrade module's, from the same verdicts passed below.
     if (!anySourcePlayable(verdicts)) {
       console.info(
         "[movi] Take over page videos: this page's video links do not lead to media, so the page has been left as it is.",
@@ -389,6 +393,16 @@ function injectTakeover() {
     const script = document.createElement("script");
     script.type = "module";
     script.src = chrome.runtime.getURL("upgrade.js");
+    script.id = UPGRADE_SCRIPT_ID;
+    // Through the DOM, because this runs in the isolated world and the module
+    // runs in the page's: the two share the document and nothing else, so an
+    // attribute is the channel. Read at the top of the module, while the
+    // element is still there — it is taken out on load, which is after.
+    try {
+      script.dataset.sources = JSON.stringify(verdicts);
+    } catch {
+      /* nothing worth passing along */
+    }
     script.addEventListener("load", () => script.remove());
     (document.head || document.documentElement).appendChild(script);
   });

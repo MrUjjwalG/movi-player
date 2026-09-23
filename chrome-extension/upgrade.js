@@ -65,7 +65,40 @@ function looksLikeThePagesPlayer(video) {
   return box.width >= 400 && box.height >= 225;
 }
 
+/**
+ * What the background found at the end of each link, handed over by
+ * content.js on this script's own tag — the isolated world and this one share
+ * the document and nothing else.
+ *
+ * Read now rather than later: the tag is taken out of the DOM when this
+ * module finishes loading.
+ */
+const SOURCE_VERDICTS = (() => {
+  try {
+    const tag = document.getElementById("movi-upgrade-script");
+    return JSON.parse(tag?.dataset.sources || "{}");
+  } catch {
+    return {};
+  }
+})();
+
+/**
+ * Leave an element alone only when every link it declares is known NOT to be
+ * media.
+ *
+ * One bad source among several is not a refusal: an mp4 with an ogg beside it
+ * is the oldest shape on the web, and the first of them 404ing is what the
+ * second is there for. Nor is silence — a URL nobody could probe, or a server
+ * that said nothing useful, leaves the element exactly as it would have been.
+ */
+function sourceCheck(urls) {
+  const known = urls.map((u) => SOURCE_VERDICTS[u]).filter(Boolean);
+  if (known.length === 0) return true;
+  return known.some((v) => v !== "notmedia");
+}
+
 upgradeVideoElements({
+  sourceCheck,
   // A page that routes without reloading — and every site that swaps its
   // player between items — puts its next <video> in later.
   watch: true,
