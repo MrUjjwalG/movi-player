@@ -119,7 +119,6 @@ upgradeVideoElements({
     titlemode: "fullscreen back-mobile",
     subtitlepicker: "",
     ambientmode: "",
-    resume: "",
     smoothwarning: "",
   },
 });
