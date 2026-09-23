@@ -14085,6 +14085,39 @@ export class MoviElement extends HTMLElement {
     }, MoviElement.SEEK_ICON_HOLD_MS);
   }
 
+  /**
+   * Is the centre button standing in for the ring right now?
+   *
+   * On touch, with the chrome up, that button IS the play control — and during
+   * a seek it is showing the pause glyph, held there by _iconHeldForSeek. The
+   * ring wants the same spot, and the stylesheet's "never the button and the
+   * spinner together" rule resolves that by taking the button away: measured on
+   * a phone scrub, is-spinner-pending came on at 583ms and faded the button out
+   * over ~190ms, the ring took over at 1.6s, and the button faded back in at
+   * 1.8s. A live control blinking out and back for a seek the viewer asked for.
+   *
+   * Here the rule is resolved the other way. The button is the one that stays:
+   * it is a control the viewer may want to press, the seek already has feedback
+   * of its own in the scrubber and the clock, and the glyph it shows is a pause
+   * — not the play triangle inside a loading ring that the rule was written
+   * against. Bounded by the hold's own backstop, so a seek that really is
+   * taking a long time still gets a ring once the hold expires.
+   *
+   * Only where all of that holds: a seek in flight, touch, and the chrome up.
+   * With the chrome down there is no button to protect, on a mouse it is not a
+   * control, and a seek made while paused never arms the hold — which is the
+   * case the original rule is still exactly right about.
+   */
+  private centrePinnedForSeek(): boolean {
+    return (
+      this._iconHeldForSeek &&
+      this._controls &&
+      !this._isUnsupported &&
+      this.isTouchLike() &&
+      this.areControlsVisible()
+    );
+  }
+
   /** The seek is over, one way or another. Safe to call when nothing is held. */
   private releaseIconHold(): void {
     if (this._iconHoldTimer) {
@@ -34547,6 +34580,12 @@ export class MoviElement extends HTMLElement {
       performance.now() - this._seekRunSince <
         MoviElement.SEEK_SPINNER_GRACE_MS
     ) {
+      shouldShow = false;
+    }
+
+    // …and the ring stands down entirely while the centre button is holding
+    // that spot as the touch play control — see centrePinnedForSeek.
+    if (shouldShow && this.centrePinnedForSeek()) {
       shouldShow = false;
     }
 
