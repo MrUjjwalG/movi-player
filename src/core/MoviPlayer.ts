@@ -2477,6 +2477,11 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
    * VIDEO_LAG_SUSTAIN_MS.
    */
   private static readonly RATE_CHANGE_SETTLE_MS = 4000;
+  /** Below this share of the source rate the picture is not merely late, it is
+   *  being outrun — and a catch-up cannot win that. Deliberately looser than
+   *  the renderer's own severe ratio: this only declines to make things worse,
+   *  where that one commits the whole pipeline to a downshift. */
+  private static readonly LAG_KEEPING_UP_RATIO = 0.6;
   private static readonly VIDEO_LAG_COOLDOWN_MS = 6000;
   /**
    * A catch-up that keeps being needed isn't catching up. Past this the device
@@ -2485,6 +2490,23 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
    * budget comes back after a stretch of being genuinely in step.
    */
   private static readonly MAX_VIDEO_LAG_RESYNCS = 3;
+  /**
+   * Presented-frame history, for pictureKeepingUp().
+   *
+   * The renderer's own decode-bound verdict is the right gate on the catch-up
+   * and it is already wired below — but it needs four uninterrupted seconds of
+   * presentation to reach, and `framesPresented` restarts at every seek. The
+   * catch-up IS a seek, so each attempt wiped the evidence for the guard that
+   * would have stopped the next one. Read off an 8K60 AV1 session in Firefox:
+   * catch-ups at 6.3s, 12.3s and 18.4s, and the verdict only at 31.5s — once
+   * the attempt limit had stopped the resets. Those 25 seconds are the stutter.
+   *
+   * So the player keeps its own reading, which nothing resets but time.
+   */
+  private _lagFpsBase = -1;
+  private _lagFpsAt = 0;
+  private _lagFpsAchieved = -1;
+  private _lagSlowLogged = false;
   /**
    * How long a bound stall may hold before it gives up and resumes on whatever
    * it has.
@@ -3209,6 +3231,10 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
     // this one's picture at those times.
     this.clearPreviewCache();
 
+    this._lagFpsBase = -1;
+    this._lagFpsAt = 0;
+    this._lagFpsAchieved = -1;
+    this._lagSlowLogged = false;
     // A new source gets its own attempts at catching the picture up; what the
     // last one spent says nothing about this one (see _videoLagSince).
     this._videoLagSince = 0;
@@ -8124,6 +8150,21 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
       Math.abs(this.clock.getPlaybackRate() - 1.0) < 0.01
     ) {
       const nowLag = performance.now();
+      // …and the same judgement from the player's own reading, which arrives
+      // sooner. See pictureKeepingUp: the verdict above needs four
+      // uninterrupted seconds and every catch-up resets the count it needs.
+      const outrun = this.pictureKeepingUp() === false;
+      if (outrun) {
+        this._videoLagSince = 0;
+        if (!this._lagSlowLogged) {
+          this._lagSlowLogged = true;
+          Logger.warn(
+            TAG,
+            `Picture is being outrun (~${this._lagFpsAchieved.toFixed(1)}fps presented) — ` +
+              `not chasing it; the sound carries on and the picture runs at what it can`,
+          );
+        }
+      }
       const audioAt = this.audioRenderer.getAudioClock();
       const videoAt = (this.videoRenderer as any).currentTime ?? -1;
       const videoBehind =
@@ -8177,6 +8218,7 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
         if (this._videoLagSince === 0) {
           this._videoLagSince = nowLag;
         } else if (
+          !outrun &&
           nowLag - this._videoLagSince > sustainMs &&
           nowLag - this._lastVideoLagResyncAt >
             MoviPlayer.VIDEO_LAG_COOLDOWN_MS &&
@@ -15395,6 +15437,40 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
    * — the recovery for the first (a corrective re-prime seek) is actively
    * harmful for the second.
    */
+  /**
+   * Is the picture presenting fast enough for a catch-up to be worth trying?
+   *
+   * `null` until there is a second of history to answer from. A catch-up is a
+   * video-only seek, and on a long-GOP 8K AV1 the keyframe before the target
+   * sits well behind it — measured in the session this comes from, 1.7s and
+   * 3.2s behind two of the targets. Asking the slowest decoder in the session
+   * to decode that much extra before anything reaches the screen loses more
+   * ground than the lag it was chasing, which is the same reasoning the
+   * decode-bound gate beside it already carries; this just gets there sooner.
+   */
+  private pictureKeepingUp(): boolean | null {
+    const h = this.getRenderHealth();
+    if (!h) return null;
+    const now = performance.now();
+    if (this._lagFpsBase < 0 || h.framesPresented < this._lagFpsBase) {
+      // First look, or the counter restarted under us (any seek does that).
+      this._lagFpsBase = h.framesPresented;
+      this._lagFpsAt = now;
+      return this._lagFpsAchieved < 0
+        ? null
+        : this._lagFpsAchieved >= h.sourceFps * MoviPlayer.LAG_KEEPING_UP_RATIO;
+    }
+    const elapsed = now - this._lagFpsAt;
+    if (elapsed >= 1000) {
+      this._lagFpsAchieved =
+        (h.framesPresented - this._lagFpsBase) / (elapsed / 1000);
+      this._lagFpsBase = h.framesPresented;
+      this._lagFpsAt = now;
+    }
+    if (this._lagFpsAchieved < 0) return null;
+    return this._lagFpsAchieved >= h.sourceFps * MoviPlayer.LAG_KEEPING_UP_RATIO;
+  }
+
   isDecodeBound(): boolean {
     return this.videoRenderer?.isDecodeBound?.() ?? false;
   }

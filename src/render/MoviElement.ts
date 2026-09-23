@@ -1497,6 +1497,9 @@ export class MoviElement extends HTMLElement {
   /** The source and speed last judged, so the same question is not asked —
    *  or answered with a popup — twice. */
   private _smoothWarnKey: string | null = null;
+  /** Whether the MEASURED notice has been shown for the source now loaded — see
+   *  the decode-bound branch in sampleStutter. Cleared with the source. */
+  private _smoothWarnedByMeasurement = false;
   private _smoothWarnTimer: number | null = null;
   /** Bumped per check: a slower answer for a source or speed that has since
    *  changed must not put up a popup about the old one. */
@@ -5535,6 +5538,7 @@ export class MoviElement extends HTMLElement {
     this.player.setPlaybackRate(2);
     this._playbackRate = 2;
     this.updateMediaSessionPosition();
+    this._smoothWarnedByMeasurement = false;
     this.resetStutterHint();
     const pill = this.shadowRoot?.querySelector(
       ".movi-hold-speed",
@@ -12269,6 +12273,43 @@ export class MoviElement extends HTMLElement {
     if (juddering !== this._juddering) {
       this._juddering = juddering;
       this.updateLoadingIndicator();
+    }
+
+    // What the load-time assessment could not know.
+    //
+    // canPlaySmoothly answers from the file and the device's advertised
+    // capability, and 8K60 sits exactly AT the hardware ceiling rather than
+    // past it — so a browser that claims the format gets a "smooth" verdict and
+    // no notice. On a machine where that claim does not hold, nothing then said
+    // anything: the "Play at 1x" hint below is gated to rates above 1x, which
+    // is right (there is nothing slower to suggest), and the judder signal only
+    // raises the spinner. So the viewer watched an 8K60 AV1 file present ~22 of
+    // its 60 frames with no word about why.
+    //
+    // The renderer's decode-bound verdict IS the measurement the ceiling
+    // comment promises — "if the headroom turns out not to be there, the
+    // stutter hint says so from what actually happened" — so say it, once per
+    // source, at any rate, through the same notice and the same cancelable
+    // event a host can already intercept.
+    if (
+      this._smoothWarning &&
+      !this._smoothWarnedByMeasurement &&
+      this.player?.isDecodeBound?.()
+    ) {
+      this._smoothWarnedByMeasurement = true;
+      const message = {
+        title: "This video may not play smoothly on this device",
+        body: "Your device can't decode it fast enough, so the picture may stutter or fall behind the sound.",
+      };
+      const allowed = this.dispatchEvent(
+        new CustomEvent("smoothwarning", {
+          detail: { measured: true, media: "video", message },
+          cancelable: true,
+          bubbles: true,
+          composed: true,
+        }),
+      );
+      if (allowed) this.showSmoothWarning(message);
     }
 
     if (
@@ -32537,6 +32578,7 @@ export class MoviElement extends HTMLElement {
     this._mediaSessionLastPos = -1;
     this._mediaSessionArtworkUrl = null;
     this.stopStutterMonitor();
+    this._smoothWarnedByMeasurement = false;
     this.resetStutterHint();
     if (this._captionLive) this._captionLive.textContent = "";
     this._lastCaptionText = "";
@@ -41241,6 +41283,7 @@ export class MoviElement extends HTMLElement {
     // Keep the OS lock-screen scrubber's speed indicator in sync.
     this.updateMediaSessionPosition();
     // Each new speed gets a fresh stutter warning if it can't keep up.
+    this._smoothWarnedByMeasurement = false;
     this.resetStutterHint();
     // …and a fresh prediction, which can say so before it has stuttered at all.
     void this.checkSmoothPlayback();
