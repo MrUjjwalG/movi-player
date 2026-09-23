@@ -223,6 +223,37 @@ function upgradeOne(
     player.setAttribute("id", id);
   }
 
+  // Sit where the element being replaced sat.
+  //
+  // A <video> is inline-level by default, so a container that centres its
+  // contents with text-align centres it. <movi-player> is a block, which
+  // text-align does not reach — and a page that had its video in the middle
+  // suddenly had it hard against the left edge, the same width as before and
+  // in the wrong place. Measured on a centred 640px video in a 1100px page:
+  // 320px of margin either side became 24 and 616.
+  //
+  // Centred with auto margins rather than by making the player inline-level:
+  // inline-block shrinks to its contents, and the player's contents are a
+  // canvas that sizes itself to the box — so it collapsed to nothing. A block
+  // with auto margins is what centring a block means, and the player keeps
+  // the width it works out for itself.
+  //
+  // Read BEFORE the element is hidden below: a hidden element computes to
+  // display:none and would answer the wrong question. Only for a video the
+  // page left inline-level — one a stylesheet or a skin has already made a
+  // block is laid out by whatever made that choice.
+  try {
+    const parent = video.parentElement;
+    const was = getComputedStyle(video).display;
+    const inlineLevel = was === "inline" || was === "inline-block";
+    const centred = parent && getComputedStyle(parent).textAlign === "center";
+    if (inlineLevel && centred && !player.style.marginInline) {
+      player.style.marginInline = "auto";
+    }
+  } catch {
+    /* an element in a document that cannot be measured */
+  }
+
   video.parentNode.insertBefore(player, video);
 
   // Kept, not removed: a page holds references, and a removed element would
