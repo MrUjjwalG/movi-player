@@ -19036,6 +19036,19 @@ export class MoviElement extends HTMLElement {
       .movi-custom-divider.movi-divider-stranded {
         display: none;
       }
+      /* The built-in one answers to the same measurement, and that
+         measurement wins — hence !important, against the container rule
+         below which is more specific.
+         That rule asks whether a track container's INLINE style says
+         "display: flex", which is a string test standing in for "is there a
+         button here". In native fallback the subtitle button is gone while
+         its container keeps that inline style, so the test still passed and
+         the divider stood at the edge of the pill with nothing on its left.
+         syncStrandedDividers asks the question properly: it measures what is
+         actually laid out beside it. */
+      .movi-controls-right-divider.movi-divider-stranded {
+        display: none !important;
+      }
 
       @container movi-host (min-width: 721px) {
         .movi-controls-right:has(.movi-audio-track-container[style*="display: flex"]) .movi-controls-right-divider,
@@ -28515,8 +28528,15 @@ export class MoviElement extends HTMLElement {
       ".movi-control-group, .movi-seek-group, .movi-controls-left, .movi-controls-right, .movi-controls-center, .movi-top-controls";
     const ITEM =
       ".movi-btn, .movi-controls-divider, .movi-time, .movi-volume-slider-container";
+    // Every divider on the bar, not only the ones a host added. The built-in
+    // one between the track controls and the viewing controls carries
+    // .movi-controls-divider but not .movi-custom-divider, so it was never
+    // considered — and in native fallback, where the subtitle button is gone,
+    // it was left standing with nothing on its left: a stray line at the edge
+    // of the pill. Custom dividers carry both classes, so this still reaches
+    // them.
     const dividers = Array.from(
-      sr.querySelectorAll<HTMLElement>(".movi-custom-divider"),
+      sr.querySelectorAll<HTMLElement>(".movi-controls-divider"),
     );
     for (const d of dividers) {
       const capsule = d.parentElement?.closest(CAPSULE);
