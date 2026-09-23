@@ -1620,8 +1620,22 @@ export class MoviVideoDecoder {
       // drain a hang on every auto quality switch in Brave, resetting and
       // reconfiguring a decoder that was working through its backlog exactly
       // as asked. The ceiling still catches a genuine hang.
+      // …and the ceiling has to scale with it too, which is the same bug one
+      // level up. 5000ms is 83 chunks at the 60ms-per-chunk rate this line
+      // already assumes; past that the budget stopped growing while the work
+      // kept doing so. A decoder holding 645 frames at EOF — measured, on a
+      // 30s VP8 clip whose whole file had been read — was given the same five
+      // seconds as one holding 84, could not drain in it, and was reset. That
+      // reset discards every queued frame, and at EOF there is nothing left to
+      // refill them: the picture stopped four seconds in while the clock ran
+      // on to the end.
+      //
+      // Nothing below 83 chunks changes, so an ordinary seek or quality
+      // switch is untouched. The outer bound still catches a genuine hang;
+      // it is simply no longer reached by a decoder doing exactly what it
+      // was asked.
       const pending = this.decoder.decodeQueueSize || 0;
-      const flushBudgetMs = Math.min(5000, Math.max(1000, pending * 60));
+      const flushBudgetMs = Math.min(30000, Math.max(1000, pending * 60));
       await Promise.race([
         this.decoder.flush(),
         new Promise<void>((_, reject) =>
