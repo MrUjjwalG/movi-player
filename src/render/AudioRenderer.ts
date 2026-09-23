@@ -31,6 +31,16 @@ let sharedAudioContext: AudioContext | null = null;
 // wakes it during init(), before autoplay's block-check runs. Stays false until
 // the first real gesture so a brand-new page's poster-seek can't leak audio.
 let sharedContextActivated = false;
+/**
+ * How many live renderers are holding the shared context.
+ *
+ * Only for flushSharedOutput(): closing the context is the only way to empty
+ * the output device, and a page running two players must not have one of them
+ * take the other's sound with it. A count, not a boolean, because a source
+ * change destroys the outgoing renderer before it builds the incoming one —
+ * the number passes through zero exactly when there is nothing left to protect.
+ */
+let sharedContextHolders = 0;
 
 /**
  * Whether this session's output has ever been handed a buffer.
@@ -89,6 +99,8 @@ export class AudioRenderer {
   private volume: number = 1.0;
   private _playbackRate: number = 1.0;
   private activeSources: AudioBufferSourceNode[] = [];
+  /** Whether this renderer is one of sharedContextHolders. */
+  private _holdsSharedContext = false;
   /**
    * What each live source was made from, and when it is due.
    *
@@ -445,6 +457,10 @@ export class AudioRenderer {
         }
       }
       this.audioContext = sharedAudioContext;
+      if (!this._holdsSharedContext) {
+        this._holdsSharedContext = true;
+        sharedContextHolders++;
+      }
       if (retiringContext && retiringContext !== sharedAudioContext) {
         Logger.info(
           TAG,
@@ -2313,6 +2329,35 @@ export class AudioRenderer {
   }
 
   /**
+   * Empty the output device, by retiring the shared context.
+   *
+   * Stopping the sources and fading the gain only reach what the graph has yet
+   * to render. Whatever it already handed the device is past every node in it
+   * and plays out regardless — measured here at 29ms (5.3 base + 24 output) on
+   * a desktop, and hundreds on a phone. That tail is the bit of the last video
+   * heard over the start of the next one, and it arrives even when the new
+   * source has no audio at all, because it was never the new source's to begin
+   * with. Closing is the only thing that drops it: a closed context's queue
+   * goes with it.
+   *
+   * Safe only once the context has been activated, which is the same condition
+   * the sample-rate re-mint above already retires on: after that a replacement
+   * resumes without a gesture, so nothing brings the "tap to unmute" pill back.
+   * Before it there is nothing audible to flush anyway.
+   *
+   * Callers: a genuine source change. NOT a quality switch or a recreate —
+   * there the content is the one already playing and the sound is meant to run
+   * straight through.
+   */
+  static flushSharedOutput(): void {
+    if (!sharedAudioContext || !sharedContextActivated) return;
+    if (sharedContextHolders > 0) return;
+    const retiring = sharedAudioContext;
+    sharedAudioContext = null;
+    retiring.close().catch(() => {});
+  }
+
+  /**
    * Check if audio has healthy buffers (not in underrun state)
    * Used by video renderer to decide whether to sync to audio
    */
@@ -3062,6 +3107,13 @@ export class AudioRenderer {
    */
   async destroy(): Promise<void> {
     this.isPlaying = false;
+    // Released synchronously, before anything here awaits: the element asks
+    // flushSharedOutput() whether the context is idle immediately after
+    // destroy() is called, not after it resolves.
+    if (this._holdsSharedContext) {
+      this._holdsSharedContext = false;
+      sharedContextHolders = Math.max(0, sharedContextHolders - 1);
+    }
     this.reset();
 
     // reset() ends by ramping the gain back up, which is right for a seek —
