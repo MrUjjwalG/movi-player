@@ -12,7 +12,6 @@
 
 import { MoviPlayer } from "../core/MoviPlayer";
 import { NativeVideoWrapper } from "./NativeVideoWrapper";
-import { AudioRenderer } from "./AudioRenderer";
 import { loadingIndicatorMarkup, loadingIndicatorStyles } from "./LoadingIndicator";
 import type {
   SourceConfig,
@@ -32080,21 +32079,6 @@ export class MoviElement extends HTMLElement {
       // If player exists, destroy and recreate
       this.player.destroy();
       this.player = null;
-      // …and empty the output device behind it. destroy() stops the sources and
-      // holds the gain down, but neither reaches what the graph already handed
-      // the device — that plays out over the start of the NEXT video, even one
-      // with no audio of its own, because it was never the new source's to
-      // begin with. See AudioRenderer.flushSharedOutput, which no-ops unless
-      // the context is idle and has been activated.
-      //
-      // Here as well as in dispose(): this is the path a plain src change takes
-      // — dispose() is not on it, which is why the tail survived a swap.
-      //
-      // Not on a rebuild: a quality switch is the same content still playing,
-      // and there the sound is meant to run straight through.
-      if (!this._qualitySwitchInProgress && !this._fullRecreateInFlight) {
-        AudioRenderer.flushSharedOutput();
-      }
     }
 
     // Reset unsupported and loading state on source change so new source can load
@@ -32566,17 +32550,6 @@ export class MoviElement extends HTMLElement {
         /* noop */
       }
       this.player = null;
-      // …and empty the output device behind it. destroy() stops the sources and
-      // holds the gain down, but neither reaches what the graph already handed
-      // the device — that plays out over the start of the NEXT video, even one
-      // with no audio of its own. See AudioRenderer.flushSharedOutput, which
-      // no-ops unless the context is idle and has been activated.
-      //
-      // Not on a rebuild: a quality switch is the same content still playing,
-      // and there the sound is meant to run straight through.
-      if (!this._qualitySwitchInProgress && !this._fullRecreateInFlight) {
-        AudioRenderer.flushSharedOutput();
-      }
     }
 
     // An <audio> released for a quality switch but never re-adopted (the source
