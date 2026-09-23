@@ -930,6 +930,25 @@ export class MoviElement extends HTMLElement {
    *  Separate from _startCancelled, which the autoplay path owns. */
   private _pauseWasAskedFor: boolean = false;
   /**
+   * "A seek is under way and playback is meant to continue through it."
+   *
+   * The play/pause glyph reads intent, not raw state, so a stall cannot bounce
+   * it — but intent is only reported for `playing`, `buffering` and `seeking`,
+   * and a seek does not always land back on one of those. seekFromEvent has
+   * known this all along: it checks whether the player came out of a seek NOT
+   * playing and puts it back 100ms later. For those 100ms, plus however long
+   * the resume itself takes, the state is `paused` or `ready` and every icon
+   * flipped to "play" and back — a blink after every scrub, on the bar and on
+   * the centre button together.
+   *
+   * Held from the seek that starts it until playback genuinely resumes, the
+   * viewer asks for a pause, or the source ends. Backstopped by a timer, so a
+   * resume that never comes leaves an honest "play" behind rather than a glyph
+   * that lies for the rest of the session.
+   */
+  private _iconHeldForSeek: boolean = false;
+  private _iconHoldTimer: number | null = null;
+  /**
    * Bumped by every initializePlayer(), and only there — a load() that bumps
    * on its own can invalidate a live init without starting one to replace it.
    * An init awaits twice — the
@@ -14047,6 +14066,35 @@ export class MoviElement extends HTMLElement {
   }
 
   /**
+   * Take the play/pause glyph out of the seek's hands — see _iconHeldForSeek.
+   *
+   * Armed only from a seek the viewer is meant to come out of still playing,
+   * so a seek made while paused leaves the glyph alone and it keeps saying
+   * "play". The backstop is long enough to cover a scrub that has to fetch
+   * across the network and short enough that a resume which never arrives is
+   * admitted rather than hidden.
+   */
+  private holdIconThroughSeek(): void {
+    this._iconHeldForSeek = true;
+    if (this._iconHoldTimer) clearTimeout(this._iconHoldTimer);
+    this._iconHoldTimer = window.setTimeout(() => {
+      this._iconHoldTimer = null;
+      if (!this._iconHeldForSeek) return;
+      this._iconHeldForSeek = false;
+      this.updatePlayPauseIcon();
+    }, MoviElement.SEEK_ICON_HOLD_MS);
+  }
+
+  /** The seek is over, one way or another. Safe to call when nothing is held. */
+  private releaseIconHold(): void {
+    if (this._iconHoldTimer) {
+      clearTimeout(this._iconHoldTimer);
+      this._iconHoldTimer = null;
+    }
+    this._iconHeldForSeek = false;
+  }
+
+  /**
    * Put the chrome back the way a freshly-created, source-less player looks.
    *
    * Clearing the source ran dispose(), and dispose() does refresh the controls
@@ -16349,6 +16397,9 @@ export class MoviElement extends HTMLElement {
    *  glyph register, not to bring an icon into view. */
   private static readonly CENTER_FLASH_EXIT_MS = 520;
   private static readonly CENTER_FLASH_EXIT_FADE_AT = 0.34;
+  /** How long the glyph may be held across a seek before an unresolved resume
+   *  is reported honestly — see _iconHeldForSeek. */
+  private static readonly SEEK_ICON_HOLD_MS = 5000;
   private _centerFlashAnim: Animation | null = null;
   private _centerFlashTimer: number | null = null;
   /** When the flash in flight starts fading, in ms from its own start. Stored
@@ -31075,6 +31126,24 @@ export class MoviElement extends HTMLElement {
           this.maybeFallbackToMutedAutoplay();
         }
       } else if (state === "buffering") this.dispatchEvent(new Event("waiting"));
+      // The glyph must not blink across a seek. Arm on the way in — only from
+      // a state that says playback is meant to continue — and let go once it
+      // genuinely has, or once the video has stopped for a reason of its own.
+      // See _iconHeldForSeek for what the gap looks like without this.
+      if (
+        (state === "seeking" || state === "buffering") &&
+        this.player?.isPlaybackIntended?.()
+      ) {
+        this.holdIconThroughSeek();
+      } else if (
+        state === "playing" ||
+        state === "ended" ||
+        state === "error" ||
+        state === "idle" ||
+        state === "loading"
+      ) {
+        this.releaseIconHold();
+      }
       // The replacement player is up — stop holding the controls open on the
       // rebuild's behalf and let the normal state gating take over again.
       if (
@@ -31986,6 +32055,9 @@ export class MoviElement extends HTMLElement {
     this._startCancelled = true;
     this._pauseWasAskedFor = true;
     this._autoplayStarting = false;
+    // A pause the viewer asked for is the one thing that outranks the seek
+    // hold: the glyph must answer the press even mid-scrub.
+    this.releaseIconHold();
     // The viewer pressing pause during startup is the answer the timer was
     // waiting for; it must not fire later against a player they stopped.
     clearTimeout(this._autoplayPausedTimer);
@@ -32566,7 +32638,11 @@ export class MoviElement extends HTMLElement {
     // the raw isPlaying above — that's the resume affordance, not a state
     // indicator, and has its own flicker handling.)
     const isPlayingIntended =
-      (this.player?.isPlaybackIntended() ?? isPlaying) || this.isStartPending();
+      (this.player?.isPlaybackIntended() ?? isPlaying) ||
+      this.isStartPending() ||
+      // …and across a seek that is meant to end in playback, whatever the
+      // state does in between. See _iconHeldForSeek.
+      this._iconHeldForSeek;
     const loadingIndicator = this.shadowRoot?.querySelector(
       ".movi-loading-indicator",
     ) as HTMLElement;
