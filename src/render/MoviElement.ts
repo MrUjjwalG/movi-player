@@ -16391,12 +16391,17 @@ export class MoviElement extends HTMLElement {
    *  Must track the 0.68 offset in the keyframes below — everything before it
    *  sits at full opacity. */
   private static readonly CENTER_FLASH_FADE_AT = 0.68;
-  /** The other shape: a press on a button that is ALREADY on screen. There is
-   *  nothing to pop in, so it is all exit — a short hold, then the same fade.
-   *  Shorter than the full flash because the hold is only there to let the
-   *  glyph register, not to bring an icon into view. */
-  private static readonly CENTER_FLASH_EXIT_MS = 520;
-  private static readonly CENTER_FLASH_EXIT_FADE_AT = 0.34;
+  /** The other shape: a press on a button that is ALREADY on screen. Nothing to
+   *  pop in, so the receipt is the press itself — in, past the resting size on
+   *  the way up, and settled back ON it. The fade after that is for the one
+   *  case where such a button does leave (the poster's play button, pressed);
+   *  where it stays, settleCenterFlashSolid drops that tail and the press has
+   *  already played out in full by then. */
+  private static readonly CENTER_FLASH_PRESS_MS = 640;
+  /** Where the press has finished moving and the fade would start. The motion
+   *  must be complete by here, because this is the boundary the settle logic
+   *  cancels on. */
+  private static readonly CENTER_FLASH_PRESS_FADE_AT = 0.66;
   /** How long the glyph may be held across a seek before an unresolved resume
    *  is reported honestly — see _iconHeldForSeek. */
   private static readonly SEEK_ICON_HOLD_MS = 5000;
@@ -16476,7 +16481,17 @@ export class MoviElement extends HTMLElement {
     if (this._centerFlashSettleTimer) return;
     this._centerFlashSettleTimer = window.setTimeout(() => {
       this._centerFlashSettleTimer = null;
-      if (this._centerFlashAnim === anim) this.cancelCenterFlash();
+      if (this._centerFlashAnim !== anim) return;
+      // Still settling solid? The button can stop being a persistent control
+      // between arming this and it firing — pressing the poster's play button
+      // is exactly that: the class comes off a couple of hundred milliseconds
+      // in, and cancelling anyway took the fade with it and snapped the button
+      // out on one frame instead.
+      const btn = this.shadowRoot?.querySelector(
+        ".movi-center-play-pause",
+      ) as HTMLElement | null;
+      if (!btn?.classList.contains("movi-center-visible")) return;
+      this.cancelCenterFlash();
     }, fadeAt - at);
   }
 
@@ -16578,13 +16593,50 @@ export class MoviElement extends HTMLElement {
     // under it, settles ON it, and both shapes drift a touch over as they go.
     // Ending well past that (the old 1.22) read as a second, oversized button;
     // staying entirely under it read as a shrunken one.
+    //
+    // The exit shape assumed the button was on its way OUT — it holds where the
+    // button already is, then fades. On touch it never goes out: the centre
+    // button IS the play control while the chrome is up, so the class holds it
+    // solid, settleCenterFlashSolid drops the fade exactly as it is meant to,
+    // and what is left is a hold at the resting size followed by nothing.
+    // Measured on a phone press: 176ms of opacity 1 at scale 1, the flash
+    // cancelled at the fade boundary, then a 0.9% wobble off the stylesheet's
+    // own transition. That is the same "it reads as nothing at all" this method
+    // was already rewritten once to cure, arrived at from the other side.
+    //
+    // A button that stays needs motion it comes BACK from, so this is a press:
+    // in, past the resting size on the way up, and settled exactly on it. It
+    // ends where the button lives, so there is no fade for the settle logic to
+    // drop and nothing for the CSS transition to snap back from.
     const held = "translate(-50%, -50%) scale(1)";
     const gone = "translate(-50%, -50%) scale(1.08)";
+    const pressed = "translate(-50%, -50%) scale(0.86)";
+    const sprung = "translate(-50%, -50%) scale(1.045)";
     const frames = persistent
       ? [
-          { offset: 0, visibility: "visible", opacity: 1, transform: held },
           {
-            offset: MoviElement.CENTER_FLASH_EXIT_FADE_AT,
+            offset: 0,
+            visibility: "visible",
+            opacity: 1,
+            transform: held,
+            easing: "cubic-bezier(.4, 0, .6, 1)",
+          },
+          {
+            offset: 0.17,
+            visibility: "visible",
+            opacity: 1,
+            transform: pressed,
+            easing: "cubic-bezier(.2, .8, .2, 1)",
+          },
+          {
+            offset: 0.41,
+            visibility: "visible",
+            opacity: 1,
+            transform: sprung,
+            easing: "ease-out",
+          },
+          {
+            offset: MoviElement.CENTER_FLASH_PRESS_FADE_AT,
             visibility: "visible",
             opacity: 1,
             transform: held,
@@ -16614,7 +16666,7 @@ export class MoviElement extends HTMLElement {
           { offset: 1, visibility: "visible", opacity: 0, transform: gone },
         ];
     const duration = persistent
-      ? MoviElement.CENTER_FLASH_EXIT_MS
+      ? MoviElement.CENTER_FLASH_PRESS_MS
       : MoviElement.CENTER_FLASH_MS;
     const anim = btn.animate(frames, {
       duration,
@@ -16624,14 +16676,17 @@ export class MoviElement extends HTMLElement {
       fill: "none",
     });
     this._centerFlashAnim = anim;
-    // Both shapes fade out now. A button that is STILL a persistent control
-    // when the fade is due has that tail dropped instead — see
-    // settleCenterFlashSolid — which is what keeps a fade from fighting the
-    // class holding it solid.
+    // Only the pop fades, and a button that turns into a persistent control
+    // while it is mid-air has that tail dropped — see settleCenterFlashSolid,
+    // which is what keeps a fade from fighting the class holding it solid. The
+    // press has no tail to drop: it ends ON the resting style, so it is marked
+    // as fading only at its very last frame and the settle logic leaves it to
+    // finish. Cancelling it at a boundary earlier than that is precisely what
+    // erased the receipt on touch.
     this._centerFlashFadeAtMs =
       duration *
       (persistent
-        ? MoviElement.CENTER_FLASH_EXIT_FADE_AT
+        ? MoviElement.CENTER_FLASH_PRESS_FADE_AT
         : MoviElement.CENTER_FLASH_FADE_AT);
     // Set after the animation exists, because setSpinnerVisible(false) above
     // clears this flag — and it is what tells done() to ask for the spinner
