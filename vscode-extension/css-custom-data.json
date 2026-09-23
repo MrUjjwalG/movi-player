@@ -884,6 +884,19 @@
           "url": "https://moviplayer.com/docs/api/element"
         }
       ]
+    },
+    {
+      "name": "--movi-strip-cap-h",
+      "description": {
+        "kind": "markdown",
+        "value": "MoviPlayer theme variable.\n\nDefault: `calc(2 * var(--movi-strip-cap-line) + 10px)`"
+      },
+      "references": [
+        {
+          "name": "Documentation",
+          "url": "https://moviplayer.com/docs/api/element"
+        }
+      ]
     }
   ]
 }

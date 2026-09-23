@@ -1016,6 +1016,10 @@
             {
               "name": "--movi-sub-cust-rail",
               "description": "MoviPlayer theme variable.\n\nDefault: `rgba(0, 0, 0, 0.35)`"
+            },
+            {
+              "name": "--movi-strip-cap-h",
+              "description": "MoviPlayer theme variable.\n\nDefault: `calc(2 * var(--movi-strip-cap-line) + 10px)`"
             }
           ]
         }
