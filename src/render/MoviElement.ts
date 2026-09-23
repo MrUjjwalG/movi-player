@@ -25997,11 +25997,23 @@ export class MoviElement extends HTMLElement {
          Colour and edge style need none of this — they are inherited through
          --movi-sub-color and --movi-sub-edge and were working already. */
       :host(.movi-audio-strip.movi-has-caption) {
-        --movi-strip-cap-h: clamp(
-          20px,
-          calc(24px * var(--movi-sub-size-mult, 1)),
-          64px
+        /* Two lines' worth, always. A cue is one line or two — that is what
+           subtitling does — and a band sized for one had the second line
+           bleeding out of it at both ends: measured on a two-line cue, the
+           block ran 21..67 inside a band of 33..57, which put its top INSIDE
+           the title above (10..26) and its bottom INSIDE the control row
+           below (55..105). That is the crowding.
+           Sized for two rather than for the cue in hand on purpose: the bar
+           would otherwise change height every time a one-line cue followed a
+           two-line one, which is the twitch the band was built to avoid. */
+        --movi-strip-cap-line: clamp(
+          15px,
+          calc(19px * var(--movi-sub-size-mult, 1)),
+          44px
         );
+        /* Plus a little air. Sized to the line alone, the block still touched
+           both edges — the band has to hold the block, not equal it. */
+        --movi-strip-cap-h: calc(2 * var(--movi-strip-cap-line) + 10px);
       }
       :host(.movi-audio-strip.movi-has-caption) .movi-subtitle-overlay {
         position: absolute !important;
@@ -26017,6 +26029,9 @@ export class MoviElement extends HTMLElement {
         flex-direction: row !important;
         align-items: center !important;
         justify-content: center !important;
+        /* A cue with more lines than the band was sized for is clipped here
+           rather than allowed to paint over the title and the buttons. */
+        overflow: hidden !important;
         z-index: 6;
       }
       /* Centre it in the BAND, not where the renderer thinks the picture is.
@@ -26041,7 +26056,23 @@ export class MoviElement extends HTMLElement {
           calc(13px * var(--movi-sub-size-mult, 1)),
           34px
         ) !important;
-        line-height: 1.3 !important;
+        line-height: var(--movi-strip-cap-line) !important;
+        /* A caption parsed as VTT gets 2px of padding per line, which is a
+           video affordance: over a picture it separates the lines' own
+           backdrops. Here the backdrop is one block around both, so the
+           padding only made each line box 4px taller than the band was told
+           to expect — which is how a two-line cue kept overflowing a band
+           sized from the line height. */
+        padding-top: 0 !important;
+        padding-bottom: 0 !important;
+        /* Same rule, the other half of it: a VTT line is "width: fit-content"
+           with a backdrop of its own, so over a picture each line wears its
+           own plate. Here the block already carries one plate around both,
+           and a fit-content line cannot be centred by text-align — it is a
+           box the width of its text, so the short second line of a two-line
+           cue sat against the left edge of a block sized by the first. */
+        width: auto !important;
+        background: none !important;
         white-space: nowrap;
         overflow: hidden;
         text-overflow: ellipsis;
@@ -26065,30 +26096,30 @@ export class MoviElement extends HTMLElement {
 
       /* Untitled + caption: band at the top, controls below it. */
       :host(.movi-audio-strip.movi-has-caption) {
-        min-height: calc(60px + var(--movi-strip-cap-h)) !important;
-        height: calc(60px + var(--movi-strip-cap-h)) !important;
-        max-height: calc(60px + var(--movi-strip-cap-h)) !important;
+        min-height: calc(65px + var(--movi-strip-cap-h)) !important;
+        height: calc(65px + var(--movi-strip-cap-h)) !important;
+        max-height: calc(65px + var(--movi-strip-cap-h)) !important;
       }
       :host(.movi-audio-strip.movi-has-caption) .movi-subtitle-overlay {
         top: 6px !important;
       }
       :host(.movi-audio-strip.movi-has-caption) .movi-controls-container,
       :host(.movi-audio-strip.movi-has-caption) .movi-controls-container.movi-controls-hidden {
-        top: calc(4px + var(--movi-strip-cap-h)) !important;
+        top: calc(9px + var(--movi-strip-cap-h)) !important;
       }
 
       /* Titled + caption: title, then caption, then controls. */
       :host(.movi-audio-strip.movi-has-title.movi-has-caption) {
-        min-height: calc(82px + var(--movi-strip-cap-h)) !important;
-        height: calc(82px + var(--movi-strip-cap-h)) !important;
-        max-height: calc(82px + var(--movi-strip-cap-h)) !important;
+        min-height: calc(87px + var(--movi-strip-cap-h)) !important;
+        height: calc(87px + var(--movi-strip-cap-h)) !important;
+        max-height: calc(87px + var(--movi-strip-cap-h)) !important;
       }
       :host(.movi-audio-strip.movi-has-title.movi-has-caption) .movi-subtitle-overlay {
         top: 32px !important;
       }
       :host(.movi-audio-strip.movi-has-title.movi-has-caption) .movi-controls-container,
       :host(.movi-audio-strip.movi-has-title.movi-has-caption) .movi-controls-container.movi-controls-hidden {
-        top: calc(30px + var(--movi-strip-cap-h)) !important;
+        top: calc(35px + var(--movi-strip-cap-h)) !important;
       }
       /* Title + OSD in strip mode.
          Floating the title ABOVE the host collided with whatever sits above
