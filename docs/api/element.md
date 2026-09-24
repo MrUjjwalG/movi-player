@@ -3672,6 +3672,13 @@ colour of the chrome's marks. Reach for `setIcon()` when a different SHAPE is
 wanted.
 :::
 
+**From a framework wrapper.** `setIcon()` is a method, so it needs the element:
+a `ref` or `onReady(el)` in React, `@ready` or the exposed `element` in Vue,
+`bind:element` in Svelte. Calling it again with the same icon is a no-op, so an
+effect that re-runs on unrelated renders costs nothing. `controlslist` and
+`::part()` need nothing from the wrappers, and a `slot="spinner"` child works
+whether it is rendered with the player or on a later tick.
+
 ---
 
 ### Replace the spinner — `slot="spinner"`

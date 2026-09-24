@@ -39372,6 +39372,12 @@ export class MoviElement extends HTMLElement {
       );
       return;
     }
+    // Setting the same icon again is nothing, and saying so matters: a React
+    // effect with no dependency array and a Vue watchEffect both re-run on
+    // renders that have nothing to do with the player, and each bumped
+    // revision repaints every drawing of that symbol.
+    const current = this._iconOverrides.get(name);
+    if (icon ? current === icon : current === undefined) return;
     if (icon) this._iconOverrides.set(name, icon);
     else this._iconOverrides.delete(name);
     this._iconRevs.set(name, (this._iconRevs.get(name) ?? 0) + 1);
