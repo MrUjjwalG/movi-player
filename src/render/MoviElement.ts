@@ -12263,9 +12263,17 @@ export class MoviElement extends HTMLElement {
     // it, while warning that it will stop, reads as a bug. The requirement is
     // the one to move: it is the advice, and erring high is the safe direction.
     if (need <= got) need = got + MoviElement.mbpsStep(got);
+    // Say what was measured, not whose fault it is. The probe times the path to
+    // THIS origin, so a throttling server, a busy CDN edge and a slow line all
+    // read the same from here, and there is no second reference point to tell
+    // them apart. "This connection is measuring about N Mbps" claimed the one
+    // thing the reading cannot support — it blamed the viewer's internet for
+    // what may be the host's. What IS true either way is the rate the media is
+    // arriving at, so that is what it says, and it names both possibilities
+    // rather than picking one.
     const message = {
       title: `This media needs about ${need} Mbps to play`,
-      body: `This connection is measuring about ${got} Mbps, so playback will keep stopping to load.`,
+      body: `It's only arriving at about ${got} Mbps — this connection or the server can't deliver it fast enough.`,
     };
     const allowed = this.dispatchEvent(
       new CustomEvent("smoothwarning", {
