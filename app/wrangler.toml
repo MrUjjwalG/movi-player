@@ -73,11 +73,30 @@ bucket_name = "movi-assets"
 #
 # Query it (no dashboard page for this dataset — it is the SQL API):
 #   curl "https://api.cloudflare.com/client/v4/accounts/<account_id>/analytics_engine/sql" \
-#     -H "Authorization: Bearer <token>" \
-#     -d "SELECT blob1 AS site, blob2 AS version, SUM(_sample_interval) AS hits
-#         FROM movi_dist_hits
-#         WHERE timestamp > NOW() - INTERVAL '30' DAY
-#         GROUP BY site, version ORDER BY hits DESC"
+#     -H "Authorization: Bearer <token>" --data @-
+#
+# Which sites, and how many hits each — the whole point of the dataset:
+#   SELECT blob1 AS site, SUM(_sample_interval) AS hits
+#   FROM movi_dist_hits
+#   WHERE timestamp > NOW() - INTERVAL '30' DAY
+#   GROUP BY blob1
+#   ORDER BY SUM(_sample_interval) DESC
+#
+# …broken down by version and file as well:
+#   SELECT blob1 AS site, blob2 AS version, blob3 AS file,
+#          SUM(_sample_interval) AS hits
+#   FROM movi_dist_hits
+#   WHERE timestamp > NOW() - INTERVAL '30' DAY
+#   GROUP BY blob1, blob2, blob3
+#   ORDER BY SUM(_sample_interval) DESC
+#
+# …and everyone but you, which is usually the question being asked:
+#   … WHERE timestamp > NOW() - INTERVAL '30' DAY AND blob1 != 'moviplayer.com'
+#
+# GROUP BY and ORDER BY name the raw column and repeat the aggregate rather
+# than reusing the SELECT alias: aliases are documented for the SELECT list,
+# and the reference's own grouping example is `GROUP BY index1`, so this is
+# the shape the docs actually show working.
 #
 # `SUM(_sample_interval)`, not COUNT(*): Analytics Engine samples under load
 # and that column is the weight each stored row stands for.
