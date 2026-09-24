@@ -1507,6 +1507,10 @@ export class MoviElement extends HTMLElement {
   /** How many stalls before a low reading is allowed to become a verdict. One
    *  is a hiccup; a file the link cannot carry does it again and again. */
   private static readonly LINK_BUDGET_STALLS = 2;
+  /** How many probes to take the best of — see bestLinkBps. */
+  private static readonly LINK_PROBE_TRIES = 3;
+  /** Spacing between them, long enough that two do not measure the same dip. */
+  private static readonly LINK_PROBE_GAP_MS = 1500;
 
   /** The rounding step at a given speed, so the figure lands where connection
    *  speeds actually land: singles below 10, fives to 50, tens above. */
@@ -12238,11 +12242,11 @@ export class MoviElement extends HTMLElement {
     this._linkProbeAbort?.abort();
     const ac = new AbortController();
     this._linkProbeAbort = ac;
-    void probeLinkBandwidth(url, { signal: ac.signal })
+    void this.bestLinkBps(url, needed, ac)
       .then((bps) => {
         if (ac.signal.aborted || !this._smoothWarning) return;
-        if (!(bps > 0)) return; // the probe had no answer — say nothing
-        if (bps >= needed) return; // the link can carry it; the stalls were not this
+        if (!(bps > 0)) return; // no answer — say nothing
+        if (bps >= needed) return; // it can be delivered; the stalls were not this
         this.announceLinkShortfall(needed, bps);
       })
       .catch(() => {
@@ -12250,7 +12254,44 @@ export class MoviElement extends HTMLElement {
       });
   }
 
-  /** The notice itself, once the probe has confirmed the shortfall. */
+  /**
+   * The best reading a few probes can find, which is the only one worth having.
+   *
+   * A single probe is not a measurement here. It runs WHILE the player is
+   * streaming the same media from the same origin, so the two share the link
+   * and the probe gets whatever is left at that moment — reported from the
+   * wild, the same media reading 10, then 40, then 50 Mbps on one connection.
+   * Contention, a busy edge and a momentary dip all push a reading DOWN and
+   * none of them push it up, so the largest of several is the closest thing to
+   * what the path can actually do, and the average would just be a record of
+   * how busy the player was while asking.
+   *
+   * It stops the moment a reading clears the requirement, which is the whole
+   * point: the case this gets wrong is the false alarm, and that one now costs
+   * a single probe. Only a path that keeps falling short pays for the rest —
+   * and there the bytes are already not arriving in time anyway.
+   */
+  private async bestLinkBps(
+    url: string,
+    needed: number,
+    ac: AbortController,
+  ): Promise<number> {
+    let best = -1;
+    for (let i = 0; i < MoviElement.LINK_PROBE_TRIES; i++) {
+      if (ac.signal.aborted) break;
+      const bps = await probeLinkBandwidth(url, { signal: ac.signal });
+      if (bps > best) best = bps;
+      if (best >= needed) break;
+      if (i < MoviElement.LINK_PROBE_TRIES - 1) {
+        await new Promise((r) =>
+          setTimeout(r, MoviElement.LINK_PROBE_GAP_MS),
+        );
+      }
+    }
+    return best;
+  }
+
+  /** The notice itself, once the probes have confirmed the shortfall. */
   private announceLinkShortfall(needed: number, measured: number): void {
     // "About 69 Mbps" is a measurement read out loud, not advice. Nobody buys a
     // 69 Mbps line, and a figure that precise invites the reader to check it
