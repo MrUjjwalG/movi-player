@@ -15438,6 +15438,39 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
    * harmful for the second.
    */
   /**
+   * What this source needs, in BITS per second, to arrive in real time.
+   *
+   * Total bytes over duration, not the video track's declared bitrate: a remux
+   * carries every audio track and every subtitle in the same container, and the
+   * demuxer reads the lot — on the 40GB file this was written for, five audio
+   * tracks including TrueHD Atmos. What has to come down the wire is the file,
+   * so the file is what the figure is taken from. Declared per-track bitrates
+   * would answer a question nobody is asking, and MKV often omits them anyway.
+   *
+   * 0 when it cannot be known — a local file, or a source that has not resolved
+   * its size — which is the signal to say nothing rather than guess.
+   */
+  requiredLinkBps(): number {
+    const bytes =
+      (this.source as { getKnownSize?: () => number } | null)?.getKnownSize?.() ??
+      0;
+    const duration = this.getDuration();
+    if (!(bytes > 0) || !(duration > 0)) return 0;
+    return (bytes * 8) / duration;
+  }
+
+  /**
+   * The link's rate as the player has actually measured it, in bits per second.
+   *
+   * The ABR's own smoothed reading — already taken from real reads of this
+   * source through whatever proxy or CDN is in the way, which is the only
+   * number worth comparing against requiredLinkBps(). 0 before there is one.
+   */
+  measuredLinkBps(): number {
+    return this._lastThroughputBps > 0 ? this._lastThroughputBps * 8 : 0;
+  }
+
+  /**
    * Is the picture presenting fast enough for a catch-up to be worth trying?
    *
    * `null` until there is a second of history to answer from. A catch-up is a

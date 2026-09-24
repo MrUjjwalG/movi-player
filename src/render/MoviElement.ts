@@ -1500,6 +1500,19 @@ export class MoviElement extends HTMLElement {
   /** Whether the MEASURED notice has been shown for the source now loaded — see
    *  the decode-bound branch in sampleStutter. Cleared with the source. */
   private _smoothWarnedByMeasurement = false;
+  /** Link-rate readings taken during playback, for sampleLinkBudget(). */
+  private _linkBudgetSamples: number[] = [];
+  private _warnedLinkBudget = false;
+  /** Buffering episodes since this source started — see sampleLinkBudget. */
+  private _linkStalls = 0;
+  /** How many stalls before a low reading is allowed to become a verdict. One
+   *  is a hiccup; a file the link cannot carry does it again and again. */
+  private static readonly LINK_BUDGET_STALLS = 2;
+  /** Seconds of real playback to read before judging the link. The first
+   *  megabytes come out of a proxy or CDN read-ahead burst at fantasy rates —
+   *  bandwidthProbe exists because of exactly that — so a verdict taken early
+   *  says the link is fine when it is not. */
+  private static readonly LINK_BUDGET_SAMPLES = 5;
   private _smoothWarnTimer: number | null = null;
   /** Bumped per check: a slower answer for a source or speed that has since
    *  changed must not put up a popup about the old one. */
@@ -5539,6 +5552,9 @@ export class MoviElement extends HTMLElement {
     this._playbackRate = 2;
     this.updateMediaSessionPosition();
     this._smoothWarnedByMeasurement = false;
+    this._warnedLinkBudget = false;
+    this._linkBudgetSamples = [];
+    this._linkStalls = 0;
     this.resetStutterHint();
     const pill = this.shadowRoot?.querySelector(
       ".movi-hold-speed",
@@ -12114,7 +12130,10 @@ export class MoviElement extends HTMLElement {
     const h = this.player?.getRenderHealth?.();
     this._stutterLastPresented = h ? h.framesPresented : 0;
     this._stutterSeconds = 0;
-    this._stutterInterval = window.setInterval(() => this.sampleStutter(), 1000);
+    this._stutterInterval = window.setInterval(() => {
+      this.sampleStutter();
+      this.sampleLinkBudget();
+    }, 1000);
   }
 
   private stopStutterMonitor(): void {
@@ -12171,6 +12190,68 @@ export class MoviElement extends HTMLElement {
   }
 
   /** One stutter sample: compare presented FPS to the smooth-playback baseline. */
+  /**
+   * Say so when the connection cannot carry this file at all.
+   *
+   * Separate from canPlaySmoothly, which asks whether the DEVICE can decode it.
+   * A 40GB remux can be perfectly decodable and still be unwatchable because
+   * the bytes cannot arrive in time, and nothing here said that: the viewer got
+   * a spinner every few seconds and no reason for it.
+   *
+   * Both numbers come from what actually happened rather than from a claim —
+   * the file's own size over its own duration, and the ABR's smoothed reading
+   * of real reads through whatever proxy is in the way. The BEST of the run is
+   * the one compared, not the average: a dip is a dip, and the question is
+   * whether the link can EVER carry the file.
+   *
+   * Once per source, through the same cancelable `smoothwarning` event a host
+   * can already intercept.
+   */
+  private sampleLinkBudget(): void {
+    if (!this._smoothWarning || this._warnedLinkBudget) return;
+    const p = this.player;
+    if (!p || p.getState?.() !== "playing") return;
+    const needed = p.requiredLinkBps?.() ?? 0;
+    if (!(needed > 0)) return; // a local file, or a size we never learned
+    const link = p.measuredLinkBps?.() ?? 0;
+    if (!(link > 0)) return;
+    this._linkBudgetSamples.push(link);
+    // The reading alone is not evidence. Measured on a link that was carrying
+    // the file perfectly well: 0.41 Mbps reported against a 2.84 Mbps file,
+    // because once the buffer is ahead the source parks at the prefetch gate
+    // and the throughput window sees a stream that is being paced, not a link
+    // that is slow. Playback stopping is the thing that cannot be faked.
+    if (this._linkStalls < MoviElement.LINK_BUDGET_STALLS) return;
+    if (this._linkBudgetSamples.length < MoviElement.LINK_BUDGET_SAMPLES) return;
+    const best = Math.max(...this._linkBudgetSamples);
+    this._linkBudgetSamples = [];
+    if (best >= needed) return; // it can carry it; keep watching in case it stops
+    this._warnedLinkBudget = true;
+    const mbps = (bps: number) => {
+      const m = bps / 1_000_000;
+      return m >= 10 ? Math.round(m).toString() : m.toFixed(1);
+    };
+    const message = {
+      title: `This file needs about ${mbps(needed)} Mbps to play`,
+      body: `This connection is measuring about ${mbps(best)} Mbps, so playback will keep stopping to load.`,
+    };
+    const allowed = this.dispatchEvent(
+      new CustomEvent("smoothwarning", {
+        detail: {
+          link: true,
+          neededBps: needed,
+          measuredBps: best,
+          media: "video",
+          message,
+        },
+        cancelable: true,
+        bubbles: true,
+        composed: true,
+      }),
+    );
+    if (allowed) this.showSmoothWarning(message);
+  }
+
   private sampleStutter(): void {
     // No video to smooth → the frame-drop heuristic is meaningless and would
     // falsely nag "Play at 1x for smoother playback" (framesPresented never
@@ -31368,6 +31449,10 @@ export class MoviElement extends HTMLElement {
       // QoE: track stalls. Entering "buffering" starts a rebuffer timer; any
       // other state ends it (the first stall, before first frame, is startup).
       if (state === "buffering") this._qoe.bufferingStartNow();
+      // Evidence for sampleLinkBudget. A measured throughput on its own proves
+      // nothing — a source parked at the prefetch gate reports a floor, not the
+      // link's capacity — so the verdict waits for playback to actually stop.
+      if (state === "buffering") this._linkStalls++;
       else this._qoe.bufferingEndNow();
       // A seek requested before the player was ready was held — apply it now
       // that we've reached a seekable state (fixes e.g. a PiP/handoff seek that
@@ -32583,6 +32668,9 @@ export class MoviElement extends HTMLElement {
     this._mediaSessionArtworkUrl = null;
     this.stopStutterMonitor();
     this._smoothWarnedByMeasurement = false;
+    this._warnedLinkBudget = false;
+    this._linkBudgetSamples = [];
+    this._linkStalls = 0;
     this.resetStutterHint();
     if (this._captionLive) this._captionLive.textContent = "";
     this._lastCaptionText = "";
@@ -41288,6 +41376,9 @@ export class MoviElement extends HTMLElement {
     this.updateMediaSessionPosition();
     // Each new speed gets a fresh stutter warning if it can't keep up.
     this._smoothWarnedByMeasurement = false;
+    this._warnedLinkBudget = false;
+    this._linkBudgetSamples = [];
+    this._linkStalls = 0;
     this.resetStutterHint();
     // …and a fresh prediction, which can say so before it has stuttered at all.
     void this.checkSmoothPlayback();
