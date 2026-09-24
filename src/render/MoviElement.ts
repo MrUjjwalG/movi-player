@@ -140,21 +140,163 @@ const SYMBOLS = {
   rotate: `<path d="M20.25 8.5A8.75 8.75 0 1 0 20 16M20.25 3.75V8.5H15.5"/>`,
   seekBackward: `<path d="M5.9 7.15A8.4 8.4 0 1 1 3.6 12M5.9 3.85 2.4 7.15l3.5 3.3"/><text x="12" y="14.5" font-size="6.3" font-family="-apple-system, BlinkMacSystemFont, sans-serif" font-weight="650" fill="currentColor" text-anchor="middle" stroke="none">10</text>`,
   seekForward: `<path d="M18.1 7.15A8.4 8.4 0 1 0 20.4 12M18.1 3.85l3.5 3.3-3.5 3.3"/><text x="12" y="14.5" font-size="6.3" font-family="-apple-system, BlinkMacSystemFont, sans-serif" font-weight="650" fill="currentColor" text-anchor="middle" stroke="none">10</text>`,
+
+  /* The marks below were written inline at their one call site, in whatever
+     weight and box that spot wanted, before there was anywhere to put them.
+     They are here now for one reason: setIcon can only answer for a glyph that
+     has a NAME, and "any icon, anywhere" is not a promise a table can keep with
+     a third of the player's marks outside it. Each keeps the weight and box it
+     was drawn at — this move is a rehousing, not a redraw, and the two cards
+     below are 140x100 rather than 24-square because they are illustrations
+     rather than glyphs. */
+
+  /** The error screen's card stack: two cards and a warning badge. Its parts
+   *  are coloured by class from the stylesheet, so it takes no paint here. */
+  errorCards: {
+    viewBox: "0 0 140 100",
+    raw: true,
+    body: `<rect class="movi-broken-card-back" x="22" y="10" width="94" height="66" rx="14" transform="rotate(-13 69 43)"/><rect class="movi-broken-card-front" x="28" y="25" width="100" height="66" rx="15"/><rect class="movi-broken-card-badge" x="42" y="39" width="19" height="17" rx="4.5"/><path class="movi-broken-card-mark" d="M51.5 43.2v5M51.5 51.9h.01"/>`,
+  },
+  /** The same stack with a play mark instead of the warning: nothing loaded. */
+  emptyCards: {
+    viewBox: "0 0 140 100",
+    raw: true,
+    body: `<rect class="movi-empty-card-back" x="22" y="10" width="94" height="66" rx="14" transform="rotate(-13 69 43)"/><rect class="movi-empty-card-front" x="28" y="25" width="100" height="66" rx="15"/><rect class="movi-empty-card-detail" x="42" y="39" width="19" height="17" rx="4.5"/><path class="movi-empty-card-play" d="M49 43.5v8l6.5-4-6.5-4Z"/>`,
+  },
+  retry: {
+    stroke: 1.75,
+    size: 16,
+    body: `<path d="M21 12a9 9 0 0 0-9-9 9.75 9.75 0 0 0-6.74 2.74L3 8"/><path d="M3 3v5h5"/><path d="M3 12a9 9 0 0 0 9 9 9.75 9.75 0 0 0 6.74-2.74L21 16"/><path d="M16 16h5v5"/>`,
+  },
+  /** Four corners turning inward — the error screen's way out of fullscreen. */
+  collapse: {
+    stroke: 1.75,
+    size: 16,
+    body: `<path d="M8.5 3.5v3a2 2 0 0 1-2 2h-3M20.5 8.5h-3a2 2 0 0 1-2-2v-3M3.5 15.5h3a2 2 0 0 1 2 2v3M15.5 20.5v-3a2 2 0 0 1 2-2h3"/>`,
+  },
+  pipPlaceholder: {
+    stroke: 1.4,
+    body: `<rect x="2" y="4" width="20" height="16" rx="2"></rect><rect x="12" y="12" width="8" height="6" rx="1" fill="currentColor" stroke="none"></rect>`,
+  },
+  holdSpeed: {
+    filled: true,
+    body: `<path d="M4 5l8 7-8 7V5zm9 0l8 7-8 7V5z"/>`,
+  },
+  hdr: {
+    stroke: 1.75,
+    body: `<path d="M5 7v10M5 12h5M10 7v10M14 7h6a3 3 0 0 1 0 6h-6M17 13l3 4"></path>`,
+  },
+  /** Three stacked dots: the corner gear's own mark. */
+  dots: {
+    filled: true,
+    body: `<circle cx="12" cy="5.5" r="2.3"/><circle cx="12" cy="12" r="2.3"/><circle cx="12" cy="18.5" r="2.3"/>`,
+  },
+  chevronLeftBold: { stroke: 1.9, body: `<polyline points="15 18 9 12 15 6"/>` },
+  chevronRightBold: { stroke: 1.9, body: `<polyline points="9 18 15 12 9 6"/>` },
+  warning: {
+    stroke: 2,
+    body: `<path d="M10.29 3.86 1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/><line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/>`,
+  },
+  closeThin: {
+    stroke: 2.2,
+    body: `<line x1="6" y1="6" x2="18" y2="18"/><line x1="6" y1="18" x2="18" y2="6"/>`,
+  },
+  search: {
+    stroke: 1.75,
+    size: 14,
+    body: `<circle cx="11" cy="11" r="7"/><path d="m21 21-4.3-4.3"/>`,
+  },
+  chevronsLeft: { stroke: 1.75, body: `<path d="M11 17l-5-5 5-5M18 17l-5-5 5-5"/>` },
+  chevronsRight: { stroke: 1.75, body: `<path d="M13 17l5-5-5-5M6 17l5-5-5-5"/>` },
+  replay: {
+    stroke: 1.75,
+    body: `<path d="M21 12a9 9 0 1 1-9-9 9.75 9.75 0 0 1 6.74 2.74L21 8"/><path d="M21 3v5h-5"/>`,
+  },
+  /** The menus' back and forward chevrons. Lighter and squarer than the
+   *  chevronLeft/chevronRight pair the bar uses, which is why both exist. */
+  chevronBack: { stroke: 1.75, body: `<path d="M15 18l-6-6 6-6"/>` },
+  chevronForward: { stroke: 1.75, body: `<path d="M9 18l6-6-6-6"/>` },
+  /** The dot beside a track that is not the chosen one. */
+  trackItem: {
+    body: `<circle cx="12" cy="12" r="8.75"/><path d="M7.75 12h8.5"/>`,
+  },
+  check: { stroke: 2.1, body: `<path d="m5.25 12.25 4.15 4.15 9.35-9.35"/>` },
+  volumeOff: {
+    stroke: 1.75,
+    body: `<path d="M11 5L6 9H2v6h4l5 4V5z"></path><line x1="23" y1="9" x2="17" y2="15"></line><line x1="17" y1="9" x2="23" y2="15"></line>`,
+  },
+  volumeWave: {
+    stroke: 1.75,
+    body: `<path d="M11 5L6 9H2v6h4l5 4V5z"></path><path d="M15.54 8.46a5 5 0 0 1 0 7.07"></path>`,
+  },
+  volumeWaves: {
+    stroke: 1.75,
+    body: `<path d="M11 5L6 9H2v6h4l5 4V5z"></path><path d="M19.07 4.93a10 10 0 0 1 0 14.14M15.54 8.46a5 5 0 0 1 0 7.07"></path>`,
+  },
+  plus: { stroke: 1.75, size: 16, body: `<path d="M12 5v14M5 12h14"/>` },
+  info: {
+    stroke: 1.75,
+    body: `<circle cx="12" cy="12" r="10"/><line x1="12" y1="16" x2="12" y2="12"/><line x1="12" y1="8" x2="12.01" y2="8"/>`,
+  },
+  /** The speaker with a cross through it that the "Tap to unmute" pill wears.
+   *  Heavier than volumeOff beside it — the pill is the one mark on the picture
+   *  with nothing around it to be read against. */
+  unmute: {
+    stroke: 2,
+    body: `<polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5"/><line x1="23" y1="9" x2="17" y2="15"/><line x1="17" y1="9" x2="23" y2="15"/>`,
+  },
+  /** A dial with its needle: what a speed change puts on the OSD. */
+  stopwatch: {
+    stroke: 1.75,
+    body: `<path d="M5.64 18.36a9 9 0 1 1 12.72 0"></path><path d="m12 12 4-4"></path>`,
+  },
 } as const;
 
 type SymbolName = keyof typeof SYMBOLS;
+
+/** A mark that is not drawn the family's way: its own weight, box or size. */
+interface SymbolSpec {
+  body: string;
+  filled?: boolean;
+  stroke?: number;
+  viewBox?: string;
+  /** Painted by its own children, or by the stylesheet: give it neither fill
+   *  nor stroke of the player's choosing. */
+  raw?: boolean;
+  /** Laid out by attribute rather than by CSS, where the mark sits somewhere
+   *  the stylesheet does not size. */
+  size?: number;
+}
+
+const symbolSpec = (name: SymbolName): SymbolSpec => {
+  const entry = SYMBOLS[name] as string | SymbolSpec;
+  return typeof entry === "string" ? { body: entry } : entry;
+};
 
 const symbolSvg = (
   name: SymbolName,
   className = "",
   options: { filled?: boolean; hidden?: boolean } = {},
 ): string => {
+  const spec = symbolSpec(name);
+  const filled = options.filled ?? spec.filled ?? false;
   const classes = ["movi-symbol", className].filter(Boolean).join(" ");
-  const paint = options.filled
-    ? `fill="currentColor" stroke="none"`
-    : `fill="none" stroke="currentColor" stroke-width="1.65" stroke-linecap="round" stroke-linejoin="round"`;
+  const paint = spec.raw
+    ? `fill="none"`
+    : filled
+      ? `fill="currentColor" stroke="none"`
+      : `fill="none" stroke="currentColor" stroke-width="${spec.stroke ?? 1.65}" stroke-linecap="round" stroke-linejoin="round"`;
   const hidden = options.hidden ? ` style="display: none;"` : "";
-  return `<svg class="${classes}" viewBox="0 0 24 24" ${paint} aria-hidden="true"${hidden}>${SYMBOLS[name]}</svg>`;
+  // data-icon is how setIcon finds a glyph again — every one of these, wherever
+  // it ends up (the bar, a menu row, the OSD, the PiP window), says which
+  // symbol it is. data-filled records which of the two paint styles it was
+  // drawn with, so putting the built-in back is exact rather than a guess.
+  // part="icon" is the CSS half: a part is the END of a selector, so
+  // ::part(play-button) svg selects nothing and the glyphs need a part of
+  // their own to be sizeable or recolourable from the page at all.
+  const filledMark = filled ? ` data-filled=""` : "";
+  const size = spec.size ? ` width="${spec.size}" height="${spec.size}"` : "";
+  return `<svg class="${classes}" part="icon" data-icon="${name}"${filledMark} viewBox="${spec.viewBox ?? "0 0 24 24"}" ${paint}${size} aria-hidden="true"${hidden}>${spec.body}</svg>`;
 };
 
 // OSD icons share the exact geometry used by the controls, so a keyboard
@@ -2403,32 +2545,17 @@ export class MoviElement extends HTMLElement {
           <!-- The empty state's card stack, so a failure reads as the same
                place as "nothing loaded", with a warning mark where the play
                button would be. -->
-          <svg viewBox="0 0 140 100" fill="none" aria-hidden="true">
-            <rect class="movi-broken-card-back" x="22" y="10" width="94" height="66" rx="14" transform="rotate(-13 69 43)"/>
-            <rect class="movi-broken-card-front" x="28" y="25" width="100" height="66" rx="15"/>
-            <rect class="movi-broken-card-badge" x="42" y="39" width="19" height="17" rx="4.5"/>
-            <path class="movi-broken-card-mark" d="M51.5 43.2v5M51.5 51.9h.01"/>
-          </svg>
+          ${symbolSvg("errorCards")}
         </div>
         <div class="movi-broken-text" part="error-text">
           <h3 class="movi-broken-title" part="error-title">Format Unsupported</h3>
           <p class="movi-broken-message" part="error-message">This video codec is not supported by your browser's hardware acceleration.</p>
           <button class="movi-sw-fallback-btn" part="error-button error-software-button" style="display: none;">
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" width="16" height="16">
-              <path d="M21 12a9 9 0 0 0-9-9 9.75 9.75 0 0 0-6.74 2.74L3 8"/>
-              <path d="M3 3v5h5"/>
-              <path d="M3 12a9 9 0 0 0 9 9 9.75 9.75 0 0 0 6.74-2.74L21 16"/>
-              <path d="M16 16h5v5"/>
-            </svg>
+            ${symbolSvg("retry")}
             Try Software Decoding
           </button>
           <button class="movi-retry-btn" part="error-button error-retry-button" style="display: none;">
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" width="16" height="16">
-              <path d="M21 12a9 9 0 0 0-9-9 9.75 9.75 0 0 0-6.74 2.74L3 8"/>
-              <path d="M3 3v5h5"/>
-              <path d="M3 12a9 9 0 0 0 9 9 9.75 9.75 0 0 0 6.74-2.74L21 16"/>
-              <path d="M16 16h5v5"/>
-            </svg>
+            ${symbolSvg("retry")}
             Retry
           </button>
           <!-- A failed source in fullscreen leaves the viewer on a black
@@ -2436,9 +2563,7 @@ export class MoviElement extends HTMLElement {
                need a key. Shown only while fullscreen (CSS, off the host's
                movi-fullscreen-active class). -->
           <button class="movi-error-exit-fs-btn" part="error-button error-exit-fullscreen-button" type="button">
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" width="16" height="16" aria-hidden="true">
-              <path d="M8.5 3.5v3a2 2 0 0 1-2 2h-3M20.5 8.5h-3a2 2 0 0 1-2-2v-3M3.5 15.5h3a2 2 0 0 1 2 2v3M15.5 20.5v-3a2 2 0 0 1 2-2h3"/>
-            </svg>
+            ${symbolSvg("collapse")}
             Exit full screen
           </button>
         </div>
@@ -2480,12 +2605,7 @@ export class MoviElement extends HTMLElement {
         <div class="movi-empty-icon-wrapper">
           <!-- A soft stack of media cards makes the absence feel intentional
                without turning the placeholder into a literal box or tray. -->
-          <svg viewBox="0 0 140 100" fill="none" aria-hidden="true">
-            <rect class="movi-empty-card-back" x="22" y="10" width="94" height="66" rx="14" transform="rotate(-13 69 43)"/>
-            <rect class="movi-empty-card-front" x="28" y="25" width="100" height="66" rx="15"/>
-            <rect class="movi-empty-card-detail" x="42" y="39" width="19" height="17" rx="4.5"/>
-            <path class="movi-empty-card-play" d="M49 43.5v8l6.5-4-6.5-4Z"/>
-          </svg>
+          ${symbolSvg("emptyCards")}
         </div>
         <div class="movi-empty-text">
           <!-- Two things this copy must not do. It can't say "video": the
@@ -2513,10 +2633,7 @@ export class MoviElement extends HTMLElement {
     // eslint-disable-next-line no-unsanitized/property -- static template, no user data
     this.pipPlaceholder.innerHTML = `
       <div class="movi-pip-placeholder-inner">
-        <svg class="movi-pip-placeholder-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
-          <rect x="2" y="4" width="20" height="16" rx="2"></rect>
-          <rect x="12" y="12" width="8" height="6" rx="1" fill="currentColor" stroke="none"></rect>
-        </svg>
+        ${symbolSvg("pipPlaceholder", "movi-pip-placeholder-icon")}
         <p class="movi-pip-placeholder-text">Playing in picture-in-picture</p>
         <button type="button" class="movi-pip-placeholder-btn">Bring it back</button>
       </div>
@@ -2544,7 +2661,7 @@ export class MoviElement extends HTMLElement {
     const holdSpeed = document.createElement("div");
     holdSpeed.className = "movi-hold-speed";
     holdSpeed.style.display = "none";
-    holdSpeed.innerHTML = `<span>2×</span><svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M4 5l8 7-8 7V5zm9 0l8 7-8 7V5z"/></svg>`;
+    holdSpeed.innerHTML = `<span>2×</span>${symbolSvg("holdSpeed")}`;
     shadowRoot.appendChild(holdSpeed);
 
     // Create context menu FIRST (before setupContextMenu is called)
@@ -2899,9 +3016,7 @@ export class MoviElement extends HTMLElement {
               </div>
               <div class="movi-hdr-container">
                 <button class="movi-btn movi-hdr-btn" part="button hdr-button" aria-label="Toggle HDR">
-                  <svg class="movi-icon-hdr" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round">
-                    <path d="M5 7v10M5 12h5M10 7v10M14 7h6a3 3 0 0 1 0 6h-6M17 13l3 4"></path>
-                  </svg>
+                  ${symbolSvg("hdr", "movi-icon-hdr")}
                   <span class="movi-hdr-label">HDR</span>
                 </button>
               </div>
@@ -3075,20 +3190,15 @@ export class MoviElement extends HTMLElement {
     unmuteOverlay.type = "button";
     unmuteOverlay.setAttribute("aria-label", "Unmute");
     unmuteOverlay.style.display = "none";
-    // textContent + appendChild — no innerHTML to keep the security
-    // hook happy and avoid an XSS surface even with a static template.
-    const unmuteSvg = document.createElementNS("http://www.w3.org/2000/svg", "svg");
-    unmuteSvg.setAttribute("viewBox", "0 0 24 24");
-    unmuteSvg.setAttribute("fill", "none");
-    unmuteSvg.setAttribute("stroke", "currentColor");
-    unmuteSvg.setAttribute("stroke-width", "2");
-    unmuteSvg.setAttribute("stroke-linecap", "round");
-    unmuteSvg.setAttribute("stroke-linejoin", "round");
-    unmuteSvg.innerHTML =
-      '<polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5"/>' +
-      '<line x1="23" y1="9" x2="17" y2="15"/>' +
-      '<line x1="17" y1="9" x2="23" y2="15"/>';
-    unmuteOverlay.appendChild(unmuteSvg);
+    // Built from the symbol table like every other mark, so setIcon reaches it.
+    // Through a holder rather than assigning to the pill's own innerHTML: the
+    // security hook objects to innerHTML on a node that is going into the tree,
+    // and this one never does.
+    const unmuteHolder = document.createElement("div");
+    // eslint-disable-next-line no-unsanitized/property -- player's own symbol table
+    unmuteHolder.innerHTML = symbolSvg("unmute");
+    if (unmuteHolder.firstElementChild)
+      unmuteOverlay.appendChild(unmuteHolder.firstElementChild);
     const unmuteText = document.createElement("span");
     unmuteText.textContent = "Tap to unmute";
     unmuteOverlay.appendChild(unmuteText);
@@ -3163,7 +3273,7 @@ export class MoviElement extends HTMLElement {
     gearBtn.setAttribute("title", "More options");
     // Dots at r=2 in a 24 box read as a lighter mark than the stroked icons
     // around it; 2.3 with a slightly tighter run evens out the weight.
-    gearBtn.innerHTML = `<svg viewBox="0 0 24 24" fill="currentColor" stroke="none"><circle cx="12" cy="5.5" r="2.3"/><circle cx="12" cy="12" r="2.3"/><circle cx="12" cy="18.5" r="2.3"/></svg>`;
+    gearBtn.innerHTML = `${symbolSvg("dots")}`;
     gearBtn.addEventListener("click", (e) => {
       e.stopPropagation();
       // Open the context menu via a synthetic contextmenu event; the flag lets
@@ -3219,11 +3329,11 @@ export class MoviElement extends HTMLElement {
       </div>
       <div class="movi-timeline-scroller">
         <button class="movi-timeline-arrow movi-timeline-arrow-left" type="button" tabindex="-1" aria-label="Scroll timeline left">
-          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="15 18 9 12 15 6"/></svg>
+          ${symbolSvg("chevronLeftBold")}
         </button>
         <div class="movi-timeline-strip"></div>
         <button class="movi-timeline-arrow movi-timeline-arrow-right" type="button" tabindex="-1" aria-label="Scroll timeline right">
-          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="9 18 15 12 9 6"/></svg>
+          ${symbolSvg("chevronRightBold")}
         </button>
       </div>
       <div class="movi-timeline-status"></div>
@@ -3323,16 +3433,13 @@ export class MoviElement extends HTMLElement {
     smoothWarning.setAttribute("role", "status");
     smoothWarning.style.display = "none";
     smoothWarning.innerHTML = `
-      <svg class="movi-smooth-warning-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
-        <path d="M10.29 3.86 1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/>
-        <line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/>
-      </svg>
+      ${symbolSvg("warning", "movi-smooth-warning-icon")}
       <div class="movi-smooth-warning-body">
         <div class="movi-smooth-warning-title"></div>
         <div class="movi-smooth-warning-reason"></div>
       </div>
       <button class="movi-smooth-warning-close" type="button" aria-label="Dismiss">
-        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" aria-hidden="true"><line x1="6" y1="6" x2="18" y2="18"/><line x1="6" y1="18" x2="18" y2="6"/></svg>
+        ${symbolSvg("closeThin")}
       </button>
     `;
     // A click on the notice is not a click on the video under it.
@@ -3457,10 +3564,7 @@ export class MoviElement extends HTMLElement {
       <div class="movi-cues-header">
         <span class="movi-cues-title">Transcript</span>
         <div class="movi-cues-search-wrap">
-          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" width="14" height="14">
-            <circle cx="11" cy="11" r="7"/>
-            <path d="m21 21-4.3-4.3"/>
-          </svg>
+          ${symbolSvg("search")}
           <input type="search" class="movi-cues-search" placeholder="Search transcript…" aria-label="Search transcript">
         </div>
         <button class="movi-cues-close" aria-label="Close">&times;</button>
@@ -5843,11 +5947,8 @@ export class MoviElement extends HTMLElement {
                   contain: "Fit",
                   cover: "Fill",
                 };
-                const osdSvg =
-                  MoviElement.ASPECT_ICONS[next] ||
-                  MoviElement.ASPECT_ICONS.contain;
                 this.showOSD(
-                  `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75">${osdSvg}</svg>`,
+                  symbolSvg(MoviElement.aspectSymbol(next)),
                   labels[next],
                 );
                 // Re-baseline so the opposite pinch can toggle straight back.
@@ -5968,8 +6069,8 @@ export class MoviElement extends HTMLElement {
               // Show OSD with seek information
               const icon =
                 deltaX >= 0
-                  ? `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><path d="M13 17l5-5-5-5M6 17l5-5-5-5"/></svg>`
-                  : `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><path d="M11 17l-5-5 5-5M18 17l-5-5 5-5"/></svg>`;
+                  ? `${symbolSvg("chevronsRight")}`
+                  : `${symbolSvg("chevronsLeft")}`;
 
               const timeStr = this.formatTime(newTime);
               const durationStr = this.formatTime(this.duration);
@@ -6584,7 +6685,7 @@ export class MoviElement extends HTMLElement {
             const frameTime = 1 / fps;
             this.currentTime = Math.max(0, this.currentTime - frameTime);
             this.showOSD(
-              `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><path d="M11 17l-5-5 5-5M18 17l-5-5 5-5"/></svg>`,
+              `${symbolSvg("chevronsLeft")}`,
               `-1 Frame`,
             );
           } else {
@@ -6612,7 +6713,7 @@ export class MoviElement extends HTMLElement {
                 this.currentTime + frameTime,
               );
               this.showOSD(
-                `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><path d="M13 17l5-5-5-5M6 17l5-5-5-5"/></svg>`,
+                `${symbolSvg("chevronsRight")}`,
                 `+1 Frame`,
               );
             } else {
@@ -6694,7 +6795,7 @@ export class MoviElement extends HTMLElement {
           if (this.player && !this._pipWindow && this.isControlAvailable("rotate")) {
             const deg = this.player.rotateVideo();
             this.showOSD(
-              `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12a9 9 0 1 1-9-9 9.75 9.75 0 0 1 6.74 2.74L21 8"/><path d="M21 3v5h-5"/></svg>`,
+              `${symbolSvg("replay")}`,
               `${deg}°`,
             );
             const statusEl = this.contextMenuRoot().querySelector(".movi-rotate-status");
@@ -6717,9 +6818,8 @@ export class MoviElement extends HTMLElement {
             this.updateFitMode();
             this.updateAspectRatioIcon();
             const labels: Record<string, string> = { contain: "Fit", cover: "Fill", fill: "Stretch", zoom: "Zoom" };
-            const osdSvg = MoviElement.ASPECT_ICONS[next] || MoviElement.ASPECT_ICONS.contain;
             this.showOSD(
-              `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75">${osdSvg}</svg>`,
+              symbolSvg(MoviElement.aspectSymbol(next)),
               labels[next],
             );
           }
@@ -7938,7 +8038,7 @@ export class MoviElement extends HTMLElement {
         // Surface the same Fit/Fill/… OSD the aspect button and keyboard show —
         // changing the fit from the menu was silently skipping it.
         this.showOSD(
-          `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75">${MoviElement.ASPECT_ICONS[fitMode] || MoviElement.ASPECT_ICONS.contain}</svg>`,
+          `${symbolSvg(MoviElement.aspectSymbol(fitMode))}`,
           fitLabels[fitMode] || fitMode,
         );
         hideContextMenu();
@@ -8118,9 +8218,7 @@ export class MoviElement extends HTMLElement {
         window.matchMedia("(pointer: coarse)").matches
       ) {
         html += `<div class="movi-context-menu-item movi-context-menu-back" data-action="back">
-          <svg class="movi-context-menu-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round">
-            <path d="M15 18l-6-6 6-6"/>
-          </svg>
+          ${symbolSvg("chevronBack", "movi-context-menu-icon")}
           <span class="movi-context-menu-label">Back</span>
         </div>`;
       }
@@ -8220,9 +8318,7 @@ export class MoviElement extends HTMLElement {
         window.matchMedia("(pointer: coarse)").matches
       ) {
         html += `<div class="movi-context-menu-item movi-context-menu-back" data-action="back">
-          <svg class="movi-context-menu-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round">
-            <path d="M15 18l-6-6 6-6"/>
-          </svg>
+          ${symbolSvg("chevronBack", "movi-context-menu-icon")}
           <span class="movi-context-menu-label">Back</span>
         </div>`;
       }
@@ -9342,16 +9438,28 @@ export class MoviElement extends HTMLElement {
     if (this.isFullscreenActive()) void this.toggleFullscreen();
   }
 
-  private static readonly ASPECT_ICONS: Record<string, string> = {
-    contain: SYMBOLS.aspect,
-    cover: SYMBOLS.aspectCover,
-    fill: SYMBOLS.aspectFill,
-    zoom: SYMBOLS.zoom,
+  /**
+   * Which symbol each crop is drawn with.
+   *
+   * The name, not the body. Pouring one symbol's paths into another's <svg>
+   * shell was how this worked, and it left the shell saying data-icon="aspect"
+   * over a Zoom drawing — so setIcon("zoom", …) changed nothing on the bar and
+   * setIcon("aspect", …) was undone the next time the crop changed.
+   */
+  private static readonly ASPECT_SYMBOLS: Record<string, SymbolName> = {
+    contain: "aspect",
+    cover: "aspectCover",
+    fill: "aspectFill",
+    zoom: "zoom",
   };
+
+  private static aspectSymbol(fit: string | undefined): SymbolName {
+    return MoviElement.ASPECT_SYMBOLS[fit ?? ""] ?? "aspect";
+  }
 
   private updateAspectRatioIcon(): void {
     const fit = this._objectFit === "control" ? this._currentFit : (this._objectFit as any);
-    const svg = MoviElement.ASPECT_ICONS[fit] || MoviElement.ASPECT_ICONS.contain;
+    const name = MoviElement.aspectSymbol(fit);
     // Every place the crop is drawn shows the CURRENT one: the bar button, and
     // the context menu's row. A generic frame there while the setting says
     // "Zoom" is the menu contradicting itself.
@@ -9363,11 +9471,15 @@ export class MoviElement extends HTMLElement {
     const bar = this.shadowRoot?.querySelector(
       ".movi-icon-aspect-ratio",
     ) as SVGElement | null;
-    if (bar) bar.innerHTML = svg;
+    if (bar) bar.outerHTML = symbolSvg(name, "movi-icon-aspect-ratio");
     const ctx = this.contextMenuRoot().querySelector(
       ".movi-icon-aspect-ratio-ctx",
     ) as SVGElement | null;
-    if (ctx) ctx.innerHTML = svg;
+    if (ctx)
+      ctx.outerHTML = symbolSvg(
+        name,
+        "movi-context-menu-icon movi-icon-aspect-ratio-ctx",
+      );
       // Keep an open panel / context menu in step - see the method's note.
     this.refreshOpenSettingsSurfaces();
   }
@@ -9397,8 +9509,8 @@ export class MoviElement extends HTMLElement {
    *  publishPlayerWidth. */
   private static readonly SHORT_PLAYER_PX = 400;
 
-  private static readonly TRACK_ICON_OFF = `<svg class="movi-symbol movi-track-item-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.65" stroke-linecap="round"><circle cx="12" cy="12" r="8.75"/><path d="M7.75 12h8.5"/></svg>`;
-  private static readonly TRACK_ICON_CHECK = `<svg class="movi-symbol movi-track-item-check" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.1" stroke-linecap="round" stroke-linejoin="round"><path d="m5.25 12.25 4.15 4.15 9.35-9.35"/></svg>`;
+  private static readonly TRACK_ICON_OFF = `${symbolSvg("trackItem", "movi-track-item-icon")}`;
+  private static readonly TRACK_ICON_CHECK = `${symbolSvg("check", "movi-track-item-check")}`;
 
   private formatAudioBadge(track: AudioTrack): string {
     const codec = (track.codec || "").toUpperCase();
@@ -9787,9 +9899,7 @@ export class MoviElement extends HTMLElement {
             ${
               isActive
                 ? `
-            <svg class="movi-quality-check" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.1" stroke-linecap="round" stroke-linejoin="round">
-              <path d="m5.25 12.25 4.15 4.15 9.35-9.35"></path>
-            </svg>`
+            ${symbolSvg("check", "movi-quality-check")}`
                 : ""
             }
          </div>
@@ -11552,7 +11662,7 @@ export class MoviElement extends HTMLElement {
       activeQuality?.badge || this._rungBadge(activeQuality?.height || 0),
     );
 
-    const check = `<svg class="movi-quality-check" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.1" stroke-linecap="round" stroke-linejoin="round"><path d="m5.25 12.25 4.15 4.15 9.35-9.35"></path></svg>`;
+    const check = `${symbolSvg("check", "movi-quality-check")}`;
     const rows: string[] = [];
     if (abrCapable) {
       // "Auto (1080p)" — show the rung Auto is currently serving (Shaka/YouTube).
@@ -11663,14 +11773,12 @@ export class MoviElement extends HTMLElement {
 
     const BADGE_CSS =
       "margin-left:8px;font-size:9px;font-weight:700;letter-spacing:0.5px;padding:1px 5px;border-radius:var(--movi-radius-badge,4px);background:rgba(255,255,255,0.16);color:#fff;vertical-align:middle;";
-    const checkSvg = () =>
-      document.importNode(
-        new DOMParser().parseFromString(
-          '<svg xmlns="http://www.w3.org/2000/svg" class="movi-quality-check" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.1" stroke-linecap="round" stroke-linejoin="round"><path d="m5.25 12.25 4.15 4.15 9.35-9.35"></path></svg>',
-          "image/svg+xml",
-        ).documentElement,
-        true,
-      );
+    const checkSvg = () => {
+      const holder = document.createElement("div");
+      // eslint-disable-next-line no-unsanitized/property -- player's own symbol table
+      holder.innerHTML = symbolSvg("check", "movi-quality-check");
+      return holder.firstElementChild as Element;
+    };
     const closeMenu = () => {
       const menu = this.shadowRoot?.querySelector(
         ".movi-quality-menu",
@@ -12582,7 +12690,7 @@ export class MoviElement extends HTMLElement {
         }),
       );
       this.showOSD(
-        '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><path d="M11 5L6 9H2v6h4l5 4V5z"></path><line x1="23" y1="9" x2="17" y2="15"></line><line x1="17" y1="9" x2="23" y2="15"></line></svg>',
+        symbolSvg("volumeOff"),
         "This audio format isn't supported by your browser",
       );
       this.setNoAudibleAudio(true);
@@ -13407,9 +13515,7 @@ export class MoviElement extends HTMLElement {
       return `
         <div class="movi-sub-cust-panel">
           <button type="button" class="movi-sub-cust-back" data-action="back" aria-label="Back to subtitles">
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" width="14" height="14">
-              <path d="M15 18l-6-6 6-6"/>
-            </svg>
+            ${symbolSvg("chevronBack")}
             <span>Back</span>
           </button>
           <div class="movi-sub-cust-empty">Select a subtitle track to customize.</div>
@@ -13420,9 +13526,7 @@ export class MoviElement extends HTMLElement {
     return `
       <div class="movi-sub-cust-panel">
         <button type="button" class="movi-sub-cust-back" data-action="back" aria-label="Back to subtitles">
-          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" width="14" height="14">
-            <path d="M15 18l-6-6 6-6"/>
-          </svg>
+          ${symbolSvg("chevronBack")}
           <span>Back</span>
         </button>
 
@@ -14161,9 +14265,7 @@ export class MoviElement extends HTMLElement {
     if (this._subtitlePicker) {
       menuHTML += `
         <div class="movi-subtitle-track-item movi-subtitle-pick-item" data-subtitle-pick="1">
-          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" width="16" height="16">
-            <path d="M12 5v14M5 12h14"/>
-          </svg>
+          ${symbolSvg("plus")}
           <span class="movi-subtitle-track-label">Add subtitle…</span>
         </div>
       `;
@@ -15412,7 +15514,7 @@ export class MoviElement extends HTMLElement {
       window.matchMedia("(pointer: coarse)").matches
     ) {
       html += `<div class="movi-context-menu-item movi-context-menu-back" data-action="back">
-        <svg class="movi-context-menu-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><path d="M15 18l-6-6 6-6"/></svg>
+        ${symbolSvg("chevronBack", "movi-context-menu-icon")}
         <span class="movi-context-menu-label">Back</span>
       </div>`;
     }
@@ -15438,7 +15540,7 @@ export class MoviElement extends HTMLElement {
     // opening the submenu does not).
     if (real.length < 1 && canUnlock) {
       html += `<div class="movi-context-menu-item movi-context-menu-audiodevice-unlock" data-audio-output-unlock="1">
-        <svg class="movi-context-menu-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><line x1="12" y1="16" x2="12" y2="12"/><line x1="12" y1="8" x2="12.01" y2="8"/></svg>
+        ${symbolSvg("info", "movi-context-menu-icon")}
         <span class="movi-context-menu-label">Show output devices…</span>
       </div>`;
     }
@@ -15678,9 +15780,10 @@ export class MoviElement extends HTMLElement {
    *  answers "what is it set to" without opening anything. */
   private aspectRowIcon(): string {
     const fit = this._objectFit === "control" ? this._currentFit : this._objectFit;
-    const icon =
-      MoviElement.ASPECT_ICONS[fit as string] || MoviElement.ASPECT_ICONS.contain;
-    return `<svg class="movi-settings-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round">${icon}</svg>`;
+    return symbolSvg(
+      MoviElement.aspectSymbol(fit as string),
+      "movi-settings-icon",
+    );
   }
 
   /**
@@ -15738,7 +15841,7 @@ export class MoviElement extends HTMLElement {
       ".movi-settings-root",
     ) as HTMLElement | null;
     if (!root) return;
-    const chevron = `<svg class="movi-settings-chevron" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><path d="M9 18l6-6-6-6"/></svg>`;
+    const chevron = `${symbolSvg("chevronForward", "movi-settings-chevron")}`;
     const rows: string[] = [];
     const page = (
       pageKey: string,
@@ -16021,13 +16124,13 @@ export class MoviElement extends HTMLElement {
     if (key !== "aspect") return "";
     const current =
       this._objectFit === "control" ? this._currentFit : this._objectFit;
-    const check = `<svg class="movi-settings-check" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.1" stroke-linecap="round" stroke-linejoin="round"><path d="m5.25 12.25 4.15 4.15 9.35-9.35"/></svg>`;
+    const check = `${symbolSvg("check", "movi-settings-check")}`;
     return MoviElement.ASPECT_CHOICES.map(([fit, label]) => {
       // Each fit already HAS a drawing — the bar button cycled through exactly
       // these to show which was active. Reuse them here: for a spatial setting,
       // the picture of the crop says more than the word for it.
-      const icon = MoviElement.ASPECT_ICONS[fit] || MoviElement.ASPECT_ICONS.contain;
-      return `<button type="button" class="movi-settings-choice ${fit === current ? "is-active" : ""}" data-fit="${fit}"><span class="movi-settings-choice-main"><svg class="movi-settings-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round">${icon}</svg><span>${label}</span></span>${fit === current ? check : ""}</button>`;
+      const icon = symbolSvg(MoviElement.aspectSymbol(fit), "movi-settings-icon");
+      return `<button type="button" class="movi-settings-choice ${fit === current ? "is-active" : ""}" data-fit="${fit}"><span class="movi-settings-choice-main">${icon}<span>${label}</span></span>${fit === current ? check : ""}</button>`;
     }).join("");
   }
 
@@ -16040,9 +16143,8 @@ export class MoviElement extends HTMLElement {
 
   /** The toast a fit change puts up — same one the old aspect button showed. */
   private showAspectOsd(fit: string): void {
-    const svg = MoviElement.ASPECT_ICONS[fit] || MoviElement.ASPECT_ICONS.contain;
     this.showOSD(
-      `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75">${svg}</svg>`,
+      symbolSvg(MoviElement.aspectSymbol(fit)),
       MoviElement.ASPECT_OSD_LABELS[fit] || "Fit",
     );
   }
@@ -30207,11 +30309,11 @@ export class MoviElement extends HTMLElement {
       const volumePercent = Math.round(this._volume * 100);
       let icon = "";
       if (this._muted || this._volume === 0) {
-        icon = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><path d="M11 5L6 9H2v6h4l5 4V5z"></path><line x1="23" y1="9" x2="17" y2="15"></line><line x1="17" y1="9" x2="23" y2="15"></line></svg>`;
+        icon = `${symbolSvg("volumeOff")}`;
       } else if (this._volume < 0.5) {
-        icon = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><path d="M11 5L6 9H2v6h4l5 4V5z"></path><path d="M15.54 8.46a5 5 0 0 1 0 7.07"></path></svg>`;
+        icon = `${symbolSvg("volumeWave")}`;
       } else {
-        icon = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><path d="M11 5L6 9H2v6h4l5 4V5z"></path><path d="M19.07 4.93a10 10 0 0 1 0 14.14M15.54 8.46a5 5 0 0 1 0 7.07"></path></svg>`;
+        icon = `${symbolSvg("volumeWaves")}`;
       }
 
       // Only show if user interacting or specifically requested (simple logic: just check if player exists to avoid startup spam)
@@ -30268,7 +30370,7 @@ export class MoviElement extends HTMLElement {
       this.player
     ) {
       this.showOSD(
-        `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><path d="M5.64 18.36a9 9 0 1 1 12.72 0"></path><path d="m12 12 4-4"></path></svg>`,
+        `${symbolSvg("stopwatch")}`,
         `${this._playbackRate}x`,
       );
     }
@@ -39230,6 +39332,137 @@ export class MoviElement extends HTMLElement {
     }
   }
 
+  /** Glyphs the host has replaced, and how many times — see setIcon. The count
+   *  is what tells a painted node apart from one the player has just rebuilt,
+   *  without holding the markup twice. */
+  private _iconOverrides = new Map<string, string | Element>();
+  private _iconRevs = new Map<string, number>();
+  private _iconObserver: MutationObserver | null = null;
+
+  /** Every glyph setIcon will answer to. */
+  static get iconNames(): string[] {
+    return Object.keys(SYMBOLS);
+  }
+
+  /**
+   * Replace one of the player's own glyphs with the host's.
+   *
+   *   player.setIcon("play", '<svg viewBox="0 0 24 24">…</svg>');
+   *   player.setIcon("play", null);   // back to the built-in
+   *
+   * Every drawing of that symbol changes together — the bar button, the
+   * context-menu row, the OSD flash, the lock screen's twin in the PiP window —
+   * because they are all the same symbol and a player whose menu disagrees with
+   * its bar is worse than one that cannot be themed at all.
+   *
+   * The replacement keeps the class list, the inline `display` and the data-
+   * marks the player finds and toggles the glyph by, so a swapped play mark
+   * still hides itself when pause comes up. Sizing and colour are better said
+   * in CSS — `::part(icon)`, or `--movi-controls-color` — and this is for the
+   * cases where a different SHAPE is wanted.
+   *
+   * Markup is parsed the way addControl's `icon` is: inert document, scripts
+   * and on* handlers stripped, host trust. Names are MoviElement.iconNames.
+   */
+  setIcon(name: string, icon: string | Element | null): void {
+    if (!(name in SYMBOLS)) {
+      Logger.warn(
+        TAG,
+        `setIcon("${name}"): no such icon — see MoviElement.iconNames`,
+      );
+      return;
+    }
+    if (icon) this._iconOverrides.set(name, icon);
+    else this._iconOverrides.delete(name);
+    this._iconRevs.set(name, (this._iconRevs.get(name) ?? 0) + 1);
+    this.watchIcons();
+    this.repaintIcons();
+  }
+
+  /**
+   * Draw a glyph the way the overrides currently say, if it is not already.
+   *
+   * The revision check is not an optimisation, it is what stops the observer
+   * below from chasing its own tail: replacing the node is a childList mutation
+   * on its parent, which the observer sees, which would paint it again.
+   */
+  private repaintIcon(node: Element): void {
+    const name = node.getAttribute("data-icon");
+    if (!name || !(name in SYMBOLS)) return;
+    const rev = this._iconRevs.get(name) ?? 0;
+    if ((node.getAttribute("data-icon-rev") ?? "0") === String(rev)) return;
+
+    const override = this._iconOverrides.get(name);
+    const classes = [...node.classList].filter((c) => c !== "movi-symbol");
+    const filled = node.hasAttribute("data-filled");
+    let next = override ? this.buildCustomIcon(override) : null;
+    if (!next) {
+      const holder = document.createElement("div");
+      // eslint-disable-next-line no-unsanitized/property -- player's own symbol table
+      holder.innerHTML = symbolSvg(name as SymbolName, classes.join(" "), {
+        filled,
+      });
+      next = holder.firstElementChild;
+    }
+    if (!next) return;
+
+    next.classList.add("movi-symbol", ...classes);
+    next.setAttribute("data-icon", name);
+    next.setAttribute("data-icon-rev", String(rev));
+    next.setAttribute("part", "icon");
+    next.setAttribute("aria-hidden", "true");
+    if (filled) next.setAttribute("data-filled", "");
+    // The player shows and hides these by writing display on them. A glyph that
+    // arrived hidden has to stay hidden, or a swapped pause mark appears over
+    // the play one the moment it is installed.
+    const display = (node as HTMLElement).style?.display;
+    if (display) (next as HTMLElement).style.display = display;
+    node.replaceWith(next);
+  }
+
+  /** Every glyph currently in the DOM, in both roots — the desktop menu spends
+   *  its visible life in a body-level portal. */
+  private repaintIcons(root?: ParentNode | null): void {
+    const roots = root ? [root] : [this.shadowRoot, this._menuPortalRoot];
+    for (const r of roots) {
+      if (!r) continue;
+      for (const node of Array.from(r.querySelectorAll("[data-icon]")))
+        this.repaintIcon(node);
+    }
+  }
+
+  /**
+   * Watch for glyphs the player draws AFTER the override was set — a menu page
+   * built on first open, a track list rebuilt when the source changes, the OSD.
+   * There is no single place those go through, and a host that has to re-call
+   * setIcon every time the player rebuilds something has not been given an API.
+   *
+   * Installed only once a host has actually overridden something, so a page
+   * that never calls setIcon pays nothing. Not torn down on disconnect: it
+   * holds nothing but this element's own shadow tree, so it is collected with
+   * the element, and a reconnect would otherwise have to remember to re-arm it.
+   */
+  private watchIcons(): void {
+    if (!this._iconObserver) {
+      this._iconObserver = new MutationObserver((records) => {
+        for (const record of records) {
+          for (const added of Array.from(record.addedNodes)) {
+            if (!(added instanceof Element)) continue;
+            if (added.hasAttribute("data-icon")) this.repaintIcon(added);
+            this.repaintIcons(added);
+          }
+        }
+      });
+    }
+    const opts = { childList: true, subtree: true };
+    if (this.shadowRoot) this._iconObserver.observe(this.shadowRoot, opts);
+    // observe() on a root already being watched with the same options is a
+    // no-op, so re-arming the portal every time setIcon is called is how it
+    // gets watched at all — the portal does not exist until a menu opens.
+    if (this._menuPortalRoot)
+      this._iconObserver.observe(this._menuPortalRoot, opts);
+  }
+
   /**
    * The button a custom control is, wherever it is going.
    *
@@ -44068,6 +44301,13 @@ export class MoviElement extends HTMLElement {
     document.body.appendChild(host);
     this._menuPortalHost = host;
     this._menuPortalRoot = root;
+    // The menu's own nodes MOVE here, so they arrive already painted — but the
+    // panels built inside it afterwards do not, and the observer cannot watch a
+    // root that did not exist when setIcon was called.
+    if (this._iconOverrides.size) {
+      this.watchIcons();
+      this.repaintIcons(root);
+    }
     return root;
   }
 

@@ -3594,6 +3594,7 @@ movi-player::part(title-bar)       { font-family: "Söhne", sans-serif; }
 | `progress-handle` | The knob |
 | `time` | Current time / duration |
 | `center-button` | The big centre play / pause |
+| `icon` | Every glyph in the player, all at once — size, colour, transform |
 | `spinner` | The loading ring's box — where it sits, not what it draws |
 | `title-bar` | The title strip along the top |
 | `poster` | The poster image |
@@ -3609,6 +3610,66 @@ The element sets `outline: none !important` on its own controls, and an
 `!important` declaration inside a shadow tree beats one in the page. Focus
 rings are therefore not overridable from outside; nothing else in the table is
 declared `!important`.
+:::
+
+---
+
+### Replace an icon — `setIcon()`
+
+`::part()` can style a glyph but cannot swap it — a part is the END of a
+selector, so `::part(play-button) svg` matches nothing. Every mark the player
+draws has a name instead:
+
+```js
+const player = document.querySelector("movi-player");
+
+player.setIcon("play", '<svg viewBox="0 0 24 24"><path d="…"/></svg>');
+player.setIcon("emptyCards", myPlaceholderElement);
+player.setIcon("play", null);   // back to the built-in
+```
+
+Every drawing of that symbol changes together — the bar button, the big centre
+button, the context-menu row, the settings panel, the OSD flash — because they
+are the same symbol, and a menu that disagrees with its bar is worse than a
+player that cannot be themed at all.
+
+The replacement keeps the class list, the inline `display` and the marks the
+player finds and toggles the glyph by, so a swapped play mark still hides itself
+when pause comes up. Markup is parsed the way
+[`addControl()`](#addcontrol-spec)'s `icon` is: inert document, `<script>` and
+`on*` handlers stripped, host trust. An `Element` is cloned instead.
+
+Glyphs the player draws later — a settings page built on first open, a track
+list rebuilt for a new source, the OSD — are swapped as they appear; there is
+nothing to re-call.
+
+**Names** (`MoviElement.iconNames`, 72):
+
+`play`, `pause`, `previous`, `next`, `volume`, `volumeLow`, `volumeHigh`,
+`mute`, `volumeFull`, `volumeOne`, `volumeMuted`, `volumeOff`, `volumeWave`,
+`volumeWaves`, `unmute`, `audio`, `audioOutput`, `subtitles`,
+`subtitlesFilled`, `subtitlesOff`, `transcript`, `speed`, `stopwatch`,
+`stable`, `loop`, `shuffle`, `settings`, `quality`, `qualityUp`, `aspect`,
+`aspectCover`, `aspectFill`, `zoom`, `crop`, `rotate`, `pip`, `pipPlaceholder`,
+`backToTab`, `fullscreen`, `fullscreenExit`, `collapse`, `more`, `dots`,
+`close`, `closeThin`, `check`, `plus`, `search`, `info`, `warning`, `retry`,
+`replay`, `ambient`, `snapshot`, `timeline`, `stats`, `keyboard`, `holdSpeed`,
+`seekBackward`, `seekForward`, `chevronLeft`, `chevronRight`, `chevronBack`,
+`chevronForward`, `chevronLeftBold`, `chevronRightBold`, `chevronsLeft`,
+`chevronsRight`, `trackItem`, `hdr`, `emptyCards`, `errorCards`
+
+`emptyCards` and `errorCards` are the two card-stack illustrations — "Nothing to
+Play" and the error screen — not 24-square glyphs; they are drawn in a 140×100
+box and their pieces are coloured by the stylesheet.
+
+The loading ring is not in this list. It has
+[`slot="spinner"`](#replace-the-spinner-slot-spinner) instead, because replacing
+it is a matter of handing over an element, not a path.
+
+::: tip Size and colour are CSS
+`::part(icon)` reaches every glyph at once, and `--movi-controls-color` sets the
+colour of the chrome's marks. Reach for `setIcon()` when a different SHAPE is
+wanted.
 :::
 
 ---

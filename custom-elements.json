@@ -836,6 +836,10 @@
               "description": "HDR toggle"
             },
             {
+              "name": "icon",
+              "description": "Every glyph in the player, all at once — size, colour, transform"
+            },
+            {
               "name": "loop-button",
               "description": "Loop"
             },

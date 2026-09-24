@@ -150,7 +150,7 @@ npm i movi-player
 
 **Host Error Screen** -- Restyle the built-in error overlay via `::part()`, replace it outright with `slot="error"`, and read the exact on-screen wording from the `errordisplay` event.
 
-**Host Chrome** -- Every button, the progress bar, the time, the centre play button, the title strip and the spinner carry a `part=` for `::part()` restyling. `slot="spinner"` swaps the loading ring for your own; `controlslist="nospinner"` takes it away entirely.
+**Host Chrome** -- Every button, the progress bar, the time, the centre play button, the title strip and the spinner carry a `part=` for `::part()` restyling. `setIcon()` swaps any of the player's 72 icons for your own. `slot="spinner"` swaps the loading ring for your own; `controlslist="nospinner"` takes it away entirely.
 
 </details>
 
@@ -740,7 +740,8 @@ See [Sources](https://moviplayer.com/docs/api/sources) in the docs.
 - **Host fullscreen handoff** — a cancelable `movi-fullscreen-request` event plus `setHostFullscreen()` let embedders (VS Code webview, custom apps) take over fullscreen and keep the player's UI in sync; `exitFullscreen()` covers all fullscreen routes.
 - **Host error screen** — every piece of the built-in error overlay carries a `part=` for `::part()` restyling; `slot="error"` replaces it outright; the `errordisplay` event (and `errorTitle` / `errorMessage` properties) carries the exact wording on screen, including format/codec failures that never raise a runtime `error`. See [Customizing the Error Screen](https://moviplayer.com/docs/api/element#customizing-the-error-screen).
 - **`noerrorscreen`** — suppress the built-in error overlays entirely and render your own.
-- **Host chrome** — forty-four pieces of the shadow tree carry a `part=`: every bar button (`::part(button)` reaches all of them at once), the progress track and its buffered/played/handle, the time, the centre play button, the title strip, the poster, the OSD, caption lines and the spinner's box. See [Restyle the chrome](https://moviplayer.com/docs/api/element#restyle-the-chrome-part).
+- **Host chrome** — forty-five pieces of the shadow tree carry a `part=`: every bar button (`::part(button)` reaches all of them at once), the progress track and its buffered/played/handle, the time, the centre play button, the title strip, the poster, the OSD, caption lines and the spinner's box. See [Restyle the chrome](https://moviplayer.com/docs/api/element#restyle-the-chrome-part).
+- **Host icons** — `player.setIcon(name, svg)` replaces any of the player's 72 marks, `null` restores it; one swap changes the bar, the centre button, the menu row and the OSD together, and `::part(icon)` sizes and colours them all. See [Replace an icon](https://moviplayer.com/docs/api/element#replace-an-icon-seticon).
 - **Host spinner** — `slot="spinner"` replaces the built-in loading ribbon while the player keeps deciding when it is on screen and where it sits; `controlslist="nospinner"` removes it entirely and leaves the `is-buffering` / `is-spinner-pending` host classes for a page drawing its own.
 
 ## Reference
