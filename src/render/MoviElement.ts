@@ -1489,7 +1489,7 @@ export class MoviElement extends HTMLElement {
   private _bufferSize: number = 0; // Custom buffer size in seconds
   private _title: string | null = null; // Video title to display
   private _showTitle: boolean = false; // Show title at top if true
-  /** `subtitlepicker` — offer "Add subtitle file…" in the subtitle menu. */
+  /** `subtitlepicker` — offer "Add subtitle…" in the subtitle menu. */
   private _subtitlePicker: boolean = false;
   /** `smoothwarning` — say so when this source is not expected to play
    *  smoothly here. See checkSmoothPlayback. */
@@ -1500,9 +1500,8 @@ export class MoviElement extends HTMLElement {
   /** Whether the MEASURED notice has been shown for the source now loaded — see
    *  the decode-bound branch in sampleStutter. Cleared with the source. */
   private _smoothWarnedByMeasurement = false;
-  /** Link-rate readings taken during playback, for sampleLinkBudget(). */
-  private _linkBudgetSamples: number[] = [];
   private _warnedLinkBudget = false;
+  private _linkProbeAbort: AbortController | null = null;
   /** Buffering episodes since this source started — see sampleLinkBudget. */
   private _linkStalls = 0;
   /** How many stalls before a low reading is allowed to become a verdict. One
@@ -1522,11 +1521,7 @@ export class MoviElement extends HTMLElement {
     const step = MoviElement.mbpsStep(m);
     return Math.max(Math.round(m / step) * step, 1);
   }
-  /** Seconds of real playback to read before judging the link. The first
-   *  megabytes come out of a proxy or CDN read-ahead burst at fantasy rates —
-   *  bandwidthProbe exists because of exactly that — so a verdict taken early
-   *  says the link is fine when it is not. */
-  private static readonly LINK_BUDGET_SAMPLES = 5;
+
   private _smoothWarnTimer: number | null = null;
   /** Bumped per check: a slower answer for a source or speed that has since
    *  changed must not put up a popup about the old one. */
@@ -1911,7 +1906,7 @@ export class MoviElement extends HTMLElement {
     if (!assessment.playable) {
       return {
         title: `This ${media} can't be played on this device`,
-        body: "Your device or browser doesn't support this file's format.",
+        body: `Your device or browser doesn't support this ${media}'s format.`,
       };
     }
     if (fineAtNormalSpeed) {
@@ -5567,7 +5562,8 @@ export class MoviElement extends HTMLElement {
     this.updateMediaSessionPosition();
     this._smoothWarnedByMeasurement = false;
     this._warnedLinkBudget = false;
-    this._linkBudgetSamples = [];
+    this._linkProbeAbort?.abort();
+    this._linkProbeAbort = null;
     this._linkStalls = 0;
     this.resetStutterHint();
     const pill = this.shadowRoot?.querySelector(
@@ -12205,21 +12201,25 @@ export class MoviElement extends HTMLElement {
 
   /** One stutter sample: compare presented FPS to the smooth-playback baseline. */
   /**
-   * Say so when the connection cannot carry this file at all.
+   * Say so when the connection cannot carry this media at all.
    *
    * Separate from canPlaySmoothly, which asks whether the DEVICE can decode it.
-   * A 40GB remux can be perfectly decodable and still be unwatchable because
-   * the bytes cannot arrive in time, and nothing here said that: the viewer got
-   * a spinner every few seconds and no reason for it.
+   * A 40GB remux can be perfectly decodable and still unwatchable because the
+   * bytes cannot arrive in time, and nothing here said that.
    *
-   * Both numbers come from what actually happened rather than from a claim —
-   * the file's own size over its own duration, and the ABR's smoothed reading
-   * of real reads through whatever proxy is in the way. The BEST of the run is
-   * the one compared, not the average: a dip is a dip, and the question is
-   * whether the link can EVER carry the file.
+   * The link rate comes from a PROBE, and nothing else will do. Two earlier
+   * versions of this read the ABR's throughput instead and both cried wolf:
+   * once the buffer is ahead the source parks at the prefetch gate, so the
+   * window sees a stream being paced rather than a link being slow. Measured on
+   * a healthy link, 0.41 Mbps against a 2.84 Mbps file; reported from the wild,
+   * "2 Mbps" on a 40 Mbps line. That number is a FLOOR, not a capacity, and no
+   * amount of corroborating evidence turns it into one — the stalls it was
+   * paired with can come from decode, from a seek, from startup.
    *
-   * Once per source, through the same cancelable `smoothwarning` event a host
-   * can already intercept.
+   * So the stalls only decide WHEN to ask, and probeLinkBandwidth answers: it
+   * skips the proxy burst and times the sustained tail, a few MB, bounded, and
+   * only ever once per source. No answer, or an answer that clears the bar, and
+   * nothing is said.
    */
   private sampleLinkBudget(): void {
     if (!this._smoothWarning || this._warnedLinkBudget) return;
@@ -12227,33 +12227,44 @@ export class MoviElement extends HTMLElement {
     if (!p || p.getState?.() !== "playing") return;
     const needed = p.requiredLinkBps?.() ?? 0;
     if (!(needed > 0)) return; // a local file, or a size we never learned
-    const link = p.measuredLinkBps?.() ?? 0;
-    if (!(link > 0)) return;
-    this._linkBudgetSamples.push(link);
-    // The reading alone is not evidence. Measured on a link that was carrying
-    // the file perfectly well: 0.41 Mbps reported against a 2.84 Mbps file,
-    // because once the buffer is ahead the source parks at the prefetch gate
-    // and the throughput window sees a stream that is being paced, not a link
-    // that is slow. Playback stopping is the thing that cannot be faked.
+    // Playback stopping is what makes the question worth the probe's bytes —
+    // one stall is a hiccup, so wait for the second.
     if (this._linkStalls < MoviElement.LINK_BUDGET_STALLS) return;
-    if (this._linkBudgetSamples.length < MoviElement.LINK_BUDGET_SAMPLES) return;
-    const best = Math.max(...this._linkBudgetSamples);
-    this._linkBudgetSamples = [];
-    if (best >= needed) return; // it can carry it; keep watching in case it stops
+    const url = typeof this._src === "string" ? this._src : "";
+    if (!url) return;
+    // One attempt per source whatever it finds, so a link that stays slow does
+    // not buy a fresh probe every second.
     this._warnedLinkBudget = true;
+    this._linkProbeAbort?.abort();
+    const ac = new AbortController();
+    this._linkProbeAbort = ac;
+    void probeLinkBandwidth(url, { signal: ac.signal })
+      .then((bps) => {
+        if (ac.signal.aborted || !this._smoothWarning) return;
+        if (!(bps > 0)) return; // the probe had no answer — say nothing
+        if (bps >= needed) return; // the link can carry it; the stalls were not this
+        this.announceLinkShortfall(needed, bps);
+      })
+      .catch(() => {
+        /* a probe that cannot run is not evidence of anything */
+      });
+  }
+
+  /** The notice itself, once the probe has confirmed the shortfall. */
+  private announceLinkShortfall(needed: number, measured: number): void {
     // "About 69 Mbps" is a measurement read out loud, not advice. Nobody buys a
     // 69 Mbps line, and a figure that precise invites the reader to check it
-    // against a number that moves every second anyway. Round to something a
-    // person recognises as a connection speed and let "about" carry the rest.
+    // against a number that moves anyway. Round to something a person
+    // recognises as a connection speed and let "about" carry the rest.
     let need = MoviElement.niceMbps(needed);
-    const got = MoviElement.niceMbps(best);
+    const got = MoviElement.niceMbps(measured);
     // …but never to the SAME number. 52 against 48 rounds to fifty and fifty,
-    // and a notice that says the file needs exactly what the line is giving it,
-    // while warning that it will stop, reads as a bug. The requirement is the
-    // one to move: it is the advice, and erring high is the safe direction.
+    // and a notice that says the media needs exactly what the line is giving
+    // it, while warning that it will stop, reads as a bug. The requirement is
+    // the one to move: it is the advice, and erring high is the safe direction.
     if (need <= got) need = got + MoviElement.mbpsStep(got);
     const message = {
-      title: `This file needs about ${need} Mbps to play`,
+      title: `This media needs about ${need} Mbps to play`,
       body: `This connection is measuring about ${got} Mbps, so playback will keep stopping to load.`,
     };
     const allowed = this.dispatchEvent(
@@ -12261,7 +12272,7 @@ export class MoviElement extends HTMLElement {
         detail: {
           link: true,
           neededBps: needed,
-          measuredBps: best,
+          measuredBps: measured,
           media: "video",
           message,
         },
@@ -12522,7 +12533,7 @@ export class MoviElement extends HTMLElement {
     if (btn) {
       btn.disabled = on;
       btn.setAttribute("aria-disabled", on ? "true" : "false");
-      if (on) btn.title = "This file's audio can't be decoded by your browser";
+      if (on) btn.title = "This media's audio can't be decoded by your browser";
       else btn.removeAttribute("title");
     }
     if (slider) {
@@ -14074,14 +14085,14 @@ export class MoviElement extends HTMLElement {
       `)
       .join("");
 
-    // "Add subtitle file…" — last, under the tracks it will join.
+    // "Add subtitle…" — last, under the tracks it will join.
     if (this._subtitlePicker) {
       menuHTML += `
         <div class="movi-subtitle-track-item movi-subtitle-pick-item" data-subtitle-pick="1">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" width="16" height="16">
             <path d="M12 5v14M5 12h14"/>
           </svg>
-          <span class="movi-subtitle-track-label">Add subtitle file…</span>
+          <span class="movi-subtitle-track-label">Add subtitle…</span>
         </div>
       `;
     }
@@ -20359,7 +20370,7 @@ export class MoviElement extends HTMLElement {
         flex: 1;
       }
 
-      /* "Add subtitle file…" — an action sitting under the tracks, so it takes
+      /* "Add subtitle…" — an action sitting under the tracks, so it takes
          the accent and a rule above it rather than reading as one more track
          you could select. */
       .movi-subtitle-pick-item {
@@ -32690,7 +32701,8 @@ export class MoviElement extends HTMLElement {
     this.stopStutterMonitor();
     this._smoothWarnedByMeasurement = false;
     this._warnedLinkBudget = false;
-    this._linkBudgetSamples = [];
+    this._linkProbeAbort?.abort();
+    this._linkProbeAbort = null;
     this._linkStalls = 0;
     this.resetStutterHint();
     if (this._captionLive) this._captionLive.textContent = "";
@@ -41398,7 +41410,8 @@ export class MoviElement extends HTMLElement {
     // Each new speed gets a fresh stutter warning if it can't keep up.
     this._smoothWarnedByMeasurement = false;
     this._warnedLinkBudget = false;
-    this._linkBudgetSamples = [];
+    this._linkProbeAbort?.abort();
+    this._linkProbeAbort = null;
     this._linkStalls = 0;
     this.resetStutterHint();
     // …and a fresh prediction, which can say so before it has stuttered at all.

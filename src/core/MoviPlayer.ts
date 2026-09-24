@@ -15449,6 +15449,11 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
    *
    * 0 when it cannot be known — a local file, or a source that has not resolved
    * its size — which is the signal to say nothing rather than guess.
+   *
+   * Deliberately NOT paired with a throughput accessor here. The ABR's reading
+   * is a floor once the source parks at the prefetch gate, and publishing it
+   * beside this invites exactly the comparison that cried wolf twice; the link
+   * side of the question belongs to probeLinkBandwidth.
    */
   requiredLinkBps(): number {
     const bytes =
@@ -15457,17 +15462,6 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
     const duration = this.getDuration();
     if (!(bytes > 0) || !(duration > 0)) return 0;
     return (bytes * 8) / duration;
-  }
-
-  /**
-   * The link's rate as the player has actually measured it, in bits per second.
-   *
-   * The ABR's own smoothed reading — already taken from real reads of this
-   * source through whatever proxy or CDN is in the way, which is the only
-   * number worth comparing against requiredLinkBps(). 0 before there is one.
-   */
-  measuredLinkBps(): number {
-    return this._lastThroughputBps > 0 ? this._lastThroughputBps * 8 : 0;
   }
 
   /**
