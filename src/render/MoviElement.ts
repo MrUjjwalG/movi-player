@@ -30926,7 +30926,22 @@ export class MoviElement extends HTMLElement {
         document.visibilityState !== "visible" &&
         !this._pipWindow &&
         !this._backgroundPlay;
-      if (this._autoplay && this.player) {
+      // A start the viewer has already cancelled is not a start. It has to fall
+      // through to the poster branch, not merely skip the play(): that branch is
+      // where the opening seek happens, and skipping it leaves the source having
+      // never seeked at all — so the FIRST seek, with everything it has to read
+      // to do one, is deferred to the moment the viewer presses play.
+      //
+      // Measured on a 19.9GB MKV over HTTP. Paused during the load, 50MB of the
+      // head buffered, then play: `seek(0.00) seekSessionId=0` — the first seek
+      // this source ever did — sent the demuxer to the Cues at the tail,
+      // `Read: offset=19865229333, gap=19384143KB`, and the sliding window
+      // abandoned the head to go and get them. The buffered bar emptied in front
+      // of the viewer at exactly the moment they asked for playback. The
+      // autoplay-off path never shows this because it pays that read during the
+      // load, while the viewer is already waiting.
+      const startArmed = this._autoplay && !this._startCancelled;
+      if (startArmed && this.player) {
         if (hiddenAndNotInPip) {
           this._autoplayPendingVisible = true;
           Logger.info(TAG, "Autoplay deferred — tab hidden; will start when visible");
