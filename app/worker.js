@@ -922,8 +922,13 @@ function recordDistHit(env, parts, key, request) {
     // /dist/0.4.1/element.js — and absent on a bare /dist/element.js.
     const version = parts.length > 1 ? parts[0] : "(unversioned)";
     env.DIST_HITS.writeDataPoint({
-      // One index, and the site is the thing worth grouping by.
-      indexes: [site],
+      // One index — that is the documented maximum — and the site is the thing
+      // worth grouping by. Clamped to 96 bytes because that is the documented
+      // index limit and a hostname may be up to 253 characters; an over-long
+      // index loses the whole datapoint, so a truncated host is strictly better
+      // than no row. Hostnames are ASCII (an IDN arrives punycoded), so the
+      // character count is the byte count here.
+      indexes: [site.slice(0, 96)],
       blobs: [site, version, key],
     });
   } catch {

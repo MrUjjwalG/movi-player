@@ -81,6 +81,10 @@ bucket_name = "movi-assets"
 #
 # `SUM(_sample_interval)`, not COUNT(*): Analytics Engine samples under load
 # and that column is the weight each stored row stands for.
+#
+# No migration and no setup command — Cloudflare creates the table on the first
+# writeDataPoint. `SHOW TABLES` through the same SQL API lists it once it
+# exists. Data is kept for three months.
 [[analytics_engine_datasets]]
 binding = "DIST_HITS"
 dataset = "movi_dist_hits"
