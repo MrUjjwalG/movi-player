@@ -1508,6 +1508,20 @@ export class MoviElement extends HTMLElement {
   /** How many stalls before a low reading is allowed to become a verdict. One
    *  is a hiccup; a file the link cannot carry does it again and again. */
   private static readonly LINK_BUDGET_STALLS = 2;
+
+  /** The rounding step at a given speed, so the figure lands where connection
+   *  speeds actually land: singles below 10, fives to 50, tens above. */
+  private static mbpsStep(mbps: number): number {
+    return mbps < 10 ? 1 : mbps < 50 ? 5 : 10;
+  }
+
+  /** Bits per second as a round number of Mbps. Never zero — a link too slow to
+   *  round to one is still "about 1", and "about 0 Mbps" is not a sentence. */
+  private static niceMbps(bps: number): number {
+    const m = bps / 1_000_000;
+    const step = MoviElement.mbpsStep(m);
+    return Math.max(Math.round(m / step) * step, 1);
+  }
   /** Seconds of real playback to read before judging the link. The first
    *  megabytes come out of a proxy or CDN read-ahead burst at fantasy rates —
    *  bandwidthProbe exists because of exactly that — so a verdict taken early
@@ -12227,13 +12241,20 @@ export class MoviElement extends HTMLElement {
     this._linkBudgetSamples = [];
     if (best >= needed) return; // it can carry it; keep watching in case it stops
     this._warnedLinkBudget = true;
-    const mbps = (bps: number) => {
-      const m = bps / 1_000_000;
-      return m >= 10 ? Math.round(m).toString() : m.toFixed(1);
-    };
+    // "About 69 Mbps" is a measurement read out loud, not advice. Nobody buys a
+    // 69 Mbps line, and a figure that precise invites the reader to check it
+    // against a number that moves every second anyway. Round to something a
+    // person recognises as a connection speed and let "about" carry the rest.
+    let need = MoviElement.niceMbps(needed);
+    const got = MoviElement.niceMbps(best);
+    // …but never to the SAME number. 52 against 48 rounds to fifty and fifty,
+    // and a notice that says the file needs exactly what the line is giving it,
+    // while warning that it will stop, reads as a bug. The requirement is the
+    // one to move: it is the advice, and erring high is the safe direction.
+    if (need <= got) need = got + MoviElement.mbpsStep(got);
     const message = {
-      title: `This file needs about ${mbps(needed)} Mbps to play`,
-      body: `This connection is measuring about ${mbps(best)} Mbps, so playback will keep stopping to load.`,
+      title: `This file needs about ${need} Mbps to play`,
+      body: `This connection is measuring about ${got} Mbps, so playback will keep stopping to load.`,
     };
     const allowed = this.dispatchEvent(
       new CustomEvent("smoothwarning", {
