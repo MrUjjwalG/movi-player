@@ -1929,7 +1929,7 @@
           linear-gradient(180deg, rgba(124, 108, 240, 0.04) 0%, transparent 40%),
           var(--bg-card);
         border: 1px solid var(--border-subtle);
-        border-radius: 18px;
+        border-radius: var(--r-3);
         display: flex;
         flex-direction: column;
         overflow: hidden;
@@ -1989,7 +1989,7 @@
         padding: 0.15rem 0.5rem;
         background: var(--bg-surface);
         border: 1px solid var(--border-subtle);
-        border-radius: 999px;
+        border-radius: var(--r-1);
         font-variant-numeric: tabular-nums;
       }
 
@@ -2006,7 +2006,7 @@
         color: var(--text-muted);
         cursor: pointer;
         padding: 0.3rem;
-        border-radius: 8px;
+        border-radius: var(--r-2);
         display: flex;
         align-items: center;
         justify-content: center;
@@ -2073,7 +2073,7 @@
         align-items: center;
         gap: 0.75rem;
         padding: 0.5rem 0.6rem;
-        border-radius: 12px;
+        border-radius: var(--r-2);
         cursor: pointer;
         color: var(--text-secondary);
         font-size: 0.85rem;
@@ -2093,7 +2093,7 @@
         width: 3px;
         height: 70%;
         background: var(--accent);
-        border-radius: 0 3px 3px 0;
+        border-radius: 0 var(--r-1) var(--r-1) 0;
         transition: transform 0.2s ease;
       }
 
@@ -2125,7 +2125,7 @@
         width: 112px;
         aspect-ratio: 16 / 9;
         background: linear-gradient(135deg, #1a1a20 0%, #0d0d12 100%);
-        border-radius: 8px;
+        border-radius: var(--r-2);
         overflow: hidden;
         display: flex;
         align-items: center;
@@ -2187,7 +2187,7 @@
         line-height: 1;
         color: #fff;
         background: rgba(0, 0, 0, 0.82);
-        border-radius: 4px;
+        border-radius: var(--r-1);
         font-variant-numeric: tabular-nums;
         font-weight: 600;
         letter-spacing: 0.3px;
@@ -2202,7 +2202,7 @@
         line-height: 1;
         color: #fff;
         background: #e11d48;
-        border-radius: 999px;
+        border-radius: var(--r-1);
         font-weight: 700;
         letter-spacing: 0.6px;
       }
@@ -2221,7 +2221,7 @@
         line-height: 1;
         color: #fff;
         background: #0ea5e9;
-        border-radius: 999px;
+        border-radius: var(--r-1);
         font-weight: 700;
         letter-spacing: 0.6px;
       }
@@ -2375,7 +2375,7 @@
         color: var(--text-secondary);
         font-size: 0.78rem;
         font-weight: 500;
-        border-radius: 10px;
+        border-radius: var(--r-2);
         user-select: none;
         transition: background 0.12s, color 0.12s;
       }
@@ -2414,7 +2414,7 @@
         color: var(--text-muted);
         background: var(--bg-surface);
         padding: 2px 8px;
-        border-radius: 999px;
+        border-radius: var(--r-1);
         font-weight: 500;
         flex-shrink: 0;
         font-variant-numeric: tabular-nums;
@@ -2450,7 +2450,7 @@
         border: 1px solid var(--border-subtle);
         color: var(--text-primary);
         padding: 7px 28px 7px 30px;
-        border-radius: 8px;
+        border-radius: var(--r-2);
         font-size: 0.78rem;
         outline: none;
         font-family: inherit;
@@ -2471,7 +2471,7 @@
         transform: translateY(-50%);
         width: 18px;
         height: 18px;
-        border-radius: 4px;
+        border-radius: var(--r-1);
         background: transparent;
         border: 0;
         color: var(--text-muted);
@@ -4287,18 +4287,28 @@
         display: none !important;
       }
 
-      /* ── The extension card moves out of the content's way ─────
-         It was pinned under the navbar on the right, which used to be the
-         decorative half of the hero and is now the half that answers "will it
-         play my file?" — so it sat on top of the answer, and the link inside
-         it could not even be clicked. A promotion belongs beside the page,
-         not over it: bottom right, where a dismissible card goes. */
+      /* ── The extension card, under the navbar on the right ──────
+         It was moved to the bottom right when the right half of a split
+         hero held "will it play my file?" and the card sat on top of it.
+         The hero is one centred column now, so the top right is empty
+         again, and the card goes back there: under the bar, scrolling away
+         with the page rather than following it down. */
       .ext-prompt-wrap {
-        position: fixed !important;
-        top: auto !important;
-        bottom: 1.25rem !important;
+        position: absolute !important;
+        top: calc(64px + 1rem) !important;
+        bottom: auto !important;
         right: 1.25rem !important;
         z-index: 40 !important;
+      }
+      /* The card is 340px and the headline is centred: below about 1320px
+         the two meet, and the card would sit over "right in your browser".
+         There it keeps the bottom-right corner it had. */
+      @media (max-width: 1319px) {
+        .ext-prompt-wrap {
+          position: fixed !important;
+          top: auto !important;
+          bottom: 1.25rem !important;
+        }
       }
       .ext-prompt {
         border-radius: var(--r-3) !important;
@@ -6622,6 +6632,340 @@
         .hero-proof > div { border-top: 0; padding: 0; }
         .hero-format-strip { gap: 0.7rem; }
       }
+
+      /* ── Below the player: rules and air, not boxes ──────────────
+         Scrolling down the page was box, box, box: four bordered cards,
+         four tinted cards, a panel holding eighteen more boxes, eight
+         tinted cards, a carded form. Every item was the same shape, so
+         the shape said nothing — it just repeated. Each item now hangs
+         from one hairline at its top, with the space between items doing
+         the separating the outlines were doing. The hero and the player
+         keep their surfaces; they are the two things that are objects.
+
+         !important because this lands on top of several passes that each
+         set these surfaces with it (the tints, the spec-chip layer), and
+         a shared.css that is spliced in after every block on the page. */
+      /* The sentence under a section heading, not across from it. Pushed
+         to the far edge of a 1300px row it ended level with nothing and
+         read as a caption for whatever sat under it — the third step, the
+         fourth card — and was read last instead of second. Below 900px
+         these heads already stacked; this is the same layout at width. */
+      .how-section .section-head,
+      .watch-rail .rail-heading {
+        flex-direction: column;
+        align-items: flex-start;
+        justify-content: flex-start;
+        gap: 0.9rem;
+      }
+      .how-section .section-head h2,
+      .watch-rail .rail-heading h2 { margin-bottom: 0 !important; }
+      .how-section .section-head p,
+      .watch-rail .rail-heading p { max-width: 62ch; margin: 0 !important; }
+
+      .watch-rail .way-cards,
+      .features-section .features-grid {
+        gap: 2.25rem 2rem !important;
+      }
+      .watch-rail .way-card,
+      .features-section .feature-card {
+        min-height: 0 !important;
+        padding: 1.15rem 0 0 !important;
+        border: 0 !important;
+        border-top: 1px solid var(--border-subtle) !important;
+        border-radius: 0 !important;
+        background: none !important;
+        box-shadow: none !important;
+        transform: none !important;
+      }
+      .features-section .feature-card::before { display: none !important; }
+      /* The glyph sits on a small tile in its card's tone (set below):
+         the colour the tinted cards carried, on the one thing in the card
+         that is a mark rather than text, with no box around the rest. */
+      .features-section .feature-card .feature-icon,
+      .watch-rail .way-card .way-card-icon {
+        display: grid !important;
+        place-items: center !important;
+        width: 2.5rem !important;
+        height: 2.5rem !important;
+        margin: 0 0 0.95rem !important;
+        border: 0 !important;
+        border-radius: 0.7rem !important;
+        background: color-mix(in srgb, var(--tone) 14%, transparent) !important;
+        box-shadow: none !important;
+        color: var(--tone) !important;
+      }
+      /* A way card is a flex column with an 8px gap of its own, which the
+         feature cards are not; take it off the margin so the tile sits the
+         same distance above its title in both. */
+      .watch-rail .way-card .way-card-icon { margin-bottom: calc(0.95rem - 8px) !important; }
+      .features-section .feature-card .feature-icon svg,
+      .watch-rail .way-card .way-card-icon svg {
+        display: block;
+        width: 20px !important;
+        height: 20px !important;
+        stroke: currentColor;
+      }
+      .features-section .feature-card h3 { margin-top: 0 !important; }
+
+      /* The four tones the tinted cards used, in the same order — green,
+         blue, violet, peach — one shade for each theme. */
+      .watch-rail .way-card,
+      .features-section .feature-card {
+        --tone: var(--accent);
+        position: relative;
+      }
+      .watch-rail .way-card.tone-green,
+      .features-section .feature-card:nth-child(4n+1) { --tone: #1f9a63; }
+      .watch-rail .way-card.tone-blue,
+      .features-section .feature-card:nth-child(4n+2) { --tone: #3d6ee0; }
+      .watch-rail .way-card.tone-violet,
+      .features-section .feature-card:nth-child(4n+3) { --tone: #6a4ff0; }
+      .watch-rail .way-card.tone-peach,
+      .features-section .feature-card:nth-child(4n+4) { --tone: #d9632f; }
+      :root:not([data-theme="light"]) .watch-rail .way-card.tone-green,
+      :root:not([data-theme="light"]) .features-section .feature-card:nth-child(4n+1) { --tone: #6fe0a8; }
+      :root:not([data-theme="light"]) .watch-rail .way-card.tone-blue,
+      :root:not([data-theme="light"]) .features-section .feature-card:nth-child(4n+2) { --tone: #8fb4ff; }
+      :root:not([data-theme="light"]) .watch-rail .way-card.tone-violet,
+      :root:not([data-theme="light"]) .features-section .feature-card:nth-child(4n+3) { --tone: #b9a4ff; }
+      :root:not([data-theme="light"]) .watch-rail .way-card.tone-peach,
+      :root:not([data-theme="light"]) .features-section .feature-card:nth-child(4n+4) { --tone: #ffab80; }
+      /* .card-glow: under the pointer, a soft light in the card's tone that
+         follows it — the only surface a card shows, and only while it is
+         being pointed at. It reaches 0.9rem past the text, the room the
+         card's old padding gave it, without taking that room in layout.
+         The script by the way cards writes --glow-x/--glow-y. */
+      .watch-rail .way-card,
+      .features-section .feature-card { isolation: isolate; overflow: visible !important; }
+      .watch-rail .way-card::after,
+      .features-section .feature-card::after {
+        content: "";
+        position: absolute;
+        inset: -0.9rem;
+        z-index: -1;
+        border-radius: 1rem;
+        pointer-events: none;
+        background: radial-gradient(
+          circle 240px at calc(var(--glow-x, 50%) + 0.9rem) calc(var(--glow-y, 50%) + 0.9rem),
+          color-mix(in srgb, var(--tone) 16%, transparent),
+          transparent 70%
+        );
+        opacity: 0;
+        transition: opacity 260ms ease;
+      }
+      @media (hover: hover) {
+        .watch-rail .way-card:hover::after,
+        .features-section .feature-card:hover::after { opacity: 1; }
+        /* The hairline runs straight through the glow, a hard grey cut
+           across soft light. Under the pointer it takes the same light:
+           the tone where the glow is, easing back to the plain rule away
+           from it. border-image because the rule is the card's border —
+           and !important because the `border` shorthand above, which is,
+           resets it. */
+        .watch-rail .way-card:hover,
+        .features-section .feature-card:hover {
+          border-image: radial-gradient(
+            circle 240px at var(--glow-x, 50%) 0,
+            color-mix(in srgb, var(--tone) 55%, transparent),
+            var(--border-subtle) 70%
+          ) 1 !important;
+        }
+      }
+
+      /* The way cards are buttons: the rule over the one you are on and
+         its title take its tone — a pointer to it, not a lift. */
+      .watch-rail .way-card { transition: border-color 160ms ease; }
+      .watch-rail .way-card strong { transition: color 160ms ease; }
+      .watch-rail .way-card:hover,
+      .watch-rail .way-card:focus-visible { border-top-color: var(--tone) !important; }
+      .watch-rail .way-card:hover strong,
+      .watch-rail .way-card:focus-visible strong { color: var(--tone); }
+
+      /* The codec list: a panel with a grid of boxes inside it was a box
+         of boxes. The names sit on the section's own sheet, each over its
+         kind, under one hairline per row of the grid. */
+      .features-section .spec-panel {
+        padding: 0 !important;
+        border: 0 !important;
+        border-radius: 0 !important;
+        background: none !important;
+        box-shadow: none !important;
+      }
+      .features-section .spec-panel-head { padding: 0 !important; margin-bottom: 1.1rem; }
+      .features-section .spec-grid {
+        gap: 0 1.5rem !important;
+        padding: 0 !important;
+        background: none !important;
+      }
+      html:root .features-section .spec-chip {
+        display: flex;
+        flex-direction: column;
+        align-items: flex-start;
+        gap: 0.15rem;
+        padding: 0.75rem 0 !important;
+        border: 0 !important;
+        border-top: 1px solid var(--border-subtle) !important;
+        border-radius: 0 !important;
+        background: none !important;
+        box-shadow: none !important;
+        text-align: left;
+      }
+
+      /* The form keeps its fields — they are the thing to type into — but
+         not a card around them. */
+      .comments-section .comment-form,
+      :root:not([data-theme="light"]) .comments-section .comment-form {
+        padding: 1.15rem 0 0 !important;
+        border: 0 !important;
+        border-top: 1px solid var(--border-subtle) !important;
+        border-radius: 0 !important;
+        background: none !important;
+        box-shadow: none !important;
+      }
+
+      /* The idle hint over the three ways in (script by the tabs). The tip
+         is drawn in the page's text colour on its background colour, so it
+         reads as the one inverted thing on the hero in either theme. It
+         sits above the tabs, pointing down at the one it is about. */
+      .hero-mode-tabs { position: relative; overflow: visible !important; }
+      .hero-idle-tip {
+        position: absolute;
+        bottom: calc(100% + 10px);
+        left: 0;
+        z-index: 5;
+        padding: 0.42rem 0.7rem;
+        border-radius: 6px;
+        background: var(--text-primary);
+        color: var(--bg-base);
+        font-size: 0.8rem;
+        font-weight: 600;
+        line-height: 1.2;
+        white-space: nowrap;
+        pointer-events: none;
+        opacity: 0;
+        transform: translate(-50%, 4px);
+        transition: opacity 220ms ease, transform 220ms ease;
+        box-shadow: 0 8px 24px rgba(0, 0, 0, 0.25);
+      }
+      .hero-idle-tip::after {
+        content: "";
+        position: absolute;
+        top: 100%;
+        left: 50%;
+        margin-left: -5px;
+        border: 5px solid transparent;
+        border-top-color: var(--text-primary);
+      }
+      .hero-idle-tip.is-shown { opacity: 1; transform: translate(-50%, 0); }
+      @media (prefers-reduced-motion: reduce) {
+        .hero-idle-tip,
+        .hero-idle-tip.is-shown { transform: translate(-50%, 0); transition: opacity 150ms linear; }
+      }
+
+      /* The hero's margins at width. The column is 780px, so on a desktop
+         screen a third of the hero either side is nothing at all — which
+         reads as unfinished rather than calm. A fine dot grid lives in the
+         margins only: full at the edges, gone before it reaches the
+         column, and faded top and bottom so it has no edge of its own.
+         Phones have no margin to fill, so they do not get it. */
+      @media (min-width: 1100px) {
+        .hero::before {
+          content: "";
+          position: absolute;
+          inset: 0;
+          z-index: -1;
+          pointer-events: none;
+          background-image: radial-gradient(
+            circle,
+            color-mix(in srgb, var(--text-primary) 22%, transparent) 1px,
+            transparent 1.5px
+          );
+          background-size: 22px 22px;
+          background-position: center top;
+          -webkit-mask-image:
+            linear-gradient(90deg, #000 0, rgba(0, 0, 0, 0.55) 16%, transparent 32%, transparent 68%, rgba(0, 0, 0, 0.55) 84%, #000 100%),
+            linear-gradient(180deg, transparent 0, #000 18%, #000 62%, transparent 92%);
+          -webkit-mask-composite: source-in;
+          mask-image:
+            linear-gradient(90deg, #000 0, rgba(0, 0, 0, 0.55) 16%, transparent 32%, transparent 68%, rgba(0, 0, 0, 0.55) 84%, #000 100%),
+            linear-gradient(180deg, transparent 0, #000 18%, #000 62%, transparent 92%);
+          mask-composite: intersect;
+          opacity: 0.55;
+        }
+        /* On the light sheet the same ink at the same strength all but
+           vanishes; it takes more of both to read as a grid at all. */
+        [data-theme="light"] .hero::before {
+          background-image: radial-gradient(
+            circle,
+            color-mix(in srgb, var(--text-primary) 45%, transparent) 1.1px,
+            transparent 1.6px
+          );
+          opacity: 0.3;
+        }
+        /* The same grid again in the accent, lit only in a circle round
+           the pointer and only inside the margins — so moving the mouse
+           across the empty sides lights the dots under it, and the column
+           in the middle is never lit. Its position comes from the script
+           after the hero (--dots-x/--dots-y, in px from the hero's box). */
+        .hero-dots-glow {
+          position: absolute !important;
+          inset: 0;
+          z-index: -1;
+          pointer-events: none;
+          background-image: radial-gradient(
+            circle,
+            var(--accent) 1.3px,
+            transparent 1.8px
+          );
+          background-size: 22px 22px;
+          background-position: center top;
+          -webkit-mask-image:
+            radial-gradient(circle 200px at var(--dots-x, -999px) var(--dots-y, -999px), #000 0, transparent 100%),
+            linear-gradient(90deg, #000 0, #000 20%, transparent 34%, transparent 66%, #000 80%, #000 100%),
+            linear-gradient(180deg, transparent 0, #000 18%, #000 62%, transparent 92%);
+          -webkit-mask-composite: source-in, source-in;
+          mask-image:
+            radial-gradient(circle 200px at var(--dots-x, -999px) var(--dots-y, -999px), #000 0, transparent 100%),
+            linear-gradient(90deg, #000 0, #000 20%, transparent 34%, transparent 66%, #000 80%, #000 100%),
+            linear-gradient(180deg, transparent 0, #000 18%, #000 62%, transparent 92%);
+          mask-composite: intersect, intersect;
+          opacity: 0;
+          transition: opacity 300ms ease;
+        }
+        .hero:hover .hero-dots-glow { opacity: 0.9; }
+      }
+      @media (max-width: 1099px) { .hero-dots-glow { display: none; } }
+
+      /* The form's fields and its button on the site's radius, like the
+         link field and Play at the top of the page — they came in at 12px
+         and 8px from an older pass. Reply fields too. */
+      .comment-form .comment-input,
+      .comment-form .comment-textarea,
+      .comment-form .comment-submit,
+      .comment-reply-form input,
+      .comment-reply-form textarea,
+      .comment-reply-form button { border-radius: var(--r-2) !important; }
+
+      /* Comment cards in the dark theme. They were set on #121a2e — a navy
+         a shade off the page's neutral black, which read as a hole rather
+         than a surface — with the body in the page's secondary grey at
+         14px, so a paragraph of someone's words was the dimmest thing in
+         the section. A neutral lift for the card, the body brought up to
+         near-primary and a size a paragraph can be read at, and the small
+         print a step brighter. Corners on the site's own radius. */
+      .comment-card { border-radius: var(--r-3) !important; }
+      :root:not([data-theme="light"]) .comment-card {
+        border-color: rgba(255, 255, 255, 0.1);
+        background: color-mix(in srgb, #fff 4%, var(--bg-base));
+      }
+      :root:not([data-theme="light"]) .comment-card .comment-body {
+        color: #d3d9e4;
+        font-size: 0.925rem;
+        line-height: 1.65;
+      }
+      :root:not([data-theme="light"]) .comment-card .comment-meta,
+      :root:not([data-theme="light"]) .comment-card .comment-reply-open { color: #9ba5b5; }
+      :root:not([data-theme="light"]) .comment-card .comment-reply { border-color: rgba(255, 255, 255, 0.14); }
     </style>
     <!-- Drop Zone Overlay -->
     <div class="drop-overlay" id="drop-overlay">
@@ -7196,6 +7540,93 @@
           });
         });
 
+        // Idle hint. A visitor who has sat on the hero for a while without
+        // doing anything is told, one tab at a time, what each of the three
+        // does — a tip over URL, then Files, then Folder, then quiet until
+        // they go idle again. Any input puts the tip away at once. It never
+        // shows once a tab has been used or something is playing, nor while
+        // the hero is off screen, the tab hidden, or the link field in use.
+        // The same tip also answers a pointer resting on a tab (or keyboard
+        // focus on one), for as long as it stays there — that one is asked
+        // for, so it shows after a tab has been used too.
+        (function () {
+          var group = document.querySelector(".hero-mode-tabs");
+          if (!group || !tabs.length) return;
+          var IDLE_MS = 2000, SHOW_MS = 2600, GAP_MS = 500;
+          var TIPS = {
+            url: "Paste a link to any video",
+            file: "Or pick files from your device",
+            folder: "Or open a whole folder"
+          };
+          var tip = document.createElement("div");
+          tip.className = "hero-idle-tip";
+          tip.setAttribute("role", "status");
+          tip.setAttribute("aria-live", "polite");
+          group.appendChild(tip);
+
+          var done = false, heroInView = true, idleTimer = 0, stepTimer = 0;
+          var held = null;
+          function place(tab) {
+            var text = TIPS[tab.getAttribute("data-hero-mode")];
+            if (!text) return false;
+            tip.textContent = text;
+            tip.style.left = (tab.offsetLeft + tab.offsetWidth / 2) + "px";
+            tip.classList.add("is-shown");
+            return true;
+          }
+          function blocked() {
+            return done || !heroInView || document.hidden ||
+              document.body.classList.contains("playing-video") ||
+              (urlInput && (urlInput.value || document.activeElement === urlInput));
+          }
+          function hide() {
+            clearTimeout(stepTimer);
+            if (!held) tip.classList.remove("is-shown");
+          }
+          function show(i) {
+            if (blocked() || i >= tabs.length) { hide(); return; }
+            var tab = tabs[i];
+            if (tab.offsetParent === null || !place(tab)) { show(i + 1); return; }
+            stepTimer = setTimeout(function () {
+              tip.classList.remove("is-shown");
+              stepTimer = setTimeout(function () { show(i + 1); }, GAP_MS);
+            }, SHOW_MS);
+          }
+          function arm() {
+            hide();
+            clearTimeout(idleTimer);
+            if (!done) idleTimer = setTimeout(function () { show(0); }, IDLE_MS);
+          }
+          ["pointermove", "pointerdown", "keydown", "wheel", "touchstart", "scroll"].forEach(function (type) {
+            window.addEventListener(type, arm, { passive: true });
+          });
+          tabs.forEach(function (tab) {
+            tab.addEventListener("click", function () { done = true; hide(); clearTimeout(idleTimer); });
+          });
+          var canHover = window.matchMedia && matchMedia("(hover: hover)").matches;
+          function hold(tab) { clearTimeout(stepTimer); held = tab; place(tab); }
+          function release(tab) {
+            if (held !== tab) return;
+            held = null;
+            tip.classList.remove("is-shown");
+          }
+          tabs.forEach(function (tab) {
+            if (canHover) {
+              tab.addEventListener("pointerenter", function () { hold(tab); });
+              tab.addEventListener("pointerleave", function () { release(tab); });
+            }
+            tab.addEventListener("focus", function () { if (tab.matches(":focus-visible")) hold(tab); });
+            tab.addEventListener("blur", function () { release(tab); });
+          });
+          if ("IntersectionObserver" in window) {
+            new IntersectionObserver(function (entries) {
+              heroInView = entries[0].isIntersecting;
+              if (!heroInView) hide();
+            }).observe(group);
+          }
+          arm();
+        })();
+
       })();
     </script>
 
@@ -7388,6 +7819,56 @@
           }
         });
       });
+
+      // The accent dots in the hero's margins (.hero-dots-glow): the layer
+      // is made here, since it is decoration and not content, and follows
+      // the pointer for as long as it is over the hero. Desktop only, as
+      // the grid itself is; one write per frame.
+      (function () {
+        if (!window.matchMedia || !matchMedia("(hover: hover) and (min-width: 1100px)").matches) return;
+        var hero = document.querySelector(".hero");
+        if (!hero) return;
+        var glow = document.createElement("div");
+        glow.className = "hero-dots-glow";
+        glow.setAttribute("aria-hidden", "true");
+        hero.insertBefore(glow, hero.firstChild);
+        var pending = null;
+        hero.addEventListener("pointermove", function (e) {
+          var first = !pending;
+          pending = e;
+          if (!first) return;
+          requestAnimationFrame(function () {
+            var r = hero.getBoundingClientRect();
+            glow.style.setProperty("--dots-x", (pending.clientX - r.left) + "px");
+            glow.style.setProperty("--dots-y", (pending.clientY - r.top) + "px");
+            pending = null;
+          });
+        }, { passive: true });
+      })();
+
+      // The glow that follows the pointer over a card (.card-glow in the
+      // stylesheet). One listener for every card on the page, delegated,
+      // so the feature grids further down need no script of their own;
+      // one write per frame however fast the pointer reports.
+      (function () {
+        if (!window.matchMedia || !matchMedia("(hover: hover)").matches) return;
+        var CARDS = ".watch-rail .way-card, .features-section .feature-card";
+        var pending = null;
+        document.addEventListener("pointermove", function (e) {
+          var card = e.target instanceof Element ? e.target.closest(CARDS) : null;
+          if (!card) return;
+          var first = !pending;
+          pending = { card: card, x: e.clientX, y: e.clientY };
+          if (!first) return;
+          requestAnimationFrame(function () {
+            var p = pending;
+            pending = null;
+            var r = p.card.getBoundingClientRect();
+            p.card.style.setProperty("--glow-x", (p.x - r.left) + "px");
+            p.card.style.setProperty("--glow-y", (p.y - r.top) + "px");
+          });
+        }, { passive: true });
+      })();
     </script>
 
     <!-- ===== FEATURES ===== -->
