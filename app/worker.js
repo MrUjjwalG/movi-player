@@ -454,6 +454,7 @@ export default {
       const parts = path.slice(6).split("/");
       // /dist/<version>/element.js → key = "element.js"
       const key = parts.length > 1 ? parts.slice(1).join("/") : parts[0];
+      recordDistHit(env, parts, key, request);
       return handleR2(env, key, request);
     }
 
@@ -882,6 +883,53 @@ const MIME_TYPES = {
   mov: "video/quicktime",
   ts: "video/mp2t",
 };
+
+/**
+ * Note which SITE loaded a player bundle from this origin.
+ *
+ * The documented embed points at jsdelivr, so this does not see most adoption
+ * and is not meant to — it answers one question: of the loads that DO come
+ * here, whose page were they on. The referring HOST is the whole record. No
+ * path, no query, no IP, no cookie: a cross-origin script load already sends
+ * only the origin under the default referrer policy, and the origin is the
+ * answer, so there is nothing further worth keeping.
+ *
+ * Own traffic is recorded too rather than filtered out — moviplayer.com is a
+ * row like any other, and telling it apart is a WHERE clause at query time,
+ * while dropping it here would make "is anyone else using this" unanswerable
+ * against a baseline.
+ *
+ * Fall-open, like every other optional binding in this worker: with no
+ * ANALYTICS dataset bound (a fork, `wrangler dev`) it does nothing at all.
+ *
+ * What it CANNOT tell you: how many people watched. /dist is served
+ * `immutable` for a year, so a browser asks once and never again — these are
+ * first fetches, not views.
+ */
+function recordDistHit(env, parts, key, request) {
+  if (!env.DIST_HITS) return;
+  try {
+    const ref = request.headers.get("Referer") || "";
+    let site = "(none)";
+    if (ref) {
+      try {
+        site = new URL(ref).host;
+      } catch {
+        site = "(unparseable)";
+      }
+    }
+    // The version is the first path segment when there is more than one —
+    // /dist/0.4.1/element.js — and absent on a bare /dist/element.js.
+    const version = parts.length > 1 ? parts[0] : "(unversioned)";
+    env.DIST_HITS.writeDataPoint({
+      // One index, and the site is the thing worth grouping by.
+      indexes: [site],
+      blobs: [site, version, key],
+    });
+  } catch {
+    /* analytics must never be able to fail a file the page is waiting for */
+  }
+}
 
 async function handleR2(env, key, request) {
   if (!env.ASSETS) {

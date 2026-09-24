@@ -63,6 +63,28 @@ new_sqlite_classes = ["WatchParty"]
 binding = "ASSETS"
 bucket_name = "movi-assets"
 
+# ─── Which sites load a player bundle from this origin (/dist/…) ───────
+# The documented embed points at jsdelivr, so this deliberately does not see
+# most adoption. It answers one question: of the loads that DO come here,
+# whose page were they on. The referring HOST is the whole record — see
+# recordDistHit() in worker.js for what is and is not kept.
+#
+# OPTIONAL for forks: with no binding the worker skips it entirely.
+#
+# Query it (no dashboard page for this dataset — it is the SQL API):
+#   curl "https://api.cloudflare.com/client/v4/accounts/<account_id>/analytics_engine/sql" \
+#     -H "Authorization: Bearer <token>" \
+#     -d "SELECT blob1 AS site, blob2 AS version, SUM(_sample_interval) AS hits
+#         FROM movi_dist_hits
+#         WHERE timestamp > NOW() - INTERVAL '30' DAY
+#         GROUP BY site, version ORDER BY hits DESC"
+#
+# `SUM(_sample_interval)`, not COUNT(*): Analytics Engine samples under load
+# and that column is the weight each stored row stands for.
+[[analytics_engine_datasets]]
+binding = "DIST_HITS"
+dataset = "movi_dist_hits"
+
 # ─── Visitor feedback wall (/api/comments) ─────────────────────────────
 # D1 backs the comment list under the FAQ on the landing page. Comments go
 # live instantly — the abuse gate is server-side (profanity filter +
