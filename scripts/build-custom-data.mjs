@@ -8,6 +8,8 @@
  *   - which values it accepts →  the "**Values:**" bullet lists in those docs
  *   - CSS custom properties   →  the --movi-* declarations in the element's styles
  *   - DOM events              →  the element event table in docs/api/events.md
+ *   - CSS shadow parts        →  the part= attributes in src/render/*.ts
+ *   - slots                   →  the <slot name=> elements in src/render/*.ts
  *
  * That direction matters. A hand-written copy of the attribute list is exactly
  * how the docs drifted from the code before (events that were documented but
@@ -30,6 +32,14 @@ const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");
 const read = (p) => readFileSync(join(ROOT, p), "utf8");
 
 const ELEMENT_SRC = read("src/render/MoviElement.ts");
+// Parts and slots are not all in MoviElement: caption lines are written by the
+// renderer, and the native fallback writes its own. Scanning only the element
+// would have silently dropped `subtitle` from the manifest.
+const SHADOW_SRC = [
+  ELEMENT_SRC,
+  read("src/render/CanvasRenderer.ts"),
+  read("src/render/NativeVideoWrapper.ts"),
+].join("\n");
 const DOC_ELEMENT = read("docs/api/element.md");
 const DOC_GUIDE = read("docs/guide/custom-element.md");
 const DOC_EVENTS = read("docs/api/events.md");
@@ -256,6 +266,79 @@ function buildCssProperties() {
   }));
 }
 
+/* ------------------------------------------------------------ parts + slots */
+
+/**
+ * Every `part=` the shadow trees carry, and every named `<slot>`, described
+ * from the tables in docs/api/element.md.
+ *
+ * Same contract as the attributes above: the source decides what EXISTS and the
+ * docs decide what it MEANS, and a part with nothing describing it fails the
+ * build. That direction is the point — docs/api/element.md promised
+ * `::part(error-screen)` and `::part(subtitle)` for two releases while neither
+ * was in the markup, which is the drift this file exists to make impossible.
+ */
+const DOC_PART_ROWS = (() => {
+  const rows = new Map();
+  const lines = DOC_ELEMENT.split("\n");
+  let inTable = false;
+  for (const line of lines) {
+    if (!line.startsWith("|")) {
+      inTable = false;
+      continue;
+    }
+    // Only tables that ARE the parts tables — the reference is full of other
+    // two-column tables, and a whole-document search matched `osd` and
+    // `progress` against rows describing the attribute and the event of the
+    // same name.
+    const cells = line.split("|").slice(1, -1).map((c) => c.trim());
+    if (cells.length === 2 && cells[0].toLowerCase() === "part") {
+      inTable = true;
+      continue;
+    }
+    if (!inTable) continue;
+    if (/^-+$/.test(cells[0].replace(/[\s:]/g, ""))) continue;
+    const names = [...cells[0].matchAll(/`([^`]+)`/g)].map((m) => m[1]);
+    const description = stripMd(cells[1] ?? "");
+    for (const name of names) if (!rows.has(name)) rows.set(name, description);
+  }
+  return rows;
+})();
+
+function buildParts() {
+  const names = new Set();
+  for (const m of SHADOW_SRC.matchAll(/\bpart="([^"]+)"/g))
+    for (const n of m[1].split(/\s+/)) if (n) names.add(n);
+  for (const m of SHADOW_SRC.matchAll(/setAttribute\(\s*"part"\s*,\s*"([^"]+)"/g))
+    for (const n of m[1].split(/\s+/)) if (n) names.add(n);
+
+  const out = [];
+  const missing = [];
+  for (const name of [...names].sort()) {
+    const description = DOC_PART_ROWS.get(name);
+    if (!description) missing.push(name);
+    out.push({ name, description: description ?? "" });
+  }
+  if (missing.length) {
+    throw new Error(
+      `No documentation found for ${missing.length} shadow part(s): ${missing.join(", ")}\n` +
+        `Add a "| \`name\` | what it is |" table row to docs/api/element.md before\n` +
+        `shipping the part — a part= is public API a page can style, and one with\n` +
+        `nothing describing it is one nobody can find.`,
+    );
+  }
+  return out;
+}
+
+function buildSlots() {
+  const names = new Set();
+  for (const m of SHADOW_SRC.matchAll(/<slot\s+name="([^"]+)"/g)) names.add(m[1]);
+  return [...names].sort().map((name) => ({
+    name,
+    description: `Light-DOM children with slot="${name}" are drawn instead of the built-in one.`,
+  }));
+}
+
 /* ---------------------------------------------------------------- DOM events */
 
 function buildEvents() {
@@ -281,6 +364,8 @@ const attributes = buildAttributes();
 assertInterfaceCovers(attributes.map((a) => a.name));
 const cssProperties = buildCssProperties();
 const events = buildEvents();
+const cssParts = buildParts();
+const slots = buildSlots();
 
 const TAG_DESCRIPTION =
   "MoviPlayer — a WASM + WebCodecs video player custom element.\n\n" +
@@ -311,6 +396,8 @@ const manifest = {
               : {}),
           })),
           events,
+          slots,
+          cssParts,
           cssProperties: cssProperties.map((p) => ({
             name: p.name,
             description: p.description,
@@ -376,6 +463,6 @@ write("vscode-extension/css-custom-data.json", cssData);
 
 console.log(
   `[custom-data] movi-player v${PKG.version}: ` +
-    `${attributes.length} attributes, ${cssProperties.length} CSS properties, ${events.length} events ` +
+    `${attributes.length} attributes, ${cssParts.length} parts, ${slots.length} slots, ${cssProperties.length} CSS properties, ${events.length} events ` +
     `→ custom-elements.json + vscode-extension/{html,css}-custom-data.json`,
 );

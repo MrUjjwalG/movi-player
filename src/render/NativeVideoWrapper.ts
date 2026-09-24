@@ -806,6 +806,7 @@ export class NativeVideoWrapper extends EventEmitter<PlayerEventMap> {
     for (const cue of active) {
       const row = document.createElement("div");
       row.className = "movi-subtitle-line";
+      row.setAttribute("part", "subtitle");
       const visible = stripKaraokeGhost(cue.text);
       if (visible !== cue.text) {
         // Karaoke cue: everything after the delimiter is the not-yet-spoken

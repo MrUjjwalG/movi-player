@@ -2205,6 +2205,7 @@ export class MoviElement extends HTMLElement {
     // Create poster image element (overlay on video/canvas)
     this.posterElement = document.createElement("img");
     this.posterElement.className = "movi-poster-overlay";
+    this.posterElement.setAttribute("part", "poster");
     // Pages that ship Cross-Origin-Embedder-Policy: require-corp will block
     // cross-origin images that aren't loaded with CORS. Without this, a host
     // page that opts into COEP gets a silent black overlay instead of the
@@ -2291,6 +2292,7 @@ export class MoviElement extends HTMLElement {
     // live region below is their source, so the overlay is aria-hidden.
     this.subtitleOverlay = document.createElement("div");
     this.subtitleOverlay.className = "movi-subtitle-overlay";
+    this.subtitleOverlay.setAttribute("part", "subtitle-area");
     this.subtitleOverlay.setAttribute("aria-hidden", "true");
     shadowRoot.appendChild(this.subtitleOverlay);
 
@@ -2357,12 +2359,21 @@ export class MoviElement extends HTMLElement {
     loadingIndicator.style.display = "none";
     loadingIndicator.setAttribute("role", "status");
     loadingIndicator.setAttribute("aria-label", "Loading video");
-    loadingIndicator.innerHTML = loadingIndicatorMarkup;
+    loadingIndicator.setAttribute("part", "spinner");
+    // The ribbon is the SLOT'S FALLBACK, not the slot's content: a host that
+    // supplies <div slot="spinner"> replaces it outright, and one that does not
+    // gets the built-in exactly as before. Replacing it this way keeps the part
+    // the player owns — when the ring is on screen, where it sits, and that it
+    // never shares the middle with the play button — and hands over only the
+    // drawing, which is the half a host actually wants to change.
+    // eslint-disable-next-line no-unsanitized/property -- static template, no user data
+    loadingIndicator.innerHTML = `<slot name="spinner">${loadingIndicatorMarkup}</slot>`;
     shadowRoot.appendChild(loadingIndicator);
 
     // Create centered play/pause button
     const centerPlayPause = document.createElement("button");
     centerPlayPause.className = "movi-center-play-pause";
+    centerPlayPause.setAttribute("part", "center-button");
     centerPlayPause.setAttribute("aria-label", "Play/Pause");
     centerPlayPause.innerHTML = `
       ${symbolSvg("play", "movi-center-icon-play", { filled: true })}
@@ -2373,6 +2384,11 @@ export class MoviElement extends HTMLElement {
     // Create broken indicator
     this.brokenIndicator = document.createElement("div");
     this.brokenIndicator.className = "movi-broken-indicator";
+    // error-screen: the backdrop. Documented since the error screen shipped and
+    // missing from the markup until now — the reference named the part, the
+    // "Replace it" section told hosts to override it to drop the backdrop, and
+    // nothing carried it.
+    this.brokenIndicator.setAttribute("part", "error-screen");
     this.brokenIndicator.style.display = "none";
     // part= on every piece a host might want to restyle. ::part() reaches
     // into the shadow root without exposing the markup as an API — the
@@ -2516,6 +2532,7 @@ export class MoviElement extends HTMLElement {
     // Create OSD (On-Screen Display) container
     const osdContainer = document.createElement("div");
     osdContainer.className = "movi-osd-container";
+    osdContainer.setAttribute("part", "osd");
     osdContainer.style.display = "none";
     osdContainer.innerHTML = `
       <div class="movi-osd-icon"></div>
@@ -2745,18 +2762,19 @@ export class MoviElement extends HTMLElement {
 
     const container = document.createElement("div");
     container.className = "movi-controls-container";
+    container.setAttribute("part", "controls");
     // eslint-disable-next-line no-unsanitized/property -- static template, no user data
     container.innerHTML = `
-      <div class="movi-controls-bar" style="position: relative;">
+      <div class="movi-controls-bar" part="controls-bar" style="position: relative;">
         <div class="movi-progress-container">
-          <div class="movi-progress-bar" role="slider" tabindex="0" aria-label="Seek" aria-valuemin="0" aria-valuenow="0" aria-valuetext="0:00">
+          <div class="movi-progress-bar" part="progress" role="slider" tabindex="0" aria-label="Seek" aria-valuemin="0" aria-valuenow="0" aria-valuetext="0:00">
             <!-- Buffer + fill live in a wrapper that spans the whole track.
                  Chapter gaps are cut from THAT: it is the full width, so the
                  cuts can be expressed as percentages of the timeline, and the
                  handle stays outside it so a cut can never clip the knob. -->
             <div class="movi-progress-paint">
-              <div class="movi-progress-buffer"></div>
-              <div class="movi-progress-filled"></div>
+              <div class="movi-progress-buffer" part="progress-buffer"></div>
+              <div class="movi-progress-filled" part="progress-played"></div>
               <!-- The stretch between the playhead and where the pointer is:
                    what a click here would skip, or replay. Last inside the
                    wrapper so it reads over the played bar as well as the
@@ -2766,7 +2784,7 @@ export class MoviElement extends HTMLElement {
               <div class="movi-progress-hover"></div>
             </div>
             <div class="movi-chapter-markers"></div>
-            <div class="movi-progress-handle"></div>
+            <div class="movi-progress-handle" part="progress-handle"></div>
           </div>
           <div class="movi-seek-thumbnail" style="display: none;">
              <div class="movi-thumbnail-placeholder" style="display: none;"></div>
@@ -2801,16 +2819,16 @@ export class MoviElement extends HTMLElement {
                  queue: a Previous button on a single video is a control that
                  can never do anything, and the commonest case by far is a
                  single video. Filled glyphs, like Play beside them. -->
-            <button class="movi-btn movi-prev-btn" aria-label="Previous in queue">
+            <button class="movi-btn movi-prev-btn" part="button prev-button" aria-label="Previous in queue">
               ${symbolSvg("previous", "", { filled: true })}
             </button>
 
-            <button class="movi-btn movi-play-pause" aria-label="Play/Pause">
+            <button class="movi-btn movi-play-pause" part="button play-button" aria-label="Play/Pause">
               ${symbolSvg("play", "movi-icon-play", { filled: true })}
               ${symbolSvg("pause", "movi-icon-pause", { filled: true, hidden: true })}
             </button>
 
-            <button class="movi-btn movi-next-btn" aria-label="Next in queue">
+            <button class="movi-btn movi-next-btn" part="button next-button" aria-label="Next in queue">
               ${symbolSvg("next", "", { filled: true })}
             </button>
             </div>
@@ -2818,17 +2836,17 @@ export class MoviElement extends HTMLElement {
             <!-- The two seek buttons are one control, not two: they do the same
                  thing in opposite directions, and the bar groups them as one. -->
             <div class="movi-seek-group">
-              <button class="movi-btn movi-seek-backward" aria-label="Skip Backward 10s">
+              <button class="movi-btn movi-seek-backward" part="button seek-backward-button" aria-label="Skip Backward 10s">
                 ${symbolSvg("seekBackward")}
               </button>
 
-              <button class="movi-btn movi-seek-forward" aria-label="Skip Forward 10s">
+              <button class="movi-btn movi-seek-forward" part="button seek-forward-button" aria-label="Skip Forward 10s">
                 ${symbolSvg("seekForward")}
               </button>
             </div>
 
             <div class="movi-volume-container">
-              <button class="movi-btn movi-volume-btn" aria-label="Mute/Unmute">
+              <button class="movi-btn movi-volume-btn" part="button volume-button" aria-label="Mute/Unmute">
                 ${symbolSvg("volumeFull", "movi-icon-volume-high")}
                 ${symbolSvg("volumeOne", "movi-icon-volume-mid", { hidden: true })}
                 ${symbolSvg("volume", "movi-icon-volume-low", { hidden: true })}
@@ -2839,7 +2857,7 @@ export class MoviElement extends HTMLElement {
               </div>
             </div>
 
-            <div class="movi-time">
+            <div class="movi-time" part="time">
               <span class="movi-current-time">0:00</span>
               <span class="movi-time-separator"> / </span>
               <span class="movi-duration">0:00</span>
@@ -2868,7 +2886,7 @@ export class MoviElement extends HTMLElement {
           <div class="movi-controls-right">
             <div class="movi-mobile-expandable">
               <div class="movi-audio-track-container">
-                <button class="movi-btn movi-audio-track-btn" aria-label="Audio Track">
+                <button class="movi-btn movi-audio-track-btn" part="button audio-button" aria-label="Audio Track">
                   ${symbolSvg("audio", "movi-icon-audio-track")}
                 </button>
                 <div class="movi-audio-track-menu" style="display: none;">
@@ -2880,7 +2898,7 @@ export class MoviElement extends HTMLElement {
                 </div>
               </div>
               <div class="movi-hdr-container">
-                <button class="movi-btn movi-hdr-btn" aria-label="Toggle HDR">
+                <button class="movi-btn movi-hdr-btn" part="button hdr-button" aria-label="Toggle HDR">
                   <svg class="movi-icon-hdr" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round">
                     <path d="M5 7v10M5 12h5M10 7v10M14 7h6a3 3 0 0 1 0 6h-6M17 13l3 4"></path>
                   </svg>
@@ -2889,7 +2907,7 @@ export class MoviElement extends HTMLElement {
               </div>
 
               <div class="movi-subtitle-track-container">
-                <button class="movi-btn movi-subtitle-track-btn" aria-label="Subtitles/Captions">
+                <button class="movi-btn movi-subtitle-track-btn" part="button subtitles-button" aria-label="Subtitles/Captions">
                   ${symbolSvg("subtitles", "movi-icon-subtitle")}
                   ${symbolSvg("subtitlesFilled", "movi-icon-subtitle-filled", { hidden: true, filled: true })}
                 </button>
@@ -2915,7 +2933,7 @@ export class MoviElement extends HTMLElement {
               </div>
 
               <div class="movi-quality-container" style="display: none;">
-                <button class="movi-btn movi-quality-btn" aria-label="Quality">
+                <button class="movi-btn movi-quality-btn" part="button quality-button" aria-label="Quality">
                   ${symbolSvg("quality", "movi-icon-quality")}
                   <span class="movi-quality-btn-badge" style="display: none;"></span>
                 </button>
@@ -2925,7 +2943,7 @@ export class MoviElement extends HTMLElement {
               </div>
 
               <div class="movi-speed-container">
-                <button class="movi-btn movi-speed-btn" aria-label="Playback Speed">
+                <button class="movi-btn movi-speed-btn" part="button speed-button" aria-label="Playback Speed">
                   ${symbolSvg("speed", "movi-icon-speed")}
                 </button>
                 <div class="movi-speed-menu" style="display: none;">
@@ -2943,13 +2961,13 @@ export class MoviElement extends HTMLElement {
               </div>
 
               <div class="movi-stable-audio-container">
-                <button class="movi-btn movi-stable-audio-btn" aria-label="Toggle Stable Audio">
+                <button class="movi-btn movi-stable-audio-btn" part="button stableaudio-button" aria-label="Toggle Stable Audio">
                   ${symbolSvg("stable", "movi-icon-stable-audio-outline")}
                   ${symbolSvg("stable", "movi-icon-stable-audio-filled", { hidden: true })}
                 </button>
               </div>
 
-              <button class="movi-btn movi-loop-btn" aria-label="Toggle Loop">
+              <button class="movi-btn movi-loop-btn" part="button loop-button" aria-label="Toggle Loop">
                 ${symbolSvg("loop", "movi-icon-loop-outline")}
                 ${symbolSvg("loop", "movi-icon-loop-filled", { hidden: true })}
               </button>
@@ -2966,7 +2984,7 @@ export class MoviElement extends HTMLElement {
                  work — their menus are borrowed into this panel a page at a
                  time — but only this one is on the bar. -->
             <div class="movi-settings-container">
-              <button class="movi-btn movi-settings-btn" aria-label="Settings">
+              <button class="movi-btn movi-settings-btn" part="button settings-button" aria-label="Settings">
                 ${symbolSvg("settings", "movi-icon-settings")}
                 <span class="movi-settings-btn-badge" style="display: none;"></span>
               </button>
@@ -2990,26 +3008,26 @@ export class MoviElement extends HTMLElement {
                  phone too (the tray comes BEFORE the gear, so a member of it
                  can only ever appear on the left); the narrow-width rules fold
                  it away with the tray instead. -->
-            <button class="movi-btn movi-aspect-ratio-btn" aria-label="Aspect Ratio">
+            <button class="movi-btn movi-aspect-ratio-btn" part="button aspect-button" aria-label="Aspect Ratio">
               ${symbolSvg("aspect", "movi-icon-aspect-ratio")}
             </button>
 
             <!-- PiP sits beside the gear, outside the mobile "more" tray: the
                  two are the controls a viewer reaches for while watching, not
                  settings to go hunting for. -->
-            <button class="movi-btn movi-pip-btn" aria-label="Picture in Picture" style="display:none">
+            <button class="movi-btn movi-pip-btn" part="button pip-button" aria-label="Picture in Picture" style="display:none">
               <!-- Drawn to fill the 24x24 box like its neighbours. The old
                    20x14 frame sat inside the box with room to spare, so at the
                    same nominal size it read as a smaller button. -->
               ${symbolSvg("pip", "movi-icon-pip")}
             </button>
 
-            <button class="movi-btn movi-more-btn" aria-label="More Settings">
+            <button class="movi-btn movi-more-btn" part="button more-button" aria-label="More Settings">
               ${symbolSvg("more", "movi-icon-more")}
               ${symbolSvg("close", "movi-icon-close", { hidden: true })}
             </button>
 
-            <button class="movi-btn movi-fullscreen-btn" aria-label="Fullscreen">
+            <button class="movi-btn movi-fullscreen-btn" part="button fullscreen-button" aria-label="Fullscreen">
               ${symbolSvg("fullscreen", "movi-icon-fullscreen")}
               ${symbolSvg("fullscreenExit", "movi-icon-fullscreen-exit", { hidden: true })}
             </button>
@@ -3106,6 +3124,7 @@ export class MoviElement extends HTMLElement {
     // Create title bar as a separate element outside controls container
     const titleBar = document.createElement("div");
     titleBar.className = "movi-title-bar";
+    titleBar.setAttribute("part", "title-bar");
     titleBar.style.display = "none";
     // The back arrow is always in the DOM and hidden by default — the bar is
     // rebuilt on nothing, so toggling a class beats re-writing markup whenever
@@ -23617,6 +23636,22 @@ export class MoviElement extends HTMLElement {
       }
 
       ${loadingIndicatorStyles}
+
+      /* No ring at all - the middle is cleared for the host's own.
+         !important because the element writes the ring's display inline
+         (applySpinnerVisible), and an inline style beats a plain rule.
+
+         Only the drawing goes. is-buffering and is-spinner-pending still ride
+         on the host through every state they always did, because they are what
+         a page draws its own indicator off, and the centre play button still
+         stands down while they are on: a host that has taken the ring away has
+         taken away the thing that stood in the middle, not the reason the
+         button cannot be there either. A host that wants to keep the ring's
+         placement and merely redraw it wants <div slot="spinner"> instead,
+         which leaves all of this alone. */
+      :host([controlslist~="nospinner"]) .movi-loading-indicator {
+        display: none !important;
+      }
 
       /* Centre play/pause button. Default placement assumes only the
          bottom controls bar is visible — sit the icon at the centre

@@ -5118,7 +5118,7 @@ export class CanvasRenderer {
           // wrapper now, so individual lines just hug their content (and
           // expand to the wrapper's width because they're block-level).
           const lineParts: string[] = [
-            `<div class="movi-subtitle-line">`,
+            `<div class="movi-subtitle-line" part="subtitle">`,
           ];
           if (staticHtml)
             lineParts.push(

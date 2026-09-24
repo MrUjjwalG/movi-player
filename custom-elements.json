@@ -748,6 +748,194 @@
               }
             }
           ],
+          "slots": [
+            {
+              "name": "error",
+              "description": "Light-DOM children with slot=\"error\" are drawn instead of the built-in one."
+            },
+            {
+              "name": "spinner",
+              "description": "Light-DOM children with slot=\"spinner\" are drawn instead of the built-in one."
+            }
+          ],
+          "cssParts": [
+            {
+              "name": "aspect-button",
+              "description": "Aspect ratio"
+            },
+            {
+              "name": "audio-button",
+              "description": "Audio track"
+            },
+            {
+              "name": "button",
+              "description": "Every button on the bar, all at once"
+            },
+            {
+              "name": "center-button",
+              "description": "The big centre play / pause"
+            },
+            {
+              "name": "controls",
+              "description": "The whole bottom chrome — bar, progress, tooltip"
+            },
+            {
+              "name": "controls-bar",
+              "description": "The bar itself, inside that container"
+            },
+            {
+              "name": "controls-divider",
+              "description": "The quiet rule in the right-hand capsule"
+            },
+            {
+              "name": "error-button",
+              "description": "Both buttons"
+            },
+            {
+              "name": "error-container",
+              "description": "The centred column"
+            },
+            {
+              "name": "error-exit-fullscreen-button",
+              "description": "\"Exit full screen\" — shown only while the player is fullscreen"
+            },
+            {
+              "name": "error-icon",
+              "description": "Icon tile (its <svg> inherits currentColor)"
+            },
+            {
+              "name": "error-message",
+              "description": "Body text"
+            },
+            {
+              "name": "error-retry-button",
+              "description": "Retry only"
+            },
+            {
+              "name": "error-screen",
+              "description": "The full-bleed backdrop"
+            },
+            {
+              "name": "error-software-button",
+              "description": "\"Try Software Decoding\" only"
+            },
+            {
+              "name": "error-text",
+              "description": "Title + message + buttons wrapper"
+            },
+            {
+              "name": "error-title",
+              "description": "Heading"
+            },
+            {
+              "name": "fullscreen-button",
+              "description": "Fullscreen"
+            },
+            {
+              "name": "hdr-button",
+              "description": "HDR toggle"
+            },
+            {
+              "name": "loop-button",
+              "description": "Loop"
+            },
+            {
+              "name": "more-button",
+              "description": "The mobile \"more\" tray"
+            },
+            {
+              "name": "next-button",
+              "description": "The queue's two ends"
+            },
+            {
+              "name": "osd",
+              "description": "The volume / speed / seek flash in the middle"
+            },
+            {
+              "name": "pip-button",
+              "description": "Picture-in-picture"
+            },
+            {
+              "name": "play-button",
+              "description": "Play / pause"
+            },
+            {
+              "name": "poster",
+              "description": "The poster image"
+            },
+            {
+              "name": "prev-button",
+              "description": "The queue's two ends"
+            },
+            {
+              "name": "progress",
+              "description": "The seek bar's track"
+            },
+            {
+              "name": "progress-buffer",
+              "description": "The buffered stretch"
+            },
+            {
+              "name": "progress-handle",
+              "description": "The knob"
+            },
+            {
+              "name": "progress-played",
+              "description": "The played stretch"
+            },
+            {
+              "name": "quality-button",
+              "description": "Quality"
+            },
+            {
+              "name": "seek-backward-button",
+              "description": "The ±10s pair"
+            },
+            {
+              "name": "seek-forward-button",
+              "description": "The ±10s pair"
+            },
+            {
+              "name": "settings-button",
+              "description": "The gear"
+            },
+            {
+              "name": "speed-button",
+              "description": "Playback speed"
+            },
+            {
+              "name": "spinner",
+              "description": "The loading ring's box — where it sits, not what it draws"
+            },
+            {
+              "name": "stableaudio-button",
+              "description": "Stable volume"
+            },
+            {
+              "name": "subtitle",
+              "description": "Each caption line"
+            },
+            {
+              "name": "subtitle-area",
+              "description": "The region the captions are laid out in"
+            },
+            {
+              "name": "subtitles-button",
+              "description": "Subtitles / captions"
+            },
+            {
+              "name": "time",
+              "description": "Current time / duration"
+            },
+            {
+              "name": "title-bar",
+              "description": "The title strip along the top"
+            },
+            {
+              "name": "volume-button",
+              "description": "Mute / unmute"
+            }
+          ],
           "cssProperties": [
             {
               "name": "--movi-chrome-inset",

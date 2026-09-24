@@ -670,7 +670,7 @@ Switches built-in controls off, as `no<name>` tokens — the same shape
 `noprogress`, `noaudio`, `nocc`, `noquality`, `nospeed`, `nostableaudio`,
 `nohdr`, `noloop`, `nosettings`, `noaspect`, `nopip`, `nofullscreen`, `nomore`,
 `nostats`, `noshortcuts`, `noambient`, `nocrop`, `nosnapshot`, `norotate`,
-`notimeline`, `nodivider`, `nosubtitledrag`
+`notimeline`, `nodivider`, `nosubtitledrag`, `nospinner`
 — plus the `id` of any control added with
 [`addControl()`](#addcontrol-spec), which is simply not added.
 
@@ -684,6 +684,15 @@ of.
 `nosubtitledrag` is not a control on the bar at all — it takes away the
 viewer's ability to drag the live caption somewhere else in the picture. The
 caption still opens the transcript when clicked.
+
+`nospinner` is not a control either — it takes the built-in loading ring off
+the screen so a page can draw its own anywhere it likes. Only the drawing goes:
+the element still puts `is-buffering` (ring earned) and `is-spinner-pending`
+(ring withheld by [`spinnerdelay`](#spinnerdelay)) on the host for exactly as
+long as it always did, which is what a page keys its own indicator off, and the
+centre play button still stands down while either is on. To keep the ring where
+the player puts it and only change how it looks, use
+[`slot="spinner"`](#replace-the-spinner-slot-spinner) instead.
 
 `noprev` and `nonext` are a different kind of token: they take one BUTTON off
 the bar and nothing else. The key, the queue and the lock screen's pair carry
@@ -3524,16 +3533,110 @@ Controls auto-hide after 3 seconds of inactivity.
 
 ### Custom Styling
 
-Shadow DOM allows styling via CSS custom properties (future enhancement):
+Every colour, radius, size and timing in the chrome is a `--movi-*` custom
+property set on `:host`, so a page can retheme the player by overriding them —
+no `::part()`, no shadow-piercing:
 
 ```css
 movi-player {
-  --control-bg: rgba(0, 0, 0, 0.8);
-  --control-text: #fff;
-  --accent-color: #ff5722;
-  --progress-color: #4caf50;
+  --movi-primary: #ff5722;
+  --movi-accent: #ffc107;
+  --movi-controls-height: 64px;
+  --movi-progress-height: 6px;
+  --movi-radius-control: 2px;
 }
 ```
+
+`--movi-accent` falls back to `--movi-primary` wherever it is not set, so
+setting one colour is usually enough. The complete list is generated from the
+stylesheet into `vscode-extension/css-custom-data.json`, which is what gives
+the VS Code extension its completions.
+
+---
+
+### Restyle the chrome — `::part()`
+
+The pieces a page is most likely to want to change carry a `part=`, so they can
+be styled from outside without reaching into the shadow root:
+
+```css
+movi-player::part(button)          { border-radius: 2px; }
+movi-player::part(progress-played) { background: #ff5722; }
+movi-player::part(center-button)   { backdrop-filter: blur(8px); }
+movi-player::part(title-bar)       { font-family: "Söhne", sans-serif; }
+```
+
+| Part | Piece |
+|---|---|
+| `controls` | The whole bottom chrome — bar, progress, tooltip |
+| `controls-bar` | The bar itself, inside that container |
+| `button` | Every button on the bar, all at once |
+| `play-button` | Play / pause |
+| `prev-button` / `next-button` | The queue's two ends |
+| `seek-backward-button` / `seek-forward-button` | The ±10s pair |
+| `volume-button` | Mute / unmute |
+| `audio-button` | Audio track |
+| `subtitles-button` | Subtitles / captions |
+| `hdr-button` | HDR toggle |
+| `quality-button` | Quality |
+| `speed-button` | Playback speed |
+| `stableaudio-button` | Stable volume |
+| `loop-button` | Loop |
+| `settings-button` | The gear |
+| `aspect-button` | Aspect ratio |
+| `pip-button` | Picture-in-picture |
+| `more-button` | The mobile "more" tray |
+| `fullscreen-button` | Fullscreen |
+| `controls-divider` | The quiet rule in the right-hand capsule |
+| `progress` | The seek bar's track |
+| `progress-buffer` | The buffered stretch |
+| `progress-played` | The played stretch |
+| `progress-handle` | The knob |
+| `time` | Current time / duration |
+| `center-button` | The big centre play / pause |
+| `spinner` | The loading ring's box — where it sits, not what it draws |
+| `title-bar` | The title strip along the top |
+| `poster` | The poster image |
+| `osd` | The volume / speed / seek flash in the middle |
+| `subtitle` | Each caption line |
+| `subtitle-area` | The region the captions are laid out in |
+
+The error screen has its own set — see
+[Customizing the Error Screen](#customizing-the-error-screen).
+
+::: warning What `::part()` cannot reach
+The element sets `outline: none !important` on its own controls, and an
+`!important` declaration inside a shadow tree beats one in the page. Focus
+rings are therefore not overridable from outside; nothing else in the table is
+declared `!important`.
+:::
+
+---
+
+### Replace the spinner — `slot="spinner"`
+
+A light-DOM child with `slot="spinner"` is drawn instead of the built-in
+ribbon:
+
+```html
+<movi-player src="video.mkv" controls>
+  <div slot="spinner" class="my-spinner"></div>
+</movi-player>
+```
+
+The player keeps everything around it — when the ring comes up, how long
+[`spinnerdelay`](#spinnerdelay) holds it back, where it sits, and that it never
+shares the middle with the play button. Only the drawing is yours. The box is
+centred and `pointer-events: none`, so size it yourself and do not expect it to
+take clicks.
+
+To take the ring away entirely and draw your own somewhere else on the page,
+use [`controlslist="nospinner"`](#controlslist) and watch the `statechange`
+event, or the `is-buffering` / `is-spinner-pending` classes the element puts on
+itself.
+
+The Document Picture-in-Picture window keeps the built-in ribbon either way —
+it is a separate document, and a slot cannot reach into it.
 
 ---
 
@@ -3818,7 +3921,9 @@ movi-player {
 <movi-player src="video.mp4" controls></movi-player>
 ```
 
-_Note: Shadow parts may not be fully exposed yet. Check component implementation._
+`::part(subtitle)` is each caption line; `::part(subtitle-area)` is the region
+they are laid out in. See [Restyle the chrome](#restyle-the-chrome-part) for
+the rest of the parts.
 
 ---
 
