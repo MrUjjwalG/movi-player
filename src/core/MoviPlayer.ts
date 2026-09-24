@@ -15498,6 +15498,38 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
     return this._lagFpsAchieved >= h.sourceFps * MoviPlayer.LAG_KEEPING_UP_RATIO;
   }
 
+  /**
+   * Is the DEVICE the bottleneck right now, rather than the delivery?
+   *
+   * The link notice needs this because its only other evidence is that
+   * playback stopped, and a decoder that cannot keep up stops playback too —
+   * the catch-up hold does it on purpose ("holding sound and clock for it").
+   * Without this, a slow decoder on a heavy file would arm a verdict about the
+   * connection, and a probe that happens to read low while competing with the
+   * player's own streaming would then blame the link for the device's problem.
+   * That is the same wrong-cause-named mistake the notice already made twice,
+   * arriving from the third direction.
+   *
+   * Three answers, cheapest first. Self-inflicted buffering is the player's own
+   * doing by definition, so it is never the link. The renderer's decode-bound
+   * verdict is the settled judgement. The lag reading is the early one — see
+   * pictureKeepingUp — and is READ here, never sampled, so this cannot perturb
+   * the window that method keeps.
+   *
+   * Used only to hold a notice back, so a false positive here costs nothing but
+   * silence, which is the right way to be wrong about this.
+   */
+  deviceIsBottleneck(): boolean {
+    if (this._bufferingSelfInflicted) return true;
+    if (this.videoRenderer?.isDecodeBound?.()) return true;
+    const h = this.getRenderHealth();
+    return (
+      !!h &&
+      this._lagFpsAchieved >= 0 &&
+      this._lagFpsAchieved < h.sourceFps * MoviPlayer.LAG_KEEPING_UP_RATIO
+    );
+  }
+
   isDecodeBound(): boolean {
     return this.videoRenderer?.isDecodeBound?.() ?? false;
   }

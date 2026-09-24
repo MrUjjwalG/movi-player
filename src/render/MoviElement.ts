@@ -12231,6 +12231,10 @@ export class MoviElement extends HTMLElement {
     if (!p || p.getState?.() !== "playing") return;
     const needed = p.requiredLinkBps?.() ?? 0;
     if (!(needed > 0)) return; // a local file, or a size we never learned
+    // …and not while the device is the one falling behind. The decode-bound
+    // notice owns that case, and a probe competing with the player's own
+    // streaming can read low enough to look like agreement.
+    if (p.deviceIsBottleneck?.()) return;
     // Playback stopping is what makes the question worth the probe's bytes —
     // one stall is a hiccup, so wait for the second.
     if (this._linkStalls < MoviElement.LINK_BUDGET_STALLS) return;
@@ -31548,7 +31552,14 @@ export class MoviElement extends HTMLElement {
       // Evidence for sampleLinkBudget. A measured throughput on its own proves
       // nothing — a source parked at the prefetch gate reports a floor, not the
       // link's capacity — so the verdict waits for playback to actually stop.
-      if (state === "buffering") this._linkStalls++;
+      //
+      // But only for stops the DELIVERY could be responsible for. A decoder
+      // that cannot keep up stops playback too — the catch-up hold does it on
+      // purpose — and counting those would let a slow device arm a verdict
+      // about the connection. See MoviPlayer.deviceIsBottleneck.
+      if (state === "buffering" && !this.player?.deviceIsBottleneck?.()) {
+        this._linkStalls++;
+      }
       else this._qoe.bufferingEndNow();
       // A seek requested before the player was ready was held — apply it now
       // that we've reached a seekable state (fixes e.g. a PiP/handoff seek that
