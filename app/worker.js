@@ -538,6 +538,7 @@ export default {
     if (path === "/badge/vscode.svg") return handleBadge("vscode");
     if (path === "/badge/npm.svg") return handleBadge("npm");
     if (path === "/badge/jsdelivr.svg") return handleBadge("jsdelivr");
+    if (path === "/badge/github.svg") return handleBadge("github");
 
     // --- Serve static assets from R2 (favicons, etc.) ---
     if (path.startsWith("/favicon") || path === "/apple-touch-icon.png" || path === "/og-image.png") {
@@ -1036,6 +1037,8 @@ const BADGE_SOURCES = {
     "https://vsmarketplacebadges.dev/downloads-short/mrujjwalg.movi-player-vscode.svg?label=VS%20Code&color=7c6cf0&labelColor=23232e",
   npm:
     "https://img.shields.io/npm/dt/movi-player?label=npm%20downloads&color=7c6cf0&labelColor=23232e",
+  github:
+    "https://img.shields.io/github/stars/mrujjwalg/movi-player?label=GitHub%20stars&color=7c6cf0&labelColor=23232e",
 };
 
 async function handleBadge(which) {
@@ -1076,7 +1079,7 @@ async function handleBadge(which) {
     // Upstream down/changed → serve a static badge so the <img> never
     // renders broken. Short cache so it self-heals when upstream returns.
     const label =
-      { chrome: "Chrome Web Store", vscode: "VS Code", npm: "npm downloads", jsdelivr: "jsDelivr" }[which] ||
+      { chrome: "Chrome Web Store", vscode: "VS Code", npm: "npm downloads", jsdelivr: "jsDelivr", github: "GitHub stars" }[which] ||
       "extension";
     const w = Math.max(60, label.length * 7 + 16);
     const fallback =
