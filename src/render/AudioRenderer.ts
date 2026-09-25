@@ -54,6 +54,40 @@ let outputEverFed = false;
  */
 const RESUME_GRACE_MS = 1200;
 /**
+ * The same wait, when the browser has as good as said no — see
+ * audioStartRefused(). Not zero: Chromium also lets a site with a high media
+ * engagement score start audio without a gesture, and that resume lands in
+ * tens of milliseconds.
+ */
+const REFUSED_RESUME_GRACE_MS = 150;
+
+/**
+ * Will the browser refuse to start audio right now?
+ *
+ * The full grace is for a context that might still wake. One that cannot —
+ * nothing has been unlocked this session and the page has never had a
+ * gesture — held an upgraded `<video autoplay>` on its first frame for 1.2s
+ * under a centre play button, and only then did the muted fallback start it.
+ * Gecko says so outright (getAutoplayPolicy); Chromium has no such call, but
+ * a page with no activation ever is exactly what its policy refuses.
+ */
+function audioStartRefused(): boolean {
+  if (sharedContextActivated) return false;
+  if (typeof navigator === "undefined") return false;
+  const nav = navigator as Navigator & {
+    getAutoplayPolicy?: (type: string) => string;
+    userActivation?: { hasBeenActive: boolean };
+  };
+  try {
+    const policy = nav.getAutoplayPolicy?.("audiocontext");
+    if (policy === "disallowed") return true;
+    if (policy === "allowed") return false;
+  } catch {
+    /* an engine that does not know the type */
+  }
+  return !!nav.userActivation && !nav.userActivation.hasBeenActive;
+}
+/**
  * "Somebody suspended this context on purpose."
  *
  * Module scope, because the context is module scope. This was an instance
@@ -1322,9 +1356,12 @@ export class AudioRenderer {
         // Past the grace, playback starts without sound. That is the same
         // bargain the muted-autoplay fallback makes, and the element raises
         // the pill for it once the picture is moving.
+        const grace = audioStartRefused()
+          ? REFUSED_RESUME_GRACE_MS
+          : RESUME_GRACE_MS;
         await Promise.race([
           resuming,
-          new Promise<void>((r) => setTimeout(r, RESUME_GRACE_MS)),
+          new Promise<void>((r) => setTimeout(r, grace)),
         ]);
       } catch (err) {
         Logger.warn(
@@ -2310,6 +2347,11 @@ export class AudioRenderer {
    */
   wasEverActivated(): boolean {
     return sharedContextActivated;
+  }
+
+  /** See audioStartRefused(). */
+  isStartRefused(): boolean {
+    return audioStartRefused();
   }
 
   /**

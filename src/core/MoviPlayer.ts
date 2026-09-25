@@ -15929,6 +15929,16 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
     return this.audioRenderer.wasEverActivated();
   }
 
+  /**
+   * True when the browser will refuse to start audio now — no gesture on the
+   * page yet and nothing unlocked this session. The element then skips the
+   * wait for a warm-up that cannot come.
+   */
+  isAudioStartRefused(): boolean {
+    if (this.disableAudio) return false;
+    return this.audioRenderer.isStartRefused();
+  }
+
   /** True when audio-only (data-saver) mode is active. */
   isAudioOnly(): boolean {
     return this._audioOnly;

@@ -1142,6 +1142,12 @@ export class MoviElement extends HTMLElement {
   /** The seek target already announced, so the same one is not announced twice. */
   private _seekAnnouncedFor: number | null = null;
   private _pendingPlay: boolean = false;
+  /**
+   * The last play() came from a script with no gesture behind it — a page
+   * autoplaying by calling play() rather than by declaring `autoplay`. See
+   * play().
+   */
+  private _playUnprompted: boolean = false;
   // True while loading spinner + play() must wait for FileSource preload to
   // complete (mobile only, height >= 2160). Released by the player's
   // 'preloadcomplete' event, which always fires once preload settles.
@@ -10219,6 +10225,7 @@ export class MoviElement extends HTMLElement {
     // new source starts from the same clean slate a fresh element gets.
     this._startCancelled = false;
     this._pendingPlay = false;
+    this._playUnprompted = false;
     this.announceLoadStart(typeof this._src === "string" ? this._src : null);
     this.load();
   }
@@ -30229,9 +30236,15 @@ export class MoviElement extends HTMLElement {
       //  - cold start: only long enough to cover a warm-up. A genuine block
       //    still gets its pill, just a few hundred ms later — and the video is
       //    silent either way, so nothing is lost in the meantime.
+      // …and a third: the browser has as good as said no (no gesture on the
+      // page, nothing unlocked). There is no warm-up to wait for, and every
+      // frame of waiting is the picture held under a play button — only a
+      // beat, for a high-engagement site Chromium lets through anyway.
       const graceFrames = this.player.wasAudioContextActivated()
         ? 40 // ~650ms
-        : 24; // ~400ms
+        : this.player.isAudioStartRefused()
+          ? 6 // ~100ms
+          : 24; // ~400ms
       if (attempt < graceFrames) {
         requestAnimationFrame(() => this.maybeFallbackToMutedAutoplay(attempt + 1));
         return;
@@ -30340,7 +30353,9 @@ export class MoviElement extends HTMLElement {
       // sound, and it is the case the pill exists for — so it shows however
       // many times they have unmuted before.
       (this._autoMutedForAutoplay ||
-        (!this._userHasUnmuted && this._controls && this._autoplay));
+        (!this._userHasUnmuted &&
+          this._controls &&
+          (this._autoplay || this._playUnprompted)));
     overlay.style.display = shouldShow ? "flex" : "none";
   }
 
@@ -31421,7 +31436,7 @@ export class MoviElement extends HTMLElement {
         // Flush any play() calls deferred while loading was in flight.
         if (this._pendingPlay && this.player && !this._isUnsupported) {
           this._pendingPlay = false;
-          this.player.play().catch(() => {});
+          this.startDeferredPlay();
         } else {
           this._pendingPlay = false;
         }
@@ -32080,7 +32095,7 @@ export class MoviElement extends HTMLElement {
       this.updateLoadingIndicator(this.player?.getState() || "idle");
       if (this._pendingPlay && this.player && !this._isUnsupported) {
         this._pendingPlay = false;
-        this.player.play().catch(() => {});
+        this.startDeferredPlay();
       }
       this.updateControlsState();
       this.updatePlayPauseIcon();
@@ -32594,6 +32609,22 @@ export class MoviElement extends HTMLElement {
    */
   async play(): Promise<void> {
     if (this._isUnsupported) return;
+    // Read now, while any gesture behind this call is still live — the awaits
+    // below outlast it.
+    //
+    // A page that autoplays by CALLING play() is doing what `autoplay` does,
+    // and is refused sound the same way; it just never went through
+    // _startAutoplay, so neither the muted fallback nor the pill ever ran. On
+    // a <video> the upgrade took over — whose page starts it from script, and
+    // whose play() now lands here — the film rolled in silence with nothing to
+    // say so and nothing to tap, while a <movi-player autoplay> beside it
+    // showed "Tap to unmute". Browsers without the API are taken as a gesture:
+    // the old behaviour, rather than a pill nobody asked for.
+    const activation = (
+      navigator as Navigator & { userActivation?: { isActive: boolean } }
+    ).userActivation;
+    this._playUnprompted = !!activation && !activation.isActive;
+    this.updateUnmuteOverlay();
     this._startCancelled = false;
     this._pauseWasAskedFor = false;
     // `play` is the sound of the request, not of the picture moving: an
@@ -32631,6 +32662,15 @@ export class MoviElement extends HTMLElement {
       // pipeline; the player suppresses the spinner for those internal seeks
       // itself (suppressSeekSpinner), so no element-side handling is needed.
       await this.player.play();
+      if (this._playUnprompted) this.maybeFallbackToMutedAutoplay();
+    }
+  }
+
+  /** Start a play() that was held back behind a load — see play(). */
+  private startDeferredPlay(): void {
+    const started = this.player?.play().catch(() => {});
+    if (this._playUnprompted) {
+      void started?.then(() => this.maybeFallbackToMutedAutoplay());
     }
   }
 
@@ -37940,7 +37980,7 @@ export class MoviElement extends HTMLElement {
       this.isLoading = false;
       if (this._pendingPlay && this.player && !this._isUnsupported) {
         this._pendingPlay = false;
-        this.player.play().catch(() => {});
+        this.startDeferredPlay();
       } else {
         this._pendingPlay = false;
       }
