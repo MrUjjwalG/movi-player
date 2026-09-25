@@ -31198,6 +31198,17 @@ export class MoviElement extends HTMLElement {
         // title card sat over the frame the viewer had paused on. The seek
         // above has landed and painted that frame; it is the picture now.
         this.hidePoster();
+        // …and the clock and the bar say so. The swap cleared the timeline to
+        // 0:00, and a paused restore sends no time updates to redraw it — the
+        // bar caught up only if something else happened to repaint it (the
+        // chrome coming back up), and otherwise read 0:00 and an empty track
+        // over a frame from the middle of the film. Announced as well, for a
+        // host that draws its own time from the event.
+        this.updateTimeDisplay();
+        this.updateProgressBar();
+        this.dispatchEvent(
+          new CustomEvent("timeupdate", { detail: this.currentTime }),
+        );
         if (discarded.rate > 0 && discarded.rate !== this.playbackRate) {
           this.playbackRate = discarded.rate;
         }
