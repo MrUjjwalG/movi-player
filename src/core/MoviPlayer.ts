@@ -11057,7 +11057,21 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
       // old stream — on a large remote file the 3s seek timeout below fires
       // first, so the stream keeps pulling the region we just left and the
       // new position starves (no video frame, chopped audio, bogus buffer bar).
-      (this.source as { hintSeek?: () => void } | null)?.hintSeek?.();
+      //
+      // With where it is expected to land, roughly: a linear guess from the
+      // time is plenty, because all it has to do is tell the landing apart
+      // from the index lookups the seek makes on the way (see
+      // HttpSource.readIsSeekSearch).
+      {
+        const dur = this.getDuration();
+        const nearOffset =
+          dur > 0 && this.fileSize > 0
+            ? Math.round((Math.max(0, seconds) / dur) * this.fileSize)
+            : -1;
+        (
+          this.source as { hintSeek?: (near?: number) => void } | null
+        )?.hintSeek?.(nearOffset);
+      }
 
       // Seek relative to start time (time 0 in UI = startTime in media)
       Logger.info(TAG, `seek: demuxer.seek(${(seconds + this.startTime).toFixed(2)}) starting...`);

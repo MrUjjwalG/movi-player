@@ -297,6 +297,8 @@ export class HttpSource implements SourceAdapter {
   // landing, so restart there at once instead of dribbling range requests.
   // Consumed by the next read either way (an in-window seek needs no restart).
   private seekHinted: boolean = false;
+  /** Where the hinted seek is expected to land, in bytes; -1 if unknown. */
+  private seekHintOffset = -1;
 
   // Dynamic buffer size (3% of file size, clamped)
   // Start with minimum size, will be resized when file size is known
@@ -574,8 +576,29 @@ export class HttpSource implements SourceAdapter {
    * user just left. See `seekHinted`. Harmless if the seek lands in-window:
    * the next read simply clears the hint.
    */
-  hintSeek(): void {
+  hintSeek(nearOffset = -1): void {
     this.seekHinted = true;
+    this.seekHintOffset = nearOffset;
+  }
+
+  /**
+   * Is this read the seek's SEARCH rather than its landing?
+   *
+   * A seek on Matroska reads the Cues first, and the Cues sit at the end of the
+   * file. With only "a seek is coming" to go on, that read — 2.7KB, the last
+   * bytes of a 1.1GB file — was taken for the landing: the main stream was
+   * moved to the tail, the download of the head it was still making was
+   * dropped, and the first-play seek(0) left playback to re-request its own
+   * opening bytes a second later and stall on them. Measured on the compare
+   * page's Sintel: playing at 4.4s, a stall at 7.5s, every load. A read a
+   * fifth of the file or more away from where the seek is expected to land is
+   * a lookup; it gets a one-off fetch and the stream stays where it is.
+   */
+  private readIsSeekSearch(offset: number): boolean {
+    if (!this.seekHinted || this.seekHintOffset < 0 || !(this.size > 0)) {
+      return false;
+    }
+    return Math.abs(offset - this.seekHintOffset) > this.size * 0.2;
   }
 
   private async awaitPrefetchGate(): Promise<void> {
@@ -2386,9 +2409,10 @@ export class HttpSource implements SourceAdapter {
       // are the search FOR that seek: the hint is still set from the viewer's
       // request, so every probe repositioned the download to a place the
       // search was about to reject.
-      (!this.seekHinted || this._probing) &&
+      (!this.seekHinted || this._probing || this.readIsSeekSearch(offset)) &&
       length <= ONEOFF_RANGE_MAX_BYTES &&
       (this._probing ||
+        this.readIsSeekSearch(offset) ||
         this.consecutiveOneOffFetches < this.MAX_ONEOFF_BEFORE_RESTART)
     ) {
       Logger.info(TAG, `Read: one-off range fetch for offset=${offset}, length=${length} (outside stream window, main stream continues)`);
@@ -2440,7 +2464,9 @@ export class HttpSource implements SourceAdapter {
           this.consecutiveForceRestarts = 0;
           // Count this one-off; a run of them (a real seek) trips the gate above
           // on the next read and restarts the stream at the new position.
-          if (!this._probing) this.consecutiveOneOffFetches++;
+          if (!this._probing && !this.readIsSeekSearch(offset)) {
+            this.consecutiveOneOffFetches++;
+          }
           return result.buffer;
         }
       } catch (e) {
