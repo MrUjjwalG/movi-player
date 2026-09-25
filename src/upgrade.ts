@@ -23,6 +23,14 @@
  *
  * const stop = upgradeVideoElements({ watch: true });   // …and future ones
  * ```
+ *
+ * A page opts a video out with `data-movi-ignore` — on the `<video>` itself or
+ * on anything around it:
+ *
+ * ```html
+ * <video data-movi-ignore src="clip.mp4" controls></video>
+ * <section data-movi-ignore> …videos left alone… </section>
+ * ```
  */
 
 import { Logger } from "./utils/Logger";
@@ -31,6 +39,18 @@ const TAG = "upgrade";
 
 /** Marks an element that has already been taken over, so a second pass skips it. */
 const TAKEN = "__moviUpgraded";
+
+/**
+ * The page's own "leave this one alone".
+ *
+ * `skip` and `filter` belong to whoever CALLS the upgrade — and on a page the
+ * browser extension upgrades, that is not the page. The page is the one that
+ * knows a video is meant to stay native: the compare page shows a `<video>`
+ * beside a `<movi-player>` precisely to show what the native element does, and
+ * the extension's takeover replaced it, so both halves of the comparison were
+ * the same player. Honoured on an ancestor too, so a whole section can opt out.
+ */
+const IGNORE_ATTRIBUTE = "data-movi-ignore";
 
 export interface UpgradeOptions {
   /** Where to look. Defaults to the whole document. */
@@ -220,6 +240,7 @@ function upgradeOne(
   options: UpgradeOptions,
 ): UpgradedVideo | null {
   if ((video as unknown as Record<string, unknown>)[TAKEN]) return null;
+  if (video.closest?.(`[${IGNORE_ATTRIBUTE}]`)) return null;
   if (options.skip && video.matches(options.skip)) return null;
   if (options.sources !== "any" && !hasStaticSource(video)) return null;
   if (options.filter && !options.filter(video)) return null;

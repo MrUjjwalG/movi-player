@@ -276,6 +276,9 @@ function looksLikeThePagesPlayer(video) {
 }
 
 function videoWorthTakingOver(video) {
+  // The page's own opt-out — the library honours it too (see upgrade.ts), so a
+  // page whose only video carries it is not worth loading the player for.
+  if (video.closest("[data-movi-ignore]")) return false;
   if (video.srcObject) return false;
   if (video.mediaKeys) return false;
   const source =
