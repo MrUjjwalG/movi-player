@@ -1370,7 +1370,25 @@ no resume at all without this. The key is also known before the file opens, so
 the position is offered on the first check rather than after metadata arrives.
 
 Also a property: `el.resumeKey = "episode-42"`. Empty or absent means the title
-decides, as before. Needs `resume` — on its own it does nothing.
+decides, as before. For a saved position it needs `resume`.
+
+**It also says two sets of links are the same media.** A host whose URLs expire
+— YouTube's, a signed CDN link, Google Drive's — renews them by swapping the
+`<source>` children, and to the player that looks exactly like the next video in
+a queue. With `resumekey` set and unchanged across the swap, the player treats it
+as the same media under new links: it picks up at the same position, paused if it
+was paused, playing if it was, at the same speed — no `resume` needed. Change the
+key along with the children for a new video, and it starts fresh as before.
+
+```jsx
+// React: the video's own id, not the URL — the URL is what changes.
+<MoviPlayer resumekey={videoId} autoplay>
+  {qualities.map((q) => <MoviSource key={q.url} src={q.url} />)}
+</MoviPlayer>
+```
+
+A wrapper that sets the key a frame after the children change is fine: the
+decision is made once the new source has loaded, not at the swap.
 
 **Not needed for a discarded tab.** When the browser takes a background tab's
 memory back (Chrome's Memory Saver) and the viewer returns, the page reloads —

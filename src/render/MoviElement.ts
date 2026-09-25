@@ -1730,6 +1730,17 @@ export class MoviElement extends HTMLElement {
   // What the saved position is filed under, when the host would rather say so
   // itself than let the title decide (see getResumeKey).
   private _resumeKey: string = "";
+  /**
+   * Where the outgoing media was when the host swapped the `<source>` children,
+   * filed under its `resumekey`. Taken by the next load if the key still
+   * matches — see _reloadFromSourceChildren.
+   */
+  private _refreshCarry: {
+    key: string;
+    t: number;
+    playing: boolean;
+    rate: number;
+  } | null = null;
   /** Crop the black bars that are baked into the picture — see `cropbars`. */
   private _cropBars = false;
   /** Let autoplay start while the tab is hidden — see `backgroundplay`. */
@@ -10202,6 +10213,30 @@ export class MoviElement extends HTMLElement {
 
   private _reloadFromSourceChildren(): void {
     Logger.info(TAG, "Source children changed — reloading in place");
+    // The same media with fresh links, or a different one?
+    //
+    // A host with expiring URLs — YouTube's, a signed CDN link, Drive's — has
+    // to swap the children to renew them, and from here that looks exactly
+    // like the next video in a queue. Reloading it as a new source put the
+    // viewer back at 0:00 and started a paused video, measured on a watch page
+    // that renewed its links after a long pause: paused at 47.5s, restarted
+    // from the top. `resumekey` is the host's own id for the media, so it
+    // decides. It is NOT read here: a framework wrapper sets attributes in an
+    // effect, after this microtask, so the key on the element right now is
+    // still the outgoing media's — which is exactly what gets recorded. The
+    // next load compares it with the key it finds by then (takeDiscardState).
+    this._refreshCarry = null;
+    if (this._resumeKey && this.player) {
+      const t = this.currentTime;
+      if (t > 0) {
+        this._refreshCarry = {
+          key: this._resumeKey,
+          t,
+          playing: !this.paused && !this.ended,
+          rate: this.playbackRate,
+        };
+      }
+    }
     // Swapping the children IS writing a new source — it is the only way to
     // change video without losing fullscreen, and the host that does it is
     // making the same statement as one that writes `src`. Without this, the
@@ -31126,6 +31161,11 @@ export class MoviElement extends HTMLElement {
         // stays paused on the right frame, which is still the point.
         if (discarded.playing && document.visibilityState === "visible") {
           void this.play()?.catch?.(() => {});
+        } else if (!discarded.playing) {
+          // …and a video that was paused stays paused. `autoplay` runs after
+          // this and would otherwise start it: the host asked for autoplay on a
+          // NEW video, not for this one to begin again on its own.
+          this._startCancelled = true;
         }
       } else if (this._startAt > 0 && this.player) {
         await this.player.seek(this._startAt).catch((e: unknown) => {
@@ -41333,6 +41373,22 @@ export class MoviElement extends HTMLElement {
     playing: boolean;
     rate: number;
   } | null {
+    // The same media under renewed links (see _reloadFromSourceChildren) is
+    // restored exactly like a discarded tab: same place, same speed, playing
+    // only if it was. Taken once, and only while the host's key still names
+    // the media it was recorded for.
+    const carry = this._refreshCarry;
+    this._refreshCarry = null;
+    if (carry && carry.key === this._resumeKey) {
+      const d = this.duration;
+      if (!(d > 0 && carry.t > d - 1)) {
+        Logger.info(
+          TAG,
+          `Same media under new links (resumekey) — resuming at ${carry.t.toFixed(1)}s, ${carry.playing ? "playing" : "paused"}`,
+        );
+        return { t: carry.t, playing: carry.playing, rate: carry.rate };
+      }
+    }
     const doc = document as Document & { wasDiscarded?: boolean };
     if (!doc.wasDiscarded) return null;
     const key = this.discardKey();

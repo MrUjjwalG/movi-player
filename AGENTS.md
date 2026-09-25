@@ -168,7 +168,9 @@ All observed attributes are listed in `MoviElement.observedAttributes` (around [
 **Other**
 - `ambientmode` + `ambientwrapper="<element-id>"` — paint average frame color as a blurred glow on the given element. **Heavy** on mobile (see §7).
 - `resume` — persist + restore playback position via `localStorage`.
-- `resumekey` — what that position is filed under. Default is the title;
+- `resumekey` — what that position is filed under, and the media's identity
+  across a `<source>` swap: same key, new children = renewed links, so position
+  and paused state carry over (no `resume` needed). Default is the title;
   a host with its own ids should say so here (see `getResumeKey`).
 - `stablevolume` — DynamicsCompressor for loudness normalization.
 - `renderer` (`"canvas"` — only supported value today)
