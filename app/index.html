@@ -7640,6 +7640,11 @@
         // The same tip also answers a pointer resting on a tab (or keyboard
         // focus on one), for as long as it stays there — that one is asked
         // for, so it shows after a tab has been used too.
+        //
+        // The idle run is for a first visit only: someone who has been here
+        // before knows what the three do. The mark is set as the page opens,
+        // so the whole of that first visit still gets it; the hover tip is
+        // never limited this way.
         (function () {
           var group = document.querySelector(".hero-mode-tabs");
           if (!group || !tabs.length) return;
@@ -7655,7 +7660,13 @@
           tip.setAttribute("aria-live", "polite");
           group.appendChild(tip);
 
-          var done = false, heroInView = true, idleTimer = 0, stepTimer = 0;
+          var SEEN_KEY = "movi-hero-hint-seen";
+          var firstVisit = true;
+          try {
+            firstVisit = !localStorage.getItem(SEEN_KEY);
+            localStorage.setItem(SEEN_KEY, "1");
+          } catch (e) { /* private window or blocked storage: treat as first */ }
+          var done = !firstVisit, heroInView = true, idleTimer = 0, stepTimer = 0;
           var held = null;
           function place(tab) {
             var text = TIPS[tab.getAttribute("data-hero-mode")];
