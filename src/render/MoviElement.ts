@@ -12484,20 +12484,42 @@ export class MoviElement extends HTMLElement {
           TAG,
           `Link probe: best ${bps > 0 ? (bps / 1e6).toFixed(1) + "Mbps" : "no reading"} ` +
             `for ${(needed / 1e6).toFixed(1)}Mbps needed; arriving ` +
-            `${arriving > 0 ? (arriving / 1e6).toFixed(1) + "Mbps" : "unknown"} ` +
+            `${arriving > 0 ? (arriving / 1e6).toFixed(1) + "Mbps" : "unknown"} at best, ` +
+            `${(() => { const v = p.sustainedDeliveryBps?.() ?? -1; return v > 0 ? (v / 1e6).toFixed(1) + "Mbps" : "unknown"; })()} sustained ` +
             `(stalls ${this._linkStalls}, from delivery ${this._deliveryStalls})`,
         );
-        if (!(bps > 0)) return; // no answer — say nothing
-        if (bps >= needed) return; // it can be delivered; the stalls were not this
-        // What reached the player is the figure to quote, and a second
-        // opinion on whether to speak at all. The probe cannot be quoted: it
-        // shares the link with the player's own stream, so it reads high or
-        // low depending on what it catches — "about 60 Mbps" on a ~40 Mbps
-        // line. The stream's own best sustained window (HttpSource.
-        // bestDeliveryBps) cannot read above the line, and being the best of
-        // many it does not sink with whatever the last few seconds held.
-        if (arriving > 0 && arriving >= needed) return;
-        this.announceLinkShortfall(needed, arriving > 0 ? arriving : bps);
+        // What has ACTUALLY been arriving decides. The probe is a second
+        // opinion, and only where the stalls did not already prove the
+        // delivery short: when reads sat waiting on the network through the
+        // stalls, a separate probe connection reading fast does not make the
+        // media arrive any faster. The best-window figure is not a verdict
+        // either — it is the most flattering five seconds of the last minute,
+        // and a link that bursts to 28 while averaging 6 never fell short of
+        // it. Measured on a 4K R2 source: seven stalls, 1-13 Mbps sustained
+        // against 20.4 needed, and no notice, because the probe (read from
+        // cache) said 3404 and the best window said 28.6.
+        const sustained = p.sustainedDeliveryBps?.() ?? -1;
+        const deliveryProven =
+          this._deliveryStalls >= MoviElement.LINK_BUDGET_STALLS;
+        if (sustained > 0) {
+          if (sustained >= needed) return; // it is being delivered
+        } else {
+          if (!(bps > 0)) return; // no answer either way — say nothing
+          if (bps >= needed && !deliveryProven) return;
+          if (arriving > 0 && arriving >= needed) return;
+        }
+        if (bps >= needed && !deliveryProven) return; // the stalls were not this
+        // The figure to quote is the recent best window when it is still
+        // short of the need — it cannot read above the line, and it does not
+        // sink with whatever the last few seconds held — and otherwise the
+        // sustained average, which is what fell short.
+        const quote =
+          arriving > 0 && arriving < needed
+            ? arriving
+            : sustained > 0
+              ? sustained
+              : bps;
+        this.announceLinkShortfall(needed, quote);
       })
       .catch(() => {
         /* a probe that cannot run is not evidence of anything */

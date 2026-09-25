@@ -95,6 +95,12 @@ export async function probeLinkBandwidth(
     const res = await fetch(url, {
       headers: { Range: `bytes=0-${wantBytes - 1}`, ...(opts.headers || {}) },
       signal: ac.signal,
+      // A link test answered from the cache measures the cache. It asks for the
+      // head of the file, which is exactly what the player read first — so on
+      // any source it had been playing, the answer came out of memory: 3404
+      // Mbps, measured, on a link carrying 4-9, and the link notice concluded
+      // the connection was fine.
+      cache: "no-store",
     });
     if ((!res.ok && res.status !== 206) || !res.body) return -1;
 

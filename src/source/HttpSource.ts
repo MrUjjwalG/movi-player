@@ -309,8 +309,9 @@ export class HttpSource implements SourceAdapter {
   private deliveryLog: Array<{ t: number; bytes: number }> = [];
   // The best recentDeliveryBps() window this source has seen, and when it was
   // last sampled — see bestDeliveryBps().
-  private bestDelivery = -1;
   private bestDeliverySampledAt = 0;
+  /** Five-second delivery readings, one a second — see bestDeliveryBps. */
+  private deliverySamples: Array<{ t: number; bps: number }> = [];
   private streamStartTime: number = 0;
   private lastSpeedBytes: number = 0;
   private lastSpeedTime: number = 0;
@@ -2622,12 +2623,22 @@ export class HttpSource implements SourceAdapter {
         HttpSource.BEST_DELIVERY_WINDOW_MS,
         HttpSource.BEST_DELIVERY_MIN_MS,
       );
-      if (r > this.bestDelivery) this.bestDelivery = r;
+      if (r > 0) {
+        this.deliverySamples.push({ t: now, bps: r });
+        while (
+          this.deliverySamples.length > 0 &&
+          now - this.deliverySamples[0].t > HttpSource.BEST_DELIVERY_HORIZON_MS
+        ) {
+          this.deliverySamples.shift();
+        }
+      }
     }
   }
 
   private static readonly BEST_DELIVERY_WINDOW_MS = 5000;
   private static readonly BEST_DELIVERY_MIN_MS = 3000;
+  // How far back the best window may come from. See bestDeliveryBps.
+  private static readonly BEST_DELIVERY_HORIZON_MS = 60_000;
 
   /**
    * The fastest this source's own stream has sustained, over any five-second
@@ -2642,8 +2653,20 @@ export class HttpSource implements SourceAdapter {
    * player's own pauses. The same reasoning bestLinkBps applies to its
    * probes, on readings that cannot overshoot the way a probe's can.
    */
+  //
+  // …over the last minute, not since the source opened. A best-ever reading
+  // is only as fresh as the fastest window the session ever had, and that
+  // one is usually the opening: measured on a 4K R2 source, 28.6 Mbps from
+  // the first seconds stood as "the line" for the whole session while the
+  // stream went on arriving at 1-13, and the link notice, comparing against
+  // it, never spoke through seven stalls.
   bestDeliveryBps(): number {
-    return this.bestDelivery;
+    let best = -1;
+    const now = performance.now();
+    for (const s of this.deliverySamples) {
+      if (now - s.t <= HttpSource.BEST_DELIVERY_HORIZON_MS && s.bps > best) best = s.bps;
+    }
+    return best;
   }
 
   /**

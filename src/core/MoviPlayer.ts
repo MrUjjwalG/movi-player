@@ -15763,6 +15763,16 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
 
   /** The best rate the media has actually arrived at from this source,
    *  BITS/second, or -1 — see HttpSource.bestDeliveryBps. */
+  /** What has actually been arriving, on average, over the last half minute
+   *  of active streaming — BITS/second, or -1. The honest "is the link
+   *  keeping up" figure; deliveryRateBps is the kinder one to quote. */
+  sustainedDeliveryBps(): number {
+    const src = this.source as {
+      recentDeliveryBps?: (windowMs?: number, minMs?: number) => number;
+    } | null;
+    return src?.recentDeliveryBps?.(30_000, 5_000) ?? -1;
+  }
+
   deliveryRateBps(): number {
     const src = this.source as {
       bestDeliveryBps?: () => number;
