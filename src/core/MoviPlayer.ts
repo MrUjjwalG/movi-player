@@ -15556,12 +15556,17 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
    * (resets to 0 on seek/reset), so callers must handle it going backwards.
    * Null when there's no video renderer (audio-only / adaptive streams).
    */
-  getRenderHealth(): { framesPresented: number; sourceFps: number } | null {
+  getRenderHealth(): {
+    framesPresented: number;
+    sourceFps: number;
+    hostContended: boolean;
+  } | null {
     if (!this.videoRenderer || this.streamWrapper) return null;
     const vt = this.trackManager.getActiveVideoTrack() as VideoTrack | null;
     return {
       framesPresented: this.videoRenderer.getStats().framesPresented,
       sourceFps: vt?.frameRate && vt.frameRate > 0 ? vt.frameRate : 30,
+      hostContended: this.videoRenderer.isHostContended(),
     };
   }
 

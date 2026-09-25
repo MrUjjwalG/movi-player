@@ -12631,35 +12631,31 @@ export class MoviElement extends HTMLElement {
     // stutter hint says so from what actually happened" — so say it, once per
     // source, at any rate, through the same notice and the same cancelable
     // event a host can already intercept.
-    if (
-      this._smoothWarning &&
-      !this._smoothWarnedByMeasurement &&
-      this.player?.isDecodeBound?.()
-    ) {
-      this._smoothWarnedByMeasurement = true;
-      const message = {
-        title: "This video may not play smoothly on this device",
-        body: "Your device can't decode it fast enough, so the picture may stutter or fall behind the sound.",
-      };
-      const allowed = this.dispatchEvent(
-        new CustomEvent("smoothwarning", {
-          detail: { measured: true, media: "video", message },
-          cancelable: true,
-          bubbles: true,
-          composed: true,
-        }),
-      );
-      if (allowed) this.showSmoothWarning(message);
-    }
+    if (this.player?.isDecodeBound?.()) this.warnSmoothFromMeasurement();
 
+    // A second the host page starved rAF is not the device falling short —
+    // the renderer holds its own detectors off for exactly the same reason.
     this._stutterHistory.push(
-      this._playbackRate > 1 && presented < expected * MoviElement.STUTTER_RATIO,
+      !h.hostContended && presented < expected * MoviElement.STUTTER_RATIO,
     );
     if (this._stutterHistory.length > MoviElement.STUTTER_WINDOW) {
       this._stutterHistory.shift();
     }
     const badSeconds = this._stutterHistory.filter(Boolean).length;
-    if (badSeconds >= MoviElement.STUTTER_SECONDS && !this._stutterCooldown) {
+    // At 1x the decode-bound verdict above was the only thing that could say
+    // anything, and it wants four bad seconds in an unbroken run — bursty
+    // stutter never gives it that. Most of the window going bad says the same
+    // thing, so it raises the same once-per-source notice. Above 1x the speed
+    // hint below speaks for it, and the load-time check already priced the
+    // speed in.
+    if (badSeconds >= MoviElement.STUTTER_SECONDS && this._playbackRate <= 1) {
+      this.warnSmoothFromMeasurement();
+    }
+    if (
+      this._playbackRate > 1 &&
+      badSeconds >= MoviElement.STUTTER_SECONDS &&
+      !this._stutterCooldown
+    ) {
       this._stutterHistory.length = 0;
       this._stutterCooldown = true;
       // Cooldown so it doesn't nag while stuttering at the SAME rate; a rate
@@ -12673,6 +12669,28 @@ export class MoviElement extends HTMLElement {
       }, 45000);
       this.showOSD(OSD.speed, "Play at 1x for smoother playback");
     }
+  }
+
+  /**
+   * "May not play smoothly", from what playback actually did — once per source,
+   * through the same cancelable event as the load-time notice.
+   */
+  private warnSmoothFromMeasurement(): void {
+    if (!this._smoothWarning || this._smoothWarnedByMeasurement) return;
+    this._smoothWarnedByMeasurement = true;
+    const message = {
+      title: "This video may not play smoothly on this device",
+      body: "Your device can't decode it fast enough, so the picture may stutter or fall behind the sound.",
+    };
+    const allowed = this.dispatchEvent(
+      new CustomEvent("smoothwarning", {
+        detail: { measured: true, media: "video", message },
+        cancelable: true,
+        bubbles: true,
+        composed: true,
+      }),
+    );
+    if (allowed) this.showSmoothWarning(message);
   }
 
   /**

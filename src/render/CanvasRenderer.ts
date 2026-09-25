@@ -5242,6 +5242,14 @@ export class CanvasRenderer {
   }
 
   /**
+   * Whether the last cadence window was the HOST PAGE starving rAF rather than
+   * the pipeline falling short — see sampleRafCadence.
+   */
+  isHostContended(): boolean {
+    return this._hostContended;
+  }
+
+  /**
    * Media time (s) of the frame on screen, or -1 when nothing has been shown
    * since the last seek / queue clear.
    */
