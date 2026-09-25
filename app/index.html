@@ -4440,6 +4440,12 @@
         margin: 0 auto !important;
         padding-block: 2.5rem 2rem !important;
       }
+      /* A phone already sees the bar sit right above the hero; 70px of air
+         between it and the eyebrow read as a gap rather than a breath. */
+      @media (max-width: 640px) {
+        .hero--split .hero-content,
+        .hero-content { padding-top: 1.25rem !important; }
+      }
       .hero-left,
       .hero-copy,
       .hero-panel {
