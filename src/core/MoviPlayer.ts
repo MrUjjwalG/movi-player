@@ -1447,6 +1447,10 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
    *  runway — enough that the new decoder is never the thing being waited on
    *  at the seam. */
   private static readonly SEAMLESS_PRIME_LEAD_S = 0.25;
+  // How far the Clock may run past the frame on screen when the picture is
+  // all of playback. Above a frame interval and scheduling jitter, well under
+  // anything a viewer reads as the bar moving over a still picture.
+  private static readonly PICTURE_CLOCK_LEAD_S = 0.25;
   /** …and the most it may prime, however much the outgoing queue holds. Whole
    *  decoded frames are expensive at 4K and outrageous at 8K. */
   private static readonly SEAMLESS_PRIME_MAX_AHEAD_S = 0.6;
@@ -6216,6 +6220,7 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
       this._eofPictureDrainSince = 0;
     this._eofFlushRequested = false;
       this.eofSince = 0;
+      this._audioPlayedOutSince = 0;
     } else {
       // Resume from pause — just resume AudioContext
       //
@@ -6501,6 +6506,9 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
   // playout head and the last video frame), force the ended transition
   // rather than freezing one frame short of the end forever.
   private eofSince = 0;
+  // When the sound was first found played out at EOF — what the drain
+  // watchdog times from. See its use.
+  private _audioPlayedOutSince = 0;
 
   /**
    * Route a decoded audio frame to the renderer, dropping any that predate the
@@ -7746,7 +7754,15 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
 
     // Stall detection: if playing but both video and audio buffers are critically low
     // Skip near end of video to avoid false stall at EOF
-    const nearEnd = this.mediaInfo && this.clock.getTime() >= (this.mediaInfo.duration + this.startTime) - 3;
+    // …only once there is nothing left to fetch. By clock alone, the last three
+    // seconds were exempt whether or not their bytes had arrived: on a link
+    // under the bitrate a 10s file ran its sound dry at 7.5s, nothing stalled,
+    // the clock ran on over silence, and the desync check "fixed" it with a
+    // seek. Before EOF an empty buffer near the end is as real as anywhere.
+    const nearEnd =
+      this.eofReached &&
+      this.mediaInfo &&
+      this.clock.getTime() >= this.mediaInfo.duration + this.startTime - 3;
     // Longer stall timeout for slow + high-FPS: stretcher / hardware rate fallback
     // causes brief audio gaps that aren't true stalls. 2s vs 500ms default.
     const currentRate = this.clock.getPlaybackRate();
@@ -7851,6 +7867,28 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
     // seek brought the picture back. Bound, EOF stops speaking for the picture;
     // the genuine end of playback is already covered by `nearEnd` below.
     const eofSilencesStall = this.eofReached && !boundToAudio;
+    // With no sound, the picture IS the timeline — but two clocks run it. The
+    // renderer has its own anchor and holds it when the queue runs dry; the
+    // player Clock is plain wall time and does not. On a link under the
+    // bitrate the Clock ran on over a frozen frame (6.3s → 7.8s with the
+    // picture at 3.25s), the bar and currentTime with it, and every frame that
+    // then arrived was already behind it and dropped as stale — so the gap
+    // only grew, and the file "ended" at 10s with the picture at 5.8s.
+    // Pinning the Clock to what is on screen keeps them one timeline: the bar
+    // stops when the picture does, and a late frame is shown, not binned.
+    if (
+      this.stateManager.getState() === "playing" &&
+      this.videoRenderer &&
+      this.pictureIsPlayback()
+    ) {
+      const shown = this.videoRenderer.getLastPresentedTime();
+      if (
+        shown >= 0 &&
+        this.clock.getTime() - shown > MoviPlayer.PICTURE_CLOCK_LEAD_S
+      ) {
+        this.clock.seek(shown);
+      }
+    }
     if (this.stateManager.getState() === "playing" && !eofSilencesStall && !this.waitingForVideoSync && !nearEnd && !this.isBackgrounded) {
       // `hasPicture`, not `videoRenderer` — a source with no video track has
       // an empty queue forever and must never read as a stalled picture.
@@ -8487,6 +8525,10 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
         // demuxer and video decoder are both drained, treat the renderer as
         // done if its queue is empty OR only holds this unpresentable tail
         // (head frame at/after the audio playout head).
+        if (!audioPlayedOut) this._audioPlayedOutSince = 0;
+        else if (!this._audioPlayedOutSince) {
+          this._audioPlayedOutSince = performance.now();
+        }
         const headFrameTime = this.videoRenderer?.getHeadFrameTime() ?? -1;
         // The picture can simply run LONGER than the sound.
         //
@@ -8624,10 +8666,18 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
         // never all aligned — a marginal float mismatch between the audio tail
         // and the last video frame can leave one frame unpresentable forever.
         // Once audio is done and we've waited a beat, end rather than freeze.
+        //
+        // Timed from the sound running out, not from EOF. On a slow link the
+        // demuxer reaches EOF long before playback reaches the end, so an EOF
+        // clock was always already past 750ms — and `audioPlayedOut` is true
+        // from 0.25s before the end (reachedContentEnd). Together they ended a
+        // 10s file at 9.8s with a quarter second of sound and four frames still
+        // queued.
         if (
           audioPlayedOut &&
           this.eofSince > 0 &&
-          performance.now() - this.eofSince > 750 &&
+          this._audioPlayedOutSince > 0 &&
+          performance.now() - this._audioPlayedOutSince > 750 &&
           // Not while there is still picture to play. This watchdog is for a
           // float mismatch leaving one frame unpresentable; a soundtrack that
           // simply ends early would otherwise trip it 750ms later and end the
@@ -10723,6 +10773,7 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
       this._eofPictureDrainSince = 0;
     this._eofFlushRequested = false;
       this.eofSince = 0;
+      this._audioPlayedOutSince = 0;
       // Honor a resume intent, mirroring what the video path does in
       // notifySeekCompletion. play()'s first-play (and replay) branch sets
       // wasPlayingBeforeSeek before calling seek(0); in audio-only there are no
@@ -11016,6 +11067,7 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
       this._eofPictureDrainSince = 0;
     this._eofFlushRequested = false;
       this.eofSince = 0;
+      this._audioPlayedOutSince = 0;
       // A seek re-aligns the audio source too, so the automatic-recovery budget
       // starts fresh — a failure burst earlier in the file shouldn't leave a
       // later stretch permanently silent.
@@ -13592,6 +13644,7 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
     this.eofReached = false;
     this._eofPictureDrainSince = 0;
     this.eofSince = 0;
+    this._audioPlayedOutSince = 0;
     try {
       await dm.seek(target);
     } catch (e) {
@@ -15253,6 +15306,7 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
       this._eofPictureDrainSince = 0;
     this._eofFlushRequested = false;
       this.eofSince = 0;
+      this._audioPlayedOutSince = 0;
     } catch (err) {
       Logger.error(TAG, "Subtitle prefetch failed", err);
     } finally {
@@ -16285,6 +16339,7 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
       this._eofPictureDrainSince = 0;
     this._eofFlushRequested = false;
       this.eofSince = 0;
+      this._audioPlayedOutSince = 0;
 
       // Seek demuxer to nearest keyframe before current audio position
       if (this.demuxer) {

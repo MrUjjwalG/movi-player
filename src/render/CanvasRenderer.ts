@@ -5242,6 +5242,14 @@ export class CanvasRenderer {
   }
 
   /**
+   * Media time (s) of the frame on screen, or -1 when nothing has been shown
+   * since the last seek / queue clear.
+   */
+  getLastPresentedTime(): number {
+    return this.lastPresentedPts;
+  }
+
+  /**
    * Get frame queue size
    */
   getQueueSize(): number {
