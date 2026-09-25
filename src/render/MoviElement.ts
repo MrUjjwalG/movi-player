@@ -14932,7 +14932,7 @@ export class MoviElement extends HTMLElement {
    * Pass a `keep` selector to skip closing the menu currently being
    * opened, otherwise everything goes away.
    */
-  private closeAllBottomMenus(keep?: string): void {
+  private closeAllBottomMenus(keep?: string, rearm = true): void {
     if (!this.shadowRoot) return;
     const animatedSelectors = [
       ".movi-speed-menu",
@@ -14963,7 +14963,7 @@ export class MoviElement extends HTMLElement {
     // menu open and nothing scheduled to hide it — on touch devices, where
     // there's no mouseleave to re-trigger showControls(), the bar would stay
     // up. With `keep` set a different menu is opening, so leave it alone.
-    if (!keep) {
+    if (!keep && rearm) {
       this.showControls();
     }
   }
@@ -32931,7 +32931,11 @@ export class MoviElement extends HTMLElement {
     // changes are: setting src to a File — which is what a file picker does —
     // goes straight to initializePlayer() and never touches load(). dispose()
     // is the one thing every route runs through.
-    this.closeAllBottomMenus();
+    //
+    // Without the re-arm: that exists for a viewer who just closed a menu, and
+    // nobody closed one here. Run on a source change, it put the bar up on
+    // every new src — an autoplay embed opened with its chrome showing.
+    this.closeAllBottomMenus(undefined, false);
     this.closeSettingsPage(false);
 
     // Cancel any queued play intent — and any queued NEXT ITEM with it. The
@@ -34685,10 +34689,15 @@ export class MoviElement extends HTMLElement {
    * And `_hasEverPlayed` keeps it to the opening load: a mid-play stall or a
    * quality switch has a picture on screen and a bar the viewer already knows
    * how to summon.
+   *
+   * Not under `autoplay`: there the start was the host's decision, not the
+   * viewer's, and a bar rising the moment a src is set is chrome nobody asked
+   * for. The viewer can still summon it — hover, or a tap on touch.
    */
   private openingLoadHoldsControls(): boolean {
     return (
       this._controls &&
+      !this._autoplay &&
       !this._isUnsupported &&
       !this._hasEverPlayed &&
       this.hasMediaSource() &&
