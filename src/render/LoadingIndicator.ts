@@ -42,8 +42,16 @@ export const loadingIndicatorMarkup = `
           <stop offset=".55" stop-color="#eee"/>
           <stop offset="1" stop-color="#fff"/>
         </linearGradient>
+        <filter id="movi-loader-goo" filterUnits="userSpaceOnUse" x="300" y="40" width="970" height="950" color-interpolation-filters="sRGB">
+          <feGaussianBlur stdDeviation="30"/>
+          <feColorMatrix values="1 0 0 0 0  0 1 0 0 0  0 0 1 0 0  0 0 0 18 -7"/>
+        </filter>
         <mask id="movi-loader-flow-mask" maskUnits="userSpaceOnUse" x="350" y="80" width="870" height="870">
-          <path class="movi-loader-flow" d="M441.05 183.62 Q441.05 143.62 476.72 161.73 L1139.97 498.51 Q1170.28 513.9 1139.97 529.29 L476.72 866.07 Q441.05 884.18 441.05 844.18 Z"/>
+          <g filter="url(#movi-loader-goo)">
+            <path class="movi-loader-flow" d="M441.05 183.62 Q441.05 143.62 476.72 161.73 L1139.97 498.51 Q1170.28 513.9 1139.97 529.29 L476.72 866.07 Q441.05 884.18 441.05 844.18 Z"/>
+            <path class="movi-loader-neck" d="M441.05 183.62 Q441.05 143.62 476.72 161.73 L1139.97 498.51 Q1170.28 513.9 1139.97 529.29 L476.72 866.07 Q441.05 884.18 441.05 844.18 Z"/>
+            <path class="movi-loader-crest" d="M441.05 183.62 Q441.05 143.62 476.72 161.73 L1139.97 498.51 Q1170.28 513.9 1139.97 529.29 L476.72 866.07 Q441.05 884.18 441.05 844.18 Z"/>
+          </g>
         </mask>
         <g id="movi-loader-ribbon">
           <path fill="url(#movi-loader-bottom)" d="M350 80 H1220 V950 H350 Z"/>
@@ -101,13 +109,57 @@ export const loadingIndicatorStyles = `
     transform: translateX(clamp(3.59px, 0.374cqw, 4.19px));
   }
 
-  .movi-loader-flow {
+  /* The light is water coming in like a tide: one body that keeps moving,
+     its tail at a steady pace, its head surging ahead and drawing back three
+     times a lap — and at the top of each surge a crest runs out in front of
+     it, held to the body by a narrower neck, and falls back in as the water
+     draws back. It thins; it never breaks. All three are dashes on the band's
+     centre line; the round caps, cut to the band by the outline, are the
+     rounded front of the water.
+
+     The neck is drawn, not left to the filter. A goo filter (blur, then a
+     steep alpha threshold) can hold a bridge between two blobs, but measured
+     on this band it goes from 86% of the band's width to nothing between a
+     gap of 200 and 220 — a knife edge that another size or engine would tip
+     into a break. So the neck is its own 50-wide stroke (the band is 115;
+     the filter's blur rounds it out to about 70, some 60% of the band)
+     from the head to the crest, always there while they are apart, and the
+     filter only rounds the joins into a fluid shape. Without the filter the
+     shapes are still joined.
+
+     180 wide for the body and the crest: over the band with room for the
+     blur, so the water fills the band edge to edge, round the corners too. */
+  .movi-loader-flow,
+  .movi-loader-crest,
+  .movi-loader-neck {
     fill: none;
     stroke: #fff;
-    stroke-width: 360;
     stroke-linecap: round;
-    animation: movi-loader-flow 1.8s linear infinite;
   }
+  .movi-loader-flow,
+  .movi-loader-crest {
+    stroke-width: 180;
+  }
+  .movi-loader-neck {
+    stroke-width: 50;
+  }
+
+  /* Generated, not hand-tuned: one 3s lap sampled every 1/60th. The tail
+     moves 2305.92 (the perimeter) a lap at a constant speed. The body's length
+     is 480 + 160 sin(3 x 2 pi t) — three surges a lap, and fast enough that
+     the head actually runs back a little on each ebb. The crest sits
+     100 + 230 sin(3 x 2 pi t - 0.6) past the head: out to 330 just after
+     each surge peaks, back inside the body (negative) on the ebb. It has to
+     get that far for a neck to show at all: the head's and the crest's round
+     caps each reach 90 past their dashes, so at a gap under 180 they touch.
+     The neck spans head to crest, 20 longer so it overlaps both. Every curve has a whole
+     number of cycles per lap, so 0% and 100% are the same picture. */
+  .movi-loader-flow { animation: movi-loader-flow 3s linear infinite; }
+  .movi-loader-crest {
+    stroke-dasharray: 40 2265.92;
+    animation: movi-loader-crest 3s linear infinite;
+  }
+  .movi-loader-neck { animation: movi-loader-neck 3s linear infinite; }
 
   .movi-loader-track { opacity: .32; }
 
@@ -118,19 +170,205 @@ export const loadingIndicatorStyles = `
 
   /* Use actual path units: WebKit does not consistently apply pathLength to
      dashes. One full perimeter per cycle also keeps the loop seam invisible.
-     The flow path is the thin band's centre line, which sits further out than
-     the fat band's did, so the perimeter is 2305.92 rather than 1883.12 and
-     the light's length grew in step (318-1078 instead of 260-880) to cover
-     the same share of the loop. */
+     The flow path is the thin band's centre line, whose perimeter is 2305.92.
+     See the generated-curves note above for what each of these traces. */
   @keyframes movi-loader-flow {
-    0% { stroke-dasharray: 318 1987.92; stroke-dashoffset: 0; }
-    50% { stroke-dasharray: 1078 1227.92; stroke-dashoffset: -772.96; }
-    100% { stroke-dasharray: 318 1987.92; stroke-dashoffset: -2305.92; }
+    0% { stroke-dasharray: 480.00 1825.92; stroke-dashoffset: 0; }
+    1.667% { stroke-dasharray: 529.44 1776.48; stroke-dashoffset: -38.43; }
+    3.333% { stroke-dasharray: 574.05 1731.87; stroke-dashoffset: -76.86; }
+    5% { stroke-dasharray: 609.44 1696.48; stroke-dashoffset: -115.30; }
+    6.667% { stroke-dasharray: 632.17 1673.75; stroke-dashoffset: -153.73; }
+    8.333% { stroke-dasharray: 640.00 1665.92; stroke-dashoffset: -192.16; }
+    10% { stroke-dasharray: 632.17 1673.75; stroke-dashoffset: -230.59; }
+    11.67% { stroke-dasharray: 609.44 1696.48; stroke-dashoffset: -269.02; }
+    13.33% { stroke-dasharray: 574.05 1731.87; stroke-dashoffset: -307.46; }
+    15% { stroke-dasharray: 529.44 1776.48; stroke-dashoffset: -345.89; }
+    16.67% { stroke-dasharray: 480.00 1825.92; stroke-dashoffset: -384.32; }
+    18.33% { stroke-dasharray: 430.56 1875.36; stroke-dashoffset: -422.75; }
+    20% { stroke-dasharray: 385.95 1919.97; stroke-dashoffset: -461.18; }
+    21.67% { stroke-dasharray: 350.56 1955.36; stroke-dashoffset: -499.62; }
+    23.33% { stroke-dasharray: 327.83 1978.09; stroke-dashoffset: -538.05; }
+    25% { stroke-dasharray: 320.00 1985.92; stroke-dashoffset: -576.48; }
+    26.67% { stroke-dasharray: 327.83 1978.09; stroke-dashoffset: -614.91; }
+    28.33% { stroke-dasharray: 350.56 1955.36; stroke-dashoffset: -653.34; }
+    30% { stroke-dasharray: 385.95 1919.97; stroke-dashoffset: -691.78; }
+    31.67% { stroke-dasharray: 430.56 1875.36; stroke-dashoffset: -730.21; }
+    33.33% { stroke-dasharray: 480.00 1825.92; stroke-dashoffset: -768.64; }
+    35% { stroke-dasharray: 529.44 1776.48; stroke-dashoffset: -807.07; }
+    36.67% { stroke-dasharray: 574.05 1731.87; stroke-dashoffset: -845.50; }
+    38.33% { stroke-dasharray: 609.44 1696.48; stroke-dashoffset: -883.94; }
+    40% { stroke-dasharray: 632.17 1673.75; stroke-dashoffset: -922.37; }
+    41.67% { stroke-dasharray: 640.00 1665.92; stroke-dashoffset: -960.80; }
+    43.33% { stroke-dasharray: 632.17 1673.75; stroke-dashoffset: -999.23; }
+    45% { stroke-dasharray: 609.44 1696.48; stroke-dashoffset: -1037.66; }
+    46.67% { stroke-dasharray: 574.05 1731.87; stroke-dashoffset: -1076.10; }
+    48.33% { stroke-dasharray: 529.44 1776.48; stroke-dashoffset: -1114.53; }
+    50% { stroke-dasharray: 480.00 1825.92; stroke-dashoffset: -1152.96; }
+    51.67% { stroke-dasharray: 430.56 1875.36; stroke-dashoffset: -1191.39; }
+    53.33% { stroke-dasharray: 385.95 1919.97; stroke-dashoffset: -1229.82; }
+    55% { stroke-dasharray: 350.56 1955.36; stroke-dashoffset: -1268.26; }
+    56.67% { stroke-dasharray: 327.83 1978.09; stroke-dashoffset: -1306.69; }
+    58.33% { stroke-dasharray: 320.00 1985.92; stroke-dashoffset: -1345.12; }
+    60% { stroke-dasharray: 327.83 1978.09; stroke-dashoffset: -1383.55; }
+    61.67% { stroke-dasharray: 350.56 1955.36; stroke-dashoffset: -1421.98; }
+    63.33% { stroke-dasharray: 385.95 1919.97; stroke-dashoffset: -1460.42; }
+    65% { stroke-dasharray: 430.56 1875.36; stroke-dashoffset: -1498.85; }
+    66.67% { stroke-dasharray: 480.00 1825.92; stroke-dashoffset: -1537.28; }
+    68.33% { stroke-dasharray: 529.44 1776.48; stroke-dashoffset: -1575.71; }
+    70% { stroke-dasharray: 574.05 1731.87; stroke-dashoffset: -1614.14; }
+    71.67% { stroke-dasharray: 609.44 1696.48; stroke-dashoffset: -1652.58; }
+    73.33% { stroke-dasharray: 632.17 1673.75; stroke-dashoffset: -1691.01; }
+    75% { stroke-dasharray: 640.00 1665.92; stroke-dashoffset: -1729.44; }
+    76.67% { stroke-dasharray: 632.17 1673.75; stroke-dashoffset: -1767.87; }
+    78.33% { stroke-dasharray: 609.44 1696.48; stroke-dashoffset: -1806.30; }
+    80% { stroke-dasharray: 574.05 1731.87; stroke-dashoffset: -1844.74; }
+    81.67% { stroke-dasharray: 529.44 1776.48; stroke-dashoffset: -1883.17; }
+    83.33% { stroke-dasharray: 480.00 1825.92; stroke-dashoffset: -1921.60; }
+    85% { stroke-dasharray: 430.56 1875.36; stroke-dashoffset: -1960.03; }
+    86.67% { stroke-dasharray: 385.95 1919.97; stroke-dashoffset: -1998.46; }
+    88.33% { stroke-dasharray: 350.56 1955.36; stroke-dashoffset: -2036.90; }
+    90% { stroke-dasharray: 327.83 1978.09; stroke-dashoffset: -2075.33; }
+    91.67% { stroke-dasharray: 320.00 1985.92; stroke-dashoffset: -2113.76; }
+    93.33% { stroke-dasharray: 327.83 1978.09; stroke-dashoffset: -2152.19; }
+    95% { stroke-dasharray: 350.56 1955.36; stroke-dashoffset: -2190.62; }
+    96.67% { stroke-dasharray: 385.95 1919.97; stroke-dashoffset: -2229.06; }
+    98.33% { stroke-dasharray: 430.56 1875.36; stroke-dashoffset: -2267.49; }
+    100% { stroke-dasharray: 480.00 1825.92; stroke-dashoffset: -2305.92; }
+  }
+
+  @keyframes movi-loader-crest {
+    0% { stroke-dashoffset: -450.13; }
+    1.667% { stroke-dashoffset: -603.02; }
+    3.333% { stroke-dashoffset: -757.42; }
+    5% { stroke-dashoffset: -901.98; }
+    6.667% { stroke-dashoffset: -1026.30; }
+    8.333% { stroke-dashoffset: -1121.99; }
+    10% { stroke-dashoffset: -1183.43; }
+    11.67% { stroke-dashoffset: -1208.37; }
+    13.33% { stroke-dashoffset: -1198.14; }
+    15% { stroke-dashoffset: -1157.50; }
+    16.67% { stroke-dashoffset: -1094.19; }
+    18.33% { stroke-dashoffset: -1018.16; }
+    20% { stroke-dashoffset: -940.63; }
+    21.67% { stroke-dashoffset: -872.93; }
+    23.33% { stroke-dashoffset: -825.47; }
+    25% { stroke-dashoffset: -806.65; }
+    26.67% { stroke-dashoffset: -822.08; }
+    28.33% { stroke-dashoffset: -873.99; }
+    30% { stroke-dashoffset: -961.09; }
+    31.67% { stroke-dashoffset: -1078.59; }
+    33.33% { stroke-dashoffset: -1218.77; }
+    35% { stroke-dashoffset: -1371.66; }
+    36.67% { stroke-dashoffset: -1526.06; }
+    38.33% { stroke-dashoffset: -1670.62; }
+    40% { stroke-dashoffset: -1794.94; }
+    41.67% { stroke-dashoffset: -1890.63; }
+    43.33% { stroke-dashoffset: -1952.07; }
+    45% { stroke-dashoffset: -1977.01; }
+    46.67% { stroke-dashoffset: -1966.78; }
+    48.33% { stroke-dashoffset: -1926.14; }
+    50% { stroke-dashoffset: -1862.83; }
+    51.67% { stroke-dashoffset: -1786.80; }
+    53.33% { stroke-dashoffset: -1709.27; }
+    55% { stroke-dashoffset: -1641.57; }
+    56.67% { stroke-dashoffset: -1594.11; }
+    58.33% { stroke-dashoffset: -1575.29; }
+    60% { stroke-dashoffset: -1590.72; }
+    61.67% { stroke-dashoffset: -1642.63; }
+    63.33% { stroke-dashoffset: -1729.73; }
+    65% { stroke-dashoffset: -1847.23; }
+    66.67% { stroke-dashoffset: -1987.41; }
+    68.33% { stroke-dashoffset: -2140.30; }
+    70% { stroke-dashoffset: -2294.70; }
+    71.67% { stroke-dashoffset: -2439.26; }
+    73.33% { stroke-dashoffset: -2563.58; }
+    75% { stroke-dashoffset: -2659.27; }
+    76.67% { stroke-dashoffset: -2720.71; }
+    78.33% { stroke-dashoffset: -2745.65; }
+    80% { stroke-dashoffset: -2735.42; }
+    81.67% { stroke-dashoffset: -2694.78; }
+    83.33% { stroke-dashoffset: -2631.47; }
+    85% { stroke-dashoffset: -2555.44; }
+    86.67% { stroke-dashoffset: -2477.91; }
+    88.33% { stroke-dashoffset: -2410.21; }
+    90% { stroke-dashoffset: -2362.75; }
+    91.67% { stroke-dashoffset: -2343.93; }
+    93.33% { stroke-dashoffset: -2359.36; }
+    95% { stroke-dashoffset: -2411.27; }
+    96.67% { stroke-dashoffset: -2498.37; }
+    98.33% { stroke-dashoffset: -2615.87; }
+    100% { stroke-dashoffset: -2756.05; }
+  }
+
+  @keyframes movi-loader-neck {
+    0% { stroke-dasharray: 20.00 2285.92; stroke-dashoffset: -470.00; }
+    1.667% { stroke-dasharray: 55.15 2250.77; stroke-dashoffset: -557.87; }
+    3.333% { stroke-dasharray: 126.51 2179.41; stroke-dashoffset: -640.91; }
+    5% { stroke-dasharray: 197.24 2108.68; stroke-dashoffset: -714.74; }
+    6.667% { stroke-dasharray: 260.41 2045.51; stroke-dashoffset: -775.90; }
+    8.333% { stroke-dasharray: 309.83 1996.09; stroke-dashoffset: -822.16; }
+    10% { stroke-dasharray: 340.67 1965.25; stroke-dashoffset: -852.76; }
+    11.67% { stroke-dasharray: 349.91 1956.01; stroke-dashoffset: -868.47; }
+    13.33% { stroke-dasharray: 336.64 1969.28; stroke-dashoffset: -871.50; }
+    15% { stroke-dasharray: 302.17 2003.75; stroke-dashoffset: -865.33; }
+    16.67% { stroke-dasharray: 249.87 2056.05; stroke-dashoffset: -854.32; }
+    18.33% { stroke-dasharray: 184.85 2121.07; stroke-dashoffset: -843.31; }
+    20% { stroke-dasharray: 113.49 2192.43; stroke-dashoffset: -837.14; }
+    21.67% { stroke-dasharray: 42.76 2263.16; stroke-dashoffset: -840.17; }
+    23.33% { stroke-dasharray: 20.00 2285.92; stroke-dashoffset: -855.88; }
+    25% { stroke-dasharray: 20.00 2285.92; stroke-dashoffset: -886.48; }
+    26.67% { stroke-dasharray: 20.00 2285.92; stroke-dashoffset: -932.74; }
+    28.33% { stroke-dasharray: 20.00 2285.92; stroke-dashoffset: -993.90; }
+    30% { stroke-dasharray: 20.00 2285.92; stroke-dashoffset: -1067.73; }
+    31.67% { stroke-dasharray: 20.00 2285.92; stroke-dashoffset: -1150.77; }
+    33.33% { stroke-dasharray: 20.00 2285.92; stroke-dashoffset: -1238.64; }
+    35% { stroke-dasharray: 55.15 2250.77; stroke-dashoffset: -1326.51; }
+    36.67% { stroke-dasharray: 126.51 2179.41; stroke-dashoffset: -1409.55; }
+    38.33% { stroke-dasharray: 197.24 2108.68; stroke-dashoffset: -1483.38; }
+    40% { stroke-dasharray: 260.41 2045.51; stroke-dashoffset: -1544.54; }
+    41.67% { stroke-dasharray: 309.83 1996.09; stroke-dashoffset: -1590.80; }
+    43.33% { stroke-dasharray: 340.67 1965.25; stroke-dashoffset: -1621.40; }
+    45% { stroke-dasharray: 349.91 1956.01; stroke-dashoffset: -1637.11; }
+    46.67% { stroke-dasharray: 336.64 1969.28; stroke-dashoffset: -1640.14; }
+    48.33% { stroke-dasharray: 302.17 2003.75; stroke-dashoffset: -1633.97; }
+    50% { stroke-dasharray: 249.87 2056.05; stroke-dashoffset: -1622.96; }
+    51.67% { stroke-dasharray: 184.85 2121.07; stroke-dashoffset: -1611.95; }
+    53.33% { stroke-dasharray: 113.49 2192.43; stroke-dashoffset: -1605.78; }
+    55% { stroke-dasharray: 42.76 2263.16; stroke-dashoffset: -1608.81; }
+    56.67% { stroke-dasharray: 20.00 2285.92; stroke-dashoffset: -1624.52; }
+    58.33% { stroke-dasharray: 20.00 2285.92; stroke-dashoffset: -1655.12; }
+    60% { stroke-dasharray: 20.00 2285.92; stroke-dashoffset: -1701.38; }
+    61.67% { stroke-dasharray: 20.00 2285.92; stroke-dashoffset: -1762.54; }
+    63.33% { stroke-dasharray: 20.00 2285.92; stroke-dashoffset: -1836.37; }
+    65% { stroke-dasharray: 20.00 2285.92; stroke-dashoffset: -1919.41; }
+    66.67% { stroke-dasharray: 20.00 2285.92; stroke-dashoffset: -2007.28; }
+    68.33% { stroke-dasharray: 55.15 2250.77; stroke-dashoffset: -2095.15; }
+    70% { stroke-dasharray: 126.51 2179.41; stroke-dashoffset: -2178.19; }
+    71.67% { stroke-dasharray: 197.24 2108.68; stroke-dashoffset: -2252.02; }
+    73.33% { stroke-dasharray: 260.41 2045.51; stroke-dashoffset: -2313.18; }
+    75% { stroke-dasharray: 309.83 1996.09; stroke-dashoffset: -2359.44; }
+    76.67% { stroke-dasharray: 340.67 1965.25; stroke-dashoffset: -2390.04; }
+    78.33% { stroke-dasharray: 349.91 1956.01; stroke-dashoffset: -2405.75; }
+    80% { stroke-dasharray: 336.64 1969.28; stroke-dashoffset: -2408.78; }
+    81.67% { stroke-dasharray: 302.17 2003.75; stroke-dashoffset: -2402.61; }
+    83.33% { stroke-dasharray: 249.87 2056.05; stroke-dashoffset: -2391.60; }
+    85% { stroke-dasharray: 184.85 2121.07; stroke-dashoffset: -2380.59; }
+    86.67% { stroke-dasharray: 113.49 2192.43; stroke-dashoffset: -2374.42; }
+    88.33% { stroke-dasharray: 42.76 2263.16; stroke-dashoffset: -2377.45; }
+    90% { stroke-dasharray: 20.00 2285.92; stroke-dashoffset: -2393.16; }
+    91.67% { stroke-dasharray: 20.00 2285.92; stroke-dashoffset: -2423.76; }
+    93.33% { stroke-dasharray: 20.00 2285.92; stroke-dashoffset: -2470.02; }
+    95% { stroke-dasharray: 20.00 2285.92; stroke-dashoffset: -2531.18; }
+    96.67% { stroke-dasharray: 20.00 2285.92; stroke-dashoffset: -2605.01; }
+    98.33% { stroke-dasharray: 20.00 2285.92; stroke-dashoffset: -2688.05; }
+    100% { stroke-dasharray: 20.00 2285.92; stroke-dashoffset: -2775.92; }
   }
 
   @media (prefers-reduced-motion: reduce) {
     .movi-loader-container { animation: none; }
-    .movi-loader-flow { animation: none; }
+    .movi-loader-flow,
+    .movi-loader-crest,
+    .movi-loader-neck { animation: none; }
     .movi-loader-track { opacity: 1; }
     .movi-loader-highlight { display: none; }
   }
