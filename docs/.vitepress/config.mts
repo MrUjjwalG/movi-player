@@ -62,7 +62,7 @@ export default defineConfig({
       { text: "Home", link: "/" },
       { text: "🚀 Getting Started", link: "/guide/getting-started" },
       { text: "🔌 API", link: "/api/player" },
-      { text: "🎮 Examples", link: "https://movi-player-examples.vercel.app/" },
+      { text: "🎮 Examples", link: "https://moviplayer.com/examples" },
       {
         text: "v0.4.1",
         items: [
@@ -122,6 +122,18 @@ export default defineConfig({
             { text: "Programmatic API", link: "/guide/programmatic-api" },
             { text: "Local File Playback", link: "/guide/local-files" },
             { text: "Multi-Track Support", link: "/guide/multi-track" },
+          ],
+        },
+        {
+          // One page per thing developers search for — each links back to
+          // the live demos on moviplayer.com/examples.
+          text: "Recipes",
+          items: [
+            { text: "HLS Player (.m3u8)", link: "/guide/hls-player" },
+            { text: "MPEG-DASH Player (.mpd)", link: "/guide/dash-player" },
+            { text: "Play MKV in the Browser", link: "/guide/play-mkv-in-browser" },
+            { text: "HEVC / H.265 in the Browser", link: "/guide/hevc-h265-in-browser" },
+            { text: "React, Vue & Svelte", link: "/guide/react-vue-svelte-video-player" },
           ],
         },
         {

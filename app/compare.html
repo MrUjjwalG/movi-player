@@ -744,6 +744,163 @@
     <!-- Shared design system — spliced in by the worker AFTER this page's own
          <style> so it is the authority on the site-wide chrome. -->
     <!--__SHARED_CSS__-->
+      <!-- ════════════════════════════════════════════════════════════════
+         Landing parity. The home page (index.html) was redone — neutral
+         canvas, one accent, 2/4/6px corners, a mono eyebrow over a heavy
+         heading, hairlines instead of boxes — and this page still wore the
+         old navy, glow and 16px cards, so moving between them felt like
+         two sites. This layer takes the home page's tokens and patterns
+         as they are and applies them here; it sits after the page's own
+         stylesheet (and wins over shared.css, which is spliced in last,
+         by starting every selector at html) so the page's layout is
+         untouched and only its finish changes. Kept in step with the
+         same block in examples.html / compare.html.
+         ════════════════════════════════════════════════════════════════ -->
+    <style id="landing-parity">
+      html:root {
+        --bg-base: #0b0d11;
+        --bg-elevated: #12151a;
+        --bg-card: #12151a;
+        --bg-surface: #171b21;
+        --text-primary: #f2f4f7;
+        --text-secondary: #9aa3b0;
+        --text-muted: #7f8a99;
+        --border-subtle: #333b47;
+        --border-hover: #4a5462;
+        --accent: #6366f1;
+        --accent-hover: #818cf8;
+        --r-1: 2px;
+        --r-2: 4px;
+        --r-3: 6px;
+        /* This page's own names, pointed at the same values. */
+        --primary-accent: var(--accent);
+        --secondary-accent: var(--accent-hover);
+        --bg-panel: var(--bg-elevated);
+        --border: var(--border-subtle);
+        --surface-soft: var(--bg-surface);
+      }
+      html[data-theme="light"] {
+        --bg-base: #f4f6f8;
+        --bg-elevated: #ffffff;
+        --bg-card: #ffffff;
+        --bg-surface: #eceff3;
+        --text-primary: #0d1117;
+        --text-secondary: #4a5567;
+        --text-muted: #798393;
+        --border-subtle: #dbe0e8;
+        --border-hover: #c2cad6;
+        --accent: #4f46e5;
+        --accent-hover: #4338ca;
+      }
+
+      /* One flat canvas, as on the home page: no navy, no glows. The
+         glow shared.css pins behind every page (body::before) is covered
+         on the home page by its opaque hero; here nothing covers it, so
+         it goes, and so does the navbar's copy of it, which the home
+         page already switches off. */
+      html body {
+        background: var(--bg-base) !important;
+        background-image: none !important;
+      }
+      html body::before,
+      html body .navbar::after { display: none !important; }
+
+      /* ── Hierarchy: mono eyebrow, heavy headline, quiet sentence ── */
+      html body .hero .hero-eyebrow {
+        padding: 0;
+        border: 0;
+        border-radius: 0;
+        background: none;
+        color: var(--text-muted);
+        font: 600 0.68rem/1 "DM Mono", ui-monospace, monospace;
+        letter-spacing: 0.09em;
+        text-transform: uppercase;
+      }
+      html body .hero h1 {
+        font-size: clamp(2.2rem, 4.1vw, 3.7rem);
+        font-weight: 800;
+        letter-spacing: -0.035em;
+        line-height: 1.05;
+      }
+      html body .hero h1 .accent {
+        background: none;
+        -webkit-text-fill-color: currentColor;
+        color: var(--accent);
+      }
+      html body .hero p.sub { color: var(--text-secondary); }
+      html body .hero p.sub code.inline,
+      html body main code.inline {
+        border-radius: var(--r-1);
+        background: var(--bg-surface);
+        border: 1px solid var(--border-subtle);
+      }
+
+      /* Section heads read like the home page's: a big left-set heading
+         with its sentence under it, and a hairline over each section. */
+      html body .section-head h2 {
+        font-size: clamp(1.6rem, 2.8vw, 2.5rem);
+        font-weight: 700;
+        letter-spacing: -0.035em;
+        line-height: 1.1;
+      }
+      html body .section-head p { color: var(--text-secondary); }
+      html body .recipe-group { border-top-color: var(--border-subtle); }
+
+      /* ── Surfaces: the site's corners, hairlines, no lift ────────── */
+      html body .card,
+      html body .pane,
+      html body .summary,
+      html body .picker-card {
+        border-radius: var(--r-3) !important;
+        border-color: var(--border-subtle) !important;
+        background: var(--bg-elevated) !important;
+        box-shadow: none !important;
+      }
+      html body .card:hover { transform: none; border-color: var(--border-hover) !important; }
+      html body .picker-card:hover { border-color: var(--accent) !important; }
+      html body .pane-header { border-bottom-color: var(--border-subtle); }
+      html body .stage { border-radius: var(--r-2) !important; border-color: var(--border-subtle); }
+      html body .code { border-radius: var(--r-2) !important; border-color: var(--border-subtle); }
+      html body .copy-btn { border-radius: var(--r-1) !important; }
+      html body .badge,
+      html body .tag-new { border-radius: var(--r-1) !important; }
+      html body .tag-new { background: var(--accent); }
+      html body .hdr-tip { border-radius: var(--r-2) !important; }
+
+      /* Category labels over each example: the home page's eyebrow. */
+      html body .card-cat {
+        color: var(--text-muted);
+        font-family: "DM Mono", ui-monospace, monospace;
+        font-weight: 600;
+        letter-spacing: 0.09em;
+      }
+
+      /* ── Buttons: one solid accent, the site's radius, no glow ───── */
+      html body .btn,
+      html body .sync-btn,
+      html body .load-btn {
+        border-radius: var(--r-2) !important;
+        box-shadow: none !important;
+      }
+      html body .btn:hover { transform: none; }
+      html body .btn-primary,
+      html body .sync-btn {
+        background: var(--accent) !important;
+        color: #fff !important;
+      }
+      html body .btn-primary:hover,
+      html body .sync-btn:hover { background: var(--accent-hover) !important; }
+      html body .btn-secondary {
+        background: transparent !important;
+        border: 1px solid var(--border-subtle) !important;
+        color: var(--text-primary) !important;
+      }
+      html body .btn-secondary:hover { border-color: var(--border-hover) !important; }
+
+      /* The closing strip sits under a hairline like every seam on the
+         home page, not floating in space. */
+      html body .footer-cta { border-top: 1px solid var(--border-subtle); margin-top: 3rem; }
+    </style>
   </head>
   <body>
     <nav class="navbar" id="navbar">
