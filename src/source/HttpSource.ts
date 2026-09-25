@@ -185,6 +185,11 @@ export class HttpSource implements SourceAdapter {
   // already arrived — and because WASM I/O is Asyncify-suspended, that idle
   // time froze the whole module, decoders included.
   private bufferWaiters: Set<{ needed: number; wake: () => void }> = new Set();
+  // When a read last had to wait for bytes the network had not delivered yet
+  // (performance.now()). The player asks this when playback stops, to tell a
+  // stall the DELIVERY caused from one the device did: see
+  // MoviPlayer.deliveryStarved.
+  private lastNetworkWaitMs = 0;
 
   // Stream state
   private reader: ReadableStreamDefaultReader<Uint8Array> | null = null;
@@ -299,6 +304,13 @@ export class HttpSource implements SourceAdapter {
 
   // Network stats tracking
   private totalBytesDownloaded: number = 0;
+  // What actually arrived, and when: 100ms buckets of body bytes, for
+  // recentDeliveryBps(). Bounded to the last DELIVERY_WINDOW_MS.
+  private deliveryLog: Array<{ t: number; bytes: number }> = [];
+  // The best recentDeliveryBps() window this source has seen, and when it was
+  // last sampled — see bestDeliveryBps().
+  private bestDelivery = -1;
+  private bestDeliverySampledAt = 0;
   private streamStartTime: number = 0;
   private lastSpeedBytes: number = 0;
   private lastSpeedTime: number = 0;
@@ -1181,6 +1193,51 @@ export class HttpSource implements SourceAdapter {
     // Set once a bounded range fetch is rejected with 403 by a server that only
     // accepts open-ended ranges; from then on this stream requests `bytes=N-`.
     let useOpenEndedRange = false;
+    // The NEXT chunk's request, sent while this one is still downloading.
+    //
+    // Chunks used to be strictly one after another: read chunk N to its end,
+    // THEN ask for N+1. Every ask costs a round trip before the first byte —
+    // 30-500ms measured (see MAX_RANGE_CHUNK_SIZE) — and a response that
+    // starts slow and speeds up: Google Drive's alt=media opened each 8MB
+    // range at ~3 MB/s and reached ~9 by its end. The link sat idle through
+    // every one of those gaps, so an 8K file needing 5.1 MB/s averaged about
+    // 5 and stalled every few seconds on a connection that could carry it —
+    // pausing to let it buffer played fine, which is the tell. Asking for N+1
+    // halfway through N hides the round trip and the slow start behind bytes
+    // that are still arriving.
+    //
+    // Keyed by the absolute offset it starts at. Compaction moves bytes
+    // within the buffer but not where the stream is in the file, so a
+    // prefetch stays valid across it; anything that does move the stream (a
+    // seek, a stop, a range mode change) finds the offset or the mode
+    // different and the prefetch is cancelled unused.
+    let prefetch: {
+      offset: number;
+      rangeEnd: number;
+      openEnded: boolean;
+      response: Promise<Response>;
+    } | null = null;
+    const dropPrefetch = () => {
+      if (!prefetch) return;
+      const p = prefetch;
+      prefetch = null;
+      p.response.then((r) => r.body?.cancel()).catch(() => {});
+    };
+    // Where a chunk starting at `offset` ends — the same bounds for the one
+    // asked for now and the one asked for ahead.
+    const planRangeEnd = (offset: number, initialized: boolean): number => {
+      const fileCanFit = this.size > 0 && this.bufferSize >= this.size;
+      const windowLimit = fileCanFit
+        ? this.size
+        : Math.floor(Math.min(MAX_STREAM_BUFFER_SIZE, this.bufferSize * 0.9));
+      const maxDownload = Math.min(
+        windowLimit,
+        initialized ? MAX_RANGE_CHUNK_SIZE : this.firstRangeBytes,
+      );
+      return this.size > 0
+        ? Math.min(offset + maxDownload - 1, this.size - 1)
+        : offset + maxDownload - 1;
+    };
 
     while (this.atomicIsStreaming()) {
       try {
@@ -1205,33 +1262,39 @@ export class HttpSource implements SourceAdapter {
         // This prevents downloading too much data on seeks in large files.
         // When the file fits entirely in the buffer, request the full remainder
         // so we don't leave a gap at the end that forces a second fetch.
-        const fileCanFit = this.size > 0 && this.bufferSize >= this.size;
-        const windowLimit = fileCanFit
-          ? this.size  // Full file — the window is the whole thing
-          : Math.floor(Math.min(MAX_STREAM_BUFFER_SIZE, this.bufferSize * 0.9));
         // …but never ask for the window in one request — see
         // MAX_RANGE_CHUNK_SIZE. The loop below continues from where the chunk
         // ended, so the window still fills; it just fills at link speed
         // instead of whatever pace the CDN puts a long range on.
-        const maxDownload = Math.min(
-          windowLimit,
-          windowInitialized ? MAX_RANGE_CHUNK_SIZE : this.firstRangeBytes,
-        );
-        const rangeEnd = this.size > 0
-          ? Math.min(resumeOffset + maxDownload - 1, this.size - 1)
-          : resumeOffset + maxDownload - 1;
-
-        // Fetch with bounded range
-        Logger.debug(TAG, `Fetching range: ${resumeOffset}-${rangeEnd} (max ${(maxDownload / 1024 / 1024).toFixed(1)}MB)`);
-        const response = await fetch(this.url, {
-          headers: await this.buildRequestHeaders({
-            offset: resumeOffset,
-            length: rangeEnd - resumeOffset + 1,
-            openEnded: useOpenEndedRange,
-          }),
-          cache: 'no-store', // Prevent cached 200 responses
-          signal: this.abortController!.signal,
-        });
+        let rangeEnd: number;
+        let response: Response;
+        if (
+          prefetch &&
+          prefetch.offset === resumeOffset &&
+          prefetch.openEnded === useOpenEndedRange
+        ) {
+          // Asked for while the last chunk was still arriving — see `prefetch`.
+          rangeEnd = prefetch.rangeEnd;
+          const pending = prefetch.response;
+          prefetch = null;
+          Logger.debug(TAG, `Fetching range: ${resumeOffset}-${rangeEnd} (requested ahead)`);
+          response = await pending;
+        } else {
+          dropPrefetch();
+          rangeEnd = planRangeEnd(resumeOffset, windowInitialized);
+          // Fetch with bounded range
+          Logger.debug(TAG, `Fetching range: ${resumeOffset}-${rangeEnd} (max ${((rangeEnd - resumeOffset + 1) / 1024 / 1024).toFixed(1)}MB)`);
+          response = await fetch(this.url, {
+            headers: await this.buildRequestHeaders({
+              offset: resumeOffset,
+              length: rangeEnd - resumeOffset + 1,
+              openEnded: useOpenEndedRange,
+            }),
+            cache: 'no-store', // Prevent cached 200 responses
+            signal: this.abortController!.signal,
+          });
+        }
+        const chunkStart = resumeOffset;
 
         // Some token/proxy file servers reject a BOUNDED range that starts at
         // offset 0 (e.g. `bytes=0-1048575`) with 403, yet serve the very same
@@ -1381,8 +1444,38 @@ export class HttpSource implements SourceAdapter {
           if (value) {
             downloadedBytes += value.length;
 
+            // Halfway through this chunk, ask for the next — see `prefetch`.
+            // Not in open-ended mode, where one response already runs on to
+            // the end of the file.
+            if (
+              !prefetch &&
+              !useOpenEndedRange &&
+              this.size > 0 &&
+              rangeEnd + 1 < this.size &&
+              downloadedBytes * 2 >= rangeEnd - chunkStart + 1
+            ) {
+              const nextOffset = rangeEnd + 1;
+              const nextEnd = planRangeEnd(nextOffset, true);
+              const signal = this.abortController!.signal;
+              const ahead = (async () =>
+                fetch(this.url, {
+                  headers: await this.buildRequestHeaders({
+                    offset: nextOffset,
+                    length: nextEnd - nextOffset + 1,
+                    openEnded: false,
+                  }),
+                  cache: "no-store",
+                  signal,
+                }))();
+              // Unobserved if it ends up dropped by an abort; whoever does
+              // await it still sees the rejection.
+              ahead.catch(() => {});
+              prefetch = { offset: nextOffset, rangeEnd: nextEnd, openEnded: false, response: ahead };
+            }
+
             // Track global network stats
             this.totalBytesDownloaded += value.length;
+            this.recordDelivery(value.length);
             const now = Date.now();
             // Active (unparked) time only — see gateMsWindow above.
             const speedElapsed = (now - this.lastSpeedTime - gateMsWindow) / 1000;
@@ -1467,7 +1560,13 @@ export class HttpSource implements SourceAdapter {
                       streamBaseOffset = bufStart + shift;
                       this.unlock();
                       Logger.debug(TAG, `Buffer compacted: reclaimed ${(shift / 1024 / 1024).toFixed(1)}MB`);
-                      break; // Continue with new fetch in outer loop
+                      // Keep reading this response. Compaction moved the bytes
+                      // within the buffer, not the stream's place in the file,
+                      // and the next write lands at the new write position.
+                      // Breaking here threw away the rest of an 8MB chunk
+                      // mid-flight and paid a fresh request (round trip and
+                      // slow start) to fetch it again.
+                      continue;
                     }
                   }
 
@@ -1704,7 +1803,10 @@ export class HttpSource implements SourceAdapter {
       }
     }
 
-    // Cleanup
+    // Cleanup. A chunk asked for ahead that the stream stopped before
+    // reaching is cancelled here; the throw paths above leave theirs to the
+    // abort controller, which the next stopStream() fires.
+    dropPrefetch();
     if (this.reader) {
       try {
         await this.reader.cancel();
@@ -1785,6 +1887,7 @@ export class HttpSource implements SourceAdapter {
         if (done) break;
         if (!value || value.length === 0) continue;
         this.totalBytesDownloaded += value.length;
+        this.recordDelivery(value.length);
         await this.writeSequential(value, buffer, fullFit);
       }
     } catch (err) {
@@ -1996,6 +2099,7 @@ export class HttpSource implements SourceAdapter {
     const FIRST_BYTE_TIMEOUT = 6000;
 
     while (this.bufferEnd < needed && this.atomicIsStreaming()) {
+      this.lastNetworkWaitMs = performance.now();
       // Check for fatal stream errors (e.g., CORS) and throw immediately
       if (this.streamError) {
         throw this.streamError;
@@ -2494,6 +2598,90 @@ export class HttpSource implements SourceAdapter {
    */
   getKnownSize(): number {
     return this.size;
+  }
+
+  private static readonly DELIVERY_WINDOW_MS = 10000;
+  // Longer than this between two arrivals is the stream not running (window
+  // full, stopped, parked), not the link being slow: that stretch is left out.
+  private static readonly DELIVERY_IDLE_GAP_MS = 2000;
+
+  private recordDelivery(bytes: number): void {
+    const now = performance.now();
+    const last = this.deliveryLog[this.deliveryLog.length - 1];
+    if (last && now - last.t < 100) last.bytes += bytes;
+    else this.deliveryLog.push({ t: now, bytes });
+    while (
+      this.deliveryLog.length > 1 &&
+      now - this.deliveryLog[0].t > HttpSource.DELIVERY_WINDOW_MS
+    ) {
+      this.deliveryLog.shift();
+    }
+    if (now - this.bestDeliverySampledAt >= 1000) {
+      this.bestDeliverySampledAt = now;
+      const r = this.recentDeliveryBps(
+        HttpSource.BEST_DELIVERY_WINDOW_MS,
+        HttpSource.BEST_DELIVERY_MIN_MS,
+      );
+      if (r > this.bestDelivery) this.bestDelivery = r;
+    }
+  }
+
+  private static readonly BEST_DELIVERY_WINDOW_MS = 5000;
+  private static readonly BEST_DELIVERY_MIN_MS = 3000;
+
+  /**
+   * The fastest this source's own stream has sustained, over any five-second
+   * stretch since it opened, in BITS/second; -1 until one has been timed.
+   *
+   * One window is a reading of what the player happened to be doing: the
+   * same ~40 Mbps line read about 40 in one session and about 10 in the
+   * next, depending on whether the last seconds held the opening index
+   * reads, a seek, a full buffer resting. None of those push a window ABOVE
+   * what the line carried — every byte counted really arrived — so the best
+   * window is the line's demonstrated rate, and the lower ones are the
+   * player's own pauses. The same reasoning bestLinkBps applies to its
+   * probes, on readings that cannot overshoot the way a probe's can.
+   */
+  bestDeliveryBps(): number {
+    return this.bestDelivery;
+  }
+
+  /**
+   * The rate the media has actually been arriving at over the last few
+   * seconds of streaming, in BITS/second; -1 without enough to go on.
+   *
+   * Not a link test. It is what reached the player, which is the thing a
+   * "this is only arriving at N Mbps" notice claims — and it cannot read
+   * higher than the connection, where a separate short probe could: on a
+   * ~40 Mbps line a probe read "about 60", because it times each chunk when
+   * JavaScript gets round to reading it, and a busy main thread hands over a
+   * backlog in one go. Over ten seconds of the stream's own bytes that
+   * backlog is a rounding error. Stretches where nothing arrived for a while
+   * are left out: the stream was not running then, not slow.
+   */
+  recentDeliveryBps(
+    windowMs: number = HttpSource.DELIVERY_WINDOW_MS,
+    minMs: number = 2000,
+  ): number {
+    const log = this.deliveryLog;
+    if (log.length < 2) return -1;
+    const now = performance.now();
+    let bytes = 0;
+    let ms = 0;
+    for (let i = 1; i < log.length; i++) {
+      if (now - log[i].t > windowMs) continue;
+      const gap = log[i].t - log[i - 1].t;
+      if (gap > HttpSource.DELIVERY_IDLE_GAP_MS) continue;
+      bytes += log[i].bytes;
+      ms += gap;
+    }
+    return ms >= minMs ? (bytes * 8) / (ms / 1000) : -1;
+  }
+
+  /** When a read last waited on the network (performance.now()); now, if one
+   *  is waiting at this moment; 0 if none ever has. */
+  lastNetworkWait(): number {
+    return this.bufferWaiters.size > 0 ? performance.now() : this.lastNetworkWaitMs;
   }
 
   /**

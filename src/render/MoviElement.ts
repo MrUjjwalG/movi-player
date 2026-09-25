@@ -1646,6 +1646,9 @@ export class MoviElement extends HTMLElement {
   private _linkProbeAbort: AbortController | null = null;
   /** Buffering episodes since this source started — see sampleLinkBudget. */
   private _linkStalls = 0;
+  /** Of those, the stalls with a read parked on the network — evidence about
+   *  the delivery that holds even when the device reads slow too. */
+  private _deliveryStalls = 0;
   /** How many stalls before a low reading is allowed to become a verdict. One
    *  is a hiccup; a file the link cannot carry does it again and again. */
   private static readonly LINK_BUDGET_STALLS = 2;
@@ -5692,6 +5695,7 @@ export class MoviElement extends HTMLElement {
     this._linkProbeAbort?.abort();
     this._linkProbeAbort = null;
     this._linkStalls = 0;
+    this._deliveryStalls = 0;
     this.resetStutterHint();
     const pill = this.shadowRoot?.querySelector(
       ".movi-hold-speed",
@@ -12360,8 +12364,15 @@ export class MoviElement extends HTMLElement {
     if (!(needed > 0)) return; // a local file, or a size we never learned
     // …and not while the device is the one falling behind. The decode-bound
     // notice owns that case, and a probe competing with the player's own
-    // streaming can read low enough to look like agreement.
-    if (p.deviceIsBottleneck?.()) return;
+    // streaming can read low enough to look like agreement. Unless the
+    // stalls themselves showed the delivery running dry: then the question
+    // is the link's whatever the picture is doing, and the probe answers it.
+    if (
+      p.deviceIsBottleneck?.() &&
+      this._deliveryStalls < MoviElement.LINK_BUDGET_STALLS
+    ) {
+      return;
+    }
     // Playback stopping is what makes the question worth the probe's bytes —
     // one stall is a hiccup, so wait for the second.
     if (this._linkStalls < MoviElement.LINK_BUDGET_STALLS) return;
@@ -12376,9 +12387,29 @@ export class MoviElement extends HTMLElement {
     void this.bestLinkBps(url, needed, ac)
       .then((bps) => {
         if (ac.signal.aborted || !this._smoothWarning) return;
+        // The verdict leaves no other trace — a probe that clears the bar
+        // says nothing on screen, and the browser does not log a successful
+        // fetch — so a session that stalled without a notice could not tell
+        // "never asked" from "asked, and the link was fast enough".
+        const arriving = p.deliveryRateBps?.() ?? -1;
+        Logger.info(
+          TAG,
+          `Link probe: best ${bps > 0 ? (bps / 1e6).toFixed(1) + "Mbps" : "no reading"} ` +
+            `for ${(needed / 1e6).toFixed(1)}Mbps needed; arriving ` +
+            `${arriving > 0 ? (arriving / 1e6).toFixed(1) + "Mbps" : "unknown"} ` +
+            `(stalls ${this._linkStalls}, from delivery ${this._deliveryStalls})`,
+        );
         if (!(bps > 0)) return; // no answer — say nothing
         if (bps >= needed) return; // it can be delivered; the stalls were not this
-        this.announceLinkShortfall(needed, bps);
+        // What reached the player is the figure to quote, and a second
+        // opinion on whether to speak at all. The probe cannot be quoted: it
+        // shares the link with the player's own stream, so it reads high or
+        // low depending on what it catches — "about 60 Mbps" on a ~40 Mbps
+        // line. The stream's own best sustained window (HttpSource.
+        // bestDeliveryBps) cannot read above the line, and being the best of
+        // many it does not sink with whatever the last few seconds held.
+        if (arriving > 0 && arriving >= needed) return;
+        this.announceLinkShortfall(needed, arriving > 0 ? arriving : bps);
       })
       .catch(() => {
         /* a probe that cannot run is not evidence of anything */
@@ -12410,7 +12441,14 @@ export class MoviElement extends HTMLElement {
     let best = -1;
     for (let i = 0; i < MoviElement.LINK_PROBE_TRIES; i++) {
       if (ac.signal.aborted) break;
-      const bps = await probeLinkBandwidth(url, { signal: ac.signal });
+      // With the source's own headers, as the pre-play probe sends them: a
+      // source behind a token (Google Drive's alt=media) answered this bare
+      // probe 403 every time, the probe came back empty, and a link that
+      // really was too slow for the file never got its notice.
+      const bps = await probeLinkBandwidth(url, {
+        signal: ac.signal,
+        headers: this._headers || undefined,
+      });
       if (bps > best) best = bps;
       if (best >= needed) break;
       if (i < MoviElement.LINK_PROBE_TRIES - 1) {
@@ -31694,8 +31732,17 @@ export class MoviElement extends HTMLElement {
       // that cannot keep up stops playback too — the catch-up hold does it on
       // purpose — and counting those would let a slow device arm a verdict
       // about the connection. See MoviPlayer.deviceIsBottleneck.
-      if (state === "buffering" && !this.player?.deviceIsBottleneck?.()) {
-        this._linkStalls++;
+      //
+      // …unless the delivery ran dry at the same moment. A picture presenting
+      // below rate (a busy host page holding rAF down, a heavy decode) makes
+      // deviceIsBottleneck say "device" for the whole session, and then a
+      // stall that was plainly the next bytes not arriving went uncounted:
+      // an 8K file on Google Drive stalled every few seconds and never got
+      // its notice. See MoviPlayer.deliveryStarved.
+      if (state === "buffering") {
+        const starved = !!this.player?.deliveryStarved?.();
+        if (starved) this._deliveryStalls++;
+        if (starved || !this.player?.deviceIsBottleneck?.()) this._linkStalls++;
       }
       else this._qoe.bufferingEndNow();
       // A seek requested before the player was ready was held — apply it now
@@ -32916,6 +32963,7 @@ export class MoviElement extends HTMLElement {
     this._linkProbeAbort?.abort();
     this._linkProbeAbort = null;
     this._linkStalls = 0;
+    this._deliveryStalls = 0;
     this.resetStutterHint();
     if (this._captionLive) this._captionLive.textContent = "";
     this._lastCaptionText = "";
@@ -41762,6 +41810,7 @@ export class MoviElement extends HTMLElement {
     this._linkProbeAbort?.abort();
     this._linkProbeAbort = null;
     this._linkStalls = 0;
+    this._deliveryStalls = 0;
     this.resetStutterHint();
     // …and a fresh prediction, which can say so before it has stuttered at all.
     void this.checkSmoothPlayback();

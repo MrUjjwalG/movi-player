@@ -2508,6 +2508,35 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
   private _lagFpsAchieved = -1;
   private _lagSlowLogged = false;
   /**
+   * Samples in the current reading's window, and how many of them found the
+   * picture with nothing to work on: no frame waiting to be shown, nothing in
+   * the decoder, nothing in the read-ahead stash. Frames not presented then
+   * were never delivered, so they say nothing about the device. A slow
+   * decoder still reads as one: its frame queue runs dry with packets still
+   * waiting in the decoder.
+   */
+  private _lagWindowSamples = 0;
+  private _lagWindowStarved = 0;
+  /**
+   * When the reading last looked. It only looks while playing, so a long gap
+   * means playback stopped in between — a stall — and a window stretched over
+   * one divides a second of frames by the seconds spent waiting for bytes.
+   *
+   * From an 8K60 AV1 file streamed from Google Drive: the link could not
+   * carry its 41 Mbps, every window spanned a stall and read ~13fps, and this
+   * reading called the DEVICE the bottleneck — the one verdict that keeps the
+   * link notice silent (deviceIsBottleneck). Pausing to buffer played it
+   * smoothly, which a slow decoder would not have. Reproduced with 4K25 AV1
+   * over a throttled link: windows over stalls read 2, 5, 9fps on a decoder
+   * doing 25, and deviceIsBottleneck was true for 17s of 70; with such
+   * windows dropped, 2s of 90. So they are dropped, not recorded.
+   */
+  private _lagLastSampleAt = 0;
+  private static readonly LAG_SAMPLE_GAP_MS = 400;
+  /** Above this share of starved samples, a window's frame rate is not a
+   *  reading of the device at all, and is discarded rather than recorded. */
+  private static readonly LAG_STARVED_RATIO = 0.25;
+  /**
    * How long a bound stall may hold before it gives up and resumes on whatever
    * it has.
    *
@@ -3235,6 +3264,9 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
     this._lagFpsAt = 0;
     this._lagFpsAchieved = -1;
     this._lagSlowLogged = false;
+    this._lagWindowSamples = 0;
+    this._lagWindowStarved = 0;
+    this._lagLastSampleAt = 0;
     // A new source gets its own attempts at catching the picture up; what the
     // last one spent says nothing about this one (see _videoLagSince).
     this._videoLagSince = 0;
@@ -15479,20 +15511,48 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
     const h = this.getRenderHealth();
     if (!h) return null;
     const now = performance.now();
-    if (this._lagFpsBase < 0 || h.framesPresented < this._lagFpsBase) {
-      // First look, or the counter restarted under us (any seek does that).
+    const gap = now - this._lagLastSampleAt;
+    this._lagLastSampleAt = now;
+    if (
+      this._lagFpsBase < 0 ||
+      h.framesPresented < this._lagFpsBase ||
+      gap > MoviPlayer.LAG_SAMPLE_GAP_MS
+    ) {
+      // First look, the counter restarted under us (any seek does that), or
+      // playback stopped since the last look (see _lagLastSampleAt): start a
+      // fresh window, keep the last reading.
       this._lagFpsBase = h.framesPresented;
       this._lagFpsAt = now;
+      this._lagWindowSamples = 0;
+      this._lagWindowStarved = 0;
       return this._lagFpsAchieved < 0
         ? null
         : this._lagFpsAchieved >= h.sourceFps * MoviPlayer.LAG_KEEPING_UP_RATIO;
     }
+    // See _lagWindowStarved: was there anything to present, or to decode?
+    this._lagWindowSamples++;
+    if (
+      (this.videoRenderer?.getStats().frameQueueSize ?? 0) === 0 &&
+      (this.videoDecoder?.queueSize ?? 0) === 0 &&
+      this._videoAheadStash.length === 0
+    ) {
+      this._lagWindowStarved++;
+    }
     const elapsed = now - this._lagFpsAt;
     if (elapsed >= 1000) {
-      this._lagFpsAchieved =
-        (h.framesPresented - this._lagFpsBase) / (elapsed / 1000);
+      const starved =
+        this._lagWindowSamples > 0 &&
+        this._lagWindowStarved / this._lagWindowSamples >
+          MoviPlayer.LAG_STARVED_RATIO;
+      // A window the delivery starved is no reading of the device: unknown,
+      // not slow. Unknown answers null here and false in deviceIsBottleneck.
+      this._lagFpsAchieved = starved
+        ? -1
+        : (h.framesPresented - this._lagFpsBase) / (elapsed / 1000);
       this._lagFpsBase = h.framesPresented;
       this._lagFpsAt = now;
+      this._lagWindowSamples = 0;
+      this._lagWindowStarved = 0;
     }
     if (this._lagFpsAchieved < 0) return null;
     return this._lagFpsAchieved >= h.sourceFps * MoviPlayer.LAG_KEEPING_UP_RATIO;
@@ -15532,6 +15592,38 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
 
   isDecodeBound(): boolean {
     return this.videoRenderer?.isDecodeBound?.() ?? false;
+  }
+
+  /**
+   * Did the DELIVERY run dry just now — a read waiting on bytes the network
+   * had not brought yet?
+   *
+   * deviceIsBottleneck answers the other half of the question and cannot
+   * answer this one: it reads how fast the picture reaches the screen, and a
+   * picture can run slow for reasons that never stop playback. From an 8K60
+   * AV1 file on Google Drive: the host page held rAF to ~40/s, the picture
+   * presented ~32fps, deviceIsBottleneck said "device" — and every stall in
+   * the session was the sound running out because the next bytes had not
+   * arrived. Those stalls were never counted against the link, so the notice
+   * that the file needs 41 Mbps never came. A stall with a read parked on the
+   * network is the delivery's, whatever the picture is doing.
+   */
+  deliveryStarved(withinMs: number = MoviPlayer.DELIVERY_STARVED_WINDOW_MS): boolean {
+    const at =
+      (this.source as { lastNetworkWait?: () => number } | null)?.lastNetworkWait?.() ?? 0;
+    return at > 0 && performance.now() - at < withinMs;
+  }
+  private static readonly DELIVERY_STARVED_WINDOW_MS = 3000;
+
+  /** The best rate the media has actually arrived at from this source,
+   *  BITS/second, or -1 — see HttpSource.bestDeliveryBps. */
+  deliveryRateBps(): number {
+    const src = this.source as {
+      bestDeliveryBps?: () => number;
+      recentDeliveryBps?: () => number;
+    } | null;
+    const best = src?.bestDeliveryBps?.() ?? -1;
+    return best > 0 ? best : (src?.recentDeliveryBps?.() ?? -1);
   }
 
   getStats(): Record<string, string | number | boolean> {
