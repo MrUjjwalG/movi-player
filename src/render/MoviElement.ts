@@ -31192,6 +31192,12 @@ export class MoviElement extends HTMLElement {
         // poster's call to action, on a frame the viewer had paused on
         // themselves (MoviTube renewing its links after a long pause).
         this._hasEverPlayed = true;
+        // The poster, too. The source swap put the cover up before anyone
+        // knew it was the same media, and it is the move to "playing" that
+        // takes a cover down — which a paused restore never makes, so the
+        // title card sat over the frame the viewer had paused on. The seek
+        // above has landed and painted that frame; it is the picture now.
+        this.hidePoster();
         if (discarded.rate > 0 && discarded.rate !== this.playbackRate) {
           this.playbackRate = discarded.rate;
         }
