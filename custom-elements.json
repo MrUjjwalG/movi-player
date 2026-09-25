@@ -679,7 +679,7 @@
             },
             {
               "name": "smoothwarning",
-              "description": "Cancelable — what is loaded is not expected to play smoothly at the current speed; media is video or audio, message is the notice's plain-language { title, body }. preventDefault() keeps the built-in notice down (see smoothwarning)",
+              "description": "Cancelable — what is loaded is not expected to play smoothly at the current speed; media is video or audio, message is the notice's plain-language { title, body }. preventDefault() keeps the built-in notice down (see smoothwarning). From measurement while playing, detail carries measured: true; for a link that is too slow, link: true, neededBps and measuredBps",
               "type": {
                 "text": "CustomEvent<PlaybackAssessment & { media: string, message: object }>"
               }
