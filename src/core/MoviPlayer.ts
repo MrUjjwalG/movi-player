@@ -1470,6 +1470,8 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
    *  runway — enough that the new decoder is never the thing being waited on
    *  at the seam. */
   private static readonly SEAMLESS_PRIME_LEAD_S = 0.25;
+  // No ABR decision this soon after a seek — see abrDecide.
+  private static readonly ABR_POST_SEEK_HOLD_MS = 3000;
   // How far the Clock may run past the frame on screen when the picture is
   // all of playback. Above a frame interval and scheduling jitter, well under
   // anything a viewer reads as the bar moving over a still picture.
@@ -4043,6 +4045,8 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
     // path that could rescue playback, so it needs an end.
     const prepDeadline =
       performance.now() + MoviPlayer.SWITCH_PREP_BUDGET_MS;
+    // Which seek the prep was started against — see the last exit below.
+    const seekAtPrep = this._lastSeekAt;
     const prepLeft = () => prepDeadline - performance.now();
     let newSource: SourceAdapter;
     try {
@@ -4288,6 +4292,24 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
         try { f.close(); } catch {}
       }
       return abandonPrep();
+    }
+    // …nor one the viewer has seeked past. The prep opened the new rung at the
+    // position it was started from, and the swap below takes the seek session:
+    // committed over a seek in flight, it put the picture back where the prep
+    // began (1476s, with the viewer at 1530s) and resolved the seek it had
+    // superseded as PAUSED — holding the right-arrow key stopped playback, and
+    // the rung it had climbed to then fell to 480p on the refill. An AUTO
+    // switch is only an opinion about the link; the viewer's seek wins, and
+    // the ladder decides again once they stop. A switch the viewer asked for
+    // is theirs and goes ahead.
+    if (this._abrSwitchInProgress && this._lastSeekAt !== seekAtPrep) {
+      try { primed?.decoder.close(); } catch {}
+      for (const f of primed?.frames ?? []) {
+        try { f.close(); } catch {}
+      }
+      return abandonPrep(
+        "the viewer seeked while the rung was being prepared — deciding again once they settle",
+      );
     }
 
     // --- ATOMIC SWAP: stop the video loop (audio + clock keep running), swap
@@ -4649,7 +4671,13 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
       // demuxer reading bytes at the wrong offset — surfacing as "corrupt data
       // stream" plus a large A/V desync. Wait for the seek to settle first.
       this.stateManager.is("seeking") ||
-      this.waitingForVideoSync
+      this.waitingForVideoSync ||
+      // …nor in the moments BETWEEN seeks. Holding an arrow key is a seek every
+      // ~100ms with a brief "playing" in between, and a decision made in one of
+      // those gaps prepares its rung while the next seeks arrive (see the last
+      // exit in switchVideoRenditionInPlace). Nothing about the link is learned
+      // from a playhead that is jumping; wait for it to settle.
+      performance.now() - this._lastSeekAt < MoviPlayer.ABR_POST_SEEK_HOLD_MS
     ) {
       if (this._audioOnly) this._lastBufferAhead = 0;
       return;
