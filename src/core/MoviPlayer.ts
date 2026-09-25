@@ -15703,6 +15703,16 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
   }
 
   /**
+   * Seconds of decoded picture waiting past the playhead — how long the screen
+   * can keep going if nothing else arrives. 0 when the queue is empty.
+   */
+  pictureRunwaySeconds(): number {
+    const queued = this.videoRenderer?.queuedPtsRange;
+    if (!queued) return 0;
+    return Math.max(0, queued.last - this.clock.getTime());
+  }
+
+  /**
    * Did the DELIVERY run dry just now — a read waiting on bytes the network
    * had not brought yet?
    *

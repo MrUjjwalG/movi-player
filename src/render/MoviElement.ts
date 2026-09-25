@@ -17855,7 +17855,18 @@ export class MoviElement extends HTMLElement {
     const bufferedAhead = (p.getBufferedTime?.() ?? 0) - t;
     if (bufferedAhead < 0.5) {
       this._frozenSince = 0;
-      const starving = t > this._starvedLastTime + 0.05;
+      // …and the picture has to actually be running out. The buffered figure
+      // counts bytes fetched but not yet demuxed, and on a link that keeps up
+      // the demuxer takes each range the moment it lands — so it reads ~0s
+      // ahead over playback that is perfectly fine, with seconds of frames
+      // already decoded and queued. That read as starvation six seconds after
+      // every climb and bounced 240p straight back to 144p, four times, on a
+      // link measuring 14–150 Mbps, with not one stall in between. Nothing
+      // queued to show is what starving looks like from the screen.
+      const pictureShort =
+        ((p as { pictureRunwaySeconds?: () => number }).pictureRunwaySeconds?.() ??
+          0) < 0.05;
+      const starving = pictureShort && t > this._starvedLastTime + 0.05;
       this._starvedLastTime = t;
       if (!starving) {
         this._starvedSince = 0;
