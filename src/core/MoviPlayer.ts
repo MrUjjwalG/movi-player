@@ -375,7 +375,36 @@ function softwareDecodeCost(
  * Two constants, one place to tune.
  */
 const SOFTWARE_DECODE_BUDGET_MOBILE = 100_000_000;
-const SOFTWARE_DECODE_BUDGET_DESKTOP = 400_000_000;
+// Measured, where the mobile figure above was measured and the old desktop
+// one (400M) was only "several times" it: Chrome's software H.264 on an M4
+// decoded 124 fps of 3840x2160 (~1.03G px/s) at 2x and kept exact pace with
+// the clock — but only just: it held for one pass and then stuttered in
+// bursts, holds of up to 384ms. That is the edge, not headroom, so the budget
+// sits below it: ~1G per 10 threads at the edge, 600M per 8 is what carries
+// without stutter (1.5x of that file, not 2x). A machine that falls short is
+// caught by what playback actually did — see the stutter hint.
+const SOFTWARE_DECODE_BUDGET_DESKTOP = 600_000_000;
+
+/**
+ * The budget above, scaled by the cores this machine actually has.
+ *
+ * The browser's software decoders are threaded, so what they carry grows with
+ * the core count — and a flat number judged every desktop as the same one. On
+ * an M4 (10 cores) a 4K60 H.264 4:2:2 file, which has no hardware path, came
+ * out 1.24x over the flat budget and raised "may not play smoothly" over
+ * playback that then presented 60 of 60 frames every second. The constants are
+ * read as an 8-thread machine; the scale is bounded both ways so a misreported
+ * count can't turn the screen off or bar everything.
+ */
+function softwareDecodeBudget(mobile: boolean): number {
+  const base = mobile
+    ? SOFTWARE_DECODE_BUDGET_MOBILE
+    : SOFTWARE_DECODE_BUDGET_DESKTOP;
+  const cores =
+    typeof navigator !== "undefined" ? navigator.hardwareConcurrency || 0 : 0;
+  if (!(cores > 0)) return base;
+  return base * Math.min(2, Math.max(0.5, cores / 8));
+}
 
 /**
  * The most a HARDWARE decoder is built to carry, in pixels per second: 8K at
@@ -475,11 +504,7 @@ async function screenLadderForDecode(
       // barring would cost quality for nothing. A hard `unsupported` still
       // counts at any size; that one isn't a judgement call.
       const cost = softwareDecodeCost(w, h, rungFps, codec);
-      const overBudget =
-        cost >
-        (mobile
-          ? SOFTWARE_DECODE_BUDGET_MOBILE
-          : SOFTWARE_DECODE_BUDGET_DESKTOP);
+      const overBudget = cost > softwareDecodeBudget(mobile);
       const key = `${codec}@${w}x${h}@${Math.round(rungFps)}`;
       if (screened.has(key)) continue;
       screened.add(key);
@@ -911,9 +936,7 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
     const width = video.width || 0;
     const height = video.height || 0;
     const fps = video.frameRate && video.frameRate > 0 ? video.frameRate : 30;
-    const budget = MoviPlayer._isMobileDevice
-      ? SOFTWARE_DECODE_BUDGET_MOBILE
-      : SOFTWARE_DECODE_BUDGET_DESKTOP;
+    const budget = softwareDecodeBudget(MoviPlayer._isMobileDevice);
     const load =
       softwareDecodeCost(width, height, fps * rate, codec || family) / budget;
 

@@ -997,7 +997,7 @@ export class MoviElement extends HTMLElement {
   // cooldown so it never nags.
   private _stutterInterval: number | null = null;
   private _stutterLastPresented: number = 0;
-  private _stutterSeconds: number = 0;
+  private _stutterHistory: boolean[] = [];
   private _stutterCooldown: boolean = false;
   private _stutterCooldownTimer: number | null = null;
   // Warm-up deadline after a rate change: the decoder needs a moment to ramp
@@ -12274,7 +12274,7 @@ export class MoviElement extends HTMLElement {
     if (this._stutterInterval !== null) return;
     const h = this.player?.getRenderHealth?.();
     this._stutterLastPresented = h ? h.framesPresented : 0;
-    this._stutterSeconds = 0;
+    this._stutterHistory.length = 0;
     this._stutterInterval = window.setInterval(() => {
       this.sampleStutter();
       this.sampleLinkBudget();
@@ -12286,7 +12286,7 @@ export class MoviElement extends HTMLElement {
       clearInterval(this._stutterInterval);
       this._stutterInterval = null;
     }
-    this._stutterSeconds = 0;
+    this._stutterHistory.length = 0;
   }
 
   /**
@@ -12314,13 +12314,22 @@ export class MoviElement extends HTMLElement {
    * at fault. Sustained incapacity outlasts that easily; a self-inflicted hitch
    * does not.
    */
-  private static readonly STUTTER_RATIO = 0.6; // < 60% of the expected frames
-  private static readonly STUTTER_SECONDS = 8; // consecutive bad seconds
+  //
+  // …and "sustained" is judged over a window, not as an unbroken run. Software
+  // 4K60 H.264 at 2x on an M4 stutters in bursts: 44, 40, 32, 42, 56, 38, 32
+  // of 60 frames a second, with holds of up to 384ms. One passable second in
+  // there reset a consecutive count every time, so the hint never came — nor
+  // did anything else, since the judder and decode-bound checks are built the
+  // same way. Most of a window going bad is the device, whichever seconds they
+  // are; a speed change's own hitch is a second or two, and has its grace.
+  private static readonly STUTTER_RATIO = 0.75; // < 75% of the expected frames
+  private static readonly STUTTER_SECONDS = 5; // bad seconds…
+  private static readonly STUTTER_WINDOW = 8; // …out of the last this many
   private _judderSeconds = 0;
   private _juddering = false;
 
   private resetStutterHint(): void {
-    this._stutterSeconds = 0;
+    this._stutterHistory.length = 0;
     this._judderSeconds = 0;
     if (this._juddering) {
       this._juddering = false;
@@ -12518,7 +12527,7 @@ export class MoviElement extends HTMLElement {
       this.player?.isAudioOnly?.() ||
       this.player?.isPastVideoEnd?.()
     ) {
-      this._stutterSeconds = 0;
+      this._stutterHistory.length = 0;
       this._judderSeconds = 0;
       if (this._juddering) {
         this._juddering = false;
@@ -12529,7 +12538,7 @@ export class MoviElement extends HTMLElement {
     // Only judge during genuine playback — buffering/seeking legitimately
     // present few/no frames and would false-positive.
     if (this.player?.getState?.() !== "playing") {
-      this._stutterSeconds = 0;
+      this._stutterHistory.length = 0;
       return;
     }
     const h = this.player?.getRenderHealth?.();
@@ -12550,7 +12559,7 @@ export class MoviElement extends HTMLElement {
       performance.now() - this._becameVisibleAt < MoviElement.VISIBILITY_SETTLE_MS
     ) {
       this._stutterLastPresented = h.framesPresented;
-      this._stutterSeconds = 0;
+      this._stutterHistory.length = 0;
       this._judderSeconds = 0;
       if (this._juddering) {
         this._juddering = false;
@@ -12563,14 +12572,14 @@ export class MoviElement extends HTMLElement {
     // before the "Play at 1x" heuristic can judge it.
     if (performance.now() < this._stutterGraceUntil) {
       this._stutterLastPresented = h.framesPresented;
-      this._stutterSeconds = 0;
+      this._stutterHistory.length = 0;
       return;
     }
     const presented = h.framesPresented - this._stutterLastPresented;
     this._stutterLastPresented = h.framesPresented;
     // framesPresented resets to 0 on seek → negative delta; skip that sample.
     if (presented < 0) {
-      this._stutterSeconds = 0;
+      this._stutterHistory.length = 0;
       return;
     }
     // Only meaningful above 1x — at ≤1x there's nothing slower to suggest.
@@ -12643,19 +12652,15 @@ export class MoviElement extends HTMLElement {
       if (allowed) this.showSmoothWarning(message);
     }
 
-    if (
-      this._playbackRate > 1 &&
-      presented < expected * MoviElement.STUTTER_RATIO
-    ) {
-      this._stutterSeconds++;
-    } else {
-      this._stutterSeconds = 0;
+    this._stutterHistory.push(
+      this._playbackRate > 1 && presented < expected * MoviElement.STUTTER_RATIO,
+    );
+    if (this._stutterHistory.length > MoviElement.STUTTER_WINDOW) {
+      this._stutterHistory.shift();
     }
-    if (
-      this._stutterSeconds >= MoviElement.STUTTER_SECONDS &&
-      !this._stutterCooldown
-    ) {
-      this._stutterSeconds = 0;
+    const badSeconds = this._stutterHistory.filter(Boolean).length;
+    if (badSeconds >= MoviElement.STUTTER_SECONDS && !this._stutterCooldown) {
+      this._stutterHistory.length = 0;
       this._stutterCooldown = true;
       // Cooldown so it doesn't nag while stuttering at the SAME rate; a rate
       // change (resetStutterHint) lifts it early so each new speed can warn.
