@@ -31164,6 +31164,12 @@ export class MoviElement extends HTMLElement {
         });
         // Already there — a "Resume from X?" prompt at X is noise.
         this._resumeDialogPending = false;
+        // …and this is a video that has played, not one waiting for its
+        // first press. A source swap clears _hasEverPlayed, and left clear it
+        // put the big centre play button over a paused restore — the
+        // poster's call to action, on a frame the viewer had paused on
+        // themselves (MoviTube renewing its links after a long pause).
+        this._hasEverPlayed = true;
         if (discarded.rate > 0 && discarded.rate !== this.playbackRate) {
           this.playbackRate = discarded.rate;
         }
