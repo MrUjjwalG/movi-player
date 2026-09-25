@@ -15506,6 +15506,21 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
         // 4.31s — a four-second jump backwards, and then the race forwards to
         // catch up with the sound.
         const pictureAt = this.getCurrentTime();
+        // …and keep the clock off the audio until the re-read has landed. The
+        // context resuming is enough for the clock to sync to the audio clock —
+        // still frozen where the context went to sleep, 0s on an autoplay that
+        // was muted from the start — so the seek below began by pausing the
+        // clock at 0:00, and the time and the bar sat at zero for the whole
+        // re-read before jumping back. Unmastered, the clock runs on the wall
+        // and tracks the picture, which is exactly what it did while the audio
+        // was being dropped; it is handed back to the audio once the audio is
+        // anchored where the picture is.
+        this.clock.setAudioProvider(null);
+        const remasterClock = () => {
+          if (!this.disableAudio && !this._destroyed) {
+            this.clock.setAudioProvider(this.audioRenderer);
+          }
+        };
         // …but the SEEK only once the context is RUNNING. Seeking first put the re-read
         // audio on an anchor that the "running" statechange then discarded,
         // and every buffer decoded in between was already late against a wall
@@ -15518,17 +15533,30 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
         ]).then(() => {
           if (this.muted || this.stateManager.getState() !== "playing") {
             this.audioRenderer.releaseResyncSilence();
+            remasterClock();
             return;
           }
           Logger.info(
             TAG,
             `Unmute: audio was being dropped — re-reading from ${pictureAt.toFixed(2)}s (where the picture was at the tap) so it lands with it`,
           );
-          this.seek(pictureAt)
+          // Machinery, not a seek the viewer asked for: no spinner, no
+          // seeking/seeked for the page, and it lands playing. It re-reads what
+          // is already in the source's buffer, at the frame already on screen —
+          // a loading ring over that read as the tap having broken something.
+          this.seek(pictureAt, {
+            internal: true,
+            suppressSpinner: true,
+            preservePlaying: true,
+          })
             // Whatever happens — landed, failed, superseded — the hold has to
-            // come off, or tap-to-unmute ends in permanent silence.
+            // come off, or tap-to-unmute ends in permanent silence; and the
+            // clock goes back to the audio, or it runs on the wall for good.
             .catch(() => {})
-            .finally(() => this.audioRenderer.releaseResyncSilence());
+            .finally(() => {
+              this.audioRenderer.releaseResyncSilence();
+              remasterClock();
+            });
         });
       }
     }
