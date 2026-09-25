@@ -42,6 +42,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **A site that embeds `<movi-player>` itself now gets CORS from the extension too.** That site's player asks for the bytes, the host that serves them sends no header, and the player falls back to the browser's `<video>` — the thing the site embedded it to avoid. The same headers the takeover asks for are now offered for the URLs a page-owned player declares, whether or not takeover is switched off for that site.
 - **Restyle the chrome with `::part()`, and replace the loading ring.** Forty-five parts — every bar button (`::part(button)` hits them all), the progress track, the time, the centre button, the title bar, the poster, the OSD, caption lines and the spinner's box. `<div slot="spinner">` swaps the built-in ribbon for your own while the player still decides when it is up and where it sits; `controlslist="nospinner"` takes the ring away entirely and leaves `is-buffering` / `is-spinner-pending` on the host for a page drawing its own. `::part(error-screen)` and `::part(subtitle)` were documented but missing from the markup — they exist now.
 - **Every icon can be replaced**: `setIcon("play", "<svg>…</svg>")`, `null` to restore. All 72 marks have names now (`MoviElement.iconNames`) — including the "Nothing to Play" and error-screen card stacks — and one swap changes the bar, the centre button, the menu and the OSD together. 27 marks that lived inline at a single call site moved into the symbol table to get there — the only drawing left outside it is the loading ribbon, which has a slot instead — and `::part(icon)` reaches every one for size and colour.
+- **`data-movi-ignore` keeps a `<video>` native** — on the element or an ancestor, the upgrade and the extensions' takeover leave it alone.
+- **"This media needs about N Mbps to play"** — under `smoothwarning`, a stall caused by the link (not the device) names the rate the media needs and the rate it is arriving at. The event carries `link: true`, `neededBps`, `measuredBps`.
 
 ### Changed
 - **The WASM module compiles once and is instantiated many times** — a second player, the preview pipeline, and a post-quality-switch rebuild no longer each pay for their own fetch and compile.
@@ -60,6 +62,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - **The takeover looks before it leaps**: the link a `<video>` declares is checked for actual media before the element is replaced, per element rather than per page, so a page whose `<video>` points at an HTML error page or a dead link keeps the player it had.
 - **The takeover no longer switches `resume` on.** A resume prompt is something a site asks for; arriving over someone else's player uninvited is not.
+- **The next range is fetched while the current one arrives** (at its halfway point), hiding each response's round trip and slow start: 1.88 → 2.12 MB/s delivered on a 2.3 MB/s link.
+- **`smoothwarning` speaks from measurement at 1x too**: 5 bad seconds out of 8 (under 75% of the frames) raise it once per source; the "Play at 1x" hint counts the same way. Seconds the host page starved the main thread don't count.
+- **The software-decode budget scales with the machine's cores** (600M px/s per 8 threads) instead of one flat figure that warned about files a fast desktop plays perfectly.
+- **A script's `play()` with no gesture is treated as autoplay**: a refused sound falls back to muted with "Tap to unmute", and a page-muted start shows the pill.
+- **An autoplay source opens without raising the controls** on `src` set or change.
 
 ### Fixed
 - **The opening poster no longer fades up out of black.** It was faded in over 220ms on every load, and both the host and the canvas are opaque black before the first frame — so what the fade actually did was ramp a thumbnail out of black on every navigation, measured at opacity 0 to 1 across 158ms to 366ms. That reads as a flash, and it lasted as long as the fade rather than as long as the load. It now cuts to the poster, and the fade is kept for the case it was written for: a poster replacing a picture that is already on screen.
@@ -105,6 +112,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **The player's corners no longer escape the frame it sits in** on the web app.
 - **A divider no longer strands itself** at the end of a capsule when native fallback leaves nothing visible beside it.
 - **The adaptive quality probe stops reading its own cache**: a measurement answered from bytes it had already fetched could only ever say "faster", so the ladder could climb on a link that never carried it.
+- **Auto quality on 4K/8K no longer sticks after a switch**: a switch seeked a demuxer over a read still in flight and played from a wedged pipeline (once a 35s freeze). Manual picks were never affected.
+- **A remembered link speed that failed is lowered**, so a stale record no longer opens every load on 8K.
+- **A video-only file on a slow link keeps its clock on the picture** instead of running the bar over a frozen frame.
+- **Running out of data near the end is a stall**, not silence plus a desync seek; and a file on a slow link no longer ends 0.25s early.
+- **An upgraded `<video autoplay>` starts at once** when sound is certain to be refused, instead of ~1.6s under a play button.
+- **The link-speed notice** probes with the source's headers (Drive answered 403) and no longer mistakes a starved link for a slow device.
+- **`setIcon()` with the same icon is a no-op** instead of a repaint on every framework render.
 
 ## [0.4.0] - 2026-08-15
 

@@ -208,6 +208,13 @@ Starts playback automatically when loaded.
 ```
 
 **Note:** Most browsers require `muted` attribute for autoplay to work.
+Without it, when the browser refuses sound the player starts muted and shows a
+"Tap to unmute" pill instead of not starting at all.
+
+The same applies to a page that autoplays by **calling `play()` from script**
+with no click behind it — which is how most pages do it, and what an upgraded
+`<video>` receives: a refused sound falls back to muted with the pill, and a
+start the page made muted shows the pill as `autoplay muted` does.
 
 ---
 
@@ -1284,6 +1291,8 @@ pixel counts — and worded for the media and the cause:
 | Too demanding for the device | This video may not play smoothly on this device | It's very demanding for this device, so it may stutter or lag. |
 | Sound-only source | This audio may not play smoothly on this device | Your device may have trouble keeping up, so you might hear gaps or skips. |
 | Cannot be decoded at all | This video can't be played on this device | Your device or browser doesn't support this file's format. |
+| Measured stutter while playing | This video may not play smoothly on this device | Your device can't decode it fast enough, so the picture may stutter or fall behind the sound. |
+| The link, not the device, is short | This media needs about N Mbps to play | It's only arriving at about M Mbps — this connection or the server can't deliver it fast enough. |
 
 It sits at the bottom left, opposite the resume prompt, has a dismiss button, and
 goes by itself after 12 seconds.
@@ -1308,9 +1317,24 @@ player.addEventListener("smoothwarning", (e) => {
 });
 ```
 
-This is the **prediction**. The existing "Play at 1x for smoother playback" hint
-is the **measurement** — raised only after several seconds of actually dropping
-frames — and both stay.
+That is the **prediction**. Two more notices come from **measurement**, while
+the file is actually playing:
+
+- **Stutter.** At any speed, if five of the last eight seconds show fewer than
+  75% of the frames they should, the notice appears once per source ("Your
+  device can't decode it fast enough…"). Above 1x the "Play at 1x for smoother
+  playback" hint counts the same way. A second in which the host page kept the
+  main thread busy is not counted — that is the page, not the device. The
+  event's `detail` carries `measured: true`.
+- **Link speed.** A source that stalls because its bytes are not arriving fast
+  enough — rather than because the device cannot decode it — is probed a few
+  times, and if the best reading still falls short the notice says how fast a
+  connection the media needs and what it is actually arriving at, rounded to
+  speeds people recognise. The `detail` carries `link: true`, `neededBps` and
+  `measuredBps`.
+
+The software-decode budget behind the prediction scales with the machine's
+core count, so a fast desktop is not warned about a file it plays perfectly.
 
 ---
 
@@ -3037,7 +3061,7 @@ The element re-exposes player activity as DOM events so you can wire `addEventLi
 | `controlschange`       | `{ visible: boolean }`               | The control bar appeared or auto-hid. Fires on the change only, so a host drawing its own chrome over the player can follow it |
 | `loopchange`           | `{ enabled: boolean, mode: "off" \| "one" \| "all" }` | Loop toggled or changed kind (see [`loop`](#loop)). `enabled` is `mode !== "off"` |
 | `loop`                 | `{ count: number }`                  | The item started over, from the seamless [`loop`](#loop). `count` is which turn this is, from 1; it resets with the source and `loopCount` reads it back |
-| `smoothwarning`        | `PlaybackAssessment & { media, message: { title, body } }` | **Cancelable** — what is loaded is not expected to play smoothly at the current speed (see [`smoothwarning`](#smoothwarning)). `preventDefault()` keeps the built-in notice down |
+| `smoothwarning`        | `PlaybackAssessment & { media, message: { title, body } }` | **Cancelable** — what is loaded is not expected to play smoothly at the current speed (see [`smoothwarning`](#smoothwarning)). `preventDefault()` keeps the built-in notice down. Measured stutter adds `measured: true`; a link too slow adds `link: true`, `neededBps`, `measuredBps` |
 | `shufflechange`        | `{ enabled: boolean }`               | Shuffle toggled (see [`shuffle`](#shuffle)). A fresh order is already drawn when it fires |
 | `stablevolumechange`   | `{ enabled: boolean }`               | Stable volume toggled                              |
 | `hdrchange`            | `{ enabled: boolean }`               | HDR toggled                                        |

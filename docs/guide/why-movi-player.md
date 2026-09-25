@@ -175,6 +175,14 @@ video.currentTime = 60;       // seeks it
 video.addEventListener("ended", …);   // fires from the player
 ```
 
+A `<video>` that should stay a `<video>` says so with `data-movi-ignore` — on
+the element, or on anything around it to leave a whole section alone. The
+upgrade skips it, and so does the browser extensions' takeover:
+
+```html
+<video data-movi-ignore src="clip.mp4" controls></video>
+```
+
 #### The markup carries over as-is
 
 The pieces video.js reads from the element are read here too, so a page can

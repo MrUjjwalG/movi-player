@@ -100,7 +100,7 @@ npm i movi-player
 
 **Custom Headers** -- Send auth tokens / signed headers across the whole media flow (manifest, segments, progressive HTTP, thumbnails, encrypted source) via the `headers` attribute (JSON) or property (object).
 
-**Audio** -- AAC, MP3, Opus, FLAC, AC-3, E-AC-3. Multi-track switching. **Output-device routing** (`audiooutput` attribute / `setAudioOutput()` / right-click "Audio Output" menu, via `AudioContext.setSinkId`). Stable volume (loudness normalization). First-class audio-only mode with cover art extraction and a dedicated strip UI. Data-saver `audioonly` mode skips the video decode (and fetches an audio-only stream rendition). Perceptual (log) volume curve. Muted-autoplay fallback with tap-to-unmute.
+**Audio** -- AAC, MP3, Opus, FLAC, AC-3, E-AC-3. Multi-track switching. **Output-device routing** (`audiooutput` attribute / `setAudioOutput()` / right-click "Audio Output" menu, via `AudioContext.setSinkId`). Stable volume (loudness normalization). First-class audio-only mode with cover art extraction and a dedicated strip UI. Data-saver `audioonly` mode skips the video decode (and fetches an audio-only stream rendition). Perceptual (log) volume curve. Muted-autoplay fallback with tap-to-unmute — for the `autoplay` attribute and for a page that starts playback from script.
 
 **Non-Range Servers** -- Servers that ignore `Range` (respond `200`, not `206`) still play via a forward-only sliding-window "linear mode" with in-window seeking; the `linearmode` event lets your UI adapt.
 
@@ -187,7 +187,7 @@ The headline changes — see the [full changelog](CHANGELOG.md) for everything:
 - **[Playlists and queues](#playlists)** — `playlist` hands the element a list and an index: Next/Previous in the bar, `Shift+N`/`Shift+P`, and the skip pair on the lock screen and headset button, which a page could never draw for itself. `autoadvance` plays through, `shuffle` plays in a random order.
 - **[Take over the `<video>` a page already has](#existing-video-tags)** — `upgradeVideoElements()`, or a `data-upgrade` script tag, drops a `<movi-player>` in place of an existing element (including one driven by video.js) and keeps the original as a live proxy, so the page's own `video.play()` and listeners go on meaning what they meant. The browser extensions do it on any page, for a file at a URL, at the flick of a switch.
 - **Auto English captions, made in the browser** — `decodeAudio()` hands back the soundtrack as 16 kHz mono PCM without playing it, `addSubtitleTrack()` takes cues as they are heard, and the web app puts the two together.
-- **`smoothwarning` and `canPlaySmoothly()`** — tell a viewer that what is loaded will not play smoothly at this speed on this machine *before* it starts stuttering, or ask the question yourself and decide what to do about it.
+- **`smoothwarning` and `canPlaySmoothly()`** — tell a viewer that what is loaded will not play smoothly at this speed on this machine *before* it starts stuttering, or ask the question yourself and decide what to do about it. While it plays, the same notice speaks up from measurement: stutter the device cannot keep up with, or a link that cannot deliver the file fast enough ("This media needs about N Mbps to play").
 - **`thumb="precise"` and standard thumbnail tracks** — previews decode forward to the frame under the pointer instead of showing the keyframe before it, and a storyboard is read the way video.js and JW Player already write one (`<track kind="metadata" label="thumbnails">`).
 - **More places to put a control** — `placement: "top"` for the corner, `placement: "center"` for the middle of the bar, and `screen: "fullscreen" | "windowed"` for a control that belongs to only one of them.
 - **Subtitles the viewer owns** — an "Add subtitle file…" picker for a file sitting next to the video (`subtitlepicker`), and captions that can be dragged anywhere in the picture and stay there, with a double-click to reset.
@@ -195,6 +195,8 @@ The headline changes — see the [full changelog](CHANGELOG.md) for everything:
 - **A loop with no seam** — `loop` turns a file over without stopping first, and says so with a `looped` event.
 - **DRM-protected content says so** — "Protected Video" with a plain explanation instead of a generic loading error, and a packager's clear lead plays rather than stalling.
 - **`posterdelay` and a spinner that waits** — hold the opening poster back by a moment, and report a stall only once it is really a stall (`spinnerdelay`).
+- **Steadier streaming on a slow or busy link** — the next range is fetched while the current one arrives, Auto quality no longer sticks after a switch on 4K/8K, and a video-only file keeps its clock on the picture instead of running the bar over a frozen frame.
+- **`data-movi-ignore`** — a `<video>` (or a whole section) that should stay native says so, and the upgrade and the extensions leave it alone.
 
 ## Getting Started
 
@@ -274,6 +276,14 @@ That answers what *can* be opened. On a page you do not control, what *should*
 be is a second question — a search page of stock footage is a grid of `<video>`
 thumbnails, a marketing page has one looping behind its headline — and
 `{ filter: (video) => … }` is where a caller answers it.
+
+The page gets a say too: `data-movi-ignore` on a `<video>` — or on anything
+around it — keeps it native. The upgrade and the browser extensions' takeover
+both leave it alone.
+
+```html
+<video data-movi-ignore src="clip.mp4" controls></video>
+```
 
 ### Local File
 
