@@ -697,12 +697,22 @@ export class Demuxer {
    * Close and cleanup
    */
   close(): void {
+    // The shared module goes back only once this demuxer's context is really
+    // gone. A read still suspended in WASM defers the teardown, and Asyncify
+    // keeps that read's resume in ONE module-wide slot: handed straight to
+    // the next player, its open ran over the suspended read and was answered
+    // with the old read's bytes. Measured on setting the same source twice —
+    // the new open was fed 3.6MB into the file, took an AC3 frame there for
+    // the start of a raw AC3 stream, and opened a 1080p MKV as one audio track
+    // lasting 17 days, in strip mode. Until then the next player takes an
+    // isolated instance, as a second player on the page already does.
+    const releaseShared = this._holdsSharedModule;
+    this._holdsSharedModule = false;
     if (this.bindings) {
+      if (releaseShared) this.bindings.onTornDown = releaseSharedModule;
       this.bindings.destroy();
       this.bindings = null;
-    }
-    if (this._holdsSharedModule) {
-      this._holdsSharedModule = false;
+    } else if (releaseShared) {
       releaseSharedModule();
     }
 

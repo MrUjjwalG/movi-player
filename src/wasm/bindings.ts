@@ -447,6 +447,12 @@ export class WasmBindings {
    */
   private inFlight = 0;
   private teardownPending = false;
+  /**
+   * Called once the context is really gone — which, with a call still
+   * suspended in WASM, is later than destroy(). Whoever owns the module waits
+   * for this before handing it to anyone else; see Demuxer.close.
+   */
+  onTornDown: (() => void) | null = null;
 
   private ccallAsync(
     name: string,
@@ -513,6 +519,9 @@ export class WasmBindings {
     this.fileSize = 0;
 
     Logger.debug(TAG, "Context destroyed");
+    const done = this.onTornDown;
+    this.onTornDown = null;
+    done?.();
   }
 
   /**
