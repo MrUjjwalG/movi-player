@@ -180,3 +180,26 @@ export function raiseLinkBps(bps: number): void {
   if (bps <= loadPersistedLinkBps()) return;
   persistLinkBps(bps);
 }
+
+/**
+ * Record that the link could NOT carry `bps`, if what's stored says it could.
+ *
+ * The one playback reading that is a ceiling rather than a floor: a rung the
+ * link failed to sustain. raiseLinkBps() can never bring the record down, and
+ * the confirm pass that should have caught a stale seed learns nothing when
+ * the rung's head is already in the HTTP cache — so a 140.9Mbps record on a
+ * ~40Mbps line opened 8K, stepped down to 4K and then 1440p in front of the
+ * viewer, and was left standing to do the same on the next load. Capping at
+ * the failed rung's bitrate puts the next opening pick (55% of the seed) well
+ * under it; the ABR climbs from there if the link was only briefly short.
+ */
+export function lowerLinkBps(bps: number): void {
+  if (!(bps > 0)) return;
+  const stored = loadPersistedLinkBps();
+  if (stored > 0 && stored <= bps) return;
+  Logger.info(
+    TAG,
+    `Link could not carry ${(bps / 1e6).toFixed(1)}Mbps — remembered rate lowered from ${(stored / 1e6).toFixed(1)}Mbps`,
+  );
+  persistLinkBps(bps);
+}

@@ -43,7 +43,7 @@ import { Demuxer } from "../demux";
 import { TrackManager } from "./TrackManager";
 import { Clock } from "./Clock";
 import { PlayerStateManager } from "./PlayerState";
-import { raiseLinkBps } from "../utils/LinkRate";
+import { lowerLinkBps, raiseLinkBps } from "../utils/LinkRate";
 import { Logger, LogLevel } from "../utils/Logger";
 import {
   Storyboard,
@@ -4124,7 +4124,9 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
     // Set when the prime ran out of clock rather than bailing for a structural
     // reason (no shared origin, a paused player, a software-backed decoder).
     // That distinction is what the abandon below turns on.
-    const primeStatus = { exhausted: false };
+    const primeStatus: { exhausted: boolean; readInFlight?: Promise<unknown> } = {
+      exhausted: false,
+    };
     const sameOrigin = Math.abs(newStartTime - this.startTime) < 0.001;
     if (
       sameOrigin &&
@@ -4213,6 +4215,27 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
         return abandonPrep(
           "the incoming rung could not be primed inside its budget — it will not chew the swap backlog either",
         );
+      }
+      // The prime can give up on a read that has not come back — it cannot be
+      // cancelled, only outwaited. Seeking the same demuxer over it hands the
+      // seek the read's pending slot: the read's bytes then land on "No pending
+      // read to fulfill" and the demuxer the swap is about to play from is
+      // wedged. That is why AUTO switches stuck on the heavy rungs and manual
+      // ones did not: an ABR downshift fires on a low buffer over a saturated
+      // link, where a 4K/8K read outlasts the prime's budget, while a manual
+      // pick lands on a healthy one and primes to a seamless handover. Measured
+      // on a 2160p → 1440p downshift: the warning 7ms after the swap, then the
+      // picture held while the sound ran on.
+      if (primeStatus.readInFlight) {
+        const landed = await withDeadline(
+          primeStatus.readInFlight,
+          Math.max(prepLeft(), 0),
+        );
+        if (landed === TIMED_OUT) {
+          return abandonPrep(
+            "the prime's last read never landed — the new demuxer cannot be reused",
+          );
+        }
       }
       swapTime = lookbackFromNow();
       seekedTo = swapTime;
@@ -4876,6 +4899,9 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
       // the lower one instead of ping-ponging every ~40s. Strikes decay after a
       // clean spell so an improved link still gets another shot.
       const leavingBw = rungs[activeIdx].bandwidth || 0;
+      // The link just failed this rung, so the stored rate that opens the next
+      // load must stop claiming it can carry it — see lowerLinkBps.
+      lowerLinkBps(leavingBw);
       const prevStrike = this._abrDrainStrikes.get(leavingBw);
       const strikes =
         (prevStrike && now - prevStrike.at < MoviPlayer.ABR_STRIKE_DECAY_MS
@@ -16224,6 +16250,23 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
     this.waitingForVideoSync = false;
 
     try {
+      // Let a read already inside the demuxer land before seeking it — the
+      // same wait seek() and the rendition swap do. Cancelling the rAF stops
+      // the NEXT pass, not a readPacket that Asyncify has suspended mid-call,
+      // and a seek issued over that read takes its pending slot: the read's
+      // bytes then arrive to "No pending read to fulfill", the readPacket never
+      // resolves, and demuxInFlight holds the whole pipeline until the demux
+      // timeout. Measured right after a hard 8K → 4K swap, where this catch-up
+      // fires by design: a 35s freeze while the source kept filling for nobody.
+      let guard = 0;
+      while (this.demuxInFlight && guard++ < 100) {
+        await new Promise((r) => setTimeout(r, 10));
+      }
+      if (this.seekSessionId !== mySessionId) {
+        clearTimeout(holdTimer);
+        return; // Superseded
+      }
+
       // Flush video decoder only — audio decoder and renderer untouched
       if (this.videoDecoder) {
         await this.videoDecoder.flush();
@@ -16906,7 +16949,7 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
     newTrack: VideoTrack,
     newStartTime: number,
     prepDeadline: number,
-    status: { exhausted: boolean },
+    status: { exhausted: boolean; readInFlight?: Promise<unknown> },
   ): Promise<{ decoder: MoviVideoDecoder; frames: VideoFrame[] } | null> {
     const staged: VideoFrame[] = [];
     const mediaTime = (f: VideoFrame) => f.timestamp / 1_000_000 - newStartTime;
@@ -17004,12 +17047,13 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
         // slow DECODE but not a slow READ — and on the rung that needs this
         // most, the read is the whole wait. Unbounded, the 5s budget was worth
         // whatever a single readPacket felt like taking on a 1.2GB file.
-        const packet = await withDeadline(
-          newDemuxer.readPacket(),
-          deadline - performance.now(),
-        );
+        const read = newDemuxer.readPacket();
+        const packet = await withDeadline(read, deadline - performance.now());
         if (packet === TIMED_OUT) {
           status.exhausted = true;
+          // Still suspended inside the demuxer — which the hard path goes on
+          // to seek and play from. It has to land first; see the swap.
+          status.readInFlight = read.catch(() => undefined);
           break;
         }
         if (!packet) break; // EOF before we could get ahead
