@@ -208,6 +208,328 @@
   <!-- Shared design system — spliced in by the worker AFTER this page's own
        <style> so it is the authority on the site-wide chrome. -->
   <!--__SHARED_CSS__-->
+  <!-- ════════════════════════════════════════════════════════════════
+       Landing parity — the same layer examples.html and compare.html
+       carry, adapted to this page's class and variable names. The home
+       page's tokens (neutral canvas, one accent, 2/4/6px corners, mono
+       eyebrow, no glows) applied over the page's own styles; it sits
+       after shared.css, whose marker is above, and starts every selector
+       at html so it wins. The Google sign-in button stays white, as
+       Google's branding asks; only its corners and shadow change.
+       ════════════════════════════════════════════════════════════════ -->
+  <style id="landing-parity">
+    html:root {
+      --bg-base: #0b0d11;
+      --bg-elevated: #12151a;
+      --bg-card: #12151a;
+      --bg-surface: #171b21;
+      --text-primary: #f2f4f7;
+      --text-secondary: #9aa3b0;
+      --text-muted: #7f8a99;
+      --border-subtle: #333b47;
+      --border-hover: #4a5462;
+      --accent: #6366f1;
+      --accent-hover: #818cf8;
+      --r-1: 2px;
+      --r-2: 4px;
+      --r-3: 6px;
+      /* This page's own names, pointed at the same values. */
+      --bg: var(--bg-base);
+      --surface: var(--bg-elevated);
+      --surface-2: var(--bg-surface);
+      --text: var(--text-primary);
+      --text-dim: var(--text-secondary);
+      --text-faint: var(--text-muted);
+      --border: var(--border-subtle);
+      --accent-grad: var(--accent);
+      --glow-1: transparent;
+      --glow-2: transparent;
+      --radius: var(--r-3);
+    }
+    html[data-theme="light"] {
+      --bg-base: #f4f6f8;
+      --bg-elevated: #ffffff;
+      --bg-card: #ffffff;
+      --bg-surface: #eceff3;
+      --text-primary: #0d1117;
+      --text-secondary: #4a5567;
+      --text-muted: #798393;
+      --border-subtle: #dbe0e8;
+      --border-hover: #c2cad6;
+      --accent: #4f46e5;
+      --accent-hover: #4338ca;
+    }
+
+    /* One flat canvas: no navy, no glows (shared.css pins one behind
+       every page on body::before). */
+    html body {
+      background: var(--bg-base) !important;
+      background-image: none !important;
+    }
+    html body::before,
+    html body::after { display: none !important; }
+
+    /* ── Hierarchy: mono eyebrow, heavy headline in one accent ─────── */
+    html body .hero .eyebrow {
+      padding: 0;
+      border: 0;
+      border-radius: 0;
+      background: none;
+      color: var(--text-muted);
+      font: 600 0.68rem/1 "DM Mono", ui-monospace, monospace;
+      letter-spacing: 0.09em;
+      text-transform: uppercase;
+    }
+    html body .hero .eyebrow .dot { box-shadow: none; }
+    html body .hero h1 {
+      font-weight: 800;
+      letter-spacing: -0.035em;
+    }
+    html body .hero h1 em {
+      background: none;
+      -webkit-text-fill-color: currentColor;
+      color: var(--accent);
+    }
+
+    /* ── Surfaces and controls on the site's corners ──────────────── */
+    html body .brand-sub,
+    html body .chip { border-radius: var(--r-1) !important; }
+    html body .brand-sub { white-space: nowrap; }
+    html body .chip { background: var(--bg-elevated); border-color: var(--border-subtle); }
+    html body .btn,
+    html body .icon-btn,
+    html body .connected,
+    html body .toast { border-radius: var(--r-2) !important; }
+    html body .btn:hover { transform: none; }
+    html body .btn-primary {
+      background: var(--accent) !important;
+      box-shadow: none !important;
+    }
+    html body .btn-primary:hover { background: var(--accent-hover) !important; }
+    html body .btn-google {
+      border-radius: var(--r-2) !important;
+      box-shadow: inset 0 0 0 1px rgba(0, 0, 0, 0.12) !important;
+    }
+    html body .stage-card {
+      border-radius: var(--r-3) !important;
+      border-color: var(--border-subtle);
+      box-shadow: none !important;
+    }
+    html body .empty .glyph { border-radius: var(--r-3) !important; }
+    html body .connected .dot,
+    html body .now-playing.active .dot { box-shadow: none; }
+
+    /* ── The toast when it is not showing ────────────────────────────
+       It was parked 140% of its own height below its spot, which is
+       bottom:24px — so the top 6px of an empty box sat at the foot of
+       every viewport, and over the footer text on a tablet. Hidden
+       means hidden: out of view and out of the accessibility tree. */
+    html body .toast {
+      visibility: hidden;
+      opacity: 0;
+      transform: translate(-50%, calc(100% + 32px));
+      transition: transform .35s cubic-bezier(.2,.9,.2,1), opacity .2s ease, visibility 0s linear .35s;
+    }
+    html body .toast.show {
+      visibility: visible;
+      opacity: 1;
+      transform: translate(-50%, 0);
+      transition: transform .35s cubic-bezier(.2,.9,.2,1), opacity .2s ease, visibility 0s;
+    }
+
+    /* ── Three steps under the chips ──────────────────────────────── */
+    html body .hero .steps {
+      display: grid;
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+      gap: 1.5rem;
+      width: 100%;
+      max-width: 46rem;
+      margin: 2.75rem 0 0;
+      padding: 1.5rem 0 0;
+      border-top: 1px solid var(--border-subtle);
+      list-style: none;
+      text-align: left;
+    }
+    html body .hero .steps li { display: flex; gap: 0.75rem; align-items: flex-start; }
+    html body .hero .step-n {
+      flex: none;
+      width: 1.6rem;
+      height: 1.6rem;
+      display: grid;
+      place-items: center;
+      border: 1px solid var(--border-subtle);
+      border-radius: var(--r-2);
+      color: var(--accent);
+      font: 600 0.75rem/1 "DM Mono", ui-monospace, monospace;
+    }
+    html body .hero .steps strong { display: block; color: var(--text-primary); font-size: 0.9rem; font-weight: 600; }
+    html body .hero .steps small { display: block; margin-top: 0.2rem; color: var(--text-muted); font-size: 0.8rem; }
+
+
+    /* ── Before a video: a picker, not an empty player ────────────────
+       Signed in with nothing chosen, the page was a large black 16:9
+       frame with the choice pushed into its middle, the same "Pick a
+       video" button twice, and "No video selected" underneath — an
+       empty player reads as broken. Until the first pick it is a panel
+       on the page's own surface with one action, what it plays, and the
+       other way in (Drive's "Open with"). data-has-video is set by
+       playDriveFile() and cleared on sign-out. */
+    html body:not([data-has-video]) .topbar #pick-btn,
+    html body:not([data-has-video]) .meta-row { display: none !important; }
+    html body:not([data-has-video]) .stage-card {
+      background: var(--bg-elevated) !important;
+      border-color: var(--border-subtle) !important;
+    }
+    /* The page above the footer fills the screen, and the footer starts
+       where the screen ends — signing in no longer shrinks the page to a
+       box with the footer pulled up under it. The panel takes all of the
+       height under the bar. svh, so a phone's collapsing toolbar does not
+       make it jump. */
+    html body:not([data-has-video]) .app { min-height: calc(100svh - 48px); } /* 48px: the footer's own margin-top */
+    /* …and in every state, from the first paint. The page opens in
+       data-state="loading" — the player bundle and the silent Google
+       sign-in both still out — with the hero and the app both hidden, so
+       the space above the footer collapsed and the footer sat mid-screen
+       until a view arrived, then jumped down. The signed-out hero on a tall
+       tablet screen fell short the same way (886px of a 1024px screen). */
+    html body .wrap { min-height: calc(100svh - 48px); }
+    /* …and it stays that tall once a file is playing: the player takes
+       the height between the bar and the title line, and the picture is
+       letterboxed inside it (objectfit="contain"). Not on a phone, where
+       a portrait screen would put the 16:9 picture in a tall black box —
+       there it keeps its own shape. Not for the audio strip either. */
+    @media (min-width: 561px) {
+      html body[data-has-video] .app { min-height: calc(100svh - 48px); }
+      html body[data-has-video] .stage-card:not(.audio) {
+        flex: 1;
+        display: flex;
+        flex-direction: column;
+      }
+      html body[data-has-video] .stage-card:not(.audio) .player-stage:not(.is-audio-strip) {
+        flex: 1;
+        aspect-ratio: auto;
+        min-height: 0;
+      }
+      /* height:100% does not resolve against a flexed height, so the
+         player stopped at its own 16:9 inside the taller stage. */
+      html body[data-has-video] .stage-card:not(.audio) .player-stage:not(.is-audio-strip) > movi-player {
+        position: absolute;
+        inset: 0;
+        height: auto;
+        /* The element writes the source's shape inline (aspect-ratio:
+           16/9) to size itself when nothing else does; here the stage
+           gives it a box, and the picture is contained inside it. */
+        aspect-ratio: auto !important;
+      }
+    }
+    html body:not([data-has-video]) .stage-card {
+      flex: 1;
+      display: flex;
+      flex-direction: column;
+    }
+    html body:not([data-has-video]) .player-stage {
+      flex: 1;
+      aspect-ratio: auto;
+      min-height: 320px;
+      background: transparent;
+    }
+    /* Hidden and out of the flow: invisible alone still kept its 16:9
+       box, which made the panel as tall as the player would be. */
+    html body:not([data-has-video]) .player-stage movi-player {
+      position: absolute;
+      inset: 0;
+      visibility: hidden;
+    }
+    /* In the flow before a pick, so the panel is as tall as what it says
+       — absolutely placed, a phone squeezed the icon and the button to
+       fit a fixed height. */
+    html body:not([data-has-video]) .empty {
+      position: relative;
+      inset: auto;
+      width: 100%;
+    }
+    html body .empty > * { flex-shrink: 0; }
+    html body .empty {
+      background: none !important;
+      color: var(--text-secondary);
+      padding: 2.5rem 1.5rem;
+    }
+    /* Spare: a mark, a heading, one line, one button, one tip. The
+       formats line wrapped into three ragged rows and said again what
+       the landing page already says, and the icon's box was one more
+       frame inside the panel's frame. */
+    html body .empty .glyph {
+      width: auto;
+      height: auto;
+      background: none;
+      border: 0;
+      color: var(--accent);
+    }
+    html body .empty .glyph svg { width: 36px; height: 36px; opacity: 1; }
+    html body .empty p { max-width: none; }
+    html body .empty h3 {
+      color: var(--text-primary);
+      font-size: clamp(1.15rem, 2.4vw, 1.45rem);
+      font-weight: 700;
+      letter-spacing: -0.02em;
+    }
+    html body .empty .btn { height: 46px; padding: 0 1.4rem; }
+    html body .empty .empty-hint {
+      margin-top: 0.75rem;
+      color: var(--text-muted);
+      font-size: 0.8rem;
+      text-wrap: balance;
+    }
+    html body .empty .empty-hint strong { color: var(--text-secondary); font-weight: 600; }
+
+    /* ── Phones ───────────────────────────────────────────────────── */
+    @media (max-width: 640px) {
+      html body .hero { padding: 2.5rem 0 3rem; }
+      html body .hero .steps { grid-template-columns: 1fr; gap: 0.9rem; margin-top: 2rem; }
+    }
+    /* The full bar — brand, status, the action, two controls — needs
+       about 800px. Below that it either ran off the right edge (561–639px,
+       by up to 67px) or wrapped "Connected to Drive" inside its own chip;
+       at 560px and under it wrapped into loose rows of unlabelled squares.
+       So under 800px: the brand with the two small controls beside it,
+       the one action as a full-width button with its words, and the
+       status as a line of text. */
+    html body .connected { white-space: nowrap; }
+    @media (max-width: 800px) {
+      html body .topbar {
+        display: grid;
+        grid-template-columns: 1fr auto auto;
+        align-items: center;
+        gap: 0.6rem 0.5rem;
+        padding: 0.85rem 0;
+      }
+      html body .topbar .actions { display: contents; }
+      html body .topbar .brand { grid-column: 1; grid-row: 1; min-width: 0; }
+      html body .topbar #signout-btn { grid-column: 2; grid-row: 1; }
+      html body .topbar #theme-toggle { grid-column: 3; grid-row: 1; }
+      html body .topbar .icon-btn { width: 40px; height: 40px; }
+      html body .topbar #pick-btn {
+        grid-column: 1 / -1;
+        grid-row: 2;
+        width: 100%;
+        padding: 0 1rem;
+      }
+      html body .topbar #pick-btn .label,
+      html body .topbar .connected .label { display: inline; }
+      html body .topbar .connected {
+        grid-column: 1 / -1;
+        grid-row: 3;
+        height: auto;
+        padding: 0;
+        border: 0;
+        background: none;
+        font-size: 0.78rem;
+      }
+    }
+    @media (max-width: 560px) {
+      html body .empty { padding: 2.5rem 1rem; }
+    }
+  </style>
 </head>
 
 <body data-state="loading">
@@ -244,6 +566,14 @@
         <span class="chip">4K & HDR</span><span class="chip">Multi-track audio</span><span class="chip">Subtitles</span>
         <span class="chip">Instant range-streaming</span>
       </div>
+
+      <!-- What happens after the button, in the home page's step form: a
+           first-time visitor otherwise signs in not knowing what comes next. -->
+      <ol class="steps" aria-label="How it works">
+        <li><span class="step-n" aria-hidden="true">1</span><span><strong>Sign in with Google</strong><small>Read-only, the file you pick</small></span></li>
+        <li><span class="step-n" aria-hidden="true">2</span><span><strong>Pick a file from Drive</strong><small>Any size, any format</small></span></li>
+        <li><span class="step-n" aria-hidden="true">3</span><span><strong>It plays here</strong><small>Streamed, never downloaded</small></span></li>
+      </ol>
     </section>
 
     <!-- ============ APP VIEW ============ -->
@@ -258,7 +588,7 @@
           <span class="connected" id="connected"><span class="dot"></span><span class="label">Connected to Drive</span></span>
           <button type="button" class="btn btn-primary" id="pick-btn">
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/></svg>
-            <span class="label">Pick a video</span>
+            <span class="label">Pick a file</span>
           </button>
           <button class="icon-btn" id="signout-btn" title="Sign out" aria-label="Sign out">
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/><polyline points="16 17 21 12 16 7"/><line x1="21" y1="12" x2="9" y2="12"/></svg>
@@ -273,19 +603,20 @@
             playsInline thumb="precise" fastseek showtitle subtitlepicker ambientmode ambientwrapper="ambient-wrapper" stablevolume smoothwarning></movi-player>
 
           <div class="empty" id="empty-state">
-            <span class="glyph"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><polygon points="23 7 16 12 23 17 23 7"/><rect x="1" y="5" width="15" height="14" rx="2" ry="2"/></svg></span>
-            <h3>Pick a video to start</h3>
-            <p>Choose any video from your Google Drive and it plays here instantly — streamed, never downloaded.</p>
+            <span class="glyph"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><path d="M14 2v6h6"/><path d="M10 11.5v5l4-2.5z"/></svg></span>
+            <h3>Pick a file from your Drive</h3>
+            <p>Video or audio — streamed from your Drive, never downloaded.</p>
             <button type="button" class="btn btn-primary" id="empty-pick-btn">
               <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/></svg>
-              Pick a video from Drive
+              Pick a file from Drive
             </button>
+            <p class="empty-hint">Tip: in Google Drive, right-click a file → <strong>Open with</strong> → <strong>MoviPlayer</strong>.</p>
           </div>
         </div>
       </div>
 
       <div class="meta-row">
-        <span class="now-playing" id="now-playing"><span class="dot"></span><span class="txt">No video selected</span></span>
+        <span class="now-playing" id="now-playing"><span class="dot"></span><span class="txt">No file selected</span></span>
         <span class="privacy-note">Streamed read-only · decoded on your device</span>
       </div>
     </div>
@@ -455,8 +786,9 @@
       try { player.dispose(); } catch {}
       player.removeAttribute("src");
       player.removeAttribute("title");
-      setNow("No video selected");
+      setNow("No file selected");
       emptyState.style.display = "";
+      document.body.removeAttribute("data-has-video");
       setState("signed-out");
     }
 
@@ -476,7 +808,7 @@
      *
      * The Picker appends its dialog to the end of <body> and focuses it, and a
      * focus lands the browser's "scroll it into view" on something below the
-     * fold — so clicking "Pick a video" slid the whole page down, smoothly,
+     * fold — so clicking "Pick a file" slid the whole page down, smoothly,
      * because this page sets scroll-behavior: smooth. None of that is ours to
      * configure: the dialog is Google's, inside an iframe.
      *
@@ -503,12 +835,24 @@
       const view = new google.picker.DocsView(google.picker.ViewId.DOCS_VIDEOS)
         .setIncludeFolders(true)
         .setSelectFolderEnabled(false);
+      // The player plays audio too, and DOCS_VIDEOS lists video only, so
+      // audio gets a second tab of its own. Listed by type because the
+      // Picker takes no wildcard; the video tab above is left as it was.
+      const audioView = new google.picker.DocsView(google.picker.ViewId.DOCS)
+        .setMimeTypes([
+          "audio/mpeg", "audio/mp3", "audio/flac", "audio/x-flac",
+          "audio/mp4", "audio/x-m4a", "audio/aac", "audio/ogg", "audio/opus",
+          "audio/wav", "audio/x-wav", "audio/webm",
+        ].join(","))
+        .setIncludeFolders(true)
+        .setSelectFolderEnabled(false);
       const picker = new google.picker.PickerBuilder()
         .setOAuthToken(accessToken)
         .setDeveloperKey(API_KEY)
         .setAppId(APP_ID)
-        .setTitle("Choose a video")
+        .setTitle("Choose a file")
         .addView(view)
+        .addView(audioView)
         .setCallback((data) => {
           // Closing hands focus back, which scrolls for the same reason.
           if (data.action === google.picker.Action.PICKED ||
@@ -532,6 +876,9 @@
       if (!accessToken) return ensureAuth();
       setState("app");
       emptyState.style.display = "none";
+      // Styles key off this: before the first pick the page is a picker,
+      // not an empty player (see "Before a video" in landing-parity).
+      document.body.setAttribute("data-has-video", "");
 
       // Change ONLY the src (headers were set once at sign-in) so the player
       // does a single clean (re)init per pick. movi-player shows its own
