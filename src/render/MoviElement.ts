@@ -371,6 +371,39 @@ export interface MoviOverlaySpec {
   onDismiss?: (reason: string, player: MoviElement) => void;
 }
 
+/**
+ * Where the pointer last was on screen, from every mousemove on the page.
+ *
+ * The browser fires mouseenter — and a mousemove — at a pointer that never
+ * moved when the page moves under it instead: a scroll, or a layout that
+ * shifts. A host that scrolls to the top when a new video is picked from a
+ * list below the player (MoviTube, on a narrow window) puts the player under a
+ * resting pointer, and the bar went up over an autoplay start as if the viewer
+ * had hovered it — or not, depending on where the pointer happened to be.
+ * Recorded in the capture phase, so it holds the position from BEFORE any
+ * boundary event the next real move produces (those are dispatched first).
+ */
+let lastPointerScreen: { x: number; y: number } | null = null;
+if (typeof document !== "undefined") {
+  document.addEventListener(
+    "mousemove",
+    (e) => {
+      lastPointerScreen = { x: e.screenX, y: e.screenY };
+    },
+    { capture: true, passive: true },
+  );
+}
+
+/** Did the pointer actually move to produce this event? See lastPointerScreen. */
+function pointerReallyMoved(e: MouseEvent): boolean {
+  if (e.type === "mousemove") return e.movementX !== 0 || e.movementY !== 0;
+  return (
+    !lastPointerScreen ||
+    e.screenX !== lastPointerScreen.x ||
+    e.screenY !== lastPointerScreen.y
+  );
+}
+
 /** "512kb" / "2mb" / "1048576" → bytes. Anything unreadable means the default. */
 function parseByteSize(value: string | null): number {
   if (!value) return 0;
@@ -5409,9 +5442,9 @@ export class MoviElement extends HTMLElement {
     ) as HTMLElement;
 
     // Keep controls visible when hovering over controls area
-    controlsContainer?.addEventListener("mouseenter", () => {
+    controlsContainer?.addEventListener("mouseenter", (e) => {
       this.isOverControls = true;
-      this.showControls();
+      if (pointerReallyMoved(e)) this.showControls();
     });
 
     controlsContainer?.addEventListener(
@@ -7131,10 +7164,13 @@ export class MoviElement extends HTMLElement {
     );
 
     // Surface controls the moment the cursor enters the player.
-    this.addEventListener("mouseenter", () => {
+    this.addEventListener("mouseenter", (e) => {
       // Skip when this is a touch-induced synthetic mouse event (a real
       // hover never follows a recent touchstart).
       if (Date.now() - this.lastTouchTime < 800) return;
+      // …or the page moving under a pointer that did not — see
+      // pointerReallyMoved.
+      if (!pointerReallyMoved(e)) return;
       // Surface the controls the moment the cursor enters the player,
       // regardless of which child element is under it. The canvas/video/
       // overlay mousemove handlers miss the case where the cursor is
@@ -7144,8 +7180,9 @@ export class MoviElement extends HTMLElement {
       if (this._controls) this.showControls();
     });
 
-    this.addEventListener("mousemove", () => {
+    this.addEventListener("mousemove", (e) => {
       if (Date.now() - this.lastTouchTime < 800) return;
+      if (!pointerReallyMoved(e)) return;
       if (this._controls) this.showControls();
     });
 
