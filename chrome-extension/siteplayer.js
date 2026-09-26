@@ -42,8 +42,16 @@
   const collect = () => {
     const urls = [];
     for (const el of document.querySelectorAll("movi-player")) {
-      for (const attr of URL_ATTRS) {
-        const raw = el.getAttribute(attr);
+      // The quality ladder too, not only the src: a player with <source>
+      // children streams ANY of them — Auto switches rung, and seek previews
+      // are read off the smallest. A takeover of a JW page writes the ladder
+      // it got from JW's config, and those rungs were never on the <video>,
+      // so nothing had asked for their header — a rung on a host that sends
+      // none of its own could not be read, for a switch or for a preview.
+      const raws = URL_ATTRS.map((attr) => el.getAttribute(attr)).concat(
+        Array.from(el.querySelectorAll(":scope > source")).map((s) => s.getAttribute("src")),
+      );
+      for (const raw of raws) {
         if (!raw) continue;
         // A blob: or data: source is already the page's own bytes.
         if (/^(blob:|data:|file:)/i.test(raw)) continue;

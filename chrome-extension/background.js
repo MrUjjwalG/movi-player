@@ -133,18 +133,53 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
 // blanket "allow everything": the same header on an unrelated credentialed
 // request is not permissiveness, it is a broken request — and a rule that
 // outlives its page is a permission nobody granted.
-const corsRuleIds = new Map(); // tabId → [ruleId]
-let nextCorsRuleId = 9000;
+const CORS_RULE_FLOOR = 9000;
 
 /**
  * Every media URL this tab has asked to have a header added to.
  *
  * Kept because the rules are rebuilt wholesale on each call — the update
  * removes the tab's previous rule ids — so two callers would cancel each
- * other. There are two: the takeover path, and a page that embeds
- * <movi-player> itself. A page can be both at once.
+ * other. There are several: the takeover path, a page that embeds
+ * <movi-player> itself, and every frame of the tab doing either.
  */
 const corsWanted = new Map();
+
+/**
+ * One rebuild at a time.
+ *
+ * A page with its videos in iframes asks once per frame, all at the same
+ * moment. Each call probes its URLs over the network before it writes, so
+ * they overlapped: each started from an empty set, and each one's update
+ * removed the rule ids the last one to finish had recorded — whichever ids
+ * those happened to be. Four embeds came out alternating, the 1st and 3rd
+ * with their header and the 2nd and 4th reading without it.
+ */
+let corsQueue = Promise.resolve();
+
+function queueCorsWrite(step) {
+  const run = corsQueue.then(step);
+  corsQueue = run.catch(() => {});
+  return run;
+}
+
+/**
+ * This tab's header rules, from the browser rather than from memory.
+ *
+ * Session rules outlive the service worker; a Map does not. After the worker
+ * was put to sleep and woken, the ids it remembered were gone and the counter
+ * started again at the floor — so the next update either left the old rules
+ * behind for ever or asked for an id that already existed, which fails the
+ * whole update and writes nothing.
+ */
+async function tabCorsRules(tabId) {
+  const rules = await chrome.declarativeNetRequest.getSessionRules();
+  const mine = rules
+    .filter((r) => r.id > CORS_RULE_FLOOR && r.condition.tabIds?.includes(tabId))
+    .map((r) => r.id);
+  const top = rules.reduce((max, r) => Math.max(max, r.id), CORS_RULE_FLOOR);
+  return { mine, top };
+}
 
 async function allowMediaCors(urls, tabId) {
   if (!Array.isArray(urls) || urls.length === 0 || tabId == null) {
@@ -159,47 +194,54 @@ async function allowMediaCors(urls, tabId) {
   // host handing off to a CDN — is answered by the address it lands on, and
   // that is the response the header has to be added to. The rule matches a
   // request by its own URL, so the redirect needs one of its own.
-  const wanted = corsWanted.get(tabId) ?? new Set();
+  //
+  // Probed outside the queue: it is the network, and one slow host must not
+  // hold up the header for every other frame's video.
+  const known = corsWanted.get(tabId);
+  const fresh = urls.slice(0, 12).filter((url) => !known?.has(url));
+  const probed = await Promise.all(fresh.map((url) => probeUrl(url)));
   const verdicts = {};
-  for (const url of urls.slice(0, 12)) {
-    if (wanted.has(url)) continue;          // already resolved for this tab
-    wanted.add(url);
-    const { landed, verdict } = await probeUrl(url);
-    verdicts[url] = verdict;
-    if (landed) wanted.add(landed);
-  }
-  // A cap, because this set only ever grows within a tab and each entry is a
-  // session rule. A page with more media than this is a page the takeover
-  // heuristics would not have touched anyway.
-  while (wanted.size > 48) wanted.delete(wanted.values().next().value);
-  corsWanted.set(tabId, wanted);
+  fresh.forEach((url, i) => (verdicts[url] = probed[i].verdict));
 
-  const addRules = [];
-  for (const url of wanted) {
-    addRules.push({
-      id: ++nextCorsRuleId,
-      priority: 1,
-      condition: { urlFilter: url, tabIds: [tabId], resourceTypes: ["xmlhttprequest"] },
-      action: {
-        type: "modifyHeaders",
-        responseHeaders: [
-          { header: "access-control-allow-origin", operation: "set", value: "*" },
-          {
-            header: "access-control-expose-headers",
-            operation: "set",
-            value: "content-range, content-length, accept-ranges",
-          },
-        ],
-      },
+  return queueCorsWrite(async () => {
+    const wanted = corsWanted.get(tabId) ?? new Set();
+    fresh.forEach((url, i) => {
+      wanted.add(url);
+      if (probed[i].landed) wanted.add(probed[i].landed);
     });
-  }
-  const previous = corsRuleIds.get(tabId) ?? [];
-  await chrome.declarativeNetRequest.updateSessionRules({
-    removeRuleIds: previous,
-    addRules,
+    // A cap, because this set only ever grows within a tab and each entry is a
+    // session rule. A page with more media than this is a page the takeover
+    // heuristics would not have touched anyway.
+    while (wanted.size > 48) wanted.delete(wanted.values().next().value);
+    corsWanted.set(tabId, wanted);
+
+    const { mine: previous, top } = await tabCorsRules(tabId);
+    let nextId = top;
+    const addRules = [];
+    for (const url of wanted) {
+      addRules.push({
+        id: ++nextId,
+        priority: 1,
+        condition: { urlFilter: url, tabIds: [tabId], resourceTypes: ["xmlhttprequest"] },
+        action: {
+          type: "modifyHeaders",
+          responseHeaders: [
+            { header: "access-control-allow-origin", operation: "set", value: "*" },
+            {
+              header: "access-control-expose-headers",
+              operation: "set",
+              value: "content-range, content-length, accept-ranges",
+            },
+          ],
+        },
+      });
+    }
+    await chrome.declarativeNetRequest.updateSessionRules({
+      removeRuleIds: previous,
+      addRules,
+    });
+    return { ok: true, rules: addRules.length, verdicts };
   });
-  corsRuleIds.set(tabId, addRules.map((rule) => rule.id));
-  return { ok: true, rules: addRules.length, verdicts };
 }
 
 /**
@@ -271,12 +313,16 @@ async function dropCorsRules(tabId) {
   // The remembered URLs go with the rules. A tab that navigates is a
   // different page, and carrying the last one's media into it would keep
   // writing headers for files nothing is going to ask for.
-  corsWanted.delete(tabId);
-  const ids = corsRuleIds.get(tabId);
-  if (!ids || ids.length === 0) return;
-  corsRuleIds.delete(tabId);
+  //
+  // Queued behind any rebuild in flight, or that rebuild would write this
+  // page's rules back after they were cleared.
   try {
-    await chrome.declarativeNetRequest.updateSessionRules({ removeRuleIds: ids });
+    await queueCorsWrite(async () => {
+      corsWanted.delete(tabId);
+      const { mine } = await tabCorsRules(tabId);
+      if (mine.length === 0) return;
+      await chrome.declarativeNetRequest.updateSessionRules({ removeRuleIds: mine });
+    });
   } catch {
     /* the session is going away anyway */
   }
