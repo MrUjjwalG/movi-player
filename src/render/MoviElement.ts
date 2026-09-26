@@ -20256,6 +20256,32 @@ export class MoviElement extends HTMLElement {
         overflow: visible;
       }
 
+      /* The hit area, not the drawing. Every seek listener - click, drag,
+         hover preview - is on this element, and this element is the 4px
+         track: the padding around it that looks like part of the control
+         caught nothing, so a seek was a matter of landing on a hairline, and
+         in fullscreen the hairline is the same 4px across a much bigger
+         picture. An invisible band over and under it belongs to the track, so
+         a press there is a press on the track and hovering it thickens the
+         track the way landing on it does. Up into the space over the bar,
+         down only as far as the gap above the button row - the buttons stay
+         where they were. */
+      .movi-progress-bar::before {
+        content: "";
+        position: absolute;
+        left: 0;
+        right: 0;
+        top: -18px;
+        bottom: -10px;
+      }
+      /* Only while the bar is up. The track keeps pointer-events through a
+         hidden bar (the auto !important above), and a band this size, unseen
+         along the bottom of the picture, would turn a click meant for the
+         picture into a seek. Hidden, it is the hairline it always was. */
+      .movi-controls-container.movi-controls-hidden .movi-progress-bar::before {
+        pointer-events: none;
+      }
+
       .movi-progress-bar:hover {
         height: var(--movi-progress-height-hover);
         /* Brighten the groove by moving the VARIABLE, not by setting a
@@ -23275,6 +23301,12 @@ export class MoviElement extends HTMLElement {
              the one piece of chrome permanently over the picture; every pixel
              it does not need is picture. */
           padding: 8px 0 4px;
+        }
+
+        /* Six pixels under the track here, not ten: the band stops at the
+           button row. */
+        .movi-progress-bar::before {
+          bottom: -6px;
         }
 
         .movi-progress-bar {
