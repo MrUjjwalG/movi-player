@@ -12690,7 +12690,72 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
     }, delayMs);
   }
 
-  private async initPreviewPipeline() {
+  /** Goes at the preview rung before previews are drawn from the picture's own
+   *  file instead — see initPreviewPipeline. */
+  private static readonly PREVIEW_RUNG_TRIES = 2;
+  private _previewRungFailures = 0;
+
+  /**
+   * Build the preview pipeline — off the small rung when there is one, and off
+   * the rendition being played when that rung will not open.
+   *
+   * The rung is a separate file, and a separate file can fail where the one
+   * playing does not: another host (a ladder's small rungs are often on a
+   * second CDN), a header that host never sends, a link that has expired. The
+   * rung was the only thing ever tried, so every retry — three, from the hover
+   * path — went at the same failing file, and then previews were switched off
+   * for the rest of the video while the picture itself played on fine. So: the
+   * rung twice, and then the file already on screen, which is known to open.
+   */
+  private async initPreviewPipeline(): Promise<void> {
+    const gen = this._previewGeneration;
+    const rung =
+      this._previewRungFailures < MoviPlayer.PREVIEW_RUNG_TRIES
+        ? this.pickPreviewRendition()
+        : null;
+    try {
+      await this.buildPreviewPipeline(rung);
+    } catch (e) {
+      if (!rung) throw e;
+      this.abandonPreviewBuild();
+      const failures = ++this._previewRungFailures;
+      Logger.warn(
+        TAG,
+        `Preview rung ${rung.label || rung.height + "p"} did not open (${failures}/${MoviPlayer.PREVIEW_RUNG_TRIES})` +
+          (failures >= MoviPlayer.PREVIEW_RUNG_TRIES ? " — previews come from the playing rendition" : ""),
+        e,
+      );
+      if (this._destroyed || gen !== this._previewGeneration) return;
+      await this.initPreviewPipeline();
+    }
+  }
+
+  /** What a build that threw left half-made: nothing of it is published. */
+  private abandonPreviewBuild(): void {
+    if (this.thumbnailBindingsPending) {
+      try {
+        this.thumbnailBindingsPending.destroy();
+      } catch {}
+      this.thumbnailBindingsPending = null;
+    }
+    if (this.thumbnailRenderer && !this.thumbnailBindings) {
+      try {
+        this.thumbnailRenderer.destroy();
+      } catch {}
+      this.thumbnailRenderer = null;
+    }
+    if (this.thumbnailSource && this.thumbnailSource !== this.source) {
+      try {
+        this.thumbnailSource.close();
+      } catch {}
+    }
+    this.thumbnailSource = null;
+    this.releaseSharedThumbModule();
+  }
+
+  private async buildPreviewPipeline(
+    previewRung: { url: string; label: string; height?: number } | null,
+  ) {
     if (this.thumbnailBindings) return; // Already initialized
     // Everything below allocates — an isolated WASM module and FFmpeg context,
     // a WebCodecs decoder, a WebGL context — and it does so across long awaits
@@ -12739,7 +12804,14 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
     const isEncrypted = sourceConfig
       && typeof sourceConfig !== "string"
       && (sourceConfig as any).type === "encrypted";
-    const previewRung = this.pickPreviewRendition();
+    // The rung would not open, so this is the fallback — and on a ladder the
+    // file on screen is the ACTIVE rendition, not config.source: an in-place
+    // switch changes the first and never the second. No borrow either way,
+    // for the same reason as the rung branch below.
+    const playingRendition =
+      !previewRung && this._previewRungFailures >= MoviPlayer.PREVIEW_RUNG_TRIES
+        ? this._activeDashRendition
+        : "";
     // HLS demuxer fallback: the media is a concatenated segment stream, not the
     // .m3u8 playlist in config.source — opening that URL as media would fail.
     // Reuse the SegmentStreamSource: its read() is offset-explicit (safe to
@@ -12754,6 +12826,15 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
       this.thumbnailSource = this.source;
     } else if (isEncrypted && this.source) {
       this.thumbnailSource = this.source;
+    } else if (playingRendition) {
+      Logger.debug(TAG, "Thumbnail source: the playing rendition (preview rung failed)");
+      this.thumbnailSource = new ThumbnailHttpSource(
+        playingRendition,
+        (sourceConfig && typeof sourceConfig !== "string" && "headers" in sourceConfig
+          ? sourceConfig.headers
+          : undefined) || {},
+        null,
+      );
     } else if (previewRung) {
       // A ladder is available, so preview off a SMALL rung instead of whatever
       // the player is streaming. A hover thumbnail is ~160 CSS px wide; pulling
@@ -13208,6 +13289,9 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
     }
     this.thumbnailSource = null;
     this.previewInitPromise = null;
+    // A new pipeline is a new chance for the rung — the next source's ladder
+    // is somebody else's files.
+    this._previewRungFailures = 0;
   }
 
   /**
