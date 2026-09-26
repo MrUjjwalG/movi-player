@@ -497,6 +497,14 @@ export interface PlayerEventMap {
    * moved to, for a UI that wants to say so.
    */
   renditionSwitch: { active: boolean; label?: string };
+  /**
+   * The viewer chose Auto and the rung the link carries could not be switched
+   * to in place — its seamless prime ran out of time, which on a heavy rung
+   * means the in-place hard swap would leave the picture behind the sound.
+   * The element answers by reloading at that rung from the current position,
+   * the way a fresh open reaches it.
+   */
+  autoSnapNeedsReload: { url: string };
   seeking: number;
   seeked: number;
   /**
