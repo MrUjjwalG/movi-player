@@ -3732,6 +3732,21 @@ export class CanvasRenderer {
       const scaledWidth = contentWidth * this.currentScaleX;
       const scaledHeight = contentHeight * this.currentScaleY;
 
+      // How much of the frame's height the picture fills, from the TARGET
+      // scale so a fit change is followed once rather than every lerp step.
+      // The caption's home is measured from the picture, not the frame — see
+      // subtitleBottomPadding. Only for an upright or upside-down picture:
+      // at 90/270 the overlay's height runs along the frame's width.
+      const rotNow = (((this.rotation ?? 0) % 360) + 360) % 360;
+      const pictureFrac =
+        rotNow % 180 === 0 && this.height > 0
+          ? Math.min(1, (contentHeight * targetScaleY) / this.height)
+          : 1;
+      if (Math.abs(pictureFrac - this._pictureHeightFrac) > 0.002) {
+        this._pictureHeightFrac = pictureFrac;
+        this.reapplySubtitlePadding();
+      }
+
       const x = (this.width - scaledWidth) / 2;
       const y = (this.height - scaledHeight) / 2;
 
@@ -4564,6 +4579,23 @@ export class CanvasRenderer {
   }
 
   private subtitleBottomPadding(overlayHeight: number): number {
+    // Measured from the PICTURE, not the frame it sits in. The overlay spans
+    // the whole player, so a letterboxed picture — a 2.39:1 film in a 16:9
+    // player, a 16:9 video in a tall one — had its caption placed off the
+    // player's bottom edge: down in the black bar, or pressed against the
+    // picture's edge, and sized by a height the picture does not have. The
+    // bar below the picture is added first, then the distance the picture
+    // itself calls for. A picture that fills the frame (cover, fill, most
+    // players) has no bar, and nothing changes for it.
+    const frac = this._pictureHeightFrac;
+    const pictureHeight =
+      Number.isFinite(overlayHeight) && overlayHeight > 0
+        ? overlayHeight * frac
+        : overlayHeight;
+    const below =
+      Number.isFinite(overlayHeight) && overlayHeight > 0
+        ? (overlayHeight - pictureHeight) / 2
+        : 0;
     const raw = this.subtitleOverlay
       ? getComputedStyle(this.subtitleOverlay)
           .getPropertyValue("--movi-sub-bottom")
@@ -4571,11 +4603,29 @@ export class CanvasRenderer {
       : "";
     if (raw && Number.isFinite(overlayHeight) && overlayHeight > 0) {
       const pct = /^([\d.]+)%$/.exec(raw);
-      if (pct) return (overlayHeight * parseFloat(pct[1])) / 100;
+      if (pct) return below + (pictureHeight * parseFloat(pct[1])) / 100;
       const px = /^([\d.]+)px$/.exec(raw);
-      if (px) return parseFloat(px[1]);
+      if (px) return below + parseFloat(px[1]);
     }
-    return CanvasRenderer.computeSubtitleBottomPadding(overlayHeight);
+    return below + CanvasRenderer.computeSubtitleBottomPadding(pictureHeight);
+  }
+
+  /** How much of the frame's height the picture fills (1 when it fills it or
+   *  overflows it). Kept by drawFrame. */
+  private _pictureHeightFrac = 1;
+
+  /** Put the caption back on its home after the picture's size in the frame
+   *  changed — a new aspect, a fit-mode change, the first frame. */
+  private reapplySubtitlePadding(): void {
+    const overlay = this.subtitleOverlay as HTMLElement | null;
+    if (!overlay) return;
+    const h = parseFloat(overlay.style.height) || this.containerHeight || 0;
+    if (!(h > 0)) return;
+    overlay.style.paddingBottom = `${this.subtitleEffectiveBottomPadding(
+      h,
+      this.subtitleBottomPadding(h),
+    )}px`;
+    if (this.activeSubtitleCue) this.scheduleSubtitleRerender();
   }
 
   /**

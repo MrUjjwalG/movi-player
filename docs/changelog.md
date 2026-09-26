@@ -73,6 +73,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **A downshift is decided at half the buffer**, with one short probe, so the switch can prime under a picture still playing.
 - **A rung whose in-place climb cannot be primed** is left out of the climb for 30s, then 60s, then at most 120s.
 - **The loading light flows like a tide.**
+- **Captions sit on the picture, not on the player's bottom edge**: on a letterboxed picture the default place and `--movi-sub-bottom` are measured from the picture's own bottom and height, not the black bar below it.
 
 ### Fixed
 - **The opening poster no longer fades up out of black.** It was faded in over 220ms on every load, and both the host and the canvas are opaque black before the first frame — so what the fade actually did was ramp a thumbnail out of black on every navigation, measured at opacity 0 to 1 across 158ms to 366ms. That reads as a flash, and it lasted as long as the fade rather than as long as the load. It now cuts to the poster, and the fade is kept for the case it was written for: a poster replacing a picture that is already on screen.
