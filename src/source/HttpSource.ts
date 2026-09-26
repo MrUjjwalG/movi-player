@@ -1135,6 +1135,14 @@ export class HttpSource implements SourceAdapter {
    * Start streaming from offset
    */
   private async startStream(fromOffset: number): Promise<void> {
+    // Never on a closed source. read() refuses at its door, but a read already
+    // inside — waiting on bytes when close() ran — comes out of its wait with
+    // "no data" and lands here, and the stream it started had a controller
+    // close() had never seen, so nothing stopped it. Measured on Safari: each
+    // abandoned 2160p prep left one of these downloading the 2160p file, three
+    // at once beside the 1440p that was playing, and every probe of 2160p then
+    // read the share left over — 13, 9.7, 7.3, 3.7Mbps — and refused the climb.
+    if (this.closed) throw new Error("Source closed");
     // If the entire file is already cached, no need to start a new stream.
     if (this.fullyBuffered) {
       Logger.debug(TAG, `startStream(${fromOffset}): skipped — file fully cached`);
@@ -1267,7 +1275,11 @@ export class HttpSource implements SourceAdapter {
         : offset + maxDownload - 1;
     };
 
-    while (this.atomicIsStreaming() && this.streamGeneration === myGeneration) {
+    while (
+      this.atomicIsStreaming() &&
+      this.streamGeneration === myGeneration &&
+      !this.closed
+    ) {
       try {
         const buffer = this.getBuffer();
 
@@ -1319,7 +1331,7 @@ export class HttpSource implements SourceAdapter {
               openEnded: useOpenEndedRange,
             }),
             cache: 'no-store', // Prevent cached 200 responses
-            signal: this.abortController!.signal,
+            signal: this.streamSignal(),
           });
         }
         const chunkStart = resumeOffset;
@@ -1451,7 +1463,7 @@ export class HttpSource implements SourceAdapter {
           // Bail if the stream stopped OR was superseded while we were parked
           // (this.reader swapped to a new stream's reader — reading it here would
           // corrupt the new stream and can be null mid-swap).
-          if (!this.atomicIsStreaming() || this.reader !== reader) break;
+          if (!this.atomicIsStreaming() || this.reader !== reader || this.closed) break;
           const { done, value } = await reader.read();
           if (done) {
             // A body that ends short of the file is normally OUR range cap
@@ -1484,7 +1496,7 @@ export class HttpSource implements SourceAdapter {
             ) {
               const nextOffset = rangeEnd + 1;
               const nextEnd = planRangeEnd(nextOffset, true);
-              const signal = this.abortController!.signal;
+              const signal = this.streamSignal();
               const ahead = (async () =>
                 fetch(this.url, {
                   headers: await this.buildRequestHeaders({
@@ -2183,6 +2195,18 @@ export class HttpSource implements SourceAdapter {
   private awaitNetwork(): Promise<void> {
     if (!this._netSuspended || this.closed) return Promise.resolve();
     return new Promise((resolve) => this._netResumeWaiters.push(resolve));
+  }
+
+  /**
+   * The signal a stream request carries: this stream's controller AND the
+   * source's lifetime. The first is swapped on every restart, so a request
+   * made on a controller close() never saw — a stream started from a read
+   * that outlived the close — was out of its reach; the lifetime one is not.
+   */
+  private streamSignal(): AbortSignal {
+    const own = this.abortController!.signal;
+    const any = (AbortSignal as unknown as { any?: (s: AbortSignal[]) => AbortSignal }).any;
+    return any ? any([own, this.lifetimeAbort.signal]) : own;
   }
 
   private async stopStream(): Promise<void> {
