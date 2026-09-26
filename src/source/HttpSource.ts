@@ -1576,7 +1576,7 @@ export class HttpSource implements SourceAdapter {
                 if (limitReached || bufferAlmostFull) {
                   // Try buffer compaction for continuous forward streaming
                   const bufStart = this.atomicGetBufferStart();
-                  const consumed = this.position - bufStart;
+                  const consumed = this.consumedUpTo() - bufStart;
 
                   if (consumed > this.bufferSize * 0.25 &&
                       this.size > 0 && currentEnd < this.size) {
@@ -1626,7 +1626,7 @@ export class HttpSource implements SourceAdapter {
                       !this.closed
                     ) {
                       await new Promise((r) => setTimeout(r, 100));
-                      if (this.position - this.atomicGetBufferStart() > this.bufferSize * 0.25) {
+                      if (this.consumedUpTo() - this.atomicGetBufferStart() > this.bufferSize * 0.25) {
                         freed = true;
                         break;
                       }
@@ -2111,6 +2111,58 @@ export class HttpSource implements SourceAdapter {
    * open the lower rung's 512KB head in twelve seconds while the 1080p range
    * kept arriving beside it, four attempts running.
    */
+  /**
+   * Keep the whole window: nothing the reader has passed is given up, and a
+   * full window waits instead of sliding. Until releaseWindowAfterNextRead()
+   * or releaseWindow().
+   *
+   * The window gives up what the reader has passed, and the reader is the
+   * demuxer, which is not the playhead. Two things run it far ahead while
+   * the picture stands still. Pause-time buffering demuxes into memory —
+   * measured on 8K, 25 seconds past a playhead at 12.5s. A paused seek reads
+   * from its keyframe to its target — on 8K AV1 a GOP is ~27MB — and the play
+   * that follows re-seeks the demuxer to the clock, which needs that keyframe
+   * again. Each time, the window slid on and dropped bytes that were still
+   * under the buffer bar; the next read found nothing, a new stream reset the
+   * window, and the bar fell back to the handle. While paused the window is
+   * held, and pause-time buffering stops at its end, as it did when a full
+   * window simply ended the stream.
+   */
+  holdWindow(): void {
+    this.retainFrom = 0;
+    this.retainArmNext = false;
+    this.retainReleaseAt = -1;
+  }
+
+  /**
+   * Stop holding, but not before the next read: keep everything until it
+   * lands, then keep from its offset until the reader is a quarter of a
+   * window past it, then slide as usual. For play() and for a seek that plays
+   * on — their first read is a keyframe the decode that follows still needs.
+   */
+  releaseWindowAfterNextRead(): void {
+    if (this.retainFrom < 0) return;
+    this.retainArmNext = true;
+  }
+
+  releaseWindow(): void {
+    this.retainFrom = -1;
+    this.retainArmNext = false;
+    this.retainReleaseAt = -1;
+  }
+
+  private retainFrom = -1;
+  private retainArmNext = false;
+  private retainReleaseAt = -1;
+
+  /** How far the window may treat as used — see holdWindow. */
+  private consumedUpTo(): number {
+    if (this.retainReleaseAt >= 0 && this.position >= this.retainReleaseAt) {
+      this.releaseWindow();
+    }
+    return this.retainFrom >= 0 ? Math.min(this.position, this.retainFrom) : this.position;
+  }
+
   suspendNetwork(): void {
     if (this._netSuspended) return;
     this._netSuspended = true;
@@ -2359,6 +2411,14 @@ export class HttpSource implements SourceAdapter {
       // as it's a fixed cache, not streaming data
       Logger.debug(TAG, `Read: served from head cache`);
       return result.buffer;
+    }
+
+    // The first read after a release arms the hold on its own offset — see
+    // releaseWindowAfterNextRead.
+    if (this.retainArmNext) {
+      this.retainArmNext = false;
+      this.retainFrom = offset;
+      this.retainReleaseAt = offset + this.bufferSize * 0.25;
     }
 
     // Check buffer first

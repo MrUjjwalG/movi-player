@@ -6443,6 +6443,9 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
 
     // Stop pause-time buffering — we're resuming active playback
     this.stopPauseBuffering();
+    // …and let the window slide with the reader again, once the first read
+    // of this play has landed (the realignment below re-reads a keyframe).
+    if (this.source instanceof HttpSource) this.source.releaseWindowAfterNextRead();
 
     // Fallback stamp for callers that drive playback without going through
     // load() — normally load() sets this. Lets ABR tell "the buffer hasn't
@@ -11330,6 +11333,19 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
     // it to false and seek completion would land paused instead of replaying).
     if (currentState !== "seeking" && !this.wasPlayingBeforeSeek) {
       this.wasPlayingBeforeSeek = currentState === "playing" || (currentState === "buffering" && this.wasPlayingBeforeRebuffer);
+    }
+
+    // A seek that lands paused keeps the whole window (see holdWindow): the
+    // decode from its keyframe to the target reads well past bytes the play
+    // that follows will want again. A seek that plays on holds only its
+    // keyframe. By intent, not by state, so a run of arrow-key seeks while
+    // paused — each arriving in "seeking" — keeps holding too.
+    if (this.source instanceof HttpSource) {
+      if (!this.wasPlayingBeforeSeek) {
+        this.source.holdWindow();
+      } else {
+        this.source.releaseWindowAfterNextRead();
+      }
     }
 
     // Pause clock so UI time doesn't advance during seek while in loading state
@@ -17077,6 +17093,9 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
     if (this.source instanceof FileSource) return;
 
     Logger.debug(TAG, "Starting pause-time buffering");
+    // Hold the window: what pause-time buffering reads ahead must not cost
+    // the bytes between the playhead and it. See holdWindow.
+    if (this.source instanceof HttpSource) this.source.holdWindow();
     this.pauseBufferTimerId = window.setInterval(() => {
       this.pauseBufferTick();
     }, MoviPlayer.PAUSE_BUFFER_INTERVAL_MS);
