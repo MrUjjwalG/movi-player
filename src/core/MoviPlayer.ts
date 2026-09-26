@@ -3144,8 +3144,16 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
         // Lets the perf detectors tell a slow decoder from a starved one — see
         // setVideoBacklogProvider. Read live rather than cached: the queue
         // drains and refills between windows.
-        this.videoRenderer.setVideoBacklogProvider(
-          () => this.videoDecoder?.queueSize ?? 0,
+        // …and "the decoder has work" is not true of a decoder waiting for a
+        // keyframe, or of one whose next bytes are still on the wire. Counted
+        // as backlog, a picture frozen by a window that had lost its keyframe
+        // (a catch-up seek, then the wait for the GOP to arrive) read as
+        // "0/60fps with healthy audio" and capped 8K for the session on a
+        // machine that had been decoding it at full rate.
+        this.videoRenderer.setVideoBacklogProvider(() =>
+          this._videoHoldingForKeyframe || this.deliveryStarved()
+            ? 0
+            : (this.videoDecoder?.queueSize ?? 0),
         );
 
         Logger.info(
