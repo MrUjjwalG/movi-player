@@ -11547,7 +11547,18 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
       // monotonic clamp so the bar can shrink to reflect the new range,
       // and re-anchor the range's START to the seek target so the bar grows
       // forward from where the user clicked instead of being painted from 0.
-      this.lastBufferedTime = 0;
+      //
+      // …unless the seek landed INSIDE what was already buffered. Those bytes
+      // are still in the window, and re-deriving the end from the new
+      // playhead is a linear byte-to-time guess: on a VBR file (8K AV1 is
+      // very VBR) the heavier stretch between the old playhead and the new
+      // one makes the guess come out short, and a click near the end of the
+      // buffer pulled the bar's end BACK toward the handle. The clamp keeps
+      // the end where it was; getBufferedTime still drops it the moment the
+      // window itself moves back (see _bufferedLatchBytes).
+      const landedInsideBuffer =
+        this.lastBufferedTime > 0 && seconds < this.lastBufferedTime;
+      if (!landedInsideBuffer) this.lastBufferedTime = 0;
       this.bufferedRangeStart = seconds;
 
       // Mark that we need to skip to keyframe after seek
@@ -17190,6 +17201,10 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
    * Get buffered time in seconds
    * Returns the furthest time position that has been buffered
    */
+  /** The source's buffered end, in bytes, when the buffer-bar clamp was last
+   *  raised — see getBufferedTime. */
+  private _bufferedLatchBytes = 0;
+
   getBufferedTime(): number {
     if (this.streamWrapper) {
       return this.streamWrapper.getBufferEndTime();
@@ -17281,6 +17296,11 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
         // Never past the end: the same skew can overshoot in the other
         // direction, and a bar wider than the track is its own small lie.
         const computed = Math.min(duration, this.getCurrentTime() + forwardTime);
+        // The clamp stands for bytes that are still there. A window that
+        // moved BACK (a new stream at a seek target, a reset) has dropped the
+        // bytes the old end was measuring, so the old end goes with them.
+        if (bufferedEndBytes < this._bufferedLatchBytes) this.lastBufferedTime = 0;
+        this._bufferedLatchBytes = bufferedEndBytes;
         this.lastBufferedTime = Math.max(this.lastBufferedTime, computed);
         return this.lastBufferedTime;
       }
