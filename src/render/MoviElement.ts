@@ -3167,6 +3167,9 @@ export class MoviElement extends HTMLElement {
                   <div class="movi-settings-page-body"></div>
                 </div>
               </div>
+              <button class="movi-settings-close" type="button" aria-label="Close settings">
+                ${symbolSvg("close", "movi-settings-close-icon")}
+              </button>
             </div>
 
             <!-- Aspect ratio sits on the far side of the gear at every width —
@@ -16718,6 +16721,12 @@ export class MoviElement extends HTMLElement {
       this.clampSettingsPanel(menu);
     });
 
+    container?.querySelector(".movi-settings-close")?.addEventListener("click", (e) => {
+      e.stopPropagation();
+      this.closeSettingsMenu();
+      this.focus();
+    });
+
     menu.addEventListener("click", (e) => {
       const target = e.target as HTMLElement;
       if (target.closest(".movi-settings-back")) {
@@ -25280,6 +25289,61 @@ export class MoviElement extends HTMLElement {
         :host(.movi-short:not(.movi-audio-strip)) .movi-settings-menu {
           max-height: min(calc(var(--movi-player-height, 70vh) - 16px), 460px);
         }
+        /* A way out that can be seen, for a mouse. The popup covers the gear
+           that opened it, and on a short player it covers nearly the whole
+           frame, so the dimmed margin that dismisses it is a few pixels wide
+           and says nothing about being the way out. A finger has the grabber
+           and the swipe; a pointer had only Escape.
+           A round button floating just above the panel, clear of it. It
+           cannot live inside the panel - the panel scrolls, and would clip
+           anything outside its edge - so it is the panel's sibling, and the
+           panel hangs from a fixed line under it instead of being centred,
+           which is the only way CSS knows where the panel's top edge is. The
+           panel gives up the same height, so the pair still fits the frame. */
+        @media (hover: hover) and (pointer: fine) {
+          :host(:not(.movi-audio-strip)) .movi-settings-menu,
+          :host(.movi-short:not(.movi-audio-strip)) .movi-settings-menu {
+            top: 52px;
+            transform: translate(-50%, 8px);
+            max-height: min(calc(var(--movi-player-height, 70vh) - 60px), 460px);
+          }
+          :host(:not(.movi-audio-strip)) .movi-settings-menu.is-open {
+            transform: translate(-50%, 0);
+          }
+          :host(:not(.movi-audio-strip)) .movi-settings-close {
+            display: flex;
+            position: fixed;
+            top: 10px;
+            left: 50%;
+            z-index: 41;
+            width: 34px;
+            height: 34px;
+            align-items: center;
+            justify-content: center;
+            padding: 0;
+            border-radius: 50%;
+            border: 1px solid var(--movi-glass-border);
+            background: var(--movi-glass-bg);
+            box-shadow: var(--movi-shadow-sm);
+            color: var(--movi-chrome-fg, #fff);
+            cursor: pointer;
+            opacity: 0;
+            pointer-events: none;
+            transform: translate(-50%, 8px);
+            transition: opacity 0.16s ease, transform 0.16s ease;
+          }
+          :host(:not(.movi-audio-strip)) .movi-settings-menu.is-open + .movi-settings-close {
+            opacity: 1;
+            pointer-events: auto;
+            transform: translate(-50%, 0);
+          }
+          :host(:not(.movi-audio-strip)) .movi-settings-close-icon {
+            opacity: 0.8;
+          }
+          :host(:not(.movi-audio-strip)) .movi-settings-close:hover .movi-settings-close-icon {
+            opacity: 1;
+          }
+        }
       }
 
       /* A short player (see SHORT_PLAYER_PX): the panel is capped at the
@@ -25314,6 +25378,15 @@ export class MoviElement extends HTMLElement {
          16px strip to put a thumb on, the pill drawn in the middle of it. */
       .movi-settings-grabber {
         display: none;
+      }
+      /* Shown only where the panel is a popup over the frame - see the
+         max-width 480px block. */
+      .movi-settings-close {
+        display: none;
+      }
+      .movi-settings-close-icon {
+        width: 18px;
+        height: 18px;
       }
       @container movi-host (max-width: 480px) {
         @media (pointer: coarse) {
