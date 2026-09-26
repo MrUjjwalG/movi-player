@@ -10198,6 +10198,39 @@ export class MoviElement extends HTMLElement {
   // it, the video is clearly fine again and the budgets reset (loop-safe: a
   // failing recreate never progresses, so it can't reset itself).
   private _recoveryResumeTime = -1;
+
+  /**
+   * What `_startAt` was before a recovery rebuild borrowed it.
+   *
+   * The rebuild resumes by writing the position into `_startAt`, the value
+   * every load seeks to — and nothing ever put it back. It outlived the
+   * rebuild and the video: a watch page whose split-audio link expired
+   * rebuilt at 27.6s, and every video played after that, in the same element,
+   * opened at 27.6s. A quality switch has always saved and restored it
+   * (_startAtBeforeSwitch); the rebuild now does the same.
+   */
+  private _startAtBeforeRecovery: number | null = null;
+
+  /** The rebuild's resume has landed: `_startAt` is the host's again. */
+  private endRecoveryResume(): void {
+    if (this._startAtBeforeRecovery !== null) {
+      this._startAt = this._startAtBeforeRecovery;
+      this._startAtBeforeRecovery = null;
+    }
+  }
+
+  /**
+   * A new source: whatever a rebuild of the last one meant to resume at
+   * belongs to that one — its `_startAt`, and a held seek it had not placed
+   * yet.
+   */
+  private forgetRecoveryResume(): void {
+    if (this._pendingSeek !== null && this._pendingSeek === this._recoveryResumeTime) {
+      this._pendingSeek = null;
+    }
+    this.endRecoveryResume();
+    this._recoveryResumeTime = -1;
+  }
   // One failed load fires TWO error paths in the same tick — MoviPlayer's
   // "error" event AND initializePlayer's init-catch. This same-tick latch makes
   // them consume ONE recovery attempt between them, so a single failure can't
@@ -10322,6 +10355,7 @@ export class MoviElement extends HTMLElement {
     this._forcedDashRendition = null;
     this._hasEverPlayed = false;
     this._restoreRungSrc = "";
+    this.forgetRecoveryResume();
     // A new file gets its own go at the remembered languages: the tracks that
     // matched last time are gone, and the preference has to be matched afresh.
     this._persistedTracksApplied = false;
@@ -10721,6 +10755,10 @@ export class MoviElement extends HTMLElement {
     this.isLoading = false; // don't let initializePlayer's guard bail early
     this._recoveryResumeTime = resumeTime;
     if (resumeTime > 1) {
+      // Borrowed for this rebuild only — see forgetRecoveryResume.
+      if (this._startAtBeforeRecovery === null) {
+        this._startAtBeforeRecovery = this._startAt;
+      }
       this._startAt = resumeTime;
       this._pendingSeek = resumeTime;
     }
@@ -14742,6 +14780,7 @@ export class MoviElement extends HTMLElement {
     const isRebuild =
       this._qualitySwitchInProgress || this._fullRecreateInFlight;
     if (!isRebuild) {
+      this.forgetRecoveryResume();
       this._hasEverPlayed = false;
       // …and with it the lift that flag grants. `movi-bar-visible` raises the
       // centre button and the spinner clear of the bar on a short player, and
@@ -32148,6 +32187,7 @@ export class MoviElement extends HTMLElement {
           if (resumed) {
             this._hideSnapshotPoster();
             this.hidePoster();
+            this.endRecoveryResume();
           }
         } else {
           this._hideSnapshotPoster();
@@ -32512,6 +32552,7 @@ export class MoviElement extends HTMLElement {
         this._fullRecreates = 0;
         this._decodeDownshifts = 0; // fresh budget for a later, unrelated decode error
         this._connectionRetries = 0; // link steadied — reset the reconnect budget
+        this.endRecoveryResume();
         this._recoveryResumeTime = -1;
       }
       this.updateLiveState();
