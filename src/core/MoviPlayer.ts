@@ -1550,6 +1550,10 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
   // sound the viewer never gets to hear. Cleared the moment a frame reaches the
   // screen, and by any seek or source change.
   private _soundCarryingAlone: boolean = false;
+  /** Every video packet handed to the decoder, ever. Differences only — see
+   *  armBlackFrameWatchdog, which uses it to tell a picture that will not
+   *  decode from one that has not arrived. */
+  private _videoPacketsFed = 0;
   /** framesPresented when the sound took over, so a picture that comes back on
    *  its own can end the hand-over even if the gate that watches for it was
    *  cleared by something else. */
@@ -6814,6 +6818,7 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
     this.cancelBlackFrameWatchdog();
     const session = this.seekSessionId;
     const baseFrames = this.videoRenderer?.getStats?.().framesPresented ?? 0;
+    const baseFed = this._videoPacketsFed;
     this._blackFrameWatchdog = setTimeout(() => {
       this._blackFrameWatchdog = null;
       if (this.seekSessionId !== session) return; // a newer seek owns recovery
@@ -6856,6 +6861,27 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
       // nothing the viewer could have heard is skipped to get it. The nudges
       // stay for the case with no sound to hand it to — a video-only file,
       // where the only thing in the gap is the picture that won't decode.
+      // …but only a picture that will not DECODE is handed over, and bound,
+      // one that has not ARRIVED must not be. The starved test above reads the
+      // buffer bar, a byte estimate that runs ahead of the video right after a
+      // quality switch: measured on an ABR downshift 4320p to 480p over a slow
+      // link, it said half a second was in hand while the new rung's packets
+      // had not reached the decoder, the sound was handed playback, and it ran
+      // from 48s to 61s under a spinner with the clock and the bar moving —
+      // exactly what `bindav` promises will not happen. A decoder that has been
+      // fed a second of packets and produced nothing is the case the hand-over
+      // was written for; one that has been fed almost nothing is a stall, and
+      // bound, a stall is a stop for both. Re-arm and wait for the bytes.
+      if (this._bindAV && this.hasAudioThatCanPlay()) {
+        const fps =
+          this.trackManager.getActiveVideoTrack()?.frameRate ||
+          (this.mediaInfo as any)?.videoFrameRate ||
+          24;
+        if (this._videoPacketsFed - baseFed < Math.max(8, Math.round(fps))) {
+          this.armBlackFrameWatchdog(seekTarget);
+          return;
+        }
+      }
       if (this.hasAudioThatCanPlay()) {
         Logger.info(
           TAG,
@@ -10133,6 +10159,7 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
                 packet.disposable,
               );
               this._lastFedVideoDts = packet.dts;
+              this._videoPacketsFed++;
             }
           } else if (activeAudio && activeAudio.id === packet.streamIndex) {
             // An audio packet exists here, whatever was decided earlier. Past a
