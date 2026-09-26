@@ -5403,6 +5403,17 @@ export class MoviElement extends HTMLElement {
         // If we've passed all the control checks above, toggle play/pause
         // This means the click is on the video area (canvas/overlay), not on controls
         this.focus(); // Make sure it gets focus for keyboard shortcuts
+        // Someone already answered this click. The toggle waits 300ms for a
+        // double-click, and a page's own click handler on the video or the
+        // box around it (an upgraded <video>, whose listeners now land here)
+        // does not wait: it paused, and this would have played it straight
+        // back. One click, one toggle — and still the receipt for it, since
+        // the page's call went through play()/pause(), which draw none.
+        if (this.toggledThisGesture()) {
+          this.flashCenterIcon(this.paused ? "pause" : "play");
+          this.clickTimer = null;
+          return;
+        }
         if (this.shouldPauseOnToggle()) {
           this.flashCenterIcon("pause");
           this.pause();
@@ -5417,6 +5428,24 @@ export class MoviElement extends HTMLElement {
     overlay?.addEventListener("click", handleVideoClick);
     this.canvas.addEventListener("click", handleVideoClick);
     this.video.addEventListener("click", handleVideoClick);
+    // Where playback stood when this press began — see toggledThisGesture.
+    // A key is a press too: Space or K toggles here, and a page's own keydown
+    // handler on the video (now on this element) answers the same key.
+    if (!this._gestureWatch) {
+      this._gestureWatch = true;
+      const markGesture = () => {
+        this._gestureAt = performance.now();
+        this._gesturePausedAtStart = this.paused;
+      };
+      this.addEventListener("pointerdown", markGesture, { capture: true });
+      this.addEventListener(
+        "keydown",
+        (e) => {
+          if (!e.repeat) markGesture();
+        },
+        { capture: true },
+      );
+    }
 
     // Keyboard shortcuts
     this.setupKeyboardShortcuts();
@@ -9494,6 +9523,21 @@ export class MoviElement extends HTMLElement {
    */
   public exitFullscreen(): void {
     if (this.isFullscreenActive()) void this.toggleFullscreen();
+  }
+
+  /**
+   * @internal For upgrade.ts. A page asking its old <video> to go fullscreen —
+   * requestFullscreen, or iOS's webkitEnterFullscreen — gets the route the
+   * player's own button takes, not the bare element API, which iOS does not
+   * have and which skips the host and pseudo fallbacks.
+   */
+  _enterFullscreenForPage(): Promise<void> {
+    return this.isFullscreenActive() ? Promise.resolve() : this.toggleFullscreen();
+  }
+
+  /** @internal For upgrade.ts — see _enterFullscreenForPage. */
+  _isFullscreenForPage(): boolean {
+    return this.isFullscreenActive();
   }
 
   /**
@@ -14525,6 +14569,31 @@ export class MoviElement extends HTMLElement {
    * and the video rolled the moment data arrived. Intent is what the icon
    * shows, so intent is what the press has to act on.
    */
+  /** When the current press on the player began, and whether playback was
+   *  paused then. Read by toggledThisGesture and _revertsThisGesture. */
+  private _gestureAt = 0;
+  private _gesturePausedAtStart = true;
+  private _gestureWatch = false;
+  private static readonly GESTURE_WINDOW_MS = 1500;
+
+  /** Has playback already flipped since this press on the player began? */
+  private toggledThisGesture(): boolean {
+    return (
+      performance.now() - this._gestureAt < MoviElement.GESTURE_WINDOW_MS &&
+      this.paused !== this._gesturePausedAtStart
+    );
+  }
+
+  /**
+   * Would going to `wantPaused` undo a toggle already made for the press in
+   * progress? For the upgrade proxy (see forwardTo in upgrade.ts), whose
+   * page may answer the same click the player already answered.
+   * @internal
+   */
+  _revertsThisGesture(wantPaused: boolean): boolean {
+    return this.toggledThisGesture() && wantPaused === this._gesturePausedAtStart;
+  }
+
   private shouldPauseOnToggle(): boolean {
     if (this.isStartPending()) return true;
     const state = this.player?.getState?.();

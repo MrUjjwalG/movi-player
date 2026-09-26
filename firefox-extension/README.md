@@ -77,6 +77,12 @@ Host access is optional. Firefox MV3 treats host permissions as opt-in, so the
 "Scan CDN / no-extension links for video" toggle on the player page requests
 `<all_urls>` on demand — everything else works without it.
 
+`scripting` registers `early.js` — a MAIN-world, `document_start` script that
+records the listeners and Intersection/ResizeObservers a page attaches to its
+`<video>`, so the takeover can hand them to the player. It is registered only
+while "Take over page videos" is on AND host access is granted, and removed
+when either goes; no page runs it otherwise.
+
 File (`file:///*`) access is granted from **about:addons → MoviPlayer →
 Permissions** if you want the play-button overlay on local directory listings.
 

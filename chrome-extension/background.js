@@ -59,11 +59,56 @@ chrome.permissions.onAdded.addListener((perms) => {
   if (perms.origins?.includes("<all_urls>")) {
     chrome.storage.local.set({ probeBlankLinks: true });
   }
+  void syncEarlyHooks();
 });
 chrome.permissions.onRemoved.addListener((perms) => {
   if (perms.origins?.includes("<all_urls>")) {
     chrome.storage.local.set({ probeBlankLinks: false });
   }
+  void syncEarlyHooks();
+});
+
+// ─── The takeover's early hooks ───────────────────────────────────────────
+//
+// early.js records what a page attaches to its <video> before the takeover
+// can see it, so the player can be handed it (see that file). It has to run
+// before the page's own scripts, in the page's world, and every page's
+// addEventListener and observers pass through it — so it is registered only
+// while the takeover is on, and only where the extension may run on the page
+// at all, and taken off again when either stops being true. Not a static
+// content script: that would be every page, for everyone, takeover or not.
+const EARLY_HOOKS_ID = "movi-early-hooks";
+
+async function syncEarlyHooks() {
+  try {
+    const { takeOverPageVideos } = await chrome.storage.local.get("takeOverPageVideos");
+    const granted = await chrome.permissions.contains({ origins: ["<all_urls>"] });
+    const want = !!takeOverPageVideos && granted;
+    const have =
+      (await chrome.scripting.getRegisteredContentScripts({ ids: [EARLY_HOOKS_ID] })).length > 0;
+    if (want && !have) {
+      await chrome.scripting.registerContentScripts([
+        {
+          id: EARLY_HOOKS_ID,
+          js: ["early.js"],
+          matches: ["<all_urls>"],
+          runAt: "document_start",
+          world: "MAIN",
+          allFrames: true,
+          persistAcrossSessions: true,
+        },
+      ]);
+    } else if (!want && have) {
+      await chrome.scripting.unregisterContentScripts({ ids: [EARLY_HOOKS_ID] });
+    }
+  } catch {
+    /* no scripting API, or a second sync got there first — the takeover
+       still works, it just cannot move what the page attached early */
+  }
+}
+void syncEarlyHooks();
+chrome.storage.onChanged.addListener((changes, area) => {
+  if (area === "local" && changes.takeOverPageVideos) void syncEarlyHooks();
 });
 
 // Handle context menu click
@@ -104,6 +149,17 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   // would be the one thing you could no longer reach to turn back on.
   if (message.action === "takeoverRelevant") {
     setPopupFor(sender.tab?.id, true);
+    return false;
+  }
+
+  // A frame asking which site its tab is on — see topSite() in content.js.
+  if (message.action === "topSite") {
+    try {
+      const { protocol, hostname } = new URL(sender.tab?.url || "");
+      sendResponse({ protocol, hostname });
+    } catch {
+      sendResponse({});
+    }
     return false;
   }
 

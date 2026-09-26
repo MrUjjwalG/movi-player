@@ -121,6 +121,17 @@ export interface UpgradeOptions {
    * "any" upgrades whatever is there, for a caller who knows their page.
    */
   sources?: "static" | "any";
+  /**
+   * Leave the page's own layers over the video where they are.
+   *
+   * By default, anything the page painted over the old element and that sits
+   * within the player's box — a big play button, a poster, a click-catcher, the
+   * gradient a skin put under its controls — is hidden once the player is in
+   * place, since it was drawn for a video that is no longer there and now
+   * covers one that is. Set this for a page whose layers mean something on
+   * their own.
+   */
+  keepOverlays?: boolean;
 }
 
 /** What an upgrade produced, for a caller that wants the pieces. */
@@ -169,6 +180,37 @@ const FORWARD_PROPS = [
   // and nothing moved.
   "width",
   "height",
+  // What a player's health checks read. Left on the hidden element they
+  // answered for a <video> with nothing in it — networkState EMPTY, never
+  // seeking, no frames decoded — which is a stall to any skin or page that
+  // asks, however well the film is playing.
+  "seeking",
+  "networkState",
+  "error",
+  "played",
+  "preload",
+  "defaultMuted",
+  "defaultPlaybackRate",
+  "preservesPitch",
+  "disablePictureInPicture",
+  "playsInline",
+  // Not textTracks / audioTracks / videoTracks: a skin adds tracks of its own
+  // there and switches their modes to draw its captions, and handed the
+  // player's lists it would be driving the player's subtitles instead.
+  //
+  // Where it is on the page. The hidden element is display:none, which is a
+  // 0x0 box at 0,0 with no offsetParent — a player nowhere, to a page sizing
+  // an overlay to it, a skin laying out its menus, or anything deciding
+  // whether the video is on screen.
+  "offsetWidth",
+  "offsetHeight",
+  "offsetTop",
+  "offsetLeft",
+  "offsetParent",
+  "clientWidth",
+  "clientHeight",
+  "clientTop",
+  "clientLeft",
 ] as const;
 
 const FORWARD_METHODS = [
@@ -177,6 +219,17 @@ const FORWARD_METHODS = [
   "load",
   "canPlayType",
   "requestPictureInPicture",
+  "getVideoPlaybackQuality",
+  "fastSeek",
+  "requestVideoFrameCallback",
+  "cancelVideoFrameCallback",
+  "setSinkId",
+  "getBoundingClientRect",
+  "getClientRects",
+  "checkVisibility",
+  "scrollIntoView",
+  "focus",
+  "blur",
   "addEventListener",
   "removeEventListener",
   "dispatchEvent",
@@ -375,6 +428,79 @@ function upgradeOne(
     /* an element in a document that cannot be measured */
   }
 
+  // A video file opened on its own — the tab's whole document is the browser's
+  // viewer, a <body> holding nothing but this <video>. The browser's own sheet
+  // for that page fits the video to the window (max-width and max-height 100%,
+  // centred), and that sheet names the <video>, not us: the player sized itself
+  // from the content instead, and a tall or large file ran past the bottom of
+  // the window. Fill the window the viewer filled, and let the picture fit
+  // inside it the way the native one did.
+  try {
+    // Asked of the document's type, not its shape. "A <body> holding only a
+    // <video>" is also a hand-written test page, a bare embed, anybody's
+    // minimal page — and pinning the player over the window there covered
+    // everything the page put below it. The browser's viewer is a document
+    // whose type is the file's own.
+    const alone = /^(video|audio)\//i.test(video.ownerDocument?.contentType || "");
+    if (alone) {
+      player.style.position = "fixed";
+      player.style.inset = "0";
+      player.style.width = "100%";
+      player.style.height = "100%";
+      player.style.maxWidth = "none";
+      player.style.maxHeight = "none";
+      player.style.margin = "0";
+    }
+  } catch {
+    /* a document that cannot be inspected */
+  }
+
+  // A video the page laid out of flow — the padding-box embed, a `position:
+  // absolute` <video> pinned over a wrapper that reserves its space. The rule
+  // that did the pinning usually names the TAG (`.player video`), and a
+  // <movi-player> does not match it: the player dropped into the flow below
+  // the space reserved for it, one whole picture-height down, and in an
+  // iframe that is outside the frame entirely. Take the box the video had.
+  try {
+    const cs = getComputedStyle(video);
+    if (
+      (cs.position === "absolute" || cs.position === "fixed") &&
+      !player.style.position
+    ) {
+      player.style.position = cs.position;
+      const box = video.offsetParent as HTMLElement | null;
+      const fills =
+        !!box &&
+        video.offsetLeft === 0 &&
+        video.offsetTop === 0 &&
+        Math.abs(video.offsetWidth - box.clientWidth) <= 1 &&
+        Math.abs(video.offsetHeight - box.clientHeight) <= 1;
+      if (fills) {
+        player.style.inset = "0";
+        player.style.width = "100%";
+        player.style.height = "100%";
+      } else {
+        player.style.top = `${video.offsetTop}px`;
+        player.style.left = `${video.offsetLeft}px`;
+        player.style.width = `${video.offsetWidth}px`;
+        player.style.height = `${video.offsetHeight}px`;
+      }
+    }
+  } catch {
+    /* an element in a document that cannot be measured */
+  }
+
+  // Inside a frame, the frame is the window: the page that embedded it gave it
+  // a size and nothing beyond that size is ever seen. A player that takes its
+  // height from the picture's shape — a 16:9 film in a wide, short embed —
+  // ran past the bottom of the frame with its controls cut off. The native
+  // <video> never did, because the page's own rules bounded it; hold the
+  // player to the frame the same way.
+  if (window.top !== window) {
+    if (!player.style.maxWidth) player.style.maxWidth = "100vw";
+    if (!player.style.maxHeight) player.style.maxHeight = "100vh";
+  }
+
   video.parentNode.insertBefore(player, video);
 
   // Kept, not removed: a page holds references, and a removed element would
@@ -409,12 +535,102 @@ function upgradeOne(
   (video as unknown as Record<string, unknown>)[TAKEN] = true;
   (video as unknown as Record<string, unknown>).moviPlayer = player;
 
-  if (options.proxy !== false) forwardTo(video, player, !!video.closest?.(HOST_SKINS));
+  if (options.proxy !== false) {
+    const pacer = timeupdatePacer(player);
+    forwardTo(video, player, !!video.closest?.(HOST_SKINS), pacer);
+    relayMediaEvents(video, player, pacer);
+    moveInputHandlers(video, player);
+    // What only a script that ran before the page's own could have seen — see
+    // VIDEO_HOOKS.
+    try {
+      (globalThis as unknown as Record<symbol, VideoHooks | undefined>)[VIDEO_HOOKS]?.handoff?.(
+        video,
+        player,
+      );
+    } catch {
+      /* the page's own listeners and observers stay where they were */
+    }
+  }
 
   fitToHostSkin(video, player);
   hideHostChrome();
+  if (!options.keepOverlays) hideOverlaysAfterLayout(player);
 
   return { video, player };
+}
+
+/**
+ * Hide what the page left lying over the player.
+ *
+ * A site's own layers over its <video> — the big play button, the poster
+ * image, a transparent click-catcher, the dark gradient under a custom bar —
+ * stay behind when the element under them is replaced, and now sit over a
+ * player with its own of each. The click-catcher is the one that hurts: every
+ * click lands on it instead of on the player.
+ *
+ * Found by asking the page what is on top: points across the player's box are
+ * hit-tested, and whatever answers before the player does is over it. Only
+ * what sits (four-fifths or more) inside that box is hidden — a cookie banner
+ * or a modal that happens to cross it is part of the page, not of the player.
+ * Asked again a little later, because a page's player script often draws its
+ * layers after the element is already there. `keepOverlays` turns it off.
+ */
+function hideOverlaysAfterLayout(player: HTMLElement): void {
+  const sweep = () => {
+    if (!player.isConnected) return;
+    const box = player.getBoundingClientRect();
+    if (box.width < 40 || box.height < 40) return;
+    const doc = player.ownerDocument;
+    const view = doc.defaultView;
+    if (!view) return;
+    const over = new Set<Element>();
+    const around = new Set<Element>();
+    for (let i = 1; i <= 5; i++) {
+      for (let j = 1; j <= 5; j++) {
+        const x = box.left + (box.width * i) / 6;
+        const y = box.top + (box.height * j) / 6;
+        if (x < 0 || y < 0 || x >= view.innerWidth || y >= view.innerHeight) continue;
+        for (const el of doc.elementsFromPoint(x, y)) {
+          if (el === player || player.contains(el)) break;
+          if (el.contains(player)) {
+            around.add(el);
+            break;
+          }
+          over.add(el);
+        }
+      }
+    }
+    // A box the player sits INSIDE answering the hit test before the player
+    // does. Its own background paints under its children, so what is on top is
+    // one of its pseudo-elements — JW's idle `.jw-media::after` is the shape of
+    // it: a layer drawn by the player's own parent, invisible to
+    // elementsFromPoint (which names the parent, not the pseudo) and taking
+    // every click meant for the player. It cannot be given an inline style;
+    // it is marked, and the stylesheet hideHostChrome puts up takes it down.
+    for (const el of around) {
+      for (const pseudo of ["::after", "::before"] as const) {
+        const cs = view.getComputedStyle(el, pseudo);
+        if (!cs.content || cs.content === "none" || cs.content === "normal") continue;
+        if (cs.position !== "absolute" && cs.position !== "fixed") continue;
+        el.setAttribute(`data-movi-hide-${pseudo.slice(2)}`, "");
+      }
+    }
+    for (const el of over) {
+      if (el === doc.body || el === doc.documentElement) continue;
+      const r = el.getBoundingClientRect();
+      const area = r.width * r.height;
+      if (!(area > 0)) continue;
+      const ix = Math.max(0, Math.min(r.right, box.right) - Math.max(r.left, box.left));
+      const iy = Math.max(0, Math.min(r.bottom, box.bottom) - Math.max(r.top, box.top));
+      if ((ix * iy) / area < 0.8) continue;
+      (el as HTMLElement).style?.setProperty("visibility", "hidden", "important");
+      el.setAttribute("data-movi-hidden-overlay", "");
+    }
+  };
+  const view = player.ownerDocument.defaultView;
+  view?.requestAnimationFrame(() => view.requestAnimationFrame(sweep));
+  view?.setTimeout(sweep, 1000);
+  view?.setTimeout(sweep, 3000);
 }
 
 /**
@@ -716,6 +932,14 @@ function hideHostChrome(): void {
       `${jw} .jw-overlays`,
       `${jw} .jw-logo`,
       `${jw} .jw-error-msg`,
+      // The layer JW lays over the media while it is idle — before play, and
+      // again at the end. It belongs to .jw-media, the box the player now sits
+      // in, so it is drawn over the player and takes its clicks.
+      `${jw} .jw-media::after`,
+      // Pseudo-element layers the overlay sweep found over the player on
+      // any page — see hideOverlaysAfterLayout.
+      "[data-movi-hide-after]::after",
+      "[data-movi-hide-before]::before",
     ].join(",\n") + " { display: none !important; }",
     // The skin hides the pointer while it believes the viewer is idle. Ours
     // decides that for itself now, and its own bar is what the pointer is
@@ -785,12 +1009,97 @@ function sameSource(current: unknown, next: unknown): boolean {
   }
 }
 
+/** The `<source>` children the player is choosing between, as URLs. */
+function childSources(player: HTMLElement): string[] {
+  return Array.from(player.querySelectorAll(":scope > source")).map(
+    (s) => (s as HTMLSourceElement).src || s.getAttribute("src") || "",
+  );
+}
+
+/**
+ * Is this URL one of the qualities the player already carries?
+ *
+ * Only for a ladder — rungs the upgrade wrote out with a label or a height
+ * (see ladderFromSkin). A plain mp4-and-webm pair is two formats, not two
+ * qualities, and a page picking one of them is picking a source.
+ */
+function isRungOf(player: HTMLElement, value: unknown): boolean {
+  if (typeof value !== "string" || !value) return false;
+  const rungs = player.querySelectorAll(
+    ":scope > source[data-label], :scope > source[data-height]",
+  );
+  if (rungs.length < 2) return false;
+  return Array.from(rungs).some((rung) =>
+    sameSource((rung as HTMLSourceElement).src, value),
+  );
+}
+
+/**
+ * How often a <video> says timeupdate: every 15 to 250ms, by the spec, and
+ * about every 250 in practice.
+ */
+const TIMEUPDATE_MS = 250;
+
+/**
+ * timeupdate at a <video>'s pace, for the page's listeners.
+ *
+ * The player says it about every frame — its own bar is drawn from it — which
+ * measured at ~50 a second. A skin does real work on each one (JW turns every
+ * one into a `time` event, and its plugins and the page's analytics hang off
+ * that), and it was written for four. The player keeps its pace for itself;
+ * what the page hears is thinned to the native one. The one after a seek
+ * always goes through, because a native element sends one there too and a
+ * page moves its own clock on it.
+ *
+ * Returns a factory: one gate per listener, so two listeners do not share —
+ * and starve — one budget.
+ */
+function timeupdatePacer(player: HTMLElement): () => () => boolean {
+  let seeks = 0;
+  player.addEventListener("seeked", () => seeks++);
+  return () => {
+    let last = -Infinity;
+    let seen = seeks;
+    return () => {
+      const now = performance.now();
+      if (seen === seeks && now - last < TIMEUPDATE_MS) return false;
+      last = now;
+      seen = seeks;
+      return true;
+    };
+  };
+}
+
+/** How long after a swallowed rung swap its follow-up seek is still its own. */
+const SWAP_ECHO_MS = 3000;
+
 function forwardTo(
   video: HTMLVideoElement,
   player: HTMLElement,
   insideSkin: boolean,
+  pacer: () => () => boolean,
 ): void {
   const target = player as unknown as Record<string, unknown>;
+  // One paced stand-in per timeupdate listener, so removeEventListener with
+  // the page's own function finds the one that was added.
+  const paced = new WeakMap<object, EventListener>();
+  const pacedListener = (listener: EventListenerOrEventListenerObject): EventListener => {
+    let stand = paced.get(listener);
+    if (!stand) {
+      const pass = pacer();
+      stand = function (this: unknown, event: Event) {
+        if (!pass()) return;
+        if (typeof listener === "function") listener.call(this, event);
+        else listener.handleEvent(event);
+      };
+      paced.set(listener, stand);
+    }
+    return stand;
+  };
+  // What the last load() — or the page's last src — already loaded, so a
+  // load() that asks for nothing new can be told apart from one that does.
+  let loadedChildren = childSources(player).join("\n");
+  let swallowedSwapAt = -Infinity;
   for (const name of FORWARD_PROPS) {
     if (insideSkin && SKIN_UNSAFE_PROPS.has(name)) continue;
     try {
@@ -801,7 +1110,31 @@ function forwardTo(
           // Re-stating the current source is not a request to start over.
           // Only src: every other forwarded property is cheap to set again.
           if (name === "src" && sameSource(target[name], value)) return;
+          // The page switching quality behind the player's back. A skin's own
+          // quality logic — its "auto", its stall watchdog — keeps running on
+          // the hidden element and changes rung the only way a <video> can: a
+          // new src, then load(), then a seek back to where it was. Each one
+          // of those reached the player as a brand new source, which is a
+          // dispose and a cold open, from the start: the film restarted every
+          // time the skin changed its mind. The rungs are the player's own
+          // quality menu now, and its own ABR picks between them.
+          if (name === "src" && isRungOf(player, value)) {
+            swallowedSwapAt = performance.now();
+            Logger.info(TAG, `Page asked for another rung (${String(value)}); the player keeps its own`);
+            return;
+          }
+          // …and the seek that puts it "back" where it already is. Within a
+          // second of the picture is the same place; a real seek is further.
+          if (
+            name === "currentTime" &&
+            performance.now() - swallowedSwapAt < SWAP_ECHO_MS &&
+            typeof value === "number" &&
+            Math.abs(value - Number(target.currentTime)) < 1
+          ) {
+            return;
+          }
           target[name] = value;
+          if (name === "src") loadedChildren = childSources(player).join("\n");
         },
       });
     } catch {
@@ -813,15 +1146,253 @@ function forwardTo(
       Object.defineProperty(video, name, {
         configurable: true,
         writable: true,
-        value: (...args: unknown[]) =>
-          (target[name] as ((...a: unknown[]) => unknown) | undefined)?.apply(
+        value: (...given: unknown[]) => {
+          let args = given;
+          if (
+            (name === "addEventListener" || name === "removeEventListener") &&
+            args[0] === "timeupdate" &&
+            args[1] &&
+            (typeof args[1] === "function" || typeof args[1] === "object")
+          ) {
+            args = [args[0], pacedListener(args[1] as EventListenerOrEventListenerObject), ...args.slice(2)];
+          }
+          // One click, one toggle. A page that toggles on a click of its own
+          // — a listener on the video, or on the box around it — hears the
+          // same click the player just answered, reads the new state through
+          // this proxy, and turns it straight back: pause, then play again.
+          // A play()/pause() that would undo the player's toggle from the
+          // same click is the page answering that click a second time.
+          if (
+            (name === "play" || name === "pause") &&
+            (player as { _revertsThisGesture?: (wantPaused: boolean) => boolean })
+              ._revertsThisGesture?.(name === "pause")
+          ) {
+            return name === "play" ? Promise.resolve() : undefined;
+          }
+          // load() starts the element over on whatever it now declares. A new
+          // src already did that — the player loads on the assignment — and
+          // one the player swallowed above has nothing to load; a skin's
+          // watchdog calling load() to "recover" a player that is fine is a
+          // restart for nothing. Only a changed set of <source> children,
+          // which the page may still hold and rewrite, is news.
+          if (name === "load") {
+            const now = childSources(player).join("\n");
+            if (now === loadedChildren) return undefined;
+            loadedChildren = now;
+          }
+          return (target[name] as ((...a: unknown[]) => unknown) | undefined)?.apply(
             player,
             args,
-          ),
+          );
+        },
       });
     } catch {
       /* ditto */
     }
+  }
+
+  // The attribute is the other way a page points a <video> at a file, and it
+  // went to the hidden element: the page's next film never reached the
+  // player, and the hidden element — whose own source the upgrade took away
+  // so it would not fetch the film twice — started fetching it. Sent the way
+  // the property goes, with the same checks for a source that is not new.
+  const setAttribute = video.setAttribute;
+  try {
+    Object.defineProperty(video, "setAttribute", {
+      configurable: true,
+      writable: true,
+      value: (qualifiedName: string, value: string) => {
+        if (String(qualifiedName).toLowerCase() === "src") {
+          (video as unknown as { src: string }).src = value;
+          return;
+        }
+        setAttribute.call(video, qualifiedName, value);
+      },
+    });
+  } catch {
+    /* ditto */
+  }
+
+  // Fullscreen, asked of the old element: a site's own button, or iOS's
+  // webkit* pair that only a <video> has. The hidden element cannot be shown
+  // fullscreen at all, so all of it goes to the player's own route — the one
+  // its button takes, with the host and iOS fallbacks the bare element API
+  // does not have.
+  const fs = player as unknown as {
+    _enterFullscreenForPage?: () => Promise<void>;
+    _isFullscreenForPage?: () => boolean;
+    exitFullscreen?: () => void;
+  };
+  const enter = () => fs._enterFullscreenForPage?.() ?? Promise.resolve();
+  const exit = () => fs.exitFullscreen?.();
+  const methods: Record<string, () => unknown> = {
+    requestFullscreen: enter,
+    webkitRequestFullscreen: enter,
+    webkitEnterFullscreen: enter,
+    webkitEnterFullScreen: enter,
+    webkitExitFullscreen: exit,
+    webkitExitFullScreen: exit,
+  };
+  for (const [name, value] of Object.entries(methods)) {
+    try {
+      Object.defineProperty(video, name, { configurable: true, writable: true, value });
+    } catch {
+      /* ditto */
+    }
+  }
+  const getters: Record<string, () => boolean> = {
+    webkitDisplayingFullscreen: () => !!fs._isFullscreenForPage?.(),
+    webkitSupportsFullscreen: () => true,
+  };
+  for (const [name, get] of Object.entries(getters)) {
+    try {
+      Object.defineProperty(video, name, { configurable: true, get });
+    } catch {
+      /* ditto */
+    }
+  }
+}
+
+/**
+ * The listeners and observers a page attached to its <video> before the
+ * upgrade could see it.
+ *
+ * Nothing can list an element's listeners after the fact, so they can only be
+ * moved if something was watching when they were added — a script that runs
+ * before the page's own. The extension installs one (chrome-extension/
+ * early.js) while its takeover is on; it records addEventListener calls and
+ * Intersection/ResizeObserver targets on media elements, and hands them to
+ * the player here. A page using this library directly has no such script and
+ * keeps what forwardTo and relayMediaEvents give it.
+ */
+const VIDEO_HOOKS = Symbol.for("movi-player.video-hooks");
+
+interface VideoHooks {
+  handoff?: (video: HTMLVideoElement, player: HTMLElement) => void;
+}
+
+/**
+ * Input handlers the page set as properties — `video.onclick = …`. A <video>
+ * with display:none is never clicked, so the ones already set move to the
+ * player, and the ones set later go straight there. Media handlers
+ * (`onplaying`) stay on the element: relayMediaEvents dispatches there.
+ */
+const INPUT_HANDLERS = [
+  "onclick",
+  "ondblclick",
+  "oncontextmenu",
+  "onmousedown",
+  "onmouseup",
+  "onmousemove",
+  "onmouseenter",
+  "onmouseleave",
+  "onmouseover",
+  "onmouseout",
+  "onpointerdown",
+  "onpointerup",
+  "onpointermove",
+  "onpointerenter",
+  "onpointerleave",
+  "onpointercancel",
+  "ontouchstart",
+  "ontouchend",
+  "ontouchmove",
+  "onwheel",
+  "onkeydown",
+  "onkeyup",
+  "onkeypress",
+  "onfocus",
+  "onblur",
+] as const;
+
+function moveInputHandlers(video: HTMLVideoElement, player: HTMLElement): void {
+  const from = video as unknown as Record<string, unknown>;
+  const to = player as unknown as Record<string, unknown>;
+  for (const name of INPUT_HANDLERS) {
+    try {
+      const set = from[name];
+      if (typeof set === "function" && !to[name]) {
+        to[name] = set;
+        from[name] = null;
+      }
+      Object.defineProperty(video, name, {
+        configurable: true,
+        get: () => to[name],
+        set: (value: unknown) => {
+          to[name] = value;
+        },
+      });
+    } catch {
+      /* a handler the browser will not let us shadow stays as it was */
+    }
+  }
+}
+
+/**
+ * What a <video> tells its listeners, and what the player tells them now.
+ *
+ * Deliberately not `error`, `emptied`, `abort` or `loadstart`: the player
+ * says those about its own work — a rung switch, a fallback to the native
+ * element — and a skin hearing them from its <video> takes them as the film
+ * failing or being replaced, and acts on it.
+ */
+const RELAYED_MEDIA_EVENTS = [
+  "loadedmetadata",
+  "loadeddata",
+  "canplay",
+  "canplaythrough",
+  "durationchange",
+  "play",
+  "playing",
+  "pause",
+  "waiting",
+  "seeking",
+  "seeked",
+  "timeupdate",
+  "progress",
+  "ended",
+  "volumechange",
+  "ratechange",
+  "resize",
+  "enterpictureinpicture",
+  "leavepictureinpicture",
+] as const;
+
+/**
+ * Tell the listeners the page put on its <video> BEFORE the upgrade what the
+ * player is doing.
+ *
+ * forwardTo moves every listener added from now on across to the player. The
+ * ones already there stay on the element — hidden, and never going to play —
+ * and a player skin attaches its listeners the moment it builds its <video>,
+ * which is before the upgrade can see it. So the skin never heard `playing`:
+ * JW sat in "paused" through the whole film, and never fired its own `play`
+ * event. A page that waits for that event to judge the player healthy then
+ * judged it stuck — mat6tube arms a 15s "ad stuck" timer on every ad break,
+ * cleared only by JW's `play`, and answers it with jwplayer().setup(): a new
+ * <video>, a new player, and the film back at 0:00.
+ *
+ * Re-dispatched on the element itself, through the prototype's dispatchEvent
+ * because forwardTo has pointed the element's own at the player. Listeners
+ * added after the upgrade live on the player, not here, so nothing hears an
+ * event twice.
+ */
+function relayMediaEvents(
+  video: HTMLVideoElement,
+  player: HTMLElement,
+  pacer: () => () => boolean,
+): void {
+  const dispatch = EventTarget.prototype.dispatchEvent;
+  const timeupdateDue = pacer();
+  for (const name of RELAYED_MEDIA_EVENTS) {
+    player.addEventListener(name, () => {
+      if (name === "timeupdate" && !timeupdateDue()) return;
+      try {
+        dispatch.call(video, new Event(name));
+      } catch {
+        /* a listener that throws is the page's, not ours */
+      }
+    });
   }
 }
 

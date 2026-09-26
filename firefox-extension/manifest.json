@@ -27,7 +27,8 @@
     "activeTab",
     "clipboardRead",
     "storage",
-    "declarativeNetRequestWithHostAccess"
+    "declarativeNetRequestWithHostAccess",
+    "scripting"
   ],
   "optional_host_permissions": [
     "<all_urls>"
@@ -52,7 +53,9 @@
       "css": [
         "content.css"
       ],
-      "run_at": "document_end"
+      "run_at": "document_end",
+      "all_frames": true,
+      "match_about_blank": true
     },
     {
       "matches": [
@@ -63,7 +66,9 @@
         "marker.js"
       ],
       "run_at": "document_start",
-      "world": "MAIN"
+      "world": "MAIN",
+      "all_frames": true,
+      "match_about_blank": true
     },
     {
       "matches": [
@@ -72,7 +77,9 @@
       "js": [
         "siteplayer.js"
       ],
-      "run_at": "document_start"
+      "run_at": "document_start",
+      "all_frames": true,
+      "match_about_blank": true
     }
   ],
   "web_accessible_resources": [

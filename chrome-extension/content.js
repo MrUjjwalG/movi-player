@@ -196,11 +196,25 @@ function injectDirectVideoOverlay() {
   });
 }
 
+// This script runs in every frame (all_frames), so a video embedded through
+// an iframe gets the same treatment as one on the page itself.
+const IS_TOP_FRAME = (() => {
+  try {
+    return window.top === window;
+  } catch {
+    return false;
+  }
+})();
+
 // Bail out on non-HTML documents (SVG, XML, image viewers, etc.) — they have
 // no <body> element, so MutationObserver and our DOM scans would just throw.
 if (document.body instanceof HTMLElement) {
+  // The "Open with MoviPlayer" card is for a TAB showing a bare video file:
+  // its button replaces the tab. In a frame that is someone else's page, so
+  // a frame that happens to be a bare file is left to the takeover instead.
+  const directViewer = () => IS_TOP_FRAME && isNativeVideoViewer();
   // Initial scan
-  if (isNativeVideoViewer()) {
+  if (directViewer()) {
     injectDirectVideoOverlay();
   } else {
     scanPage();
@@ -208,7 +222,7 @@ if (document.body instanceof HTMLElement) {
 
   // Re-scan on DOM changes (SPA, dynamic content)
   const observer = new MutationObserver(() => {
-    if (isNativeVideoViewer()) {
+    if (directViewer()) {
       injectDirectVideoOverlay();
     } else {
       scanPage();
@@ -485,10 +499,10 @@ function watchForTakeover(inject = true) {
  */
 const EXEMPT_KEY = "takeoverExemptHosts";
 
-function exemptHere(list) {
+function exemptHere(list, site) {
   if (!Array.isArray(list) || list.length === 0) return false;
   try {
-    const { protocol, hostname } = location;
+    const { protocol, hostname } = site;
     if (protocol !== "http:" && protocol !== "https:") return false;
     return list.includes(hostname);
   } catch {
@@ -496,11 +510,36 @@ function exemptHere(list) {
   }
 }
 
-try {
-  chrome.storage?.local.get([TAKEOVER_KEY, EXEMPT_KEY], (data) => {
-    if (!data || !data[TAKEOVER_KEY]) return;
-    watchForTakeover(!exemptHere(data[EXEMPT_KEY]));
+/**
+ * The site the viewer turned takeover off for is the TAB's, not the frame's.
+ *
+ * The popup's switch names the page in the address bar, and a video embedded
+ * from another host sits in a frame with a hostname of its own — so a frame
+ * asking about itself would take over on a site the viewer had turned off.
+ * The frame cannot read a cross-origin parent's address, so it asks the
+ * background, which knows the tab's.
+ */
+function topSite() {
+  if (IS_TOP_FRAME) return Promise.resolve(location);
+  return new Promise((resolve) => {
+    try {
+      chrome.runtime.sendMessage({ action: "topSite" }, (reply) => {
+        void chrome.runtime.lastError;
+        resolve(reply && reply.hostname ? reply : location);
+      });
+    } catch {
+      resolve(location);
+    }
   });
+}
+
+function decideTakeover(data) {
+  if (!data || !data[TAKEOVER_KEY]) return;
+  topSite().then((site) => watchForTakeover(!exemptHere(data[EXEMPT_KEY], site)));
+}
+
+try {
+  chrome.storage?.local.get([TAKEOVER_KEY, EXEMPT_KEY], decideTakeover);
   // Switched on while this page is open: from here, not after a reload.
   // Turning it off again cannot un-take-over a page that has already been
   // upgraded — the page's own elements are gone — so the popup says to
@@ -508,10 +547,7 @@ try {
   chrome.storage?.onChanged.addListener((changes, area) => {
     if (area !== "local") return;
     if (!changes[TAKEOVER_KEY]?.newValue && !changes[EXEMPT_KEY]) return;
-    chrome.storage.local.get([TAKEOVER_KEY, EXEMPT_KEY], (data) => {
-      if (!data || !data[TAKEOVER_KEY]) return;
-      watchForTakeover(!exemptHere(data[EXEMPT_KEY]));
-    });
+    chrome.storage.local.get([TAKEOVER_KEY, EXEMPT_KEY], decideTakeover);
   });
 } catch {
   /* no storage access in this context — the setting simply stays off */
