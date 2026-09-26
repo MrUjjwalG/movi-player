@@ -1470,6 +1470,8 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
    *  runway — enough that the new decoder is never the thing being waited on
    *  at the seam. */
   private static readonly SEAMLESS_PRIME_LEAD_S = 0.25;
+  // A rung switch's opening read — see switchVideoRenditionInPlace.
+  private static readonly SWITCH_FIRST_RANGE_BYTES = 512 * 1024;
   // No ABR decision this soon after a seek — see abrDecide.
   private static readonly ABR_POST_SEEK_HOLD_MS = 3000;
   // How far the Clock may run past the frame on screen when the picture is
@@ -1502,6 +1504,19 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
    * runs this long.
    */
   private static readonly SWITCH_PREP_BUDGET_MS = 12_000;
+  /**
+   * The same bound for a step DOWN, which the note above assumed would never
+   * come near 12s. It does, on exactly the link that asks for one: at 0.2 MB/s
+   * the 480p rung's header, index and the GOP behind the swap point are ~2MB,
+   * ten seconds before anything else waits. The downshift was abandoned at the
+   * budget, decided again, abandoned again — four times, until the element
+   * gave up on a video the lower rung would have carried. Abandoning a
+   * downshift buys nothing: the rung being left has already run dry, and the
+   * outgoing source is held for the prep (suspendNetwork), so there is no
+   * picture to go back to. What still needs an end is a rung the link cannot
+   * feed at all, and this is that end.
+   */
+  private static readonly SWITCH_DOWN_PREP_BUDGET_MS = 30_000;
   // bandwidth → consecutive "couldn't sustain this rung" strikes + when the last
   // one hit. Each strike doubles the re-climb penalty (30s → 1m → 2m … capped),
   // so a rung the link keeps failing to hold is backed off harder and harder
@@ -4027,7 +4042,29 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
         this.videoRenderer?.stopPresentationLoop();
       }
     };
+    // A step DOWN is a rescue on a link that is already short, and the rung
+    // being left keeps downloading through the whole prep — measured at
+    // 0.12 MB/s, the 2160p stream took a fresh 4MB range in the middle of a
+    // switch to 240p, so the rung we were escaping to got half of a link that
+    // could not feed either. Hold the outgoing source's download while the
+    // lower rung opens; every exit lets it go (endSwitch), and on success the
+    // old source is closed anyway.
+    const targetBwEarly =
+      this._dashRenditions.find((r) => r.url === newRenditionUrl)?.bandwidth ?? 0;
+    const activeBwEarly =
+      this._dashRenditions.find((r) => r.url === this._activeDashRendition)
+        ?.bandwidth ?? 0;
+    const stepDown =
+      targetBwEarly > 0 && activeBwEarly > 0 && targetBwEarly < activeBwEarly;
+    const heldSource = stepDown
+      ? (this.source as {
+          suspendNetwork?: () => void;
+          resumeNetwork?: () => void;
+        } | null)
+      : null;
+    heldSource?.suspendNetwork?.();
     const endSwitch = <T,>(result: T): T => {
+      heldSource?.resumeNetwork?.();
       if (indicatorOn && myIndicator === this._switchIndicatorGen) {
         indicatorOn = false;
         this.emit("renditionSwitch", { active: false, label: switchLabel });
@@ -4043,8 +4080,10 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
     // …and any HANG here bails out too. See SWITCH_PREP_BUDGET_MS: the prep is
     // several unbounded network waits held under a flag that disables every
     // path that could rescue playback, so it needs an end.
-    const prepDeadline =
-      performance.now() + MoviPlayer.SWITCH_PREP_BUDGET_MS;
+    const prepBudgetMs = stepDown
+      ? MoviPlayer.SWITCH_DOWN_PREP_BUDGET_MS
+      : MoviPlayer.SWITCH_PREP_BUDGET_MS;
+    const prepDeadline = performance.now() + prepBudgetMs;
     // Which seek the prep was started against — see the last exit below.
     const seekAtPrep = this._lastSeekAt;
     const prepLeft = () => prepDeadline - performance.now();
@@ -4065,6 +4104,15 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
           url: newRenditionUrl,
           headers,
         });
+        // Open the rung on a small first read. The 4MB opening is sized for a
+        // video's FIRST open — hosts prefetch against it — and a rung switch
+        // is not that: all it needs is the header, and the seek that follows
+        // starts its own stream at the landing point. At 0.12 MB/s a 4MB
+        // opening is 33s against a 12s prep budget, so every downshift to
+        // 240p (a 6.5MB file) timed out and left playback stuck on 2160p.
+        (
+          newSource as unknown as { setFirstRangeBytes?: (n: number) => void }
+        ).setFirstRangeBytes?.(MoviPlayer.SWITCH_FIRST_RANGE_BYTES);
       }
     } catch (e) {
       Logger.warn(TAG, "in-place switch: new source build failed", e);
@@ -4102,7 +4150,7 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
         // read is not slow, it is losing a race with the stream that is still
         // playing. Abandon, which closes the source and hands the link back.
         return abandonPrep(
-          `new demuxer open exceeded ${MoviPlayer.SWITCH_PREP_BUDGET_MS}ms — the link can't feed this rung`,
+          `new demuxer open exceeded ${prepBudgetMs}ms — the link can't feed this rung`,
         );
       }
       newInfo = opened;
@@ -4389,6 +4437,15 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
     // buffer bar freezes after a quality switch.
     this.lastBufferedTime = 0;
     this.bufferedRangeStart = seekedTo;
+    // Whatever the loop decided about the end of the file was a verdict on the
+    // OUTGOING demuxer's cursor, and the incoming one starts at seekedTo. A
+    // rung left mid-read can call a failed read EOF on its way out (see the
+    // held read in HttpSource), and carried across the swap that verdict
+    // stopped the loop reading the new rung at all: fully downloaded, under a
+    // spinner, until a seek happened to clear it.
+    this.eofReached = false;
+    this._eofPictureDrainSince = 0;
+    this.eofSince = 0;
 
     // The video decoder's software path reads through the demuxer's WASM module.
     const bindings = newDemuxer.getBindings();
@@ -16946,6 +17003,20 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
    * Get buffer end position in bytes (for HttpSource)
    * Returns -1 if not available or not HttpSource
    */
+  /**
+   * Whether a quality switch is preparing its rung right now.
+   *
+   * For the element's stuck watchdog, which judges progress by the ACTIVE
+   * source's bytes. A step down holds that source's download for the prep
+   * (see suspendNetwork in switchVideoRenditionInPlace), so the bytes stop by
+   * design while the new rung's arrive somewhere the watchdog cannot see —
+   * and it read that as stuck and nudged a seek into the prep, which the prep
+   * then abandoned as the viewer seeking. The prep has its own budget.
+   */
+  isPreparingRendition(): boolean {
+    return this._pendingSwitchSource !== null;
+  }
+
   getBufferEndBytes(): number {
     if (this.source instanceof HttpSource) {
       return this.source.getBufferedEnd();

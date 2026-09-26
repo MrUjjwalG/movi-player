@@ -2042,6 +2042,42 @@ export class HttpSource implements SourceAdapter {
     void this.stopStream();
   }
 
+  /**
+   * Stop using the network until resumeNetwork() or close(): the in-flight
+   * download is cancelled, what has already arrived keeps being served, and a
+   * read for bytes that have NOT arrived waits instead of starting a fresh
+   * stream.
+   *
+   * For a rendition that is being left. haltStreaming alone was not enough —
+   * the next read the outgoing pipeline made restarted the stream — and a
+   * paused prefetch (setPrefetchThrottle) only stops JavaScript reading the
+   * body: the server goes on sending and the browser goes on buffering it.
+   * Measured on a 0.15 MB/s link, a downshift from 1080p to 240p could not
+   * open the lower rung's 512KB head in twelve seconds while the 1080p range
+   * kept arriving beside it, four attempts running.
+   */
+  suspendNetwork(): void {
+    if (this._netSuspended) return;
+    this._netSuspended = true;
+    void this.stopStream();
+  }
+
+  resumeNetwork(): void {
+    if (!this._netSuspended) return;
+    this._netSuspended = false;
+    const waiters = this._netResumeWaiters;
+    this._netResumeWaiters = [];
+    for (const w of waiters) w();
+  }
+
+  private _netSuspended = false;
+  private _netResumeWaiters: Array<() => void> = [];
+
+  private awaitNetwork(): Promise<void> {
+    if (!this._netSuspended || this.closed) return Promise.resolve();
+    return new Promise((resolve) => this._netResumeWaiters.push(resolve));
+  }
+
   private async stopStream(): Promise<void> {
     this.atomicSetStreaming(false);
 
@@ -2325,7 +2361,19 @@ export class HttpSource implements SourceAdapter {
     const currentEnd = this.bufferEnd;
     const gap = offset - currentEnd;
     // If data is >2MB away, it's cheaper to restart than wait for sequential fill
-    const GAP_RESTART_THRESHOLD = 2 * 1024 * 1024;
+    // …on a link that moves 2MB in well under a second. The break-even is the
+    // round trip a restart costs against the time the gap takes to arrive, and
+    // on a slow link that is a much smaller gap: at 0.2 MB/s a 964KB gap —
+    // the first nineteen seconds of a 480p rung, read only to be skipped — is
+    // five seconds of waiting, which is what a downshift's prep spent on its
+    // way to the swap point, and more than a restart ever costs. Scaled to the
+    // measured rate: about a second of it, never below 256KB (a gap that small
+    // is cheaper to wait for on any link) and never above 2MB.
+    const measuredBps = this.lastSpeed || this.currentSpeed || 0;
+    const GAP_RESTART_THRESHOLD =
+      measuredBps > 0
+        ? Math.min(2 * 1024 * 1024, Math.max(256 * 1024, measuredBps))
+        : 2 * 1024 * 1024;
     const isCoveredByStream =
       this.atomicIsStreaming() &&
       offset >= streamStart &&
@@ -2400,6 +2448,15 @@ export class HttpSource implements SourceAdapter {
     // streamed files (which never fit) restarted on every such read; dropping
     // that requirement is what fixes the abrupt cancel for big remote files.
     const ONEOFF_RANGE_MAX_BYTES = 15 * 1024 * 1024;
+
+    // Past here the read needs the network. While it is suspended (see
+    // suspendNetwork) that has to wait — starting a stream here is exactly the
+    // download the suspension exists to stop.
+    if (this._netSuspended) {
+      await this.awaitNetwork();
+      if (this.closed) throw new Error("Source closed");
+      if (this.isInBuffer(offset, length)) return this.readFromBuffer(offset, length);
+    }
     if (
       !isCoveredByStream &&
       this.atomicIsStreaming() &&
@@ -2504,6 +2561,18 @@ export class HttpSource implements SourceAdapter {
       generation = this.streamGeneration;
       success = await this.waitForData(offset, length);
     }
+    // Not hung — held. suspendNetwork cancelled the stream this read was
+    // waiting on, and a read that fails there reaches the demuxer as a short
+    // read: measured on a 480p to 240p downshift, the outgoing demuxer parsed
+    // the hole as a 15MB packet, called it end of file, and the player carried
+    // that EOF across the swap — the lower rung sat fully downloaded under a
+    // spinner for 23 seconds until a nudge seek cleared it. Wait for the
+    // network like any other read that needs it, then ask again.
+    if (!success && this._netSuspended && !this.closed) {
+      await this.awaitNetwork();
+      if (this.closed) throw new Error("Source closed");
+      return this._readInternal(offset, length);
+    }
     if (!success) {
       // Still hung: stop it so the caller's retry opens a fresh request
       // instead of waiting on this one.
@@ -2592,6 +2661,10 @@ export class HttpSource implements SourceAdapter {
     // Anything parked waiting for bytes has to be let go, or it sits on a
     // stream that will never write again until its own deadline expires.
     this.wakeBufferWaiters(true);
+    // …and anything held by suspendNetwork, which would otherwise wait on a
+    // resume that a closed source will never get.
+    this._netSuspended = false;
+    for (const w of this._netResumeWaiters.splice(0)) w();
     Logger.debug(TAG, "Source closed");
   }
 

@@ -18060,7 +18060,17 @@ export class MoviElement extends HTMLElement {
     // back to where they seeked FROM. The bar then showed the old spot until the
     // real target finally landed. The seek has its own (adaptive) timeout in
     // MoviPlayer; this watchdog only owns the rebuffer case.
-    if (this.isSeeking || this._uiSeekTarget >= 0) {
+    // …nor a quality switch preparing its rung. The bytes that count are
+    // landing on the incoming source, the outgoing one is held on purpose, and
+    // a nudge here is a seek the prep reads as the viewer's and abandons for.
+    // Measured at 0.2 MB/s: a 2160p to 480p downshift was nudged out of its
+    // prep four times, each nudge resetting the next attempt, until this gave
+    // up on the video with 0 frames and blamed the decoder.
+    if (
+      this.isSeeking ||
+      this._uiSeekTarget >= 0 ||
+      p.isPreparingRendition?.()
+    ) {
       this._stuckRecoverySince = 0;
       this._stuckRecoveryLastTime = -1;
       this._stuckLastBuffered = -1;
