@@ -1548,10 +1548,15 @@
         // flip-flop, and no t=0 contention since native only started loading
         // after Movi had its metadata. Muted, so play() needs no gesture; a
         // native that rejected the file just no-ops.
+        // Not awaited. WebKit never settles play() on a source it refuses in
+        // silence — an MKV sits at readyState 0, networkState LOADING, no error
+        // — so awaiting it stopped this function here for good, and Safari's
+        // stats panels stayed at "—" on both sides. Whether native took the
+        // file is decided below from the element's own state anyway.
         try {
           const t = Number(moviPlayer.currentTime);
           if (Number.isFinite(t) && t > 0) nativeVideo.currentTime = t;
-          await nativeVideo.play?.();
+          nativeVideo.play?.()?.catch?.(() => {});
         } catch {}
 
         // Authoritative detection: the element either has decoded video
