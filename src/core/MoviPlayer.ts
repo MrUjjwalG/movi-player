@@ -4809,6 +4809,42 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
   // against the old one can be told apart from a genuine failure.
   private _demuxerGeneration = 0;
 
+  /**
+   * A rung the link just failed: stop the remembered rate claiming it, and
+   * hold the ladder below it for an escalating while — see _abrDrainStrikes.
+   */
+  private penalizeLeavingRung(leavingBw: number, now: number): void {
+    lowerLinkBps(leavingBw);
+    const prevStrike = this._abrDrainStrikes.get(leavingBw);
+    const strikes =
+      (prevStrike && now - prevStrike.at < MoviPlayer.ABR_STRIKE_DECAY_MS
+        ? prevStrike.count
+        : 0) + 1;
+    this._abrDrainStrikes.set(leavingBw, { count: strikes, at: now });
+    this._abrPenalizedBandwidth = leavingBw;
+    this._abrPenaltyUntil = Math.max(
+      this._abrPenaltyUntil,
+      now +
+        Math.min(
+          MoviPlayer.ABR_PENALTY_MS * 2 ** (strikes - 1),
+          MoviPlayer.ABR_PENALTY_MAX_MS,
+        ),
+    );
+  }
+
+  /** Deepest the buffer has been since playback last settled on this rung —
+   *  the reference the early downshift measures "half used" against. */
+  private _abrBufferPeak = 0;
+  /** When the early downshift last asked and chose to stay. */
+  private _abrEarlyCheckAt = Number.NEGATIVE_INFINITY;
+  /** Below this share of its peak, a buffer the link is not refilling is
+   *  worth a question about the rung — see the early downshift. */
+  private static readonly ABR_EARLY_DOWN_AT = 0.5;
+  /** A peak shallower than this has no half worth protecting: the reactive
+   *  downshift's own thresholds (4-6s) are already that close. */
+  private static readonly ABR_EARLY_MIN_PEAK_S = 10;
+  private static readonly ABR_EARLY_RECHECK_MS = 20_000;
+
   /** One ABR decision. Always through abrTick(), never called directly. */
   private async abrDecide(): Promise<void> {
     if (
@@ -5070,6 +5106,92 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
       !videoRecovering &&
       !nothingLeftToFetch &&
       ((draining && bufferAhead < 6) || (bufferAhead < 4 && settledSinceSwitch));
+
+    // EARLY DOWNSHIFT — decide at half the buffer, not at its last second.
+    //
+    // The reactive path below fires on a buffer that is nearly gone (4-6s, or
+    // a stall), and a switch made there is a hard one: the new rung has to open,
+    // seek and prime in whatever is left, and on 8K over a link that carries
+    // neither 8K nor quite 4K that is not enough — the picture stops while the
+    // lower rung loads, and sometimes stops again when it proves too heavy as
+    // well. Asked at half the buffer, the same switch has seconds to prime
+    // under a picture that is still playing, which is what makes it seamless.
+    //
+    // Asked only when the buffer is falling for the link's reasons: the stream
+    // is downloading right now (not parked on a full window, which also lets
+    // the buffer fall) and what it has delivered is short of the rung. Then one
+    // short read of the rung's own stream, with the playing download held so
+    // the reading is the link's and not a share of it, decides: carried, stay
+    // and ask again later; not carried, go now to the highest rung it carries.
+    const earlySettled =
+      !postSeekSettling &&
+      !postBackgroundSettling &&
+      !videoRecovering &&
+      !nothingLeftToFetch &&
+      sinceSwitch > 5000 &&
+      activeIdx >= 0;
+    if (!earlySettled) {
+      this._abrBufferPeak = 0;
+    } else if (bufferAhead > this._abrBufferPeak) {
+      this._abrBufferPeak = bufferAhead;
+    }
+    if (
+      earlySettled &&
+      !stalling &&
+      !bufferLow &&
+      activeIdx < rungs.length - 1 &&
+      this._abrBufferPeak >= MoviPlayer.ABR_EARLY_MIN_PEAK_S &&
+      bufferAhead <= this._abrBufferPeak * MoviPlayer.ABR_EARLY_DOWN_AT &&
+      now - this._abrEarlyCheckAt > MoviPlayer.ABR_EARLY_RECHECK_MS &&
+      !this._abrProbeInFlight
+    ) {
+      const active = rungs[activeIdx];
+      const activeBits = active.bandwidth || 0;
+      const ns = (
+        this.source as { getNetworkStats?: () => { currentSpeed: number } } | null
+      )?.getNetworkStats?.();
+      const downloading = (ns?.currentSpeed || 0) > 0;
+      const delivered = this.sustainedDeliveryBps();
+      if (downloading && delivered > 0 && delivered < activeBits) {
+        this._abrEarlyCheckAt = now;
+        const held = this.source as {
+          suspendNetwork?: () => void;
+          resumeNetwork?: () => void;
+        } | null;
+        held?.suspendNetwork?.();
+        let probed = -1;
+        try {
+          probed = await this.probeRungThroughput(active.url);
+        } finally {
+          held?.resumeNetwork?.();
+        }
+        if (this._destroyed || !this._autoQuality) return;
+        const reading = probed > 0 ? probed : delivered;
+        const basis = `${(reading / 1e6).toFixed(1)}Mbps ${probed > 0 ? "on its own stream" : "delivered"}`;
+        if (reading * 0.85 >= activeBits) {
+          Logger.info(
+            TAG,
+            `ABR early check at ${bufferAhead.toFixed(1)}s of a ${this._abrBufferPeak.toFixed(1)}s buffer: ${active.label || activeBits} still carried (${basis}) — staying`,
+          );
+        } else {
+          let target = rungs[rungs.length - 1];
+          for (let i = activeIdx + 1; i < rungs.length; i++) {
+            if ((rungs[i].bandwidth || 0) <= reading * 0.85) {
+              target = rungs[i];
+              break;
+            }
+          }
+          this.penalizeLeavingRung(activeBits, now);
+          Logger.info(
+            TAG,
+            `ABR downshift ${active.label || activeBits} → ${target.label || target.bandwidth}: reason=early, bufferAhead=${bufferAhead.toFixed(1)}s of ${this._abrBufferPeak.toFixed(1)}s, ${basis}, delivered ${(delivered / 1e6).toFixed(1)}Mbps`,
+          );
+          this._abrBufferPeak = 0;
+          await this.abrCommit(target.url, now);
+        }
+        return;
+      }
+    }
     if (
       (stalling || bufferLow) &&
       // Nothing left to fetch means the whole rung is already in hand, and a
@@ -5134,22 +5256,7 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
       const leavingBw = rungs[activeIdx].bandwidth || 0;
       // The link just failed this rung, so the stored rate that opens the next
       // load must stop claiming it can carry it — see lowerLinkBps.
-      lowerLinkBps(leavingBw);
-      const prevStrike = this._abrDrainStrikes.get(leavingBw);
-      const strikes =
-        (prevStrike && now - prevStrike.at < MoviPlayer.ABR_STRIKE_DECAY_MS
-          ? prevStrike.count
-          : 0) + 1;
-      this._abrDrainStrikes.set(leavingBw, { count: strikes, at: now });
-      this._abrPenalizedBandwidth = leavingBw;
-      this._abrPenaltyUntil = Math.max(
-        this._abrPenaltyUntil,
-        now +
-          Math.min(
-            MoviPlayer.ABR_PENALTY_MS * 2 ** (strikes - 1),
-            MoviPlayer.ABR_PENALTY_MAX_MS,
-          ),
-      );
+      this.penalizeLeavingRung(leavingBw, now);
       Logger.info(
         TAG,
         `ABR downshift ${rungs[activeIdx].label || rungs[activeIdx].bandwidth} → ${target.label || target.bandwidth}: reason=${stalling ? "stall" : "bufferLow"}, bufferAhead=${bufferAhead.toFixed(1)}s, draining=${draining}, sinceSwitch=${(sinceSwitch / 1000).toFixed(0)}s`,
