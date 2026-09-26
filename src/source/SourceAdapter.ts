@@ -51,6 +51,15 @@ export interface SourceAdapter {
    * cannot fail this way simply does not have it.
    */
   getFatalError?(): Error | null;
+
+  /**
+   * Whether the server is refusing this source's requests right now — a
+   * refusal already latched by getFatalError, or one still being retried.
+   *
+   * A refused range and a slow link both leave the buffer empty, and only the
+   * second is a reason to change quality. Optional, like getFatalError.
+   */
+  isRefusing?(): boolean;
 }
 
 /**

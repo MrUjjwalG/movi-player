@@ -4755,6 +4755,23 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
       this._abrUpConfirms = 0;
       return;
     }
+    // A source the server is refusing: no decision, and no verdict on the link.
+    //
+    // A 403 empties the buffer exactly the way a slow link does, and every
+    // rung of a split stream shares the one audio URL, so no downshift can
+    // answer it. Measured on a YouTube video whose URLs stop serving about a
+    // minute in (every itag, fresh or re-resolved): the audio range past that
+    // point was refused, the buffer read 0.4s, and the ABR walked 2160p to 480p
+    // to 360p to 240p through switches that could never prime — and on the way
+    // lowered the REMEMBERED link rate from 56.7 to 12 Mbps, so the next video,
+    // on a link that was fine, opened low as well. The refusal is the element's
+    // to surface; the quality stays where it is.
+    const refusing = (s: unknown) =>
+      !!(s as { isRefusing?: () => boolean } | null)?.isRefusing?.();
+    if (refusing(this.source) || refusing(this.audioSource)) {
+      this._lastBufferAhead = 0;
+      return;
+    }
 
     // Best-first: index 0 = highest bitrate.
     const rungs = this._dashRenditions

@@ -2837,6 +2837,10 @@ export class HttpSource implements SourceAdapter {
     return this.fatalError;
   }
 
+  isRefusing(): boolean {
+    return this.fatalError !== null || this.fatalAttempts > 0;
+  }
+
   getBufferedStart(): number {
     if (this.fullyBuffered) return 0;
     return this.atomicGetBufferStart();
