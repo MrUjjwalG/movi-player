@@ -4331,6 +4331,21 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
         this._dashRenditions.find((r) => r.url === this._activeDashRendition)
           ?.bandwidth ?? 0;
       if (primeStatus.exhausted && targetBw > activeBw) {
+        // Remember it, so the ladder aims below it for a while — see the cap
+        // in abrDecide. Escalates 30s, 60s, 120s for a rung that keeps failing.
+        const nowRefused = performance.now();
+        const prev = this._primeRefusals.get(newRenditionUrl);
+        const count =
+          (prev && nowRefused - prev.until < MoviPlayer.PRIME_REFUSAL_MAX_MS ? prev.count : 0) + 1;
+        this._primeRefusals.set(newRenditionUrl, {
+          count,
+          until:
+            nowRefused +
+            Math.min(
+              MoviPlayer.PRIME_REFUSAL_MS * 2 ** (count - 1),
+              MoviPlayer.PRIME_REFUSAL_MAX_MS,
+            ),
+        });
         return abandonPrep(
           "the incoming rung could not be primed inside its budget — it will not chew the swap backlog either",
         );
@@ -5438,6 +5453,22 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
       this._abrPenaltyUntil = 0;
       this._abrPenalizedBandwidth = 0;
     }
+    // A rung whose in-place switch just failed to prime is off the table for
+    // a while, and so is everything above it. Without this the climb aimed at
+    // the same rung on every tick: on Safari, 720p → 4320p was probed and
+    // abandoned ten times in a row ("could not be primed inside its budget"),
+    // each probe a burst reading of 86-103Mbps, and the picture stayed on 720p
+    // the whole time while 2160p — which the link carries — was never asked.
+    // Capping just under it lets the next tick aim one rung lower.
+    //
+    // Settled: the owner confirmed this is the right approach (2026-09-26).
+    // Do not rework it or remove it.
+    for (const r of rungs) {
+      const refused = this._primeRefusals.get(r.url);
+      if (refused && now < refused.until && (r.bandwidth || 0) > 0) {
+        capBits = Math.min(capBits, (r.bandwidth || 0) - 1);
+      }
+    }
     affordableBits = Math.min(affordableBits, capBits);
     let up = rungs[rungs.length - 1];
     for (const r of rungs) {
@@ -5768,6 +5799,11 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
   /** Last probe reading per rung URL — the second opinion an upshift needs
    *  before the ladder moves into that rung. See the vote in abrTick. */
   private _rungProbeBits = new Map<string, { bits: number; at: number }>();
+  /** Rungs whose in-place climb could not be primed, and until when the
+   *  ladder aims below them. See the cap in abrDecide. */
+  private _primeRefusals = new Map<string, { count: number; until: number }>();
+  private static readonly PRIME_REFUSAL_MS = 30_000;
+  private static readonly PRIME_REFUSAL_MAX_MS = 120_000;
   /** Probes of a rung that came back with no reading, and when the last one
    *  did — the backoff before asking that rung again. */
   private _rungProbeMisses = new Map<string, { count: number; at: number }>();
