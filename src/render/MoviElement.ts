@@ -11796,7 +11796,8 @@ export class MoviElement extends HTMLElement {
         e.stopPropagation();
         const newSrc = (item as HTMLElement).dataset.src;
         if (newSrc === "__auto__") {
-          player?.setAutoQuality?.(true);
+          // Snap: straight to the rung the link carries, as a fresh load would.
+          player?.setAutoQuality?.(true, { snap: true });
           this._writeQualityAutoPref(true);
           this.updateQualityMenu();
           closeMenu();
@@ -11891,7 +11892,7 @@ export class MoviElement extends HTMLElement {
       if (isAuto) item.appendChild(checkSvg());
       item.addEventListener("click", (e) => {
         e.stopPropagation();
-        player?.setAutoQuality?.(true);
+        player?.setAutoQuality?.(true, { snap: true });
         this._writeQualityAutoPref(true);
         this.updateQualityMenu();
         closeMenu();

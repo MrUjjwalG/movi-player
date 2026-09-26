@@ -4602,13 +4602,27 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
    * best rendition it can sustain — in-place, so it's smooth. Off pins the
    * current rendition.
    */
-  setAutoQuality(enabled: boolean): void {
+  /**
+   * `snap` is for the viewer choosing Auto from a fixed quality: go to the rung
+   * the link carries now, the way the opening pick does, instead of starting
+   * the ordinary climb from wherever the fixed pick left it. See
+   * abrSnapToLink. The per-video re-apply of a remembered Auto preference does
+   * not snap — the opening pick has already made that decision.
+   */
+  setAutoQuality(enabled: boolean, opts?: { snap?: boolean }): void {
     if (this._autoQuality === enabled) return;
     this._autoQuality = enabled;
     if (enabled) {
       this._abrPrimed = false; // first upshift jumps without the 2-tick wait
       this._abrPenalizedBandwidth = 0; // fresh Auto session — no stale penalty
       this._abrPenaltyUntil = 0;
+      if (opts?.snap) {
+        void this.abrSnapToLink();
+        if (!this._abrTimer) {
+          this._abrTimer = setInterval(() => this.abrTick(), 4000);
+        }
+        return;
+      }
       // Kick off a quick startup speed test so Auto can ramp to the right rung
       // in a couple of seconds instead of climbing rung-by-rung off passive
       // measurement — the "good link but started ugly-low" case. Non-blocking:
@@ -4623,6 +4637,90 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
     } else if (this._abrTimer) {
       clearInterval(this._abrTimer);
       this._abrTimer = null;
+    }
+  }
+
+  /**
+   * Put Auto on the rung the link carries, now — the opening pick, re-run.
+   *
+   * Choosing Auto from a fixed quality used to hand the ladder to the ordinary
+   * tick, which climbs one step and a cooldown at a time from wherever the
+   * fixed pick left it: a viewer on 360p over a 40Mbps line picked Auto and
+   * watched it walk up for a minute, when a fresh load of the same video opens
+   * on the right rung before the first frame. So do what the fresh load does:
+   * the same 55% of the best link reading we hold, the same device ceilings,
+   * then read the chosen rung's own stream and re-pick from that — up or down,
+   * twice at most — and switch once. A fixed pick above what the link carries
+   * comes down the same way.
+   *
+   * Runs under the tick lock, so no ordinary decision races it.
+   */
+  private async abrSnapToLink(): Promise<void> {
+    if (this._abrTickInFlight) return;
+    this._abrTickInFlight = true;
+    try {
+      if (
+        this._destroyed ||
+        !this._autoQuality ||
+        this._abrSwitchInProgress ||
+        !this.source
+      ) {
+        return;
+      }
+      const rungs = this._dashRenditions
+        .filter((r) => (r.bandwidth || 0) > 0)
+        .sort((a, b) => (b.bandwidth || 0) - (a.bandwidth || 0));
+      if (rungs.length < 2) return;
+      const onCpu = this.decodingOnCpu();
+      const ceilingH = onCpu
+        ? softwareDecodeCeiling(!!this.videoDecoder && !this.videoDecoder.isSoftware)
+        : Number.POSITIVE_INFINITY;
+      const allowed = rungs.filter(
+        (r) =>
+          !(r.height != null && MoviPlayer.isDecodeBound(r.codec, r.height)) &&
+          !((r.height ?? 0) > ceilingH && this.softwareCeilingApplies(r.codec)),
+      );
+      if (allowed.length === 0) return;
+      const pickFor = (bits: number) =>
+        allowed.find((r) => (r.bandwidth || 0) <= bits * 0.55) ??
+        allowed[allowed.length - 1];
+
+      const linkBits = Math.max(
+        loadPersistedLinkBps(),
+        this._lastThroughputBps * 8,
+      );
+      if (!(linkBits > 0)) {
+        // Nothing measured at all: the ordinary tick and the startup speed
+        // test are what find out, as they always did.
+        void this.runStartupSpeedTest();
+        return;
+      }
+      let pick = pickFor(linkBits);
+      let basis = `${(linkBits / 1e6).toFixed(1)}Mbps known`;
+      for (let attempt = 0; attempt < 2; attempt++) {
+        const bits = await this.probeRungThroughput(pick.url);
+        if (this._destroyed || !this._autoQuality) return;
+        if (bits <= 0) break; // unmeasurable says nothing — keep the pick
+        this._rungProbeBits.set(pick.url, { bits, at: performance.now() });
+        // A floor, not a verdict on the link: the playing stream shared the
+        // line while this was read.
+        raiseLinkBps(bits);
+        const next = pickFor(bits);
+        basis = `${(bits / 1e6).toFixed(1)}Mbps on ${pick.label || pick.height + "p"}'s own stream`;
+        if (next.url === pick.url) break;
+        pick = next;
+      }
+      if (pick.url === this._activeDashRendition) {
+        Logger.info(TAG, `Auto: already on ${pick.label || pick.height + "p"} (${basis})`);
+        return;
+      }
+      Logger.info(
+        TAG,
+        `Auto selected — going straight to ${pick.label || pick.height + "p"} (${basis})`,
+      );
+      await this.abrCommit(pick.url, performance.now());
+    } finally {
+      this._abrTickInFlight = false;
     }
   }
 
@@ -4669,7 +4767,9 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
     // raise, not persist: a reading taken mid-playback is a floor (the stream
     // is paced to its own bitrate), so it may lift a stored estimate but must
     // never drag a better one down. Same rule the Shaka and DASH wrappers use.
-    raiseLinkBps(bps);
+    // Bits: the store is bits/s (see persistLinkBps), and a bytes/s value
+    // here was eight times too small ever to raise it.
+    raiseLinkBps(bits);
     if (this._autoQuality) void this.abrTick();
   }
 
