@@ -538,6 +538,34 @@ async function screenLadderForDecode(
                   ? "software-decoded"
                   : "";
 
+        // …and "unsupported" is decodingInfo's word too, so the decoder gets
+        // the last say on it. WebKit's decodingInfo ties AV1 level to frame
+        // rate more tightly than its decoder does: it answers supported:false
+        // for 2560x1440@60 at av01.0.12M.08 and for 1920x1080@60 at
+        // av01.0.08M.08, while VideoDecoder.isConfigSupported answers true for
+        // both with prefer-hardware — and YouTube labels its 1440p60 rung
+        // exactly 12M. That false "unsupported" is a fact that gets written
+        // down, so every 1440p AV1 rung on Safari was barred the moment the
+        // ladder was screened.
+        if (verdict === "unsupported" && typeof VideoDecoder !== "undefined") {
+          try {
+            const any = await VideoDecoder.isConfigSupported({
+              codec,
+              codedWidth: w,
+              codedHeight: h,
+            });
+            if (any?.supported) {
+              Logger.debug(
+                TAG,
+                `decodingInfo calls ${w}x${h}@${Math.round(rungFps)} ${codec} unsupported, VideoDecoder does not — not barring it`,
+              );
+              verdict = "";
+            }
+          } catch {
+            /* the query itself is unsupported here — decodingInfo's answer stands */
+          }
+        }
+
         // Ask the API that actually DECIDES. decodingInfo is an advisory
         // second opinion, and Safari disagrees with itself: it answered
         // "supported" for 3840x2026 AV1 that VideoDecoder.isConfigSupported
