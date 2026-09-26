@@ -5147,6 +5147,10 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
       sizingBits = Math.max(sizingBits, this._lastProbeBits);
     }
     let affordableBits = sizingBits * 0.85;
+    // Everything below is a CEILING that holds whatever the link says (the
+    // device, the CPU, a rung that just failed) — kept apart so the stable-link
+    // jump further down can be held to the same limits.
+    let capBits = Number.POSITIVE_INFINITY;
     // Never climb into a resolution this device has proven (twice) it can't
     // decode. The cap lives at module level (survives player recreates), so it
     // holds across every video this session — convert the capped heights to a
@@ -5164,7 +5168,7 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
         }
       }
       if (swCapBits < Number.POSITIVE_INFINITY) {
-        affordableBits = Math.min(affordableBits, swCapBits - 1);
+        capBits = Math.min(capBits, swCapBits - 1);
       }
     }
 
@@ -5179,18 +5183,19 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
         }
       }
       if (heightCapBits < Number.POSITIVE_INFINITY) {
-        affordableBits = Math.min(affordableBits, heightCapBits - 1);
+        capBits = Math.min(capBits, heightCapBits - 1);
       }
     }
     // Honour an active penalty: a rung that recently drained is off-limits (and
     // so is anything above it) until the hold window passes, so a bursty spike
     // can't re-upshift into the same rung that just failed. Cleared once expired.
     if (now < this._abrPenaltyUntil && this._abrPenalizedBandwidth > 0) {
-      affordableBits = Math.min(affordableBits, this._abrPenalizedBandwidth - 1);
+      capBits = Math.min(capBits, this._abrPenalizedBandwidth - 1);
     } else if (this._abrPenaltyUntil !== 0 && now >= this._abrPenaltyUntil) {
       this._abrPenaltyUntil = 0;
       this._abrPenalizedBandwidth = 0;
     }
+    affordableBits = Math.min(affordableBits, capBits);
     let up = rungs[rungs.length - 1];
     for (const r of rungs) {
       if ((r.bandwidth || 0) <= affordableBits) {
@@ -5220,8 +5225,31 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
     // presses play on a rung several steps below what their connection has
     // already demonstrated. The target probe below still has the final say.
     const paused = this.stateManager.getState() === "paused";
-    if (!paused && upIdx < activeIdx - 1) {
-      upIdx = activeIdx - 1;
+    // …and a LINK that has been measured the same way several times over is
+    // the other. The step rule exists because the number that sizes the jump
+    // is about the rung being played; the probes are not — each is a fresh
+    // request past the opening burst, which is the link. Two or three of them
+    // that agree say what the connection carries, and walking there one rung
+    // per cooldown only spends a switch (and its refill) on every rung in
+    // between: 480p to 2160p was four switches and the best part of a minute.
+    // So with a stable history the climb goes straight to the highest rung
+    // its LOWEST reading carries — the same 0.85 margin, the same device and
+    // penalty ceilings — and the target is still probed before it is entered.
+    const link = this.linkProbeSummary(now);
+    let jumpIdx = -1;
+    if (link.stable) {
+      const jumpBits = Math.min(link.minBits * 0.85, capBits);
+      jumpIdx = rungs.findIndex((r) => (r.bandwidth || 0) <= jumpBits);
+    }
+    const stepCap = jumpIdx >= 0 && jumpIdx < activeIdx - 1 ? jumpIdx : activeIdx - 1;
+    const jumping = !paused && stepCap < activeIdx - 1;
+    if (!paused && upIdx < stepCap) {
+      upIdx = stepCap;
+      up = rungs[upIdx];
+    } else if (jumping && upIdx > stepCap) {
+      // The sustained estimate is about the rung we are on and reads low on a
+      // paced stream; the agreed probes are about the link. They size it.
+      upIdx = stepCap;
       up = rungs[upIdx];
     }
     if (upIdx < activeIdx) {
@@ -5233,7 +5261,9 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
       }
       // First upshift after enabling Auto commits at once (need 1); later ones
       // wait for 2 consecutive ticks so a lone spike can't bounce quality up.
-      const need = this._abrPrimed ? 2 : 1;
+      // A jump sized by agreeing probes already IS that confirmation — the
+      // readings it rests on were taken ticks apart.
+      const need = this._abrPrimed && !jumping ? 2 : 1;
       if (this._abrUpConfirms >= need) {
         // Confirm the upshift with a fresh probe of the TARGET rung — but the
         // probe can only make the decision MORE conservative, never less. Take
@@ -5305,6 +5335,10 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
             ? Math.min(rawProbeBits, priorFresh.bits)
             : rawProbeBits;
           this._rungProbeBits.set(up.url, { bits: rawProbeBits, at: now });
+          this._linkProbeHistory.push({ bits: rawProbeBits, at: now });
+          if (this._linkProbeHistory.length > MoviPlayer.ABR_LINK_PROBES) {
+            this._linkProbeHistory.shift();
+          }
           this._lastProbeBits = probeBits;
           this._lastProbeAt = now;
         } else if (priorFresh) {
@@ -5408,9 +5442,48 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
             return;
           }
         }
+        // One reading that says the link carries MORE than the next rung is
+        // worth a second before acting on: stepping now spends a switch on a
+        // rung the next tick would leave again, and if the second reading
+        // agrees the climb goes straight to where both of them point. Held
+        // only while the history cannot yet speak (fewer than two readings);
+        // a history that disagrees keeps the one-step climb, which is the
+        // cautious answer to a link that will not hold still.
+        // And once this reading makes the history steady, the tick that
+        // decides from it is the next one: this one sized its candidate before
+        // the reading existed, and committing it would be the one step the
+        // readings have just argued past.
+        const after = this.linkProbeSummary(now);
+        const twoUp = activeIdx >= 2 ? rungs[activeIdx - 2] : null;
+        const afterJumpIdx = after.stable
+          ? rungs.findIndex(
+              (r) =>
+                (r.bandwidth || 0) <= Math.min(after.minBits * 0.85, capBits),
+            )
+          : -1;
+        const wantsSecondReading =
+          after.count < 2 &&
+          !!twoUp &&
+          rawProbeBits * 0.85 >= (twoUp.bandwidth || 0) &&
+          (twoUp.bandwidth || 0) < capBits;
+        const readingsPointHigher = afterJumpIdx >= 0 && afterJumpIdx < upIdx;
+        if (
+          !paused &&
+          !jumping &&
+          rawProbeBits > 0 &&
+          (wantsSecondReading || readingsPointHigher)
+        ) {
+          Logger.info(
+            TAG,
+            wantsSecondReading
+              ? `ABR upshift held for a second reading — ${(rawProbeBits / 1e6).toFixed(1)}Mbps would carry ${twoUp!.label || twoUp!.bandwidth} and above, not just ${up.label || up.bandwidth}`
+              : `ABR upshift past ${up.label || up.bandwidth}: ${after.count} probes agree on ${(after.minBits / 1e6).toFixed(1)}-${(after.maxBits / 1e6).toFixed(1)}Mbps, which carries ${rungs[afterJumpIdx].label || rungs[afterJumpIdx].bandwidth} — probing it next`,
+          );
+          return;
+        }
         Logger.info(
           TAG,
-          `ABR upshift ${rungs[activeIdx].label || rungs[activeIdx].bandwidth} → ${up.label || up.bandwidth}: ${(effectiveBits / 1e6).toFixed(1)}Mbps ${probeBits <= 0 ? "sustained" : rawProbeBits <= 0 ? "last reading of the target rung" : paced ? "probed on the target rung" : "sustained∧probed"}, bufferAhead=${bufferAhead.toFixed(1)}s`,
+          `ABR upshift ${rungs[activeIdx].label || rungs[activeIdx].bandwidth} → ${up.label || up.bandwidth}${jumping ? ` (link steady at ${(link.minBits / 1e6).toFixed(1)}-${(link.maxBits / 1e6).toFixed(1)}Mbps over ${link.count} probes)` : ""}: ${(effectiveBits / 1e6).toFixed(1)}Mbps ${probeBits <= 0 ? "sustained" : rawProbeBits <= 0 ? "last reading of the target rung" : paced ? "probed on the target rung" : "sustained∧probed"}, bufferAhead=${bufferAhead.toFixed(1)}s`,
         );
         await this.abrCommit(up.url, now);
       }
@@ -5443,6 +5516,54 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
   /** Last probe reading per rung URL — the second opinion an upshift needs
    *  before the ladder moves into that rung. See the vote in abrTick. */
   private _rungProbeBits = new Map<string, { bits: number; at: number }>();
+  /** The last few upshift probe readings, whichever rung each was taken on.
+   *  Each is a fresh request timed past its opening burst — a reading of the
+   *  link rather than of a rung — so together they say whether it is steady
+   *  and what it carries. See linkProbeSummary. */
+  private _linkProbeHistory: { bits: number; at: number }[] = [];
+  private static readonly ABR_LINK_PROBES = 3;
+  /** Lowest over highest reading for the link to count as steady. Readings
+   *  further apart than this are a link that moves, and the climb stays at one
+   *  rung at a time. */
+  private static readonly ABR_LINK_STEADY_RATIO = 0.7;
+
+  /**
+   * What the recent probes agree the link carries.
+   *
+   * Steady needs two fresh readings at least, the lowest within
+   * ABR_LINK_STEADY_RATIO of the highest; the estimate is then the LOWEST of
+   * them. The lowest, not the mean: an 8K rung read 18.3, 21.4 and 30.6Mbps
+   * against a 25.9Mbps need, and anything but the floor of those would have
+   * put on screen a rung the link then could not feed. Here that spread is
+   * 0.6 and would not count as steady at all.
+   */
+  private linkProbeSummary(now: number): {
+    count: number;
+    stable: boolean;
+    minBits: number;
+    maxBits: number;
+  } {
+    const fresh = this._linkProbeHistory.filter(
+      (p) => now - p.at < MoviPlayer.ABR_PROBE_FRESH_MS,
+    );
+    if (fresh.length === 0) {
+      return { count: 0, stable: false, minBits: 0, maxBits: 0 };
+    }
+    let minBits = Number.POSITIVE_INFINITY;
+    let maxBits = 0;
+    for (const p of fresh) {
+      minBits = Math.min(minBits, p.bits);
+      maxBits = Math.max(maxBits, p.bits);
+    }
+    return {
+      count: fresh.length,
+      stable:
+        fresh.length >= 2 &&
+        minBits >= maxBits * MoviPlayer.ABR_LINK_STEADY_RATIO,
+      minBits,
+      maxBits,
+    };
+  }
   /** How long a probe reading stays fresh enough to size a candidate from. */
   private static readonly ABR_PROBE_FRESH_MS = 60_000;
   /** How long a rung's own refusal stands before it is worth spending another
