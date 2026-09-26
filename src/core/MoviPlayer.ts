@@ -5428,7 +5428,32 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
           );
           return;
         }
+        // A rung whose last probes measured nothing is not probed again on
+        // the next tick. Each is up to 2MB, and a probe that came back empty
+        // will usually come back empty again for the same reason — nothing
+        // limited that, so it ran every four seconds for as long as the
+        // candidate stood. Backs off 10s, 20s, 40s, capped at a minute, and a
+        // reading clears it.
+        const miss = this._rungProbeMisses.get(up.url);
+        if (
+          miss &&
+          now - miss.at <
+            Math.min(
+              MoviPlayer.ABR_PROBE_MIN_GAP_MS * 2 ** (miss.count - 1),
+              60_000,
+            )
+        ) {
+          return;
+        }
         const rawProbeBits = await this.probeRungThroughput(up.url);
+        if (rawProbeBits > 0) {
+          this._rungProbeMisses.delete(up.url);
+        } else {
+          this._rungProbeMisses.set(up.url, {
+            count: (miss?.count ?? 0) + 1,
+            at: now,
+          });
+        }
         // A rung gets probed again every time it comes up as a candidate, and
         // committing on the first reading that clears the bar is choosing the
         // best of N tries — which, with a variable link, is a near-certainty
@@ -5600,6 +5625,9 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
   /** Last probe reading per rung URL — the second opinion an upshift needs
    *  before the ladder moves into that rung. See the vote in abrTick. */
   private _rungProbeBits = new Map<string, { bits: number; at: number }>();
+  /** Probes of a rung that came back with no reading, and when the last one
+   *  did — the backoff before asking that rung again. */
+  private _rungProbeMisses = new Map<string, { count: number; at: number }>();
   /** How long a probe reading stays fresh enough to size a candidate from. */
   private static readonly ABR_PROBE_FRESH_MS = 60_000;
   /** How long a rung's own refusal stands before it is worth spending another
@@ -5712,6 +5740,18 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
       }
       const timedSecs = (performance.now() - timingStart) / 1000;
       if (timedSecs < 0.05) {
+        // Too fast to time is an answer, not a failure: the whole slice came
+        // in faster than the timing window can open, which a slow link cannot
+        // do. Returning nothing made a fast link the one thing the ABR could
+        // not measure — on a line that read 150Mbps, 30 probes in a row came
+        // back "too short to time", each a 2MB download, and the paced guard
+        // held every climb for want of a number. The whole slice, round trip
+        // included, is a floor on what the link carries, and a floor is all a
+        // climb needs.
+        if (totalSecs >= 0.15) {
+          Logger.debug(TAG, `Rung probe: past the burst in ${(timedSecs * 1000) | 0}ms — using the whole slice as a floor`);
+          return (total / totalSecs) * 8;
+        }
         Logger.debug(TAG, `Rung probe: only ${(timedSecs * 1000) | 0}ms past the burst — too short to time`);
         return -1;
       }
