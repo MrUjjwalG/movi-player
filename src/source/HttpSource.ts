@@ -1594,8 +1594,42 @@ export class HttpSource implements SourceAdapter {
                     }
                   }
 
-                  // Can't compact - stop stream
+                  // Can't compact YET — hold the stream, don't end it.
+                  //
+                  // Ending it here left nothing to start it again but a read
+                  // that MISSED: the window drained all the way to its last
+                  // byte, and only then did a fresh request go out, with its
+                  // round trip and slow start, while the picture waited. On a
+                  // 775MB 8K file the window is 62MB — eleven seconds — so that
+                  // happened every eleven seconds, and one of them left 0.2s
+                  // of buffer: the ABR read it as the link failing 8K and
+                  // dropped to 4K, with a one-second stop, on a line that then
+                  // refilled at 12-15 MB/s. Parked, the response stays open and
+                  // resumes the moment the reader has freed a quarter of the
+                  // window, which is exactly when the compaction above can run.
                   this.unlock();
+                  if (this.size > 0 && currentEnd < this.size) {
+                    Logger.debug(
+                      TAG,
+                      `Window full after ${(totalDownloaded / 1024 / 1024).toFixed(1)}MB — holding the stream until the reader frees a quarter of it`,
+                    );
+                    const parkedAt = Date.now();
+                    let freed = false;
+                    while (this.atomicIsStreaming() && this.reader === reader && !this.closed) {
+                      await new Promise((r) => setTimeout(r, 100));
+                      if (this.position - this.atomicGetBufferStart() > this.bufferSize * 0.25) {
+                        freed = true;
+                        break;
+                      }
+                    }
+                    const parkedMs = Date.now() - parkedAt;
+                    gateMsWindow += parkedMs;
+                    gateMsTotal += parkedMs;
+                    // Resumed: the next chunk lands in the tenth of the window
+                    // still free, and the compaction above runs on it.
+                    if (freed) continue;
+                    break;
+                  }
                   Logger.debug(TAG, `Downloaded ${(totalDownloaded / 1024 / 1024).toFixed(1)}MB (${limitReached ? 'limit reached' : 'buffer full'}), stopping stream`);
                   this.atomicSetStreaming(false);
                   break;
