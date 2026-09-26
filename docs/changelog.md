@@ -68,6 +68,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **The software-decode budget scales with the machine's cores** (600M px/s per 8 threads) instead of one flat figure that warned about files a fast desktop plays perfectly.
 - **A script's `play()` with no gesture is treated as autoplay**: a refused sound falls back to muted with "Tap to unmute", and a page-muted start shows the pill.
 - **An autoplay source opens without raising the controls** on `src` set or change.
+- **Auto aims at the rung the link carries** and probes that rung itself; a refused reading aims the next tick lower, a two-rung jump needs two readings, and a thin buffer still climbs one rung at a time.
+- **Picking Auto goes straight to the link's rung**, as a fresh open does.
+- **A downshift is decided at half the buffer**, with one short probe, so the switch can prime under a picture still playing.
+- **A rung whose in-place climb cannot be primed** is left out of the climb for 30s, then 60s, then at most 120s.
+- **The loading light flows like a tide.**
 
 ### Fixed
 - **The opening poster no longer fades up out of black.** It was faded in over 220ms on every load, and both the host and the canvas are opaque black before the first frame — so what the fade actually did was ramp a thumbnail out of black on every navigation, measured at opacity 0 to 1 across 158ms to 366ms. That reads as a flash, and it lasted as long as the fade rather than as long as the load. It now cuts to the poster, and the fade is kept for the case it was written for: a poster replacing a picture that is already on screen.
@@ -120,6 +125,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **An upgraded `<video autoplay>` starts at once** when sound is certain to be refused, instead of ~1.6s under a play button.
 - **The link-speed notice** probes with the source's headers (Drive answered 403) and no longer mistakes a starved link for a slow device.
 - **`setIcon()` with the same icon is a no-op** instead of a repaint on every framework render.
+- **8K no longer drops to 4K every few seconds** on a link that carries it: a full buffer window holds the download instead of ending it.
+- **The buffer bar no longer slides back after a seek**, and **pausing, scrubbing and pressing play no longer empties it**.
+- **A picture waiting for its bytes is not read as decode-bound**, so 8K is not capped for the session.
+- **Safari no longer bars 1440p AV1** on WebKit's `decodingInfo` answer when `VideoDecoder` can decode it.
+- **An abandoned quality switch stops downloading**, and **a link too fast to time is still measured**.
+- **A downshift on a slow link finishes**; **a refused (403) source no longer walks the quality down**; **`bindav` holds** when the picture has not arrived.
+- No starved rescue over smooth playback; a held arrow key wins over an automatic switch; setting the same source twice opens it correctly.
+- A paused video restored in place shows no first-play button, poster or 0:00; tap to unmute shows no spinner; Matroska files no longer hitch a few seconds in.
 
 ## [0.4.0] - 2026-08-15
 
