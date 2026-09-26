@@ -405,6 +405,7 @@ function injectTakeover() {
       console.info(
         "[movi] Take over page videos: this page's video links do not lead to media, so the page has been left as it is.",
       );
+      releaseSkinPrehide();
       return;
     }
     const script = document.createElement("script");
@@ -533,9 +534,35 @@ function topSite() {
   });
 }
 
+/**
+ * Give a site's player skin back its chrome.
+ *
+ * early.js hides the chrome of the skins the takeover replaces from the very
+ * start of the page, so it does not flash up and vanish while the player
+ * loads. It gives each skin back by itself once that skin is upgraded, turns
+ * out to be streaming, or waits too long — but only this side knows the page
+ * will not be taken over at all (off here, or its links are dead), and then
+ * nothing should wait. An event because early.js lives in the page's world
+ * and this does not; the two share the window's events and nothing else.
+ */
+function releaseSkinPrehide() {
+  try {
+    window.dispatchEvent(new Event("movi-prehide-release"));
+  } catch {
+    /* nothing listening */
+  }
+}
+
 function decideTakeover(data) {
-  if (!data || !data[TAKEOVER_KEY]) return;
-  topSite().then((site) => watchForTakeover(!exemptHere(data[EXEMPT_KEY], site)));
+  if (!data || !data[TAKEOVER_KEY]) {
+    releaseSkinPrehide();
+    return;
+  }
+  topSite().then((site) => {
+    const exempt = exemptHere(data[EXEMPT_KEY], site);
+    if (exempt) releaseSkinPrehide();
+    watchForTakeover(!exempt);
+  });
 }
 
 try {

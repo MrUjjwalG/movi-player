@@ -206,6 +206,71 @@
     ),
   );
 
+  // ─── the skin, hidden until the player is in ─────────────────────────────
+  //
+  // A site's player skin draws its chrome — poster, big play button, control
+  // bar — the moment its script runs, and the takeover replaces the video
+  // some time after: a CORS probe, then a player module to load. For that
+  // stretch the viewer watched the site's player appear and then vanish under
+  // ours. So the chrome the upgrade would hide anyway (hideHostChrome in
+  // src/upgrade.ts — keep the two lists in step) is hidden from the start.
+  //
+  // Each skin gets it back as soon as the answer for it is known: upgraded
+  // (the upgrade's own sheet takes over), streaming (blob:/MediaStream — never
+  // taken over), or nothing after PREHIDE_MS. content.js releases the lot when
+  // the page is not being taken over at all. A constructed sheet rather than a
+  // <style>: nothing is added to the DOM a framework is about to hydrate.
+  const PREHIDE_MS = 4000;
+  const SKINS = ".jwplayer, .video-js, .vjs-container, .plyr";
+  try {
+    const waiting = (skin) => `:is(${skin}):not([data-movi-skin])`;
+    const sheet = new CSSStyleSheet();
+    sheet.replaceSync(
+      `${waiting(".jwplayer")} :is(.jw-preview, .jw-controls, .jw-controls-backdrop, .jw-title, .jw-captions, .jw-overlays, .jw-logo),
+       ${waiting(".jwplayer")} .jw-media::after,
+       ${waiting(".video-js, .vjs-container")} > :is(.vjs-control-bar, .vjs-big-play-button, .vjs-poster, .vjs-loading-spinner, .vjs-text-track-display, .vjs-title-bar),
+       ${waiting(".plyr")} > :is(.plyr__controls, .plyr__control--overlaid) {
+         visibility: hidden !important;
+       }`,
+    );
+    document.adoptedStyleSheets = [...document.adoptedStyleSheets, sheet];
+
+    const firstSeen = new WeakMap();
+    const pageStart = performance.now();
+    let timer = 0;
+    const release = () => {
+      clearInterval(timer);
+      document.adoptedStyleSheets = document.adoptedStyleSheets.filter((s) => s !== sheet);
+    };
+    const settle = () => {
+      let pending = 0;
+      for (const skin of document.querySelectorAll(SKINS)) {
+        if (skin.hasAttribute("data-movi-skin")) continue;
+        if (skin.querySelector("movi-player")) {
+          skin.setAttribute("data-movi-skin", "movi");
+          continue;
+        }
+        const video = skin.querySelector("video");
+        const src = (video && (video.currentSrc || video.getAttribute("src"))) || "";
+        const streaming = !!video && (!!video.srcObject || /^(blob:|mediastream:)/i.test(src));
+        if (!firstSeen.has(skin)) firstSeen.set(skin, performance.now());
+        if (streaming || performance.now() - firstSeen.get(skin) > PREHIDE_MS) {
+          skin.setAttribute("data-movi-skin", "native");
+          continue;
+        }
+        pending++;
+      }
+      // Watched while the page is young or a skin is still undecided. After
+      // that the sheet goes altogether: a skin a page builds later is shown
+      // as it comes, rather than hidden with nothing left to give it back.
+      if (!pending && performance.now() - pageStart > 30000) release();
+    };
+    timer = setInterval(settle, 150);
+    window.addEventListener("movi-prehide-release", release, { once: true });
+  } catch {
+    /* no constructed sheets here — the skin shows as it always did */
+  }
+
   // ─── the handover ───────────────────────────────────────────────────────
   Object.defineProperty(globalThis, KEY, {
     value: {

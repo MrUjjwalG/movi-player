@@ -901,6 +901,9 @@ function hideHostChrome(): void {
   // every piece of chrome a sibling of .jw-media. So neither the skin nor its
   // chrome is reachable by the direct-child pattern the other two use.
   const jw = ".jwplayer:has(movi-player)";
+  // The extension hides the same chrome before the upgrade gets here
+  // (chrome-extension/early.js), so it never flashes up first. Keep the two
+  // lists in step.
   const style = document.createElement("style");
   style.id = HOST_CHROME_STYLE_ID;
   style.textContent = [
