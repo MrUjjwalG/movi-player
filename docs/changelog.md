@@ -52,7 +52,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **A speed change no longer costs a stall**: already-scheduled audio is re-stretched in place instead of thrown away for a fresh demuxer seek.
 - **Auto (adaptive) quality**: fixed a unit bug that read the link estimate 8x too small, a bottom-rung confirm pass that never ran, an ignored persisted link measurement, and a climb into 8K priced off a different stream's throughput.
 - **`/embed` runs inside the embedding page's own origin** now (a `srcdoc` iframe) instead of a cross-origin frame that needed CORS headers a host may never send; an old embed explains what happened and offers a one-copy replacement.
-- Built against **FFmpeg 9.0.1**.
+- Built against **FFmpeg 9.0.2**.
 - **The loading spinner waits before it appears**: `spinnerdelay` defaults to `"1 2"` (a stall after 1s, an opening after 2s) instead of `0`, so a fast local open never flashes a ring. `spinnerdelay="0"` restores the old behaviour.
 
 - **The audio strip keeps its controls**: the strip IS the player, so it no longer thins out at rest, and its title row starts on the same line as the controls under it.

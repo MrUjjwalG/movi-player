@@ -26,7 +26,7 @@ ARG DAV1D_VERSION=1.5.3
 RUN git clone --depth 1 --branch ${DAV1D_VERSION} https://code.videolan.org/videolan/dav1d.git /opt/dav1d
 
 # Clone FFmpeg (will be mounted from host for dev, or cloned for CI)
-ARG FFMPEG_VERSION=n9.0.1
+ARG FFMPEG_VERSION=n9.0.2
 RUN git clone --depth 1 --branch ${FFMPEG_VERSION} https://github.com/FFmpeg/FFmpeg.git /opt/FFmpeg
 
 # Build script
