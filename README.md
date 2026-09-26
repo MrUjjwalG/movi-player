@@ -185,7 +185,7 @@ Movi Player's niche is that same WebCodecs + FFmpeg-WASM playback, delivered as 
 The headline changes — see the [full changelog](CHANGELOG.md) for everything:
 
 - **[Playlists and queues](#playlists)** — `playlist` hands the element a list and an index: Next/Previous in the bar, `Shift+N`/`Shift+P`, and the skip pair on the lock screen and headset button, which a page could never draw for itself. `autoadvance` plays through, `shuffle` plays in a random order.
-- **[Take over the `<video>` a page already has](#existing-video-tags)** — `upgradeVideoElements()`, or a `data-upgrade` script tag, drops a `<movi-player>` in place of an existing element (including one driven by video.js) and keeps the original as a live proxy, so the page's own `video.play()` and listeners go on meaning what they meant. The browser extensions do it on any page, for a file at a URL, at the flick of a switch.
+- **[Take over the `<video>` a page already has](#existing-video-tags)** — `upgradeVideoElements()`, or a `data-upgrade` script tag, drops a `<movi-player>` in place of an existing element (including one driven by video.js) and keeps the original as a live proxy, so the page's own `video.play()` and listeners go on meaning what they meant. The browser extensions do it on any page — frames included — for a file at a URL, at the flick of a switch.
 - **Auto English captions, made in the browser** — `decodeAudio()` hands back the soundtrack as 16 kHz mono PCM without playing it, `addSubtitleTrack()` takes cues as they are heard, and the web app puts the two together.
 - **`smoothwarning` and `canPlaySmoothly()`** — tell a viewer that what is loaded will not play smoothly at this speed on this machine *before* it starts stuttering, or ask the question yourself and decide what to do about it. While it plays, the same notice speaks up from measurement: stutter the device cannot keep up with, or a link that cannot deliver the file fast enough ("This media needs about N Mbps to play").
 - **`thumb="precise"` and standard thumbnail tracks** — previews decode forward to the frame under the pointer instead of showing the keyframe before it, and a storyboard is read the way video.js and JW Player already write one (`<track kind="metadata" label="thumbnails">`).
@@ -260,11 +260,27 @@ so `getElementById` keeps finding the player. The original element stays hidden
 with its API pointed at the new one, so `video.play()`, `video.currentTime = 60`
 and `video.addEventListener(…)` in existing code keep working.
 
-Where the page drew a skin around its `<video>` — video.js, Plyr — that skin
-stops drawing: its control bar, big play button, poster and spinner would
-otherwise sit on top of the player's own. Nothing is removed and no player is
-disposed, so the page's scripts keep working; they are simply no longer the
-thing on screen.
+It goes on answering like the `<video>` it was. Listeners the page attached
+*before* the upgrade — which is when a player skin attaches all of its own —
+still hear `playing`, `timeupdate`, `seeked` and the rest, and `timeupdate`
+comes at a `<video>`'s pace rather than every frame. Its size and position,
+`networkState`, `played`, `getVideoPlaybackQuality()`, `setAttribute("src")`,
+fullscreen (the `webkit*` pair included) and picture-in-picture all answer from
+the player, and a page's own click handler that toggles playback no longer
+undoes the player's toggle on the same click.
+
+Where the page drew a skin around its `<video>` — video.js, JW Player, Plyr —
+that skin stops drawing: its control bar, big play button, poster and spinner
+would otherwise sit on top of the player's own. Nothing is removed and no
+player is disposed, so the page's scripts keep working; they are simply no
+longer the thing on screen. The skin's quality ladder becomes the player's
+quality menu, so a skin switching rung behind the player's back — a new `src`,
+a `load()`, a seek back — no longer starts the film over.
+
+Other layers a page left over its `<video>` — its own big play button, a
+transparent click-catcher, a dimming overlay — are found once the player is in
+place and hidden, so clicks reach the player. `{ keepOverlays: true }` leaves
+them where they are.
 
 Only a `<video>` that is playing a **file at a URL** is taken over. A site that
 feeds its element from JavaScript — Media Source Extensions, a MediaStream, a
