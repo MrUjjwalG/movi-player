@@ -1191,6 +1191,10 @@ export class HttpSource implements SourceAdapter {
   }
 
   private async readStreamBackground(startOffset: number): Promise<void> {
+    // The stream this call is. A later startStream() supersedes it, and from
+    // then on it must neither fetch nor touch `this.reader` — both belong to
+    // the new one. See the parked exit below.
+    const myGeneration = this.streamGeneration;
     let retryCount = 0;
     // Track if we have committed the new buffer window to atomics
     let windowInitialized = false;
@@ -1263,7 +1267,7 @@ export class HttpSource implements SourceAdapter {
         : offset + maxDownload - 1;
     };
 
-    while (this.atomicIsStreaming()) {
+    while (this.atomicIsStreaming() && this.streamGeneration === myGeneration) {
       try {
         const buffer = this.getBuffer();
 
@@ -1615,7 +1619,12 @@ export class HttpSource implements SourceAdapter {
                     );
                     const parkedAt = Date.now();
                     let freed = false;
-                    while (this.atomicIsStreaming() && this.reader === reader && !this.closed) {
+                    while (
+                      this.atomicIsStreaming() &&
+                      this.streamGeneration === myGeneration &&
+                      this.reader === reader &&
+                      !this.closed
+                    ) {
                       await new Promise((r) => setTimeout(r, 100));
                       if (this.position - this.atomicGetBufferStart() > this.bufferSize * 0.25) {
                         freed = true;
@@ -1628,6 +1637,18 @@ export class HttpSource implements SourceAdapter {
                     // Resumed: the next chunk lands in the tenth of the window
                     // still free, and the compaction above runs on it.
                     if (freed) continue;
+                    // Superseded while parked — a seek started a new stream.
+                    // Leave without a trace: `break` fell through to the
+                    // cleanup below, which cancels `this.reader` (the NEW
+                    // stream's), and then to the outer loop, which saw the
+                    // new stream's flag still up and fetched on beside it.
+                    // Measured: every range requested twice after a seek,
+                    // two loops writing one buffer, and a buffer bar that
+                    // slid backwards.
+                    if (this.streamGeneration !== myGeneration || this.reader !== reader) {
+                      try { await reader.cancel(); } catch {}
+                      return;
+                    }
                     break;
                   }
                   Logger.debug(TAG, `Downloaded ${(totalDownloaded / 1024 / 1024).toFixed(1)}MB (${limitReached ? 'limit reached' : 'buffer full'}), stopping stream`);
