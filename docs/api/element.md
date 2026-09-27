@@ -2796,8 +2796,9 @@ That is the whole "up next / suggestions" affordance: a button the viewer only
 meets in fullscreen, and an overlay of your own over the picture behind it.
 
 A `"fill"` overlay — the default placement, an end screen — also stands the
-centre play button down while it is up, so the replay mark does not show
-through behind your panel. `controlslist="nocenterplay"` removes it for good.
+centre play button and the captions down while it is up, so neither shows
+through behind your panel. `controlslist="nocenterplay"` removes the button for
+good.
 
 A list puts one control on several surfaces at once:
 

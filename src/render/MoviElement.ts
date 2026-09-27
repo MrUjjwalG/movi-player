@@ -24347,6 +24347,13 @@ export class MoviElement extends HTMLElement {
         clip-path: inset(50%);
         white-space: nowrap;
       }
+      /* Under an end screen the captions stand down - see syncFillOverlayClass.
+         Visibility, not display: the renderer places this element with inline
+         styles of its own, and !important is what outranks them. */
+      :host(.movi-fill-overlay-open) .movi-subtitle-overlay {
+        visibility: hidden !important;
+      }
+
       .movi-subtitle-overlay {
         position: absolute;
         /* How far off the bottom the caption sits. A variable rather than the
@@ -39495,6 +39502,10 @@ export class MoviElement extends HTMLElement {
    * under a layer that takes every click aimed at it. An overlay that covers
    * the picture is the host's answer to "what now", so the button stands down
    * while one is up. `controlslist="nocenterplay"` takes it away for good.
+   *
+   * The captions go with it, for the same reason: they sit under the overlay
+   * too, and a line of dialogue running through the middle of a grid of
+   * suggestions is noise. They come back with the picture.
    */
   private syncFillOverlayClass(): void {
     let covered = false;
