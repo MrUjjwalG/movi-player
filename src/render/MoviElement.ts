@@ -7428,7 +7428,7 @@ export class MoviElement extends HTMLElement {
         if (isStripMode || inFullscreen) {
           if (inFullscreen) this.classList.add("movi-menu-overflow");
           contextMenu.style.position = "fixed";
-          contextMenu.style.maxHeight = `${Math.max(180, window.innerHeight - 40)}px`;
+          contextMenu.style.maxHeight = `${MoviElement.contextMenuMaxHeight()}px`;
           contextMenu.style.display = "block";
           contextMenu.style.visibility = "hidden";
           const menuWidth = contextMenu.offsetWidth;
@@ -7462,8 +7462,9 @@ export class MoviElement extends HTMLElement {
         let y = e.clientY;
 
         // Cap height to the VIEWPORT so a tall menu extends downward instead of
-        // scrolling inside a tiny box.
-        contextMenu.style.maxHeight = `${Math.max(180, window.innerHeight - 40)}px`;
+        // scrolling inside a tiny box — and to a menu's height, not a window's:
+        // see contextMenuMaxHeight.
+        contextMenu.style.maxHeight = `${MoviElement.contextMenuMaxHeight()}px`;
 
         // Temporarily show menu to get its dimensions
         contextMenu.style.display = "block";
@@ -25063,6 +25064,19 @@ export class MoviElement extends HTMLElement {
         /* It is a label, not a target — never let it eat the button's click or
            show up in a text selection drag. */
         user-select: none;
+      }
+      /* The chip's text is drawn against --movi-primary, which the page picks,
+         so it cannot be one fixed colour: white vanished on a yellow or amber
+         theme. Black or white from the primary's own lightness (OKLCH L above
+         0.7 is a light fill). Behind @supports because the rule reads the
+         primary through var(), which a browser without relative colours
+         would only reject after the fact, leaving the text no colour at all;
+         there the white above stands. */
+      @supports (color: oklch(from red l c h)) {
+        .movi-settings-btn-badge,
+        .movi-quality-btn-badge {
+          color: oklch(from var(--movi-primary) clamp(0, (0.7 - l) * 1000, 1) 0 0);
+        }
       }
       .movi-settings-container,
       .movi-quality-btn {
@@ -44924,6 +44938,21 @@ export class MoviElement extends HTMLElement {
       if (sub.parentNode !== this._menuHome) this._menuHome.appendChild(sub);
     }
     this._portaledSubs = [];
+  }
+
+  /**
+   * The tallest the right-click menu gets.
+   *
+   * Capped to the window alone, a player with many items — chapters, tracks,
+   * host entries — opened a menu the height of the whole screen, a list to
+   * read top to bottom from the point that was clicked. Three quarters of the
+   * window, and past that it scrolls. 460px (the settings panel's cap) was
+   * tried first and cut a normal menu short on a desktop window, so it is only
+   * the floor on a short one.
+   */
+  private static contextMenuMaxHeight(): number {
+    const h = window.innerHeight;
+    return Math.max(180, Math.min(h - 40, Math.max(460, Math.round(h * 0.75))));
   }
 
   private clampMenuToViewport(menu: HTMLElement): void {
