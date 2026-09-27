@@ -591,6 +591,8 @@ player.showOverlay({
 // later: player.updateOverlay("up-next", { content }) / player.hideOverlay("up-next")
 ```
 
+While a `"fill"` overlay (an end screen) is up, the centre play button stands down so it does not show through behind your suggestions; `controlslist="nocenterplay"` takes it away for good.
+
 Full spec: [Custom Controls](https://moviplayer.com/docs/api/element#custom-controls) in the docs.
 
 ### Engine Selection and Native Fallback

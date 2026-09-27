@@ -25131,6 +25131,8 @@ export class MoviElement extends HTMLElement {
          line rather than generated, so a token that does not exist matches
          nothing instead of half-working. */
       :host([controlslist~="noplay"]) .movi-play-pause,
+      :host([controlslist~="nocenterplay"]) .movi-center-play-pause,
+      :host(.movi-fill-overlay-open) .movi-center-play-pause,
       :host([controlslist~="noplaylist"]) .movi-prev-btn,
       :host([controlslist~="noplaylist"]) .movi-next-btn,
       /* One end at a time — the BUTTON only. Shift+P, the queue and the lock
@@ -39468,6 +39470,28 @@ export class MoviElement extends HTMLElement {
     this.fillOverlay(el, spec.content);
     layer.appendChild(el);
     this._overlays.set(spec.id, { spec, el });
+    this.syncFillOverlayClass();
+  }
+
+  /**
+   * Is a "fill" overlay — an end screen — covering the picture?
+   *
+   * The centre button still came up under it: at `ended` it is the replay
+   * button, and an end screen is usually a translucent wash over the last
+   * frame, so a big play mark showed through behind the host's suggestions,
+   * under a layer that takes every click aimed at it. An overlay that covers
+   * the picture is the host's answer to "what now", so the button stands down
+   * while one is up. `controlslist="nocenterplay"` takes it away for good.
+   */
+  private syncFillOverlayClass(): void {
+    let covered = false;
+    for (const { spec } of this._overlays.values()) {
+      if ((spec.placement || "fill") === "fill") {
+        covered = true;
+        break;
+      }
+    }
+    this.classList.toggle("movi-fill-overlay-open", covered);
   }
 
   /** Change an overlay in place. Content given here REPLACES what is there. */
@@ -39481,6 +39505,7 @@ export class MoviElement extends HTMLElement {
     }
     if (patch.placement) {
       entry.el.className = `movi-overlay movi-overlay-${patch.placement}`;
+      this.syncFillOverlayClass();
     }
     if (patch.interactive !== undefined) {
       entry.el.style.pointerEvents = patch.interactive === false ? "none" : "auto";
@@ -39493,6 +39518,7 @@ export class MoviElement extends HTMLElement {
     if (!entry) return;
     this._overlays.delete(id);
     entry.el.remove();
+    this.syncFillOverlayClass();
     try {
       entry.spec.onDismiss?.(reason, this);
     } catch (e) {

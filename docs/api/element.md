@@ -677,7 +677,7 @@ Switches built-in controls off, as `no<name>` tokens — the same shape
 `noprogress`, `noaudio`, `nocc`, `noquality`, `nospeed`, `nostableaudio`,
 `nohdr`, `noloop`, `nosettings`, `noaspect`, `nopip`, `nofullscreen`, `nomore`,
 `nostats`, `noshortcuts`, `noambient`, `nocrop`, `nosnapshot`, `norotate`,
-`notimeline`, `nodivider`, `nosubtitledrag`, `nospinner`
+`notimeline`, `nodivider`, `nosubtitledrag`, `nospinner`, `nocenterplay`
 — plus the `id` of any control added with
 [`addControl()`](#addcontrol-spec), which is simply not added.
 
@@ -700,6 +700,13 @@ long as it always did, which is what a page keys its own indicator off, and the
 centre play button still stands down while either is on. To keep the ring where
 the player puts it and only change how it looks, use
 [`slot="spinner"`](#replace-the-spinner-slot-spinner) instead.
+
+`nocenterplay` takes the big play button off the middle of the picture — over
+the poster before the first play, at the end as replay, and on touch. The bar's
+own play button stays (that one is `noplay`). A host that draws its own start
+or end screen is the usual reason. For an end screen shown with
+[`showOverlay()`](#custom-controls) there is nothing to do: while a `"fill"`
+overlay is up the centre button stands down by itself.
 
 `noprev` and `nonext` are a different kind of token: they take one BUTTON off
 the bar and nothing else. The key, the queue and the lock screen's pair carry
@@ -2787,6 +2794,10 @@ player.addControl({
 
 That is the whole "up next / suggestions" affordance: a button the viewer only
 meets in fullscreen, and an overlay of your own over the picture behind it.
+
+A `"fill"` overlay — the default placement, an end screen — also stands the
+centre play button down while it is up, so the replay mark does not show
+through behind your panel. `controlslist="nocenterplay"` removes it for good.
 
 A list puts one control on several surfaces at once:
 
