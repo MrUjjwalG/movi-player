@@ -5769,6 +5769,7 @@ export class MoviElement extends HTMLElement {
     this._holdSpeedActive = true;
     this.gesturePerformed = true; // suppress the touchend tap (show/hide chrome)
     this._rateBeforeHold = this._playbackRate || 1;
+    Logger.info(TAG, `Hold speed on: 2x (was ${this._rateBeforeHold}x)`);
     this.player.setPlaybackRate(2);
     this._playbackRate = 2;
     this.updateMediaSessionPosition();
@@ -5793,6 +5794,7 @@ export class MoviElement extends HTMLElement {
     }
     if (!this._holdSpeedActive) return;
     this._holdSpeedActive = false;
+    Logger.info(TAG, `Hold speed off: back to ${this._rateBeforeHold}x`);
     this.player?.setPlaybackRate(this._rateBeforeHold);
     this._playbackRate = this._rateBeforeHold;
     this.updateMediaSessionPosition();
@@ -30754,6 +30756,7 @@ export class MoviElement extends HTMLElement {
   }
 
   private updatePlaybackRate() {
+    const previousOsdRate = this._lastOsdRate;
     const rateChanged = this._playbackRate !== this._lastOsdRate;
     this._lastOsdRate = this._playbackRate;
 
@@ -30790,6 +30793,16 @@ export class MoviElement extends HTMLElement {
       !this._isUnsupported &&
       this.player
     ) {
+      // Said with where it came from. A "1x" has been seen arriving with
+      // nobody touching anything, and no log said what re-applied the rate.
+      Logger.info(
+        TAG,
+        `Speed OSD ${this._playbackRate}x (last shown ${previousOsdRate}x) via ${(new Error().stack || "")
+          .split("\n")
+          .slice(2, 5)
+          .map((l) => l.trim().replace(/^at /, "").split(" (")[0])
+          .join(" < ")}`,
+      );
       this.showOSD(
         `${symbolSvg("stopwatch")}`,
         `${this._playbackRate}x`,
