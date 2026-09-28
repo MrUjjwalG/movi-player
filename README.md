@@ -979,7 +979,7 @@ The standard `HTMLMediaElement` events all fire (`loadedmetadata`, `canplay`, `p
 | `subtitledelaychange` | `{ subtitleDelay }` | Subtitle offset changed |
 | `smoothwarning` | `PlaybackAssessment & { media, message }` | Cancelable — not expected to play smoothly at this speed; `preventDefault()` hides the built-in notice |
 | `loop` | `{ count }` | The item started over on a seamless [`loop`](#attributes) — `count` is which turn this is, from 1 |
-| `aspectchange`, `loopchange`, `shufflechange`, `stablevolumechange`, `hdrchange`, `ambientchange`, `rotatechange`, `audioonlychange` | setting-specific | A viewer changed a setting — persist it host-side if you want |
+| `aspectchange`, `loopchange`, `shufflechange`, `stablevolumechange`, `hdrchange`, `ambientchange`, `cropbarschange`, `rotatechange`, `audioonlychange` | setting-specific | A viewer changed a setting — persist it host-side if you want |
 | `fullscreenchange` | `{ fullscreen }` | Entered/exited fullscreen |
 | `movi-fullscreen-request` | cancelable | Before `requestFullscreen()` — `preventDefault()` to take over via `setHostFullscreen()` |
 | `back` | cancelable | The `titlemode` back arrow was pressed |
@@ -987,7 +987,7 @@ The standard `HTMLMediaElement` events all fire (`loadedmetadata`, `canplay`, `p
 | `titlechange` | `{ title }` | Displayed title changed |
 | `coverart` | `ImageBitmap \| null` | Embedded cover art extracted |
 | `audiooutputchange` | `{ deviceId }` | Audio routed to a different output device |
-| `audiostripchange` | `{ active }` | Audio-only strip layout entered/left |
+| `audiostripchange` | `{ strip }` | Audio-only strip layout entered/left (windowed layout — a fullscreen trip does not fire it) |
 | `preloadcomplete` | — | Initial preload buffer filled |
 | `linearmode` | — | Server ignores `Range` — playback is forward-only; hide seek-dependent UI |
 | `nativefallback` | `{ src }` | Source handed to a native `<video>` (`fallback="native"`) |

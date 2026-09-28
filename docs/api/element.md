@@ -682,11 +682,28 @@ Switches built-in controls off, as `no<name>` tokens — the same shape
 [`addControl()`](#addcontrol-spec), which is simply not added.
 
 A switched-off control goes everywhere it lives: the button, its context-menu
-row, and — for the ones the availability check knows (`aspect`, `pip`,
-`snapshot`, `rotate`, `hdr`, `ambient`, `timeline`, `stableaudio`, `playlist`)
-— its keyboard shortcut. `noplaylist` also clears the queue's skip pair from
-the OS lock screen, which is the one surface a page cannot restyle its way out
-of.
+row, its row in the settings panel, its keyboard shortcut and its line in the
+Keyboard Shortcuts sheet, and any gesture that does the same thing —
+double-click / double-tap for `nofullscreen`, press-and-hold 2× for `nospeed`,
+the fullscreen pinch for `noaspect`. `nocc` takes the caption delay keys (Z / X)
+with it, `noplaylist` takes Shuffle, and `nopip` also refuses Picture-in-Picture
+on the internal `<video>`, so the browser's own media controls cannot open it
+either. `noplaylist` also clears the queue's skip pair from the OS lock screen,
+which is the one surface a page cannot restyle its way out of. The tokens can
+change at any time; the player follows.
+
+Leaving is always allowed. A token stops a place from being **entered** —
+fullscreen, Picture-in-Picture, stats, the timeline, the shortcuts sheet — but a
+viewer already inside can still get out by the usual key, button or row. A
+setting (speed, loop, captions, aspect, …) simply stays where it is.
+
+Some tokens remove a piece of the bar and nothing else, because what they sit
+over belongs to the viewer or to another attribute: `noplay` (Space, K and a
+click on the picture still play and pause), `novolume` (M, the arrow keys and
+the device's volume still work), `noseekbuttons` (seeking is
+[`fastseek`](#fastseek)'s), `noprogress`, `notime`, `nosettings` and `nomore`
+(the controls inside them have tokens of their own), `noprev` / `nonext`,
+`nocenterplay`, `nodivider`, `nospinner` and `nounmutepill`.
 
 `nosubtitledrag` is not a control on the bar at all — it takes away the
 viewer's ability to drag the live caption somewhere else in the picture. The
@@ -1669,6 +1686,8 @@ player.audioOnly = false;  // restore video
 - **Split source** — stops the demux loop entirely so the video file body never downloads; the native `<audio>` drives playback.
 
 The UI forces the album-art / strip surface and disables previews. The attribute maps to the `audioOnly` property and `PlayerConfig.audioOnly`.
+
+**Fullscreen works for audio** — any audio presentation, by every route (the button, `F`, the context menu, double-click / double-tap, swipe-up, `movi-fullscreen-request` + [`setHostFullscreen`](#sethostfullscreen)). With cover art (embedded, or the `poster` painted as art) the artwork view fills the screen, the sleeve beside its title when the screen is wide and above it when it is tall. With no art, the 56px strip gives way to the same full-screen view with a drawn sleeve in the art's place — coloured from the title — and comes back unchanged on exit; `audiostripchange` keeps reporting the windowed layout, so a page that collapses its wrapper for the strip is not reflowed by the trip. Audio never locks the phone's orientation, and a video that switches to audio while fullscreen stays fullscreen. `controlslist="nofullscreen"` still switches it all off.
 
 ---
 
@@ -2840,8 +2859,9 @@ holds, so a long title still truncates before it.
 
 **`media` — video-only or audio-only.** The player collapses to an audio
 presentation when the media has no picture (cover art, or the compact strip),
-and the built-ins that mean nothing there — captions, quality, aspect, PiP,
-fullscreen — take themselves out of the bar and the menu. Say which kind of
+and the built-ins that mean nothing there — captions, quality, aspect, PiP —
+take themselves out of the bar and the menu. (Fullscreen stays: audio has a
+full-screen view of its own — see [`audioonly`](#audioonly).) Say which kind of
 media your control belongs to and it does the same:
 
 ```typescript
@@ -3084,9 +3104,10 @@ The element re-exposes player activity as DOM events so you can wire `addEventLi
 | `pipchange`            | `{ pip: boolean }`                   | Picture-in-Picture window opened/closed            |
 | `enterpictureinpicture` | —                                   | `HTMLVideoElement` alias, fired alongside `pipchange` |
 | `leavepictureinpicture` | —                                   | `HTMLVideoElement` alias, fired alongside `pipchange` |
-| `qualitychange`        | `{ trackId: number }`                | Active video quality / track switched              |
+| `qualitychange`        | `{ trackId, height, auto }` or `{ src, height, … }` or `{ height, auto }` | Active video quality / track switched. A hand-picked rung reports `auto: false` — including the rung Auto was already on, which switches nothing — and an Auto/ABR move reports `auto: true`; see [events](./events.md) |
 | `subtitledelaychange`  | `{ subtitleDelay: number }`          | Subtitle offset changed via property/attr          |
-| `aspectchange`         | `{ fit, mode }`                      | Viewer picked an aspect from the gear menu (`fit` is `contain`/`cover`/`fill`/`zoom`; `mode` says whether it landed on `objectfit` or the `control` fit) |
+| `aspectchange`         | `{ fit, mode }`                      | Viewer picked an aspect — gear panel, context menu, the bar's aspect button, the A key or a pinch (`fit` is `contain`/`cover`/`fill`/`zoom`; `mode` says whether it landed on `objectfit` or the `control` fit). Not fired for the host's own `objectfit` |
+| `cropbarschange`       | `{ enabled: boolean }`               | Viewer switched [`cropbars`](#cropbars) on or off (C, the gear switch, the context menu, or the property). Not fired for the host's own attribute |
 | `cropchange`           | `{ top, bottom, left, right }`       | The bars cropped from the picture changed (see [`cropbars`](#cropbars)); fractions of the coded frame taken off each edge |
 | `controlschange`       | `{ visible: boolean }`               | The control bar appeared or auto-hid. Fires on the change only, so a host drawing its own chrome over the player can follow it |
 | `loopchange`           | `{ enabled: boolean, mode: "off" \| "one" \| "all" }` | Loop toggled or changed kind (see [`loop`](#loop)). `enabled` is `mode !== "off"` |

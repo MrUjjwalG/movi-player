@@ -623,7 +623,7 @@
             },
             {
               "name": "qualitychange",
-              "description": "Active video quality / track switched. The shape depends on what moved it: a pick from the track menu carries trackId, a ladder switch carries src and height, and an Auto/ABR switch carries height and auto: true. A host persisting a deliberate choice should ignore auto === true; one prefetching the next video should read height from any of them and treat its absence as \"unchanged\"",
+              "description": "Active video quality / track switched. The shape depends on what moved it: a pick from the track menu carries trackId (with height and auto), a ladder switch carries src and height, a switch landing carries height and auto, and a hand-picked rung that switches nothing (the one Auto was already on) still reports height with auto: false. An Auto/ABR move carries auto: true. A host persisting a deliberate choice should ignore auto === true; one prefetching the next video should read height from any of them and treat its absence as \"unchanged\"",
               "type": {
                 "text": "CustomEvent<{ trackId } or { src, height, … } or { height, auto }>"
               }
@@ -721,9 +721,9 @@
             },
             {
               "name": "audiostripchange",
-              "description": "Audio-only strip layout entered/left",
+              "description": "Audio-only strip layout entered/left. Reports the windowed layout: a fullscreen trip (where the strip becomes a full-screen view) doesn't fire it",
               "type": {
-                "text": "CustomEvent<{ active: boolean }>"
+                "text": "CustomEvent<{ strip: boolean }>"
               }
             },
             {

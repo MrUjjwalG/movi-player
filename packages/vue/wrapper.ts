@@ -61,6 +61,11 @@ export const MoviPlayer = defineComponent({
     // Attributes THIS wrapper wrote, so a prop that goes away can take its
     // attribute with it — see the undefined branch below.
     const written = new Set<string>();
+    // What each prop was the last time it was reflected. The effect re-runs
+    // when ANY prop changes and used to rewrite every attribute — so a viewer's
+    // loop, crop or ambient switch was undone by an unrelated prop changing.
+    // Only a prop whose value the host actually changed is written.
+    const last = new Map<string, unknown>();
 
     // Reflect props + passthrough attrs onto the element.
     watchEffect(() => {
@@ -69,6 +74,8 @@ export const MoviPlayer = defineComponent({
       const all: Record<string, unknown> = { ...attrs, ...props };
       for (const [key, value] of Object.entries(all)) {
         const attr = key.toLowerCase();
+        if (last.has(attr) && Object.is(last.get(attr), value)) continue;
+        last.set(attr, value);
         if (value === undefined || value === null) {
           // A prop that USED to have a value and now has none means the host is
           // describing a different video — chapters that the next video doesn't

@@ -848,6 +848,13 @@ export class CanvasRenderer {
     // the compositor believes, so the rounding survives.
     // x = radius in drawing-buffer pixels (0 disables), yz = buffer size.
     uniform vec3 u_round;
+    // Per corner, in drawing-buffer pixels: top-left, top-right, bottom-right,
+    // bottom-left. u_round.x is the largest of them (0 disables the cut).
+    uniform vec4 u_radii;
+    float movi_cornerR(vec2 p, vec2 h) {
+      // gl_FragCoord's origin is the bottom-left corner.
+      return p.x < h.x ? (p.y >= h.y ? u_radii.x : u_radii.w) : (p.y >= h.y ? u_radii.y : u_radii.z);
+    }
     // The part of the frame to actually show, in texture coordinates
     // (x0,y0 → x1,y1). The whole frame by default; narrowed when the black bars
     // baked INTO the picture are cropped away — see setBarCropEnabled.
@@ -864,8 +871,9 @@ export class CanvasRenderer {
       outColor.a = 1.0;
       if (u_round.x > 0.0) {
         vec2 halfSize = u_round.yz * 0.5;
-        vec2 q = abs(gl_FragCoord.xy - halfSize) - (halfSize - vec2(u_round.x));
-        float d = length(max(q, vec2(0.0))) + min(max(q.x, q.y), 0.0) - u_round.x;
+        float rr1 = movi_cornerR(gl_FragCoord.xy, halfSize);
+        vec2 q = abs(gl_FragCoord.xy - halfSize) - (halfSize - vec2(rr1));
+        float d = length(max(q, vec2(0.0))) + min(max(q.x, q.y), 0.0) - rr1;
         // d is in pixels, and the centre of an edge pixel sits exactly 0.5
         // inside the shape — so the falloff has to be one pixel wide and
         // centred on the boundary. A wider band (this was -0.75..0.75) still
@@ -975,6 +983,13 @@ export class CanvasRenderer {
     // Rounded corners cut in the shader — see the passthrough program.
     // x = radius in drawing-buffer pixels (0 disables), yz = buffer size.
     uniform vec3 u_round;
+    // Per corner, in drawing-buffer pixels: top-left, top-right, bottom-right,
+    // bottom-left. u_round.x is the largest of them (0 disables the cut).
+    uniform vec4 u_radii;
+    float movi_cornerR(vec2 p, vec2 h) {
+      // gl_FragCoord's origin is the bottom-left corner.
+      return p.x < h.x ? (p.y >= h.y ? u_radii.x : u_radii.w) : (p.y >= h.y ? u_radii.y : u_radii.z);
+    }
 
     in vec2 v_texCoord;
     out vec4 outColor;
@@ -1034,8 +1049,9 @@ export class CanvasRenderer {
       outColor = vec4(display, 1.0); // opaque — see the passthrough program
       if (u_round.x > 0.0) {
         vec2 halfSizeR = u_round.yz * 0.5;
-        vec2 qR = abs(gl_FragCoord.xy - halfSizeR) - (halfSizeR - vec2(u_round.x));
-        float dR = length(max(qR, vec2(0.0))) + min(max(qR.x, qR.y), 0.0) - u_round.x;
+        float rr2 = movi_cornerR(gl_FragCoord.xy, halfSizeR);
+        vec2 qR = abs(gl_FragCoord.xy - halfSizeR) - (halfSizeR - vec2(rr2));
+        float dR = length(max(qR, vec2(0.0))) + min(max(qR.x, qR.y), 0.0) - rr2;
         outColor *= 1.0 - smoothstep(-0.5, 0.5, dR);
       }
     }`;
@@ -1161,6 +1177,13 @@ export class CanvasRenderer {
     uniform vec3 u_colour;   // the sampled ambient colour, already held down
     uniform vec3 u_phases;   // three slowly-walking phases, in radians
     uniform vec3 u_round;    // same corner cut as the picture — see the passthrough program
+    // Per corner, in drawing-buffer pixels: top-left, top-right, bottom-right,
+    // bottom-left. u_round.x is the largest of them (0 disables the cut).
+    uniform vec4 u_radii;
+    float movi_cornerR(vec2 p, vec2 h) {
+      // gl_FragCoord's origin is the bottom-left corner.
+      return p.x < h.x ? (p.y >= h.y ? u_radii.x : u_radii.w) : (p.y >= h.y ? u_radii.y : u_radii.z);
+    }
     in vec2 v_uv;
     out vec4 outColor;
 
@@ -1223,8 +1246,9 @@ export class CanvasRenderer {
       outColor = vec4(lit, 1.0);
       if (u_round.x > 0.0) {
         vec2 halfSizeR = u_round.yz * 0.5;
-        vec2 qR = abs(gl_FragCoord.xy - halfSizeR) - (halfSizeR - vec2(u_round.x));
-        float dR = length(max(qR, vec2(0.0))) + min(max(qR.x, qR.y), 0.0) - u_round.x;
+        float rr3 = movi_cornerR(gl_FragCoord.xy, halfSizeR);
+        vec2 qR = abs(gl_FragCoord.xy - halfSizeR) - (halfSizeR - vec2(rr3));
+        float dR = length(max(qR, vec2(0.0))) + min(max(qR.x, qR.y), 0.0) - rr3;
         outColor *= 1.0 - smoothstep(-0.5, 0.5, dR);
       }
     }`;
@@ -1259,6 +1283,7 @@ export class CanvasRenderer {
       colour: gl.getUniformLocation(program, "u_colour"),
       phases: gl.getUniformLocation(program, "u_phases"),
       round: gl.getUniformLocation(program, "u_round"),
+      radii: gl.getUniformLocation(program, "u_radii"),
     };
     Logger.info(TAG, "Ambient wash program compiled");
     return true;
@@ -1267,7 +1292,20 @@ export class CanvasRenderer {
   /** Colour for the wash above. Null turns it off. The movement is the
    *  renderer's own — see advanceWash. */
   setAmbientWash(rgb: [number, number, number] | null): void {
+    const toggled = !rgb !== !this._washRgb;
     this._washRgb = rgb;
+    // Turning the wash on or off (entering or leaving fullscreen) on a PAUSED
+    // player: nothing draws again on its own, so the bars stayed black — or
+    // kept the colour after exit — until playback resumed. Repaint the retained
+    // frame, as setCornerRadius does. Colour changes while on need no help:
+    // the next frame carries them.
+    if (toggled && this.lastRenderedFrame) {
+      try {
+        this.drawFrame(this.lastRenderedFrame, true);
+      } catch {
+        /* the next real frame will carry it */
+      }
+    }
   }
   private _washRgb: [number, number, number] | null = null;
   /** Where the three waves currently sit, and how fast each is walking on,
@@ -1279,8 +1317,9 @@ export class CanvasRenderer {
   private washLocs: {
     colour: WebGLUniformLocation | null;
     phases: WebGLUniformLocation | null;
+    radii: WebGLUniformLocation | null;
     round: WebGLUniformLocation | null;
-  } = { colour: null, phases: null, round: null };
+  } = { colour: null, phases: null, radii: null, round: null };
 
   /**
    * Walk the waves on. The movement lives here rather than with the colour
@@ -1329,6 +1368,10 @@ export class CanvasRenderer {
         this.canvas?.height || 0,
       );
     }
+    if (this.washLocs.radii) {
+      const [tl, tr, br, bl] = this.cornerRadiiBufferPx();
+      gl.uniform4f(this.washLocs.radii, tl, tr, br, bl);
+    }
     gl.viewport(0, 0, this.width, this.height);
     // The quad has to be bound HERE. The picture's own draw binds it further
     // down, so on the way in there is no vertex array attached and a_position
@@ -1368,6 +1411,13 @@ export class CanvasRenderer {
     uniform float u_srcAspect;   // source frame width/height (keeps the disc round)
     // Rounded corners cut in the shader — see the passthrough program.
     uniform vec3 u_round;
+    // Per corner, in drawing-buffer pixels: top-left, top-right, bottom-right,
+    // bottom-left. u_round.x is the largest of them (0 disables the cut).
+    uniform vec4 u_radii;
+    float movi_cornerR(vec2 p, vec2 h) {
+      // gl_FragCoord's origin is the bottom-left corner.
+      return p.x < h.x ? (p.y >= h.y ? u_radii.x : u_radii.w) : (p.y >= h.y ? u_radii.y : u_radii.z);
+    }
     in vec2 v_ndc;
     out vec4 outColor;
 
@@ -1422,8 +1472,9 @@ export class CanvasRenderer {
       outColor.a = 1.0; // opaque — see the passthrough program
       if (u_round.x > 0.0) {
         vec2 halfSizeR = u_round.yz * 0.5;
-        vec2 qR = abs(gl_FragCoord.xy - halfSizeR) - (halfSizeR - vec2(u_round.x));
-        float dR = length(max(qR, vec2(0.0))) + min(max(qR.x, qR.y), 0.0) - u_round.x;
+        float rr4 = movi_cornerR(gl_FragCoord.xy, halfSizeR);
+        vec2 qR = abs(gl_FragCoord.xy - halfSizeR) - (halfSizeR - vec2(rr4));
+        float dR = length(max(qR, vec2(0.0))) + min(max(qR.x, qR.y), 0.0) - rr4;
         outColor *= 1.0 - smoothstep(-0.5, 0.5, dR);
       }
     }`;
@@ -5378,8 +5429,10 @@ export class CanvasRenderer {
    * Clear frame queue (useful for seek operations)
    * Resets all presentation timing to prevent stuttering after seek
    */
-  private cornerRadiusCss = 0;
+  /** Top-left, top-right, bottom-right, bottom-left, in CSS pixels. */
+  private cornerRadiiCss: [number, number, number, number] = [0, 0, 0, 0];
   private roundLocs = new Map<WebGLProgram, WebGLUniformLocation | null>();
+  private radiiLocs = new Map<WebGLProgram, WebGLUniformLocation | null>();
 
   /**
    * Corner radius (CSS pixels) for the picture itself.
@@ -5389,11 +5442,19 @@ export class CanvasRenderer {
    * ended up with square video inside it. Pixels the shader declines to draw
    * are transparent whatever the compositor thinks, so this holds everywhere.
    * 0 turns it off.
+   *
+   * One number rounds all four corners; four (top-left, top-right,
+   * bottom-right, bottom-left — CSS order) round each on its own. A host
+   * that rounds only the top of the picture, where it sits on a caption bar,
+   * used to get all four corners cut to the first radius.
    */
-  setCornerRadius(cssPx: number): void {
-    const r = Math.max(0, cssPx || 0);
-    if (r === this.cornerRadiusCss) return;
-    this.cornerRadiusCss = r;
+  setCornerRadius(cssPx: number | number[]): void {
+    const src = Array.isArray(cssPx) ? cssPx : [cssPx, cssPx, cssPx, cssPx];
+    const r = [0, 1, 2, 3].map((i) => Math.max(0, src[i] || 0)) as [
+      number, number, number, number,
+    ];
+    if (r.every((v, i) => v === this.cornerRadiiCss[i])) return;
+    this.cornerRadiiCss = r;
     // A paused player never draws again on its own; repaint so the change shows.
     // (Same retained frame the VR camera nudges and resizes repaint from.)
     if (this.lastRenderedFrame) {
@@ -5431,13 +5492,19 @@ export class CanvasRenderer {
   }
   private _letterboxBgCss = "";
 
-  /** Radius in DRAWING-BUFFER pixels, which is what the shader measures in. */
-  private cornerRadiusBufferPx(): number {
-    if (!this.cornerRadiusCss || !this.canvas) return 0;
+  /** Per-corner radii in DRAWING-BUFFER pixels, which is what the shader
+   *  measures in. */
+  private cornerRadiiBufferPx(): [number, number, number, number] {
+    if (!this.canvas || this.cornerRadiiCss.every((v) => !v)) return [0, 0, 0, 0];
     const cssW =
       (this.canvas as HTMLCanvasElement).clientWidth || this.canvas.width;
     const scale = cssW > 0 ? this.canvas.width / cssW : 1;
-    return this.cornerRadiusCss * scale;
+    return this.cornerRadiiCss.map((v) => v * scale) as [number, number, number, number];
+  }
+
+  /** The largest of them: the shader's on/off switch (u_round.x). */
+  private cornerRadiusBufferPx(): number {
+    return Math.max(...this.cornerRadiiBufferPx());
   }
 
   // ── Bar cropping ────────────────────────────────────────
@@ -5802,6 +5869,15 @@ export class CanvasRenderer {
       this.canvas?.width || 0,
       this.canvas?.height || 0,
     );
+    let rloc = this.radiiLocs.get(program);
+    if (rloc === undefined) {
+      rloc = gl.getUniformLocation(program, "u_radii");
+      this.radiiLocs.set(program, rloc);
+    }
+    if (rloc) {
+      const [tl, tr, br, bl] = this.cornerRadiiBufferPx();
+      gl.uniform4f(rloc, tl, tr, br, bl);
+    }
   }
 
   clearQueue(): void {

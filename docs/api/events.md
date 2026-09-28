@@ -537,7 +537,7 @@ The custom element re-exposes player activity as DOM events so you can wire `add
 | `pipchange`            | `{ pip: boolean }`                   | Picture-in-Picture window opened/closed            |
 | `enterpictureinpicture` | —                                   | `HTMLVideoElement` alias, fired alongside `pipchange` |
 | `leavepictureinpicture` | —                                   | `HTMLVideoElement` alias, fired alongside `pipchange` |
-| `qualitychange`        | `{ trackId }` or `{ src, height, … }` or `{ height, auto }` | Active video quality / track switched. The shape depends on what moved it: a pick from the track menu carries `trackId`, a ladder switch carries `src` and `height`, and an Auto/ABR switch carries `height` and `auto: true`. A host persisting a deliberate choice should ignore `auto === true`; one prefetching the next video should read `height` from any of them and treat its absence as "unchanged" |
+| `qualitychange`        | `{ trackId }` or `{ src, height, … }` or `{ height, auto }` | Active video quality / track switched. The shape depends on what moved it: a pick from the track menu carries `trackId` (with `height` and `auto`), a ladder switch carries `src` and `height`, a switch landing carries `height` and `auto`, and a hand-picked rung that switches nothing (the one Auto was already on) still reports `height` with `auto: false`. An Auto/ABR move carries `auto: true`. A host persisting a deliberate choice should ignore `auto === true`; one prefetching the next video should read `height` from any of them and treat its absence as "unchanged" |
 | `subtitledelaychange`  | `{ subtitleDelay: number }`          | Subtitle offset changed via property/attribute     |
 | `playlistchange`       | `{ items: MoviPlaylistItem[] }`      | The queue was replaced (see [`playlist`](./element.md#playlist)) |
 | `itemchange`           | `{ index, previousIndex, item }`     | **Cancelable** — the queue moved to another item and is about to load it. `preventDefault()` takes back the load, not the move, so a host whose sources are `<source>`/`<track>` children (or whose items are routes) can own what plays. See [Queues the host loads](./element.md#queues-the-host-loads) |
@@ -551,7 +551,7 @@ The custom element re-exposes player activity as DOM events so you can wire `add
 | `linearmode`           | —                                    | Source server ignores `Range` (`200`, not `206`) — playback is forward-only via a sliding RAM window; hide seek-dependent UI |
 | `audiotrackchange`     | —                                    | Active audio track switched                        |
 | `audiooutputchange`    | `{ deviceId: string \| null }`       | Audio output device (sink) changed                 |
-| `audiostripchange`     | `{ active: boolean }`                | Audio-only strip layout entered/left               |
+| `audiostripchange`     | `{ strip: boolean }`                 | Audio-only strip layout entered/left. Reports the windowed layout: a fullscreen trip (where the strip becomes a full-screen view) doesn't fire it |
 | `nativefallback`       | `{ src: string }`                    | Source handed to a native `<video>` (`fallback="native"`) |
 | `movi-qoe`             | QoE snapshot                         | Playback-quality telemetry sample                  |
 | `filerevoked`          | `{ offset, length, reason }`         | Underlying `File` handle was revoked by the browser (mobile background / memory pressure). Prompt the user to re-pick. |

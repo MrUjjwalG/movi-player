@@ -72,6 +72,8 @@ export const MoviPlayer = React.forwardRef<MoviElement, MoviPlayerProps>(
     // Attributes THIS wrapper wrote, so a prop that goes away can take its
     // attribute with it — see the undefined branch below.
     const writtenRef = React.useRef<Set<string>>(new Set());
+    // What each prop was the last time it was reflected — see below.
+    const lastRef = React.useRef<Map<string, unknown>>(new Map());
 
     // Reflect declarative attributes onto the element every render. Booleans
     // become presence/absence; everything else becomes a string attribute.
@@ -89,6 +91,18 @@ export const MoviPlayer = React.forwardRef<MoviElement, MoviPlayerProps>(
       for (const [key, value] of Object.entries(props)) {
         if (EVENT_PROPS.has(key)) continue;
         const attr = key.toLowerCase();
+        // Only what the HOST changed since it last said it. Several of these
+        // attributes are ones the viewer changes too — the player reflects
+        // loop, cropbars, ambientmode, muted… onto itself when a key, the gear
+        // panel or the context menu flips them — and comparing against the
+        // ELEMENT read that as drift to correct: the next render of the host,
+        // for any reason at all, put the page's value back. Pressing L on a
+        // page that declares `loop={false}` looped until something else on
+        // the page re-rendered, then quietly stopped. A prop that has not
+        // changed is not the host saying anything new.
+        const last = lastRef.current;
+        if (last.has(attr) && Object.is(last.get(attr), value)) continue;
+        last.set(attr, value);
         if (value === undefined || value === null) {
           // A prop that USED to have a value and now has none means the host
           // is describing a different video — `chapters={list?.length ? … :

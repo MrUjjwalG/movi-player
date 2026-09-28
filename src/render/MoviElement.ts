@@ -3574,7 +3574,7 @@ export class MoviElement extends HTMLElement {
       <div class="movi-shortcuts-body">
         <div class="movi-shortcuts-col">
           <div class="movi-shortcut-row"><kbd data-shortcut-action="playpause">Space</kbd><span>Play / Pause</span></div>
-          <div class="movi-shortcut-row" data-video-only><kbd data-shortcut-action="fullscreen">F</kbd><span>Fullscreen</span></div>
+          <div class="movi-shortcut-row"><kbd data-shortcut-action="fullscreen">F</kbd><span>Fullscreen</span></div>
           <div class="movi-shortcut-row" data-video-only><kbd data-shortcut-action="pip">P</kbd><span>Picture-in-Picture</span></div>
           <div class="movi-shortcut-row"><kbd data-shortcut-action="mute">M</kbd><span>Mute / Unmute</span></div>
           <div class="movi-shortcut-row"><kbd data-shortcut-pair="volumeup,volumedown">&uarr;/&darr;</kbd><span>Volume</span></div>
@@ -5111,6 +5111,7 @@ export class MoviElement extends HTMLElement {
       this.setFit(next);
       this.updateFitMode();
       this.showAspectOsd(next);
+      this.announceAspect(next);
     });
 
     // Playback Speed
@@ -5766,6 +5767,8 @@ export class MoviElement extends HTMLElement {
     this._holdSpeedTimer = null;
     if (this._holdSpeedActive || !this.player) return;
     if (this.player.getState() !== "playing") return;
+    // Hold-to-2x is a speed control without a button — `nospeed` takes it too.
+    if (this.isControlDisabled("speed")) return;
     this._holdSpeedActive = true;
     this.gesturePerformed = true; // suppress the touchend tap (show/hide chrome)
     this._rateBeforeHold = this._playbackRate || 1;
@@ -6028,9 +6031,13 @@ export class MoviElement extends HTMLElement {
               let next: "contain" | "cover" | null = null;
               if (ratio > 1.2 && current !== "cover") next = "cover";
               else if (ratio < 0.83 && current !== "contain") next = "contain";
-              if (next) {
+              // The pinch is the A key by hand, so `noaspect` takes it too. The
+              // two fingers are still consumed here — let through, they would
+              // reach the one-finger swipes below as a stray drag.
+              if (next && !this.isControlDisabled("aspect")) {
                 this.setFit(next);
                 this.updateFitMode();
+                this.announceAspect(next);
                 const labels: Record<string, string> = {
                   contain: "Fit",
                   cover: "Fill",
@@ -6202,13 +6209,12 @@ export class MoviElement extends HTMLElement {
               startXPercent <= 0.5
             ) {
               if (deltaY < -60) {
-                // Swipe UP -> Enter Fullscreen (skip for any audio source).
-                // Route through toggleFullscreen so the iOS pseudo-fullscreen
-                // fallback and the host-fullscreen event apply here too.
-                if (
-                  !this.isFullscreenActive() &&
-                  !this.classList.contains("movi-audio-mode")
-                ) {
+                // Swipe UP -> Enter Fullscreen. Route through toggleFullscreen
+                // so the iOS pseudo-fullscreen fallback and the host-fullscreen
+                // event apply here too. Audio included: the cover view is a
+                // surface to swipe on, and the strip has none (its overlay is
+                // display:none, so no gesture ever starts there).
+                if (!this.isFullscreenActive()) {
                   this.toggleFullscreen();
                 }
               } else if (deltaY > 60) {
@@ -6677,10 +6683,10 @@ export class MoviElement extends HTMLElement {
       // is the symptom that surfaced this gap.
       if (this.classList.contains("movi-audio-mode")) {
         // a:fit  p:pip  r:rotate  g:ambient  s:snapshot  t:timeline
-        // v:subtitle-track. f (fullscreen) and h (hdr) are intentionally
-        // omitted — they already self-guard: toggleFullscreen() is the
-        // single audio-mode chokepoint, and the h case no-ops because the
-        // hdr-toggle item is display:none for non-HDR (audio) content.
+        // v:subtitle-track. f (fullscreen) is not on the list: audio has a
+        // full-screen view of its own. h (hdr) is omitted because it already
+        // no-ops — the hdr-toggle item is display:none for non-HDR (audio)
+        // content.
         const VIDEO_ONLY_KEYS = "aprgstv";
         // Bare presses only. These letters are the keys of video-only controls
         // when nothing is held with them; Shift+P is a different shortcut that
@@ -6905,6 +6911,7 @@ export class MoviElement extends HTMLElement {
             this.setFit(next);
             this.updateFitMode();
             this.updateAspectRatioIcon();
+            this.announceAspect(next);
             const labels: Record<string, string> = { contain: "Fit", cover: "Fill", fill: "Stretch", zoom: "Zoom" };
             this.showOSD(
               symbolSvg(MoviElement.aspectSymbol(next)),
@@ -6915,6 +6922,10 @@ export class MoviElement extends HTMLElement {
         case "l":
         case "L":
           // L: Toggle loop
+          // Every key below that belongs to a control a token can switch off
+          // checks for it before claiming the press, as the queue keys above
+          // do: a switched-off control's key is not the player's to take.
+          if (this.isControlDisabled("loop")) break;
           e.preventDefault();
           this.loop = !this.loop;
           this.showOSD(
@@ -6925,6 +6936,10 @@ export class MoviElement extends HTMLElement {
         case "v":
         case "V":
           // V: Cycle subtitle track (VLC standard) — external then muxed
+          // `nocc` freezes the captions where the host left them, both ways: a
+          // caption on screen is not a place the viewer is stuck in, and one
+          // the host turned on may be the reason the page set the token.
+          if (this.isControlDisabled("cc")) break;
           e.preventDefault();
           if (this.player) {
             const extSubs = this.player.getSubtitleLangs();
@@ -6979,7 +6994,9 @@ export class MoviElement extends HTMLElement {
           // File-source only — streamed sources don't expose the timing
           // controls this nudge depends on. Also require an active subtitle
           // track: nudging a delay value that applies to nothing on screen
-          // would just surface a misleading OSD readout.
+          // would just surface a misleading OSD readout. The delay lives in the
+          // captions menu, so it goes with `nocc`.
+          if (this.isControlDisabled("cc")) break;
           e.preventDefault();
           if (!this.player || !this.player.isFileSource()) break;
           const hasActiveMuxed = !!this.player.trackManager.getActiveSubtitleTrack();
@@ -6999,6 +7016,7 @@ export class MoviElement extends HTMLElement {
         case "b":
         case "B":
           // B: Cycle audio track — muxed + external combined
+          if (this.isControlDisabled("audio")) break;
           e.preventDefault();
           if (this.player) {
             const bMuxed = this.player.getAudioTracks();
@@ -7067,6 +7085,7 @@ export class MoviElement extends HTMLElement {
         case "c":
         case "C":
           // C: Crop the black bars baked into the picture
+          if (this.isControlDisabled("crop")) break;
           e.preventDefault();
           this.cropbars = !this._cropBars;
           this.updateCropUI();
@@ -7090,6 +7109,7 @@ export class MoviElement extends HTMLElement {
         case "=":
         case "+":
           // +: Speed up (VLC standard)
+          if (this.isControlDisabled("speed")) break;
           e.preventDefault();
           {
             const maxRate = this.getMaxAllowedRate();
@@ -7105,6 +7125,7 @@ export class MoviElement extends HTMLElement {
           break;
         case "-":
           // -: Speed down (VLC standard)
+          if (this.isControlDisabled("speed")) break;
           e.preventDefault();
           {
             const maxRate = this.getMaxAllowedRate();
@@ -7121,13 +7142,7 @@ export class MoviElement extends HTMLElement {
         case "?":
           // ?: Show keyboard shortcuts
           e.preventDefault();
-          {
-            const panel = this.shadowRoot?.querySelector(".movi-shortcuts-panel") as HTMLElement;
-            if (panel) {
-              this.syncShortcutsPanel();
-              panel.style.display = panel.style.display === "none" ? "flex" : "none";
-            }
-          }
+          this.toggleShortcutsPanel();
           break;
         case "0":
           // 0: Seek to start
@@ -7886,6 +7901,21 @@ export class MoviElement extends HTMLElement {
         return;
       }
 
+      // A row the host switched off does nothing, whichever way it was reached.
+      // The stylesheet hides these rows, but a hidden row is still a row: a
+      // stale open menu, a tap already in flight, a script's .click() — and the
+      // values inside a submenu (a speed, a fit, a track) answer to the
+      // submenu's control, the same join worksBeforePlayback makes.
+      const submenuKey = (
+        item.closest(".movi-context-menu-submenu") as HTMLElement | null
+      )?.dataset.submenu;
+      const menuControl =
+        MoviElement.MENU_ACTION_CONTROL[submenuKey || action || ""];
+      if (menuControl && this.isControlDisabled(menuControl)) {
+        hideContextMenu();
+        return;
+      }
+
       const speed = item.dataset.speed;
       const audioTrackId = item.dataset.audioTrackId;
       const audioLang = item.dataset.audioLang;
@@ -8200,13 +8230,7 @@ export class MoviElement extends HTMLElement {
         this.toggleNerdStats(shadowRoot);
         hideContextMenu();
       } else if (action === "keyboard-shortcuts") {
-        const panel = shadowRoot.querySelector(
-          ".movi-shortcuts-panel",
-        ) as HTMLElement;
-        if (panel) {
-          this.syncShortcutsPanel();
-          panel.style.display = panel.style.display === "none" ? "flex" : "none";
-        }
+        this.toggleShortcutsPanel();
         hideContextMenu();
       } else if (action === "timeline") {
         this.toggleTimeline();
@@ -8702,7 +8726,7 @@ export class MoviElement extends HTMLElement {
     }
   }
 
-  private async toggleFullscreen(): Promise<void> {
+  private async toggleFullscreen(byPage = false): Promise<void> {
     // LEAVING fullscreen is always allowed. Every guard below is about whether
     // there is anything worth going fullscreen FOR — none of them is a reason
     // to hold someone in it. Gating the whole toggle meant an error arriving
@@ -8722,12 +8746,18 @@ export class MoviElement extends HTMLElement {
     ) {
       return;
     }
-    // Audio-only sources (bare strip OR cover-art view) have nothing to show
-    // fullscreen. Block it at this single chokepoint so double-click, the F
-    // key, and the button are all covered, in both audio layouts. (Entering
-    // only — a source that turns out to be audio while already fullscreen must
-    // still be escapable.)
-    if (!currentlyActive && this.classList.contains("movi-audio-mode")) {
+    // Audio is NOT a reason to refuse either. The cover-art view is a picture
+    // in its own right, and a source with no art gets the same full-screen
+    // surface with a drawn sleeve instead of its 56px strip (see
+    // updateCoverArtOverlay) — a record playing across the room is a thing
+    // people put on a big screen.
+    // Switched off by the host (controlslist="nofullscreen"). The same
+    // chokepoint, for the same reason: F, the menu row, double-click,
+    // double-tap and the swipe all end here, and only the button and the row
+    // were hidden. Entering only — see the top of this method. A page asking
+    // through its own code (_enterFullscreenForPage) is not the viewer
+    // reaching for a control the page removed, so it passes.
+    if (!currentlyActive && !byPage && this.isControlDisabled("fullscreen")) {
       return;
     }
 
@@ -8867,6 +8897,14 @@ export class MoviElement extends HTMLElement {
   `;
 
   private async togglePiP(): Promise<void> {
+    // Switched off by the host (controlslist="nopip" or disablepictureinpicture).
+    // The P key and the context-menu action both land here, and only the
+    // button and the menu row were hidden — so P still opened a window on a
+    // page that had turned PiP off. Leaving a window that is already open
+    // stays allowed.
+    const pipOpen =
+      !!this._pipWindow || (!!this.video && document.pictureInPictureElement === this.video);
+    if (!pipOpen && (this.isControlDisabled("pip") || this.disablePictureInPicture)) return;
     // Native fallback: the visible surface is a real <video>, not the canvas, so
     // use the standard video PiP API. It works even for opaque cross-origin video
     // (PiP never exposes pixels to JS) and inside iframes granted the
@@ -9374,7 +9412,9 @@ export class MoviElement extends HTMLElement {
    * (window wider than tall) the rotation is dropped.
    */
   private updatePseudoFsRotation(): void {
-    if (!this._pseudoFullscreen) {
+    // Audio has no frame to turn — and an audio-only VIDEO source still
+    // reports its video track, which would rotate the sleeve on its side.
+    if (!this._pseudoFullscreen || this.classList.contains("movi-audio-mode")) {
       this.classList.remove("movi-pseudo-fs-rotate");
       return;
     }
@@ -9445,8 +9485,12 @@ export class MoviElement extends HTMLElement {
    * On phones/tablets, rotate to match the video when entering fullscreen and
    * release the lock on exit. Wide clips lock landscape, tall clips portrait;
    * defaults to landscape (the common case) if dimensions aren't known. No-op on
-   * desktop, audio-only, or where the Screen Orientation lock API is missing
-   * (e.g. iOS Safari, which rejects programmatic lock — caught and ignored).
+   * desktop, or where the Screen Orientation lock API is missing (e.g. iOS
+   * Safari, which rejects programmatic lock — caught and ignored).
+   * Audio never locks: a sleeve has no orientation of its own, so the phone is
+   * left free to be held however the viewer holds it — and entering with
+   * audio RELEASES a lock, which is what updateCoverArtOverlay relies on when
+   * a film turns into sound while fullscreen.
    */
   private applyFullscreenOrientation(isFullscreen: boolean): void {
     const so = (
@@ -9459,9 +9503,8 @@ export class MoviElement extends HTMLElement {
     ).orientation;
     if (!so || typeof so.lock !== "function") return;
     if (!window.matchMedia("(pointer: coarse)").matches) return;
-    if (this.classList.contains("movi-audio-mode")) return;
 
-    if (isFullscreen) {
+    if (isFullscreen && !this.classList.contains("movi-audio-mode")) {
       const track = this.player?.trackManager?.getActiveVideoTrack?.();
       const rawW = track?.width ?? 0;
       const rawH = track?.height ?? 0;
@@ -9508,6 +9551,13 @@ export class MoviElement extends HTMLElement {
     // host-driven one, where the element may already be the size it will be.
     this.fitControlsRow();
     this.syncEmptyCapsules();
+    // An audio source's layout depends on fullscreen: a strip with no art is
+    // a full-screen sleeve while it lasts (see updateCoverArtOverlay). Decided
+    // here, not left to the resize, because a strip's 56px height is
+    // !important — a host-driven fullscreen could never grow it, so no resize
+    // would ever arrive to drop the strip. Leaving puts the strip back the
+    // same way; the resize that follows repaints at the final size.
+    if (this.classList.contains("movi-audio-mode")) this.updateCoverArtOverlay();
   }
 
   /**
@@ -9538,7 +9588,7 @@ export class MoviElement extends HTMLElement {
    * have and which skips the host and pseudo fallbacks.
    */
   _enterFullscreenForPage(): Promise<void> {
-    return this.isFullscreenActive() ? Promise.resolve() : this.toggleFullscreen();
+    return this.isFullscreenActive() ? Promise.resolve() : this.toggleFullscreen(true);
   }
 
   /** @internal For upgrade.ts — see _enterFullscreenForPage. */
@@ -10036,7 +10086,26 @@ export class MoviElement extends HTMLElement {
           this.setBottomMenuOpen(menu, false);
           this.updateQualityMenu();
           this.showControls();
-          this.dispatchEvent(new CustomEvent("qualitychange", { detail: { trackId } }));
+          // `height` and `auto` ride along with the id — the fields every
+          // other quality pick reports, and the only ones a host remembering
+          // the viewer's rung can use. Without them this pick was invisible to
+          // such a host, and so was a later one of the rung Auto was already
+          // on: that selects nothing new, so no rung change followed it.
+          const picked =
+            trackId === -1
+              ? 0
+              : (this.player as any).getVideoTracks?.()?.find(
+                  (t: VideoTrack) => t.id === trackId,
+                )?.height || 0;
+          if (trackId !== -1) {
+            this._involuntaryQualityUntil = 0;
+            if (picked > 0) this._lastNotifiedQualityHeight = picked;
+          }
+          this.dispatchEvent(
+            new CustomEvent("qualitychange", {
+              detail: { trackId, height: picked, auto: trackId === -1 },
+            }),
+          );
         }
       });
     });
@@ -10046,6 +10115,33 @@ export class MoviElement extends HTMLElement {
    * Map a video height to its YouTube-style quality badge (HD/4K/8K) or
    * empty string when the resolution doesn't qualify.
    */
+  /**
+   * Tell the host about a rung the viewer picked by hand, when nothing else
+   * will.
+   *
+   * A pick is normally reported when the switch it starts lands — the rung
+   * changes, tracksChange sees a new height, `qualitychange` goes out with
+   * `auto: false`. Two picks never got that far: the rung Auto was already
+   * sitting on (nothing to switch to), and a rung of the height last reported
+   * (the switch lands on a height that is "not news"). Both are the viewer
+   * saying "this one, always" — and a host that remembers the rung (movi-tube
+   * keeps the height and marks it as the next video's default source) kept the
+   * one before, while the player's own Auto preference had already been turned
+   * off. The next video then opened on the old, fixed rung.
+   *
+   * Also ends any rescue window: a pick made inside the 30s after a rescue is
+   * still the viewer's, and was being reported as `auto: true`.
+   */
+  private announceQualityPick(height: number, switching: boolean): void {
+    this._involuntaryQualityUntil = 0;
+    if (height <= 0) return;
+    if (switching && height !== this._lastNotifiedQualityHeight) return;
+    this._lastNotifiedQualityHeight = height;
+    this.dispatchEvent(
+      new CustomEvent("qualitychange", { detail: { height, auto: false } }),
+    );
+  }
+
   /** Persisted "Auto quality" preference. Survives movi-tube's per-video element
    *  rebuild (localStorage), so once the user picks Auto it stays Auto on the
    *  next video instead of falling back to a fixed height. */
@@ -11900,9 +11996,11 @@ export class MoviElement extends HTMLElement {
         // A screen, not a speedometer: this is the picture changing, and the
         // speed icon here read as though the playback rate had moved.
         if (picked) this.showOSD(OSD.quality, picked.label || "Quality");
-        if (newSrc && newSrc !== activeSrc) {
-          this.markQualityPending(newSrc);
-          this.switchPremuxedQuality(newSrc);
+        const switching = !!newSrc && newSrc !== activeSrc;
+        this.announceQualityPick(picked?.height || 0, switching);
+        if (switching) {
+          this.markQualityPending(newSrc!);
+          this.switchPremuxedQuality(newSrc!);
         } else this.updateQualityMenu();
         closeMenu();
       });
@@ -12015,6 +12113,7 @@ export class MoviElement extends HTMLElement {
         // Picking a specific quality leaves Auto.
         player?.setAutoQuality?.(false);
         this._writeQualityAutoPref(false);
+        this.announceQualityPick(parseInt(r.label, 10) || 0, r.url !== activeUrl);
         if (r.url !== activeUrl) {
           this.markQualityPending(r.url);
           this.switchDashRendition(r.url);
@@ -16099,14 +16198,20 @@ export class MoviElement extends HTMLElement {
     const videoPresentation =
       !this.classList.contains("movi-audio-mode") &&
       !this.classList.contains("movi-native-video");
-    const aspectFoldable = videoPresentation;
+    // Nor from a token that took it off the bar: a switched-off button is not
+    // an extra, and counting it kept a "more" button for a one-item tray.
+    const aspectFoldable =
+      videoPresentation && !this.isControlDisabled("aspect");
     // PiP hides itself outright where the browser has no Picture-in-Picture, so
     // its own display is the honest signal here, unlike aspect's.
     const pipEl = this.shadowRoot?.querySelector(
       ".movi-pip-btn",
     ) as HTMLElement | null;
     const pipFoldable =
-      videoPresentation && !!pipEl && pipEl.style.display !== "none";
+      videoPresentation &&
+      !!pipEl &&
+      pipEl.style.display !== "none" &&
+      !this.isControlDisabled("pip");
     this.classList.toggle(
       "movi-single-extra",
       shown + (aspectFoldable ? 1 : 0) + (pipFoldable ? 1 : 0) <= 1,
@@ -16179,12 +16284,21 @@ export class MoviElement extends HTMLElement {
     // Every row here is a remembered preference, and all of them can be set
     // before there is anything to apply them to — the same list
     // worksBeforePlayback keeps live in the context menu.
+    //
+    // A row whose control the host switched off is not built. settingsRowAvailable
+    // reads the owning menu's INLINE display, and `controlslist` hides those
+    // menus from the stylesheet — so without the token check here, the gear
+    // was one more way in to a speed, a track or a quality the page had taken
+    // off the bar. The static quality row goes with its control: it is the
+    // same row, only without a list to open.
+    const off = (name: string) => this.isControlDisabled(name);
     if (
       !audioOnly &&
+      !off("quality") &&
       this.settingsRowAvailable(".movi-quality-container", ".movi-quality-item")
     ) {
       page("quality", "Quality", ".movi-quality-container", ".movi-quality-item");
-    } else if (!audioOnly) {
+    } else if (!audioOnly && !off("quality")) {
       // One rung only (a plain file, a single <source>). The row still belongs:
       // "what am I watching" is the question people open this panel with, and
       // an absent row reads as "the player doesn't know". It just doesn't
@@ -16196,21 +16310,27 @@ export class MoviElement extends HTMLElement {
         );
       }
     }
-    rows.push(
-      `<button type="button"${deadIf("speed")} class="movi-settings-row" data-page="speed">${MoviElement.SETTINGS_ICONS.speed}<span class="movi-settings-row-label">Playback speed</span><span class="movi-settings-row-value">${MoviElement.escapeSettingsText(this.settingsRowValue("speed"))}</span>${chevron}</button>`,
-    );
-    page(
-      "audio",
-      "Audio track",
-      ".movi-audio-track-container",
-      ".movi-audio-track-item",
-    );
-    page(
-      "subtitles",
-      "Subtitles",
-      ".movi-subtitle-track-container",
-      ".movi-subtitle-track-item",
-    );
+    if (!off("speed")) {
+      rows.push(
+        `<button type="button"${deadIf("speed")} class="movi-settings-row" data-page="speed">${MoviElement.SETTINGS_ICONS.speed}<span class="movi-settings-row-label">Playback speed</span><span class="movi-settings-row-value">${MoviElement.escapeSettingsText(this.settingsRowValue("speed"))}</span>${chevron}</button>`,
+      );
+    }
+    if (!off("audio")) {
+      page(
+        "audio",
+        "Audio track",
+        ".movi-audio-track-container",
+        ".movi-audio-track-item",
+      );
+    }
+    if (!off("cc")) {
+      page(
+        "subtitles",
+        "Subtitles",
+        ".movi-subtitle-track-container",
+        ".movi-subtitle-track-item",
+      );
+    }
 
     // Aspect is the canvas renderer's fit mode. The native fallback has no
     // canvas — its setFitMode() is an empty method — so the page would let the
@@ -16288,11 +16408,12 @@ export class MoviElement extends HTMLElement {
     if (!audioOnly && offered("aspect") && !this.isControlDisabled("crop")) {
       rows.push(toggle("crop", "Crop black bars", this._cropBars));
     }
-    rows.push(toggle("loop", "Loop", this._loop));
+    if (!off("loop")) rows.push(toggle("loop", "Loop", this._loop));
     // One item is not a queue, and a Shuffle that can only draw the same card
     // is a control that takes up room — the same reasoning the Next button is
-    // hidden by (see refreshPlaylistUi).
-    if (this._playlist.length > 1) {
+    // hidden by (see refreshPlaylistUi). `noplaylist` switches the queue off as
+    // a feature, and the order it plays in is part of that.
+    if (this._playlist.length > 1 && !off("playlist")) {
       rows.push(toggle("shuffle", "Shuffle", this._shuffle));
     }
     root.innerHTML = rows.join("");
@@ -16441,6 +16562,20 @@ export class MoviElement extends HTMLElement {
     this.dispatchEvent(
       new CustomEvent(name, { detail, bubbles: true, composed: true }),
     );
+  }
+
+  /**
+   * Tell the host the viewer picked a fit. The gear panel and the context
+   * menu did; the bar's aspect button, the A key and the pinch only saved it
+   * in the player's own store — so a host that remembers the fit itself (and
+   * hands it back as `objectfit` on the next page) kept the old value, and the
+   * two stores drifted: a change made from the bar or the key did not stick.
+   */
+  private announceAspect(fit: string): void {
+    this.emitSettingChange("aspectchange", {
+      fit,
+      mode: this._objectFit === "control" ? "control" : "objectfit",
+    });
   }
 
   /**
@@ -19066,8 +19201,10 @@ export class MoviElement extends HTMLElement {
         -ms-user-select: none;
       }
 
-      /* Ensure canvas fills fullscreen */
-      :host(:fullscreen) canvas:not(.movi-nerd-stats-graph),
+      /* Ensure canvas fills fullscreen. The cover-art meter is a canvas too,
+         but it lives inside the scrubber: at 100vw its right end — the total
+         it draws there — ran off the screen once audio could go fullscreen. */
+      :host(:fullscreen) canvas:not(.movi-nerd-stats-graph):not(.movi-cover-eq),
       :host(:fullscreen) video {
         width: 100vw !important;
         max-width: 100vw !important;
@@ -19968,8 +20105,12 @@ export class MoviElement extends HTMLElement {
          of its own, the row was a switch, an icon, a badged gear and three more
          icons, all equally far apart. A little more air at the seam lets the
          eye take it as two small groups instead, and costs no width anywhere
-         else: no custom controls, no seam, no gap. */
-      .movi-controls-right .movi-custom-btn + .movi-btn:not(.movi-custom-btn),
+         else: no custom controls, no seam, no gap.
+         Not before fullscreen, though. It always ends the row, and a host
+         control placed right against it (a wide/theater toggle, say) was put
+         there to join it — the seam split the pair and read as a missing
+         button between them. */
+      .movi-controls-right .movi-custom-btn + .movi-btn:not(.movi-custom-btn):not(.movi-fullscreen-btn),
       .movi-controls-right .movi-custom-btn + .movi-settings-container {
         margin-left: 10px;
       }
@@ -25179,14 +25320,51 @@ export class MoviElement extends HTMLElement {
         display: none !important;
       }
       /* …and the context-menu rows that reach the same controls, so a control
-         that is off is not simply one click further away. */
+         that is off is not simply one click further away. !important because
+         several of these rows are shown by script (display:flex inline, per
+         source), and the host's decision outranks the source's. The click
+         handler refuses them as well — see MENU_ACTION_CONTROL. */
       :host([controlslist~="nospeed"]) .movi-context-menu-item[data-action="speed"],
       :host([controlslist~="noaspect"]) .movi-context-menu-item[data-action="fit"],
+      :host([controlslist~="noaudio"]) .movi-context-menu-item[data-action="audio-track"],
+      :host([controlslist~="noaudio"]) .movi-context-menu-divider-audio,
+      :host([controlslist~="nocc"]) .movi-context-menu-item[data-action="subtitle-track"],
+      :host([controlslist~="nocc"]) .movi-context-menu-divider-subtitle,
+      :host([controlslist~="nohdr"]) .movi-context-menu-item[data-action="hdr-toggle"],
+      :host([controlslist~="nohdr"]) .movi-hdr-divider,
       :host([controlslist~="nopip"]) .movi-context-menu-item[data-action="pip"],
-      :host([controlslist~="noloop"]) .movi-context-menu-item[data-action="loop-toggle"],
       :host([controlslist~="nofullscreen"]) .movi-context-menu-item[data-action="fullscreen"],
+      :host([controlslist~="norotate"]) .movi-context-menu-item[data-action="rotate-video"],
+      :host([controlslist~="noloop"]) .movi-context-menu-item[data-action="loop-toggle"],
+      :host([controlslist~="noplaylist"]) .movi-context-menu-item[data-action="shuffle-toggle"],
+      :host([controlslist~="nostableaudio"]) .movi-context-menu-item[data-action="stable-audio-toggle"],
+      :host([controlslist~="nocrop"]) .movi-context-menu-item[data-action="crop-toggle"],
+      :host([controlslist~="noambient"]) .movi-context-menu-item[data-action="ambient-toggle"],
+      :host([controlslist~="nosnapshot"]) .movi-context-menu-item[data-action="snapshot"],
+      :host([controlslist~="notimeline"]) .movi-context-menu-item[data-action="timeline"],
       :host([controlslist~="nostats"]) .movi-context-menu-item[data-action="nerd-stats"],
-      :host([controlslist~="noshortcuts"]) .movi-context-menu-item[data-action="keyboard-shortcuts"] {
+      :host([controlslist~="noshortcuts"]) .movi-context-menu-item[data-action="keyboard-shortcuts"],
+      /* …and the Keyboard Shortcuts sheet's rows for the same controls, whose
+         keys now do nothing — the sheet should not teach a dead press. (The
+         queue's rows already go with noplaylist, above.) */
+      :host([controlslist~="nofullscreen"]) .movi-shortcut-row:has(> kbd[data-shortcut-action="fullscreen"]),
+      :host([controlslist~="nopip"]) .movi-shortcut-row:has(> kbd[data-shortcut-action="pip"]),
+      :host([controlslist~="nospeed"]) .movi-shortcut-row:has(> kbd[data-shortcut-pair="speedup,speeddown"]),
+      :host([controlslist~="nocc"]) .movi-shortcut-row:has(> kbd[data-shortcut-action="subtitles"]),
+      :host([controlslist~="nocc"]) .movi-shortcut-row:has(> kbd[data-shortcut-pair="subtitledelayback,subtitledelayforward"]),
+      :host([controlslist~="noaudio"]) .movi-shortcut-row:has(> kbd[data-shortcut-action="audiotrack"]),
+      :host([controlslist~="noaspect"]) .movi-shortcut-row:has(> kbd[data-shortcut-action="aspect"]),
+      :host([controlslist~="norotate"]) .movi-shortcut-row:has(> kbd[data-shortcut-action="rotate"]),
+      :host([controlslist~="nocrop"]) .movi-shortcut-row:has(> kbd[data-shortcut-action="crop"]),
+      :host([controlslist~="noloop"]) .movi-shortcut-row:has(> kbd[data-shortcut-action="loop"]),
+      :host([controlslist~="nostableaudio"]) .movi-shortcut-row:has(> kbd[data-shortcut-action="stableaudio"]),
+      :host([controlslist~="nohdr"]) .movi-shortcut-row:has(> kbd[data-shortcut-action="hdr"]),
+      :host([controlslist~="nosnapshot"]) .movi-shortcut-row:has(> kbd[data-shortcut-action="snapshot"]),
+      :host([controlslist~="nostats"]) .movi-shortcut-row:has(> kbd[data-shortcut-action="stats"]),
+      :host([controlslist~="notimeline"]) .movi-shortcut-row:has(> kbd[data-shortcut-action="timeline"]),
+      /* A host control switched off after it was added — see
+         syncCustomControl. */
+      [data-custom-control][data-controlslist-off] {
         display: none !important;
       }
 
@@ -27625,8 +27803,8 @@ export class MoviElement extends HTMLElement {
         display: none !important;
       }
       /* Keep the right-side cluster visible but trim it to controls that
-         actually apply to audio playback. Subtitles, HDR, quality, PiP,
-         fullscreen, and rotation are video-only — hiding the buttons
+         actually apply to audio playback. HDR, quality, PiP and rotation
+         are video-only — hiding the buttons
          instead of the whole container preserves audio-track switching
          (multi-lang files), speed, and the stable-audio compressor. */
       :host(.movi-audio-strip) .movi-controls-right {
@@ -27680,14 +27858,16 @@ export class MoviElement extends HTMLElement {
          sound as over a picture — lyrics, a translation, a podcast transcript —
          and hiding the picker also took the row out of the settings panel,
          which reads its availability from this container. Audio tracks were
-         never hidden here for the same reason. */
+         never hidden here for the same reason.
+         Nor is fullscreen: audio has a full-screen view of its own — the
+         cover art, or a drawn sleeve when there is none (see
+         updateCoverArtOverlay). */
       :host(.movi-audio-mode) .movi-quality-container,
       :host(.movi-audio-mode) .movi-hdr-container,
       :host(.movi-audio-mode) .movi-aspect-ratio-btn,
       :host(.movi-audio-mode) .movi-pip-btn,
       :host(.movi-audio-mode) .movi-snapshot-btn,
-      :host(.movi-audio-mode) .movi-rotate-btn,
-      :host(.movi-audio-mode) .movi-fullscreen-btn {
+      :host(.movi-audio-mode) .movi-rotate-btn {
         display: none !important;
       }
       /* Host controls registered with media:"video" / media:"audio" — the
@@ -27783,8 +27963,8 @@ export class MoviElement extends HTMLElement {
          the host is only 56px tall in strip mode so the panel lands
          half-off-screen above the bar. Switch to viewport-fixed
          centring so the panel sits cleanly in the page area below the
-         strip. Also drop the video-only rows — fullscreen, PiP,
-         frame-step, subtitle keys, aspect, rotate, HDR, snapshot,
+         strip. Also drop the video-only rows — PiP, frame-step,
+         subtitle keys, aspect, rotate, HDR, snapshot,
          timeline don't apply to audio playback. */
       :host(.movi-audio-strip) .movi-shortcuts-panel {
         position: fixed !important;
@@ -27824,13 +28004,12 @@ export class MoviElement extends HTMLElement {
       }
 
       /* Mirror the same gate inside the right-click context menu —
-         aspect ratio / PiP / fullscreen / rotate / ambient / snapshot
-         / timeline make no sense for an audio-only source. Keep
-         play-pause, speed, loop, stable-audio, nerd-stats and
-         keyboard-shortcuts; everything else is video-frame work. */
+         aspect ratio / PiP / rotate / ambient / snapshot / timeline make
+         no sense for an audio-only source. Keep play-pause, speed, loop,
+         stable-audio, fullscreen, nerd-stats and keyboard-shortcuts;
+         everything else is video-frame work. */
       :host(.movi-audio-mode) .movi-context-menu-item[data-action="fit"],
       :host(.movi-audio-mode) .movi-context-menu-item[data-action="pip"],
-      :host(.movi-audio-mode) .movi-context-menu-item[data-action="fullscreen"],
       :host(.movi-audio-mode) .movi-context-menu-item[data-action="rotate-video"],
       :host(.movi-audio-mode) .movi-context-menu-item[data-action="ambient-toggle"],
       :host(.movi-audio-mode) .movi-context-menu-item[data-action="snapshot"],
@@ -28461,6 +28640,14 @@ export class MoviElement extends HTMLElement {
     SettingsStorage.getInstance()
       .load()
       .then((settings) => {
+        // Asked again now that the store has answered. A framework sets its
+        // props AFTER connecting the element (see the `persist` case in
+        // attributeChangedCallback), so a host that opted into `persist` — or
+        // passed an empty one to switch remembering off, the way a muted,
+        // cover-fitted hover preview must — was not yet saying so when this
+        // started, and the always-on store went on to put last session's
+        // volume, mute and fit over that host's markup anyway.
+        if (!this.legacySettingsEnabled()) return;
         let changed = false;
 
         // Restoring persisted settings is not a user action, so it must not
@@ -28559,6 +28746,9 @@ export class MoviElement extends HTMLElement {
         // Apply crop-bars preference
         if (settings.cropBars !== undefined) {
           this._cropBars = settings.cropBars;
+          // Recorded like the toggles above it — without it a host that
+          // re-reflects its own `cropbars` on render takes the answer back.
+          this.noteStoredChoice("cropbars", settings.cropBars);
           if (settings.cropBars) {
             this.setAttribute("cropbars", "");
           } else {
@@ -28766,7 +28956,13 @@ export class MoviElement extends HTMLElement {
         break;
       case "hdr":
         if (this.hostOverridingStoredChoice("hdr", newValue)) return;
-        this.hdr = newValue !== null;
+        // Applied, not chosen. Routed through the public setter this was the
+        // one attribute that saved the HOST's value into the viewer's store and
+        // announced it as `hdrchange` — every neighbour (ambientmode,
+        // stablevolume, cropbars) applies its attribute silently, and the
+        // events are for choices a host could not have seen. The setter still
+        // runs for the viewer's own toggles, and it is what reflects to here.
+        if ((newValue !== null) !== this._hdr) this.applyHdr(newValue !== null);
         break;
       case "theme":
         this.theme = (newValue as "light" | "dark") || "dark";
@@ -28897,6 +29093,8 @@ export class MoviElement extends HTMLElement {
         WasmBindings.probeAnalyzeMs = Math.max(0, parseInt(newValue || "0", 10) || 0);
         break;
       case "cropbars":
+        // The same guard its neighbours have — see the setter.
+        if (this.hostOverridingStoredChoice("cropbars", newValue)) return;
         this._cropBars = newValue !== null;
         this.applyBarCrop();
         this.updateCropUI();
@@ -29090,6 +29288,10 @@ export class MoviElement extends HTMLElement {
         break;
       case "disablepictureinpicture":
         this._disablePip = newValue !== null;
+        this.syncVideoPipBlock();
+        break;
+      case "controlslist":
+        this.applyControlsList();
         break;
       case "disableremoteplayback":
         this._disableRemote = newValue !== null;
@@ -29295,6 +29497,8 @@ export class MoviElement extends HTMLElement {
         if (this.hostOverridingStoredChoice("ambientmode", newValue)) return;
         this._ambientMode = newValue !== null;
         this.updateAmbientMode();
+        // The menus' switch too — see the setter.
+        this.updateAmbientUI();
         break;
       case "ambientwrapper":
         this._ambientWrapper = newValue;
@@ -29670,9 +29874,18 @@ export class MoviElement extends HTMLElement {
       width = this.clientWidth;
       height = this.clientHeight;
     } else {
+      // The LAYOUT box, not getBoundingClientRect: the rect includes any CSS
+      // transform on an ancestor, and a host that animates the player with one
+      // (a miniplayer growing back to full size scales it from the small box)
+      // got a drawing buffer sized to the SCALED box. The transform then ended
+      // with no layout change, the observer never fired again, and the picture
+      // stayed at the small resolution — pixelated. The rect stays the fallback
+      // for a box with no layout size (display: contents and the like).
       const rect = this.getBoundingClientRect();
-      width = widthAttr ? parseInt(widthAttr, 10) : rect.width;
-      height = heightAttr ? parseInt(heightAttr, 10) : rect.height;
+      const layoutW = this.clientWidth || rect.width;
+      const layoutH = this.clientHeight || rect.height;
+      width = widthAttr ? parseInt(widthAttr, 10) : layoutW;
+      height = heightAttr ? parseInt(heightAttr, 10) : layoutH;
     }
 
     if (width > 0 && height > 0) {
@@ -30078,14 +30291,17 @@ export class MoviElement extends HTMLElement {
     // Two related-but-distinct host states for an audio source (audio
     // track, no real video stream):
     //   .movi-audio-mode  — ANY audio source (with or without cover art).
-    //     Drives hiding of video-only controls (PiP, fullscreen, rotate,
-    //     aspect, snapshot, ambient, timeline, …) which make no sense for
-    //     audio. Applies in cover-art mode too, so the artwork view isn't
-    //     littered with inapplicable buttons.
+    //     Drives hiding of video-only controls (PiP, rotate, aspect,
+    //     snapshot, ambient, timeline, …) which make no sense for audio.
+    //     Applies in cover-art mode too, so the artwork view isn't littered
+    //     with inapplicable buttons.
     //   .movi-audio-strip — audio source WITHOUT artwork. Collapses the
     //     player to a native-<audio>-style 56px control strip. Cover art
     //     needs the full surface to paint, so strip layout is suppressed
     //     when a bitmap is present (audio-mode still hides the controls).
+    //     Fullscreen suppresses it too: a 56px bar across a black screen is
+    //     not a fullscreen view, so the surface paints a drawn sleeve in the
+    //     art's place instead, and the strip comes back on the way out.
     // A failed load has NO tracks, so hasVideoTrack is always false and the
     // audio renderer (built at construction) makes hasAudibleSource() read true
     // — which wrongly flags a failed VIDEO/manifest as audio and, on the next
@@ -30166,30 +30382,40 @@ export class MoviElement extends HTMLElement {
     // loading, hold the strip off so we don't flash strip → album-art.
     const posterCoverPending =
       audioMode && !bitmap && this._posterCoverLoading;
-    const stripMode =
+    // What the WINDOWED player is: the page-facing decision, and the one the
+    // audiostripchange event reports. Fullscreen only changes what is drawn
+    // while it lasts — telling the page would reflow its wrapper out from
+    // under a native fullscreen and back again on exit, which is the layout
+    // shift the strip's own height is meant to avoid.
+    const stripLayout =
       audioMode && !bitmap && !coverArtPending && !posterCoverPending;
+    const fullscreen = this.isFullscreenActive();
+    const stripMode = stripLayout && !fullscreen;
+    // No art, fullscreen: the cover surface with a drawn sleeve in the art's
+    // place. The same surface (not a second one) so the controls, the meter
+    // and every .movi-cover-art rule behave exactly as they do over real art.
+    const drawnSleeve = stripLayout && fullscreen;
     this.classList.toggle("movi-audio-mode", audioMode);
     this.classList.toggle("movi-audio-strip", stripMode);
     // Strip mode and the caption band arrive together on an audio-only source
     // that already had a track selected, so the band has to be reconsidered
     // here as well as on a track change.
     this.updateStripCaptionBand();
-    // Fullscreen is for a picture, and this is the moment it turns out there
-    // isn't one — a source that is sound alone, or audioOnly switched on while
-    // a film was filling the screen. What is left is a bar or a sleeve in the
-    // middle of a black screen, at arm's length, with no way back but the
-    // keyboard; so come back out the way the viewer would have.
-    //
-    // Cover art counts. It is a picture, but it is not the one fullscreen was
-    // entered for, and a switch to sound is a switch away from watching.
+    // A switch between sound and picture while fullscreen (audioOnly toggled,
+    // a queue moving from a film to a track) stays fullscreen — audio has a
+    // full-screen view now, and the viewer never asked to leave. What changes
+    // is the rotation: a film may have locked the phone to landscape, and a
+    // sleeve has no reason to hold it there (nor, going back, to stay free).
     //
     // Against what the player last WAS, not against the class: load() clears
     // both classes on every source change, so the class would have read
-    // "wasn't audio" for a playlist moving from one track to the next and
-    // dropped a fullscreen sleeve nobody asked it to drop.
+    // "wasn't audio" for a playlist moving from one track to the next.
     const wasAudioMode = this._lastAudioModeSeen;
     this._lastAudioModeSeen = audioMode;
-    if (audioMode && wasAudioMode === false) this.exitFullscreen();
+    if (wasAudioMode !== null && wasAudioMode !== audioMode && fullscreen) {
+      this.applyFullscreenOrientation(true);
+      this.updatePseudoFsRotation();
+    }
     // Keep a portaled menu's host classes in sync so a video→audio switch made
     // while the menu is open updates it live (the cloned :host(.movi-audio-mode)
     // rules hide the video-only items).
@@ -30217,15 +30443,15 @@ export class MoviElement extends HTMLElement {
     // unchanged: the event never fired and the page's wrapper stayed collapsed
     // at 56/78px, squashing the album art into a black bar. _lastStripDispatched
     // survives load(), so the transition is detected and the wrapper reflows.
-    if (stripMode !== this._lastStripDispatched) {
-      this._lastStripDispatched = stripMode;
+    if (stripLayout !== this._lastStripDispatched) {
+      this._lastStripDispatched = stripLayout;
       // Tell the embedding page so it can collapse/restore its own wrapper. The
       // host shrinks to 56px via :host CSS, but a parent .player-stage with
       // aspect-ratio: 16/9 (or any fixed height) would still reserve its old
       // box and leave a black gap. Consumers listen on this — see index.html.
       this.dispatchEvent(
         new CustomEvent("audiostripchange", {
-          detail: { strip: stripMode },
+          detail: { strip: stripLayout },
           bubbles: true,
           composed: true,
         }),
@@ -30253,7 +30479,8 @@ export class MoviElement extends HTMLElement {
     // Keying off !audioMode (not hasVideoTrack) is what makes audio-only work on
     // a VIDEO source: the video track still exists (we just don't decode it), so
     // the old hasVideoTrack guard hid the art and left a black screen.
-    if (!bitmap || !audioMode) {
+    // A drawn sleeve stands in for missing art while fullscreen (see above).
+    if (!audioMode || (!bitmap && !drawnSleeve)) {
       overlay.style.display = "none";
       if (this._coverArtBgEl) this._coverArtBgEl.style.backgroundImage = "none";
       this.classList.remove("movi-cover-art");
@@ -30276,23 +30503,10 @@ export class MoviElement extends HTMLElement {
     if (!ctx) return;
     ctx.save();
     ctx.scale(dpr, dpr);
-
-    // Blurred backdrop is now a CSS-blurred DOM element BEHIND this canvas — a
-    // real Gaussian in every browser (canvas ctx.filter "blur()" is unsupported
-    // in Safari < 17 and looked bad faked). Point it at the poster URL, or at a
-    // baked-down data URL of the embedded album art (an ImageBitmap has no URL
-    // of its own), so both cover-art sources get the same blurred surround. The
-    // canvas paints only the sharp art.
-    if (this._coverArtBgEl) {
-      const bgUrl = this.coverArtBitmap ? this._coverArtBgUrl : this._posterCoverUrl;
-      this._coverArtBgEl.style.backgroundImage = bgUrl
-        ? `url("${bgUrl.replace(/"/g, '\\"')}")`
-        : "none";
-    }
-    const palette = this.applyCoverArtPalette(bitmap);
     ctx.clearRect(0, 0, cssW, cssH); // transparent — let the blurred bg show
 
-    const bitmapAR = bitmap.width / bitmap.height;
+    // A drawn sleeve is square.
+    const bitmapAR = bitmap ? bitmap.width / bitmap.height : 1;
 
     // What the sleeve says about itself. A cover with no words beside it is a
     // picture; with the track and the artist it is a record being played.
@@ -30309,12 +30523,11 @@ export class MoviElement extends HTMLElement {
       }
       return "";
     };
-    const trackTitle =
-      readMeta("title") ||
-      (
-        this.shadowRoot?.querySelector(".movi-title-text") as HTMLElement | null
-      )?.textContent?.trim() ||
-      "";
+    // The player's own resolved title, not the title bar's text: a host that
+    // shows the bar only in fullscreen (titlemode="fullscreen") leaves that
+    // text empty until the first fullscreen trip, so the audio view had no
+    // title beside its art until the viewer had been fullscreen once.
+    const trackTitle = readMeta("title") || (this._title || "").trim();
     const artistName = readMeta("artist", "album_artist", "performer", "author");
     const albumName = readMeta("album");
     const releaseDate = readMeta("date", "year", "originaldate");
@@ -30328,21 +30541,79 @@ export class MoviElement extends HTMLElement {
       .filter(Boolean)
       .join("  ·  ");
 
+    // Blurred backdrop is now a CSS-blurred DOM element BEHIND this canvas — a
+    // real Gaussian in every browser (canvas ctx.filter "blur()" is unsupported
+    // in Safari < 17 and looked bad faked). Point it at the poster URL, or at a
+    // baked-down data URL of the embedded album art (an ImageBitmap has no URL
+    // of its own), so both cover-art sources get the same blurred surround. The
+    // canvas paints only the sharp art.
+    // A drawn sleeve has no picture to blur, so the surround is its own two
+    // colours instead — the same wash real art gives, not a black screen.
+    const palette = bitmap
+      ? this.applyCoverArtPalette(bitmap)
+      : this.applyDrawnSleevePalette(
+          trackTitle ||
+            artistName ||
+            (this._src instanceof File
+              ? this._src.name
+              : typeof this._src === "string"
+                ? this._src
+                : ""),
+        );
+    if (this._coverArtBgEl) {
+      if (bitmap) {
+        const bgUrl = this.coverArtBitmap ? this._coverArtBgUrl : this._posterCoverUrl;
+        this._coverArtBgEl.style.backgroundImage = bgUrl
+          ? `url("${bgUrl.replace(/"/g, '\\"')}")`
+          : "none";
+      } else {
+        const [ar, ag, ab] = palette.accent;
+        const [sr, sg, sb] = palette.secondary;
+        this._coverArtBgEl.style.backgroundImage = `linear-gradient(135deg, rgb(${ar}, ${ag}, ${ab}), rgb(${sr}, ${sg}, ${sb}))`;
+      }
+    }
+
     // Side by side when there is room for both, the sleeve alone when there is
     // not. The composition intentionally occupies the upper-middle of the
     // player: the artwork and copy feel like one editorial lockup, while the
     // lower quarter stays quiet for the waveform and the revealed controls.
     const words = trackTitle || artistName;
     const sideBySide = !!words && cssW >= 560 && cssW / cssH >= 1.1;
+    // Narrow and tall — a phone held upright, fullscreen: the words go UNDER
+    // the sleeve rather than nowhere. Fullscreen only: a windowed portrait
+    // player (a Shorts card) carries its own title chrome and would show the
+    // title twice, and a short windowed box has no room below the art.
+    const stacked =
+      !!words && !sideBySide && fullscreen && cssH >= 360 && cssH / cssW >= 1.05;
 
-    const frameSize = sideBySide
+    let frameSize = sideBySide
       ? Math.min(cssH * 0.43, cssW * 0.24)
       : Math.min(cssW, cssH) * (cssW < 420 ? 0.66 : 0.56);
-    const artW = bitmapAR >= 1 ? frameSize : frameSize * bitmapAR;
-    const artH = bitmapAR >= 1 ? frameSize / bitmapAR : frameSize;
+    let artW = bitmapAR >= 1 ? frameSize : frameSize * bitmapAR;
+    let artH = bitmapAR >= 1 ? frameSize / bitmapAR : frameSize;
+    // Fullscreen, with words: fit the art to a BOX rather than to one square
+    // edge. The square rule sizes a wide poster by its width alone, so a 16:9
+    // sleeve came out 345x194 on a 1440x900 screen — a thumbnail in a void.
+    // The box lets wide art spend the width the screen has, and square art
+    // the height. Stacked, the box is the phone's width and a third of its
+    // height, leaving the rest for the words and the bar.
+    if (fullscreen && (sideBySide || stacked)) {
+      const boxW = cssW * (stacked ? 0.82 : 0.38);
+      const boxH = cssH * (stacked ? 0.36 : 0.46);
+      artW = Math.min(boxW, boxH * bitmapAR);
+      artH = artW / bitmapAR;
+      frameSize = Math.max(artW, artH);
+    }
 
     const gap = Math.max(30, Math.round(frameSize * 0.2));
-    const titleSize = Math.max(20, Math.min(42, Math.round(frameSize * 0.105)));
+    // Fullscreen lifts the cap a little: the ceiling is sized for an embed,
+    // and at 1080p it left a 42px title beside a sleeve read from a sofa.
+    const titleSize = stacked
+      ? Math.max(20, Math.min(30, Math.round(cssW * 0.06)))
+      : Math.max(
+          20,
+          Math.min(fullscreen ? 48 : 42, Math.round(frameSize * 0.105)),
+        );
     const artistSize = Math.max(15, Math.round(titleSize * 0.68));
     // Keep a deliberate text measure instead of donating every remaining pixel
     // to it. The previous full-width column pinned the sleeve against the left
@@ -30353,11 +30624,73 @@ export class MoviElement extends HTMLElement {
           Math.max(220, cssW * 0.39),
           cssW - artW - gap - sidePad * 2,
         )
-      : 0;
+      : stacked
+        ? Math.min(cssW - sidePad * 2, 640)
+        : 0;
+
+    const setFont = (size: number, weight: string): void => {
+      ctx.font = `${weight} ${size}px -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif`;
+    };
+    // Titles are long ("… feat. …", a remix note, the year) and a single
+    // line of them is mostly ellipsis. Wrap to two, then give up.
+    const wrap = (text: string, size: number, weight: string, maxLines: number): string[] => {
+      setFont(size, weight);
+      if (ctx.measureText(text).width <= textW) return [text];
+      const words = text.split(/\s+/);
+      const lines: string[] = [];
+      let line = "";
+      for (const word of words) {
+        const next = line ? line + " " + word : word;
+        if (ctx.measureText(next).width <= textW || !line) {
+          line = next;
+        } else {
+          lines.push(line);
+          line = word;
+          if (lines.length === maxLines) break;
+        }
+      }
+      if (lines.length < maxLines && line) lines.push(line);
+      if (lines.length === maxLines) {
+        let last = lines[maxLines - 1];
+        const rest = text.slice(lines.join(" ").length).trim();
+        if (rest || ctx.measureText(last).width > textW) {
+          while (last.length > 1 && ctx.measureText(last + "…").width > textW) {
+            last = last.slice(0, -1);
+          }
+          lines[maxLines - 1] = last.trimEnd() + "…";
+        }
+      }
+      return lines;
+    };
+    const showWords = sideBySide || stacked;
+    const titleLines = showWords && trackTitle ? wrap(trackTitle, titleSize, "400", 2) : [];
+    const artistLines = showWords && artistName ? wrap(artistName, artistSize, "400", 1) : [];
+    const eyebrowSize = Math.max(10, Math.round(titleSize * 0.29));
+    const eyebrowGap = eyebrow ? Math.round(titleSize * 0.48) : 0;
+    const lineGap = Math.round(titleSize * 0.42);
+    const textBlockH =
+      (eyebrow ? eyebrowSize + eyebrowGap : 0) +
+      titleLines.length * titleSize * 1.22 +
+      (artistLines.length ? lineGap + artistSize * 1.24 : 0);
+    // Stacked, the words sit a little closer than beside: the gap is read
+    // down a narrow screen, not across a wide one.
+    const stackGap = Math.round(Math.max(22, frameSize * 0.12));
+
     const blockW = sideBySide ? artW + gap + textW : artW;
     const artX = Math.round((cssW - blockW) / 2);
     const compositionCenterY = sideBySide ? cssH * 0.38 : cssH * 0.43;
-    const artY = Math.round(compositionCenterY - artH / 2);
+    // Stacked, the sleeve sits on the player's middle — where the touch play
+    // button appears while the chrome is up — and the words hang below it.
+    // Centring the whole block instead put that button across the title.
+    // Lifted only if the words would run into the bar.
+    const artY = stacked
+      ? Math.round(
+          Math.min(
+            cssH * 0.46 - artH / 2,
+            cssH * 0.86 - (artH + stackGap + textBlockH),
+          ),
+        )
+      : Math.round(compositionCenterY - artH / 2);
 
     // Rounded sleeve, and a shadow under it so it doesn't bleed into its own
     // blurred backdrop.
@@ -30411,7 +30744,11 @@ export class MoviElement extends HTMLElement {
       ctx.rect(artX, artY, artW, artH);
     }
     ctx.clip();
-    ctx.drawImage(bitmap, artX, artY, artW, artH);
+    if (bitmap) {
+      ctx.drawImage(bitmap, artX, artY, artW, artH);
+    } else {
+      this.paintDrawnSleeve(ctx, artX, artY, artW, artH, palette);
+    }
     ctx.restore();
     // A restrained top/side highlight separates dark sleeves from dark ambient
     // backgrounds without putting a generic card border around the artwork.
@@ -30427,74 +30764,25 @@ export class MoviElement extends HTMLElement {
     ctx.stroke();
     ctx.restore();
 
-    if (sideBySide) {
-      const textX = artX + artW + gap;
-      const setFont = (size: number, weight: string): void => {
-        ctx.font = `${weight} ${size}px -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif`;
-      };
-      // Titles are long ("… feat. …", a remix note, the year) and a single
-      // line of them is mostly ellipsis. Wrap to two, then give up.
-      const wrap = (text: string, size: number, weight: string, maxLines: number): string[] => {
-        setFont(size, weight);
-        if (ctx.measureText(text).width <= textW) return [text];
-        const words = text.split(/\s+/);
-        const lines: string[] = [];
-        let line = "";
-        for (const word of words) {
-          const next = line ? line + " " + word : word;
-          if (ctx.measureText(next).width <= textW || !line) {
-            line = next;
-          } else {
-            lines.push(line);
-            line = word;
-            if (lines.length === maxLines) break;
-          }
-        }
-        if (lines.length < maxLines && line) lines.push(line);
-        if (lines.length === maxLines) {
-          let last = lines[maxLines - 1];
-          const rest = text.slice(lines.join(" ").length).trim();
-          if (rest || ctx.measureText(last).width > textW) {
-            while (last.length > 1 && ctx.measureText(last + "…").width > textW) {
-              last = last.slice(0, -1);
-            }
-            lines[maxLines - 1] = last.trimEnd() + "…";
-          }
-        }
-        return lines;
-      };
-      // Set against the middle of the sleeve, not the middle of the player:
-      // the pair reads as one object that way.
-      const midY = artY + artH / 2;
-      const titleLines = trackTitle ? wrap(trackTitle, titleSize, "400", 2) : [];
-      const artistLines = artistName ? wrap(artistName, artistSize, "400", 1) : [];
-      const eyebrowSize = Math.max(10, Math.round(titleSize * 0.29));
-      const eyebrowGap = eyebrow ? Math.round(titleSize * 0.48) : 0;
-      const lineGap = Math.round(titleSize * 0.42);
-      const blockH =
-        (eyebrow ? eyebrowSize + eyebrowGap : 0) +
-        titleLines.length * titleSize * 1.22 +
-        (artistLines.length ? lineGap + artistSize * 1.24 : 0);
-      let y = midY - blockH / 2;
+    if (showWords) {
+      // Beside: set against the middle of the sleeve, not the middle of the
+      // player — the pair reads as one object that way. Below: centred under
+      // it, one column down the screen.
+      const textX = sideBySide ? artX + artW + gap : cssW / 2;
+      let y = sideBySide
+        ? artY + artH / 2 - textBlockH / 2
+        : artY + artH + stackGap;
       ctx.save();
       ctx.textBaseline = "middle";
+      ctx.textAlign = sideBySide ? "left" : "center";
       ctx.shadowColor = "rgba(0,0,0,0.38)";
       ctx.shadowBlur = 16;
       if (eyebrow) {
         const markerW = Math.max(16, Math.round(titleSize * 0.5));
-        ctx.fillStyle = `rgba(${palette.accent[0]},${palette.accent[1]},${palette.accent[2]},0.92)`;
-        if (typeof ctx.roundRect === "function") {
-          ctx.beginPath();
-          ctx.roundRect(textX, y + eyebrowSize / 2 - 1, markerW, 2, 1);
-          ctx.fill();
-        } else {
-          ctx.fillRect(textX, y + eyebrowSize / 2 - 1, markerW, 2);
-        }
-        ctx.fillStyle = "rgba(255,255,255,0.56)";
         setFont(eyebrowSize, "600");
         const eyebrowText = eyebrow.toLocaleUpperCase();
-        const eyebrowX = textX + markerW + Math.round(titleSize * 0.22);
-        const maxEyebrowW = Math.max(20, textW - (eyebrowX - textX));
+        const markerGap = Math.round(titleSize * 0.22);
+        const maxEyebrowW = Math.max(20, textW - markerW - markerGap);
         let fittedEyebrow = eyebrowText;
         while (
           fittedEyebrow.length > 1 &&
@@ -30503,7 +30791,23 @@ export class MoviElement extends HTMLElement {
           fittedEyebrow = fittedEyebrow.slice(0, -1);
         }
         if (fittedEyebrow !== eyebrowText) fittedEyebrow += "…";
-        ctx.fillText(fittedEyebrow, eyebrowX, y + eyebrowSize / 2);
+        // Centred, the marker and the words are centred as one line.
+        const markerX = sideBySide
+          ? textX
+          : textX -
+            (markerW + markerGap + ctx.measureText(fittedEyebrow).width) / 2;
+        ctx.fillStyle = `rgba(${palette.accent[0]},${palette.accent[1]},${palette.accent[2]},0.92)`;
+        if (typeof ctx.roundRect === "function") {
+          ctx.beginPath();
+          ctx.roundRect(markerX, y + eyebrowSize / 2 - 1, markerW, 2, 1);
+          ctx.fill();
+        } else {
+          ctx.fillRect(markerX, y + eyebrowSize / 2 - 1, markerW, 2);
+        }
+        ctx.fillStyle = "rgba(255,255,255,0.56)";
+        ctx.textAlign = "left";
+        ctx.fillText(fittedEyebrow, markerX + markerW + markerGap, y + eyebrowSize / 2);
+        ctx.textAlign = sideBySide ? "left" : "center";
         y += eyebrowSize + eyebrowGap;
       }
       y += titleSize * 0.62;
@@ -30526,6 +30830,104 @@ export class MoviElement extends HTMLElement {
     overlay.style.display = "block";
     this.classList.add("movi-cover-art");
     this.startCoverEqualizer();
+  }
+
+  /** Two colours for a sleeve that has no picture to sample, derived from its
+   *  title so a track keeps its colour from one visit to the next and two
+   *  tracks in a queue don't look like the same record. Sets the same CSS
+   *  hooks applyCoverArtPalette does, so the surround's glow follows. */
+  private applyDrawnSleevePalette(seed: string): {
+    accent: [number, number, number];
+    secondary: [number, number, number];
+  } {
+    let hash = 2166136261;
+    for (let i = 0; i < seed.length; i++) {
+      hash = Math.imul(hash ^ seed.charCodeAt(i), 16777619);
+    }
+    const hue = (hash >>> 0) % 360;
+    const rgb = (h: number, s: number, l: number): [number, number, number] => {
+      const k = (n: number) => (n + h / 30) % 12;
+      const a = s * Math.min(l, 1 - l);
+      const f = (n: number) =>
+        Math.round(255 * (l - a * Math.max(-1, Math.min(k(n) - 3, 9 - k(n), 1))));
+      return [f(0), f(8), f(4)];
+    };
+    // Muted rather than saturated: this sits where artwork would, and a
+    // full-strength swatch reads as a UI colour, not a record sleeve.
+    const palette = {
+      accent: rgb(hue, 0.46, 0.5),
+      secondary: rgb((hue + 42) % 360, 0.4, 0.3),
+    };
+    this.coverArtOverlay?.style.setProperty(
+      "--movi-cover-accent",
+      palette.accent.join(", "),
+    );
+    this.coverArtOverlay?.style.setProperty(
+      "--movi-cover-secondary",
+      palette.secondary.join(", "),
+    );
+    return palette;
+  }
+
+  /** The sleeve for a track with no art: its palette as a lit card with a
+   *  note on it — plainly "no artwork", but composed like the real thing so
+   *  the fullscreen view is the same view either way. Drawn into the
+   *  caller's clip, so the rounding and the edge highlight come for free. */
+  private paintDrawnSleeve(
+    ctx: CanvasRenderingContext2D,
+    x: number,
+    y: number,
+    w: number,
+    h: number,
+    palette: {
+      accent: [number, number, number];
+      secondary: [number, number, number];
+    },
+  ): void {
+    const [ar, ag, ab] = palette.accent;
+    const [sr, sg, sb] = palette.secondary;
+    const base = ctx.createLinearGradient(x, y, x + w, y + h);
+    base.addColorStop(0, `rgb(${ar},${ag},${ab})`);
+    base.addColorStop(1, `rgb(${sr},${sg},${sb})`);
+    ctx.fillStyle = base;
+    ctx.fillRect(x, y, w, h);
+    // Light from the upper left, so it reads as a printed card rather than a
+    // flat swatch of colour.
+    const lightX = x + w * 0.26;
+    const lightY = y + h * 0.2;
+    const light = ctx.createRadialGradient(lightX, lightY, 0, lightX, lightY, w * 0.95);
+    light.addColorStop(0, "rgba(255,255,255,0.2)");
+    light.addColorStop(1, "rgba(255,255,255,0)");
+    ctx.fillStyle = light;
+    ctx.fillRect(x, y, w, h);
+    const cx = x + w / 2;
+    const cy = y + h / 2;
+    // A few faint grooves around the note: the record, without drawing one.
+    ctx.save();
+    ctx.strokeStyle = "rgba(255,255,255,0.07)";
+    ctx.lineWidth = Math.max(1, w * 0.004);
+    for (const r of [0.3, 0.37, 0.44]) {
+      ctx.beginPath();
+      ctx.arc(cx, cy, w * r, 0, Math.PI * 2);
+      ctx.stroke();
+    }
+    ctx.restore();
+    if (typeof Path2D !== "function") return;
+    // Material's music note, a 12x18 glyph centred at (12,12) in a 24 box.
+    const note = new Path2D(
+      "M12 3v10.55c-.59-.34-1.27-.55-2-.55-2.21 0-4 1.79-4 4s1.79 4 4 4 4-1.79 4-4V7h4V3h-6z",
+    );
+    const scale = (h * 0.34) / 18;
+    ctx.save();
+    ctx.translate(cx - 12 * scale, cy - 12 * scale);
+    ctx.scale(scale, scale);
+    ctx.shadowColor = "rgba(0,0,0,0.25)";
+    // Shadow sizes ignore the transform, so these are plain pixels.
+    ctx.shadowBlur = 24;
+    ctx.shadowOffsetY = 4;
+    ctx.fillStyle = "rgba(255,255,255,0.9)";
+    ctx.fill(note);
+    ctx.restore();
   }
 
   /**
@@ -31274,6 +31676,8 @@ export class MoviElement extends HTMLElement {
           streamVideo.style.objectFit = "contain";
           this.video.replaceWith(streamVideo);
           this.video = streamVideo;
+          // A fresh element knows nothing of nopip / disablepictureinpicture.
+          this.syncVideoPipBlock();
           Logger.info(TAG, "DRM: Swapped in native stream video element");
         }
       }
@@ -34074,6 +34478,15 @@ export class MoviElement extends HTMLElement {
   }
 
   set cropbars(value: boolean) {
+    const changed = !!value !== this._cropBars;
+    // Before the attribute write, as stableVolume does: this IS the viewer's
+    // answer, and the record has to agree with it or the guard in
+    // attributeChangedCallback takes it for a host talking over one. Without
+    // the record there was no guard at all — a React host that declares
+    // `cropbars` (movi-tube's watch page does) re-reflects it on its next
+    // render, so C, the gear switch and the context-menu row all turned the
+    // crop off for a second or two and then it came back on by itself.
+    this.noteStoredChoice("cropbars", !!value);
     if (value) this.setAttribute("cropbars", "");
     else this.removeAttribute("cropbars");
     // Remembered by default, like ambient mode and stable volume beside it in
@@ -34084,6 +34497,12 @@ export class MoviElement extends HTMLElement {
     // legacySettingsEnabled.
     if (this.legacySettingsEnabled()) {
       SettingsStorage.getInstance().save({ cropBars: this._cropBars });
+    }
+    // Announced like its neighbours in the menu (ambient, stable volume). Not
+    // `cropchange`: that one reports what the renderer FOUND to crop, and
+    // fires for the host's own attribute too — it says nothing about a switch.
+    if (changed) {
+      this.emitSettingChange("cropbarschange", { enabled: this._cropBars });
     }
   }
 
@@ -35682,6 +36101,8 @@ export class MoviElement extends HTMLElement {
     } else {
       v.removeAttribute("autopictureinpicture");
     }
+    // …and so does refusing it — this is the element the browser would offer.
+    this.syncVideoPipBlock();
     v.style.display = "block";
     v.style.objectFit =
       this._objectFit === "cover" || this._objectFit === "fill"
@@ -36834,6 +37255,35 @@ export class MoviElement extends HTMLElement {
   };
   private _initialEnabledControls: string[] | null = null;
 
+  /**
+   * Context-menu rows (and submenus, by their data-submenu key) that answer to
+   * a `controlslist` token — read by the menu's click handler, which refuses a
+   * switched-off one before any branch runs.
+   *
+   * Not ACTION_CONTROL_NAME: that one decides what is live before playback,
+   * and widening it would change that answer too. Two things are left out on
+   * purpose. `play-pause`, because `noplay` is the bar's button only — Space
+   * and a click on the picture still pause, and a host cannot take pausing
+   * away from a viewer. And the rows that open or close a place — PiP,
+   * fullscreen, stats, timeline, the shortcuts sheet — whose own toggles
+   * refuse to OPEN when switched off but still let the viewer out; gating
+   * them here as well would trap someone already inside.
+   */
+  private static readonly MENU_ACTION_CONTROL: Record<string, string> = {
+    speed: "speed",
+    fit: "aspect",
+    "audio-track": "audio",
+    "subtitle-track": "cc",
+    "hdr-toggle": "hdr",
+    "rotate-video": "rotate",
+    "loop-toggle": "loop",
+    "shuffle-toggle": "playlist",
+    "stable-audio-toggle": "stableaudio",
+    "crop-toggle": "crop",
+    "ambient-toggle": "ambient",
+    snapshot: "snapshot",
+  };
+
   /** The action keys that are ENABLED before playback — see
    *  setInitialEnabledControls for what that governs. */
   getInitialEnabledControls(): string[] {
@@ -36895,12 +37345,12 @@ export class MoviElement extends HTMLElement {
    */
   /** The canvas renderer, when there is one — it owns the shader-side cut. */
   private pictureRenderer():
-    | { setCornerRadius?: (px: number) => void; presentFpsCap?: number }
+    | { setCornerRadius?: (px: number | number[]) => void; presentFpsCap?: number }
     | undefined {
     return (
       this.player as unknown as {
         videoRenderer?: {
-          setCornerRadius?: (px: number) => void;
+          setCornerRadius?: (px: number | number[]) => void;
           presentFpsCap?: number;
         };
       } | null
@@ -36974,10 +37424,11 @@ export class MoviElement extends HTMLElement {
     // border-radius and clip-path on it, so a rounded page frame ended up with
     // square video inside it. The clip below stays for the browsers that do
     // honour it (and for the <video> element, which has no shader).
-    // One radius for the picture: a shader cut per corner is a lot of machinery
-    // for a case (four different radii on a video) nobody asks for.
+    // Each corner its own radius, as the page sets them: a picture rounded only
+    // along its top (sitting on a caption bar, say) must keep square bottom
+    // corners, which a single radius taken from the top-left could not do.
     this.pictureRenderer()?.setCornerRadius?.(
-      rounded ? parseFloat(corners[0]) || 0 : 0,
+      rounded ? corners.map((c) => parseFloat(c) || 0) : 0,
     );
     for (const el of [this.canvas, this.video] as (HTMLElement | null)[]) {
       if (!el) continue;
@@ -37226,7 +37677,12 @@ export class MoviElement extends HTMLElement {
     // (The old radial gradient of one averaged colour lived here. Both paths
     // draw the drifting wash below now.)
     if (this._ambientMode) {
-      const isFullscreen = document.fullscreenElement === this;
+      // Any fullscreen the player is in, not only element fullscreen: a host
+      // that drives its own (setHostFullscreen — e.g. a page that fullscreens
+      // the whole document so the viewer can scroll past the picture) left
+      // this reading false, so the wash kept going to the page's wrapper — which
+      // such a host hides — and the bars inside the picture stayed black.
+      const isFullscreen = this.isFullscreenActive();
       // The wash: black at both edges into the sampled colour, wider than what
       // it fills so it can be slid. Brighter than the old flat fill dared to be
       // — that one covered its whole area edge to edge, so anything strong read
@@ -37778,6 +38234,45 @@ export class MoviElement extends HTMLElement {
   }
 
   /* ── the two attributes native has and this did not ──────────────────── */
+
+  /**
+   * Bring what the stylesheet cannot reach in step with a `controlslist` that
+   * changed after the player was built. The stylesheet hides buttons and rows
+   * on its own; these are the surfaces that were built from the old list, or
+   * that live outside the shadow tree.
+   */
+  private applyControlsList(): void {
+    // The menu portal matches `:host([controlslist~=…])` against its OWN host,
+    // which only copies the attribute when the menu opens — so a menu already
+    // open kept offering what the page had just switched off.
+    this.syncMenuPortalAudioClasses();
+    // The gear's rows are built from the list (see buildSettingsRoot), not
+    // hidden by CSS.
+    this.buildSettingsRoot();
+    // The lock screen's skip pair is registered, not styled. Only with a queue:
+    // the session is one per page, and a player with no queue clearing the
+    // pair would take it from the one that has.
+    if (this._playlist.length) this.updatePlaylistMediaSession();
+    for (const id of this._customControls.keys()) this.syncCustomControl(id);
+    this.syncVideoPipBlock();
+    // The bar lost or regained buttons: re-decide what fits, and drop (or
+    // bring back) any capsule left with nothing in it.
+    this.syncMobileExtras();
+    this.fitControlsRow();
+    this.syncEmptyCapsules();
+  }
+
+  /**
+   * Refuse Picture-in-Picture on the internal <video> too, not only on the
+   * player's own paths. The browser offers PiP on any media element by itself
+   * — the global media controls, the video's own menu — and none of that goes
+   * through togglePiP. Mirrored the way disableRemotePlayback already is.
+   */
+  private syncVideoPipBlock(): void {
+    if (!this.video) return;
+    this.video.disablePictureInPicture =
+      this.isControlDisabled("pip") || this.disablePictureInPicture;
+  }
 
   private _disablePip = false;
   get disablePictureInPicture(): boolean {
@@ -38757,6 +39252,10 @@ export class MoviElement extends HTMLElement {
    */
   private noteTrackChoice(name: string, lang: string | null): void {
     if (this._applyingPersisted) return; // restoring, not choosing
+    // The viewer has answered for this file; a restore still waiting for its
+    // track to show up must not come along later and re-pick over them.
+    if (name === "audiolang") this._audioRestored = true;
+    else this._subsRestored = true;
     const opted = this._persistNames().has(name);
     // Two stores, one decision: `persist` takes it over completely when the
     // host uses it, and otherwise the always-on store remembers these the same
@@ -38852,7 +39351,15 @@ export class MoviElement extends HTMLElement {
     const wantSubs =
       storedSubs === "off" ? "off" : MoviElement.usableLang(storedSubs);
     if (!wantAudio && !wantSubs) return;
-    this._persistedTracksApplied = true;
+    // Latched only once each remembered language has actually found its track
+    // (below), not on the first attempt. The first attempt can come before the
+    // file's list is complete — a host's declared subtitle files register after
+    // the first tracksChange when the open is quick (a fixed rung, no speed
+    // test first) — and latching then meant the remembered captions never came
+    // back for that video, although the store said "en" and the V key, the
+    // gear and the menu had all saved it. The per-kind flags keep a later pass
+    // from re-selecting what has been restored; a language the file really
+    // does not have just costs a lookup per track change.
     this._applyingPersisted = true;
     try {
       for (const loose of [false, true]) {
@@ -38907,8 +39414,12 @@ export class MoviElement extends HTMLElement {
           }
         }
       }
+      this._persistedTracksApplied =
+        (!wantAudio || this._audioRestored) &&
+        (!wantSubs || this._subsRestored);
     } catch (err) {
       Logger.warn(TAG, "restoring remembered tracks failed", err);
+      this._persistedTracksApplied = true; // don't retry a throwing restore
     } finally {
       this._applyingPersisted = false;
       this.updateAudioTrackMenu();
@@ -39022,6 +39533,9 @@ export class MoviElement extends HTMLElement {
         if (def.boolean) {
           if (stored === "1") this.setAttribute(def.attr, "");
           else this.removeAttribute(def.attr);
+          // HDR reads an absent attribute as ON, so removing one that was
+          // never there changed nothing and a remembered "off" came back on.
+          if (name === "hdr") this.applyHdr(stored === "1");
         } else if (name === "aspect") {
           // Not straight onto the attribute: under objectfit="control" that
           // would take the element out of control mode. See restoreFit.
@@ -39382,6 +39896,19 @@ export class MoviElement extends HTMLElement {
    * control that comes and goes with the source never leaves a row behind for
    * a key that no longer does anything.
    */
+  /** Open or shut the Keyboard Shortcuts sheet — the ? key and the menu row.
+   *  `noshortcuts` stops it opening; one already up still closes. */
+  private toggleShortcutsPanel(): void {
+    const panel = this.shadowRoot?.querySelector(
+      ".movi-shortcuts-panel",
+    ) as HTMLElement | null;
+    if (!panel) return;
+    const open = panel.style.display !== "none";
+    if (!open && this.isControlDisabled("shortcuts")) return;
+    if (!open) this.syncShortcutsPanel();
+    panel.style.display = open ? "none" : "flex";
+  }
+
   private syncShortcutsPanel(): void {
     const panel = this.shadowRoot?.querySelector(".movi-shortcuts-panel");
     const body = panel?.querySelector(".movi-shortcuts-body");
@@ -39391,9 +39918,9 @@ export class MoviElement extends HTMLElement {
     );
     const cols = body.querySelectorAll(".movi-shortcuts-col");
     const target = (cols[cols.length - 1] ?? body) as HTMLElement;
-    for (const [, entry] of this._customControls) {
+    for (const [id, entry] of this._customControls) {
       const key = this.formatHotkey(entry.spec.hotkey);
-      if (!key) continue;
+      if (!key || this.isControlDisabled(id)) continue;
       const row = document.createElement("div");
       row.className = "movi-shortcut-row movi-custom-shortcut";
       // The panel promises what the keyboard does, and a scoped-out control's
@@ -39792,6 +40319,9 @@ export class MoviElement extends HTMLElement {
     for (const [id, entry] of this._customControls) {
       const want = entry.spec.hotkey;
       if (!want) continue;
+      // Switched off after it was added — addControl refuses one that is off
+      // at the time, but the token can arrive later.
+      if (this.isControlDisabled(id)) continue;
       // A control scoped out of the current presentation is not on screen, and
       // its key should be as absent as its button — otherwise "Cast to TV"
       // still fires on a podcast, invisibly.
@@ -40503,7 +41033,7 @@ export class MoviElement extends HTMLElement {
    */
   private triggerCustomControl(id: string, viaHotkey = false): void {
     const entry = this._customControls.get(id);
-    if (!entry) return;
+    if (!entry || this.isControlDisabled(id)) return;
     if (entry.spec.toggle) entry.active = !entry.active;
     if (entry.spec.toggle && entry.spec.persist) {
       this._prefWrite(`ctl:${id}`, entry.active ? "1" : "0");
@@ -40641,7 +41171,7 @@ export class MoviElement extends HTMLElement {
   /** A submenu choice was made — remember it, mark it, tell the host. */
   private pickCustomItem(id: string, itemId: string): void {
     const entry = this._customControls.get(id);
-    if (!entry?.spec.items?.length) return;
+    if (!entry?.spec.items?.length || this.isControlDisabled(id)) return;
     // Searched to the bottom, not across the top. A nested list's leaves are
     // the only rows that pick, and they are exactly the ones this missed —
     // every deep choice was dropped as if it belonged to another control.
@@ -40700,8 +41230,13 @@ export class MoviElement extends HTMLElement {
     const esc = (window as { CSS?: { escape?: (v: string) => string } }).CSS
       ?.escape;
     const sel = esc ? esc(id) : id;
+    // A token that arrives after addControl hides both faces (the stylesheet
+    // keys off this attribute); the entry is kept, so removing the token
+    // brings the control back as it was.
+    const off = this.isControlDisabled(id);
     sr.querySelectorAll(`[data-custom-control="${sel}"]`).forEach((node) => {
       const el = node as HTMLElement;
+      el.toggleAttribute("data-controlslist-off", off);
       if (el.classList.contains("movi-context-menu-item")) {
         const on = !!entry.spec.toggle && entry.active;
         el.classList.toggle("movi-context-menu-active", on);
@@ -40740,9 +41275,15 @@ export class MoviElement extends HTMLElement {
    *
    * Hiding the button alone is not enough: its hotkey and its context-menu row
    * would go on working, which is a control that is off in one place and on in
-   * two others. The names the availability check below knows are gated there
-   * too, so the button, the row and the key answer together; CSS hides the
-   * rest.
+   * two others. So every way in answers to the token: the stylesheet hides the
+   * button, the menu row and the shortcuts-sheet row; the key, the menu click
+   * (MENU_ACTION_CONTROL), the gear row and the gesture each check it; and the
+   * places a viewer can be IN — fullscreen, PiP, stats, the timeline, the
+   * sheet — refuse only the way in, never the way out (see togglePiP,
+   * toggleFullscreen). A handful of tokens are the bar's chrome and nothing
+   * more — noplay, novolume, noseekbuttons, noprogress, notime, nosettings,
+   * nomore, noprev/nonext — because what they sit over is the viewer's, or
+   * another attribute's (fastseek).
    */
   private _disabledControls(): Set<string> {
     const raw = this.getAttribute("controlslist");
@@ -40878,6 +41419,9 @@ export class MoviElement extends HTMLElement {
     if (!shadowRoot) return;
     const overlay = shadowRoot.querySelector(".movi-nerd-stats") as HTMLElement;
     if (!overlay) return;
+    // `nostats` stops it opening — the I key and the menu row both land here.
+    // A panel already up still closes.
+    if (!this._nerdStatsVisible && this.isControlDisabled("stats")) return;
 
     this._nerdStatsVisible = !this._nerdStatsVisible;
 
@@ -41873,6 +42417,9 @@ export class MoviElement extends HTMLElement {
     if (!shadowRoot) return;
     const panel = shadowRoot.querySelector(".movi-timeline-panel") as HTMLElement;
     if (!panel) return;
+    // `notimeline`: the T key checked, but the menu row and the chapter pill
+    // came straight here. Opening is refused; closing never is.
+    if (panel.style.display === "none" && this.isControlDisabled("timeline")) return;
 
     if (panel.style.display === "none") {
       panel.style.display = "flex";
@@ -42416,6 +42963,10 @@ export class MoviElement extends HTMLElement {
       this.removeAttribute("ambientmode");
     }
     this.updateAmbientMode();
+    // The context-menu row and the gear switch. Each built-in control used to
+    // call this itself after the setter, so a host's own toggle (or the
+    // property) left an open menu showing the old state.
+    this.updateAmbientUI();
     if (this.legacySettingsEnabled()) SettingsStorage.getInstance().save({ ambientMode: this._ambientMode });
     if (changed) {
       this.emitSettingChange("ambientchange", { enabled: !!this._ambientMode });
@@ -44414,7 +44965,16 @@ export class MoviElement extends HTMLElement {
       "movi-has-title",
       !!(this._showTitle && this._title && this.titleAllowedHere()),
     );
+
+    // The audio view paints the title into its canvas, so a title that
+    // resolves after the view went up (metadata, a header, the filename, or
+    // the host setting it late) needs a repaint to appear there.
+    if (this._title !== this._coverTitlePainted) {
+      this._coverTitlePainted = this._title;
+      if (this.classList.contains("movi-audio-mode")) this.updateCoverArtOverlay();
+    }
   }
+  private _coverTitlePainted: string | null = null;
 
   /**
    * Clean a video filename into a human-readable title (VLC-style).
@@ -44635,26 +45195,37 @@ export class MoviElement extends HTMLElement {
   set hdr(value: boolean) {
     const v = !!value;
     if (this._hdr === v) return;
+    this.noteStoredChoice("hdr", v);
+    // Field first, so the attribute callback this write triggers finds the
+    // value already in place and does nothing twice.
     this._hdr = v;
-    this.noteStoredChoice("hdr", this._hdr);
-    if (this._hdr) {
+    if (v) {
       this.setAttribute("hdr", "");
     } else {
       this.removeAttribute("hdr");
     }
+    this.applyHdr(v);
+    // HDR is the one boolean that is ON with its attribute absent, so turning
+    // it off on an element that never carried `hdr` writes nothing to the
+    // attribute — and `persist`, which listens to the attribute, never heard
+    // the choice. Written here as well; the attribute path writes the same.
+    if (this._persistNames().has("hdr")) this._prefWrite("hdr", v ? "1" : "0");
+    if (this.legacySettingsEnabled()) SettingsStorage.getInstance().save({ hdr: this._hdr });
+    this.emitSettingChange("hdrchange", { enabled: this._hdr });
+  }
 
+  /** Put an HDR on/off into effect — the UI, the gear's badge and the player —
+   *  without recording or announcing it. Shared by the setter (a choice) and
+   *  the attribute (a host's default, or the store's answer coming back). */
+  private applyHdr(v: boolean): void {
+    this._hdr = v;
     this.updateHDRUI();
     // The gear's badge carries HDR, so it has to follow the toggle rather than
     // wait for the next quality change.
     this._renderGearBadge();
-
-    // Pass to player
     if (this.player) {
       this.player.setHDREnabled(this._hdr);
     }
-
-    if (this.legacySettingsEnabled()) SettingsStorage.getInstance().save({ hdr: this._hdr });
-    this.emitSettingChange("hdrchange", { enabled: this._hdr });
   }
 
   /**
