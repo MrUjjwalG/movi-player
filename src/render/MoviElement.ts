@@ -21305,8 +21305,13 @@ export class MoviElement extends HTMLElement {
         background: color-mix(in srgb, var(--movi-primary) 0.16, transparent);
       }
 
+      /* Sized here because the glyph is not: symbolSvg writes a viewBox and no
+         width, so an svg nothing sizes fills whatever box it is in — this one
+         grew to the height of the panel. */
       .movi-sub-cust-back svg {
         flex-shrink: 0;
+        width: 16px;
+        height: 16px;
       }
 
       /* Live preview — sample text rendered using the EXACT same look
