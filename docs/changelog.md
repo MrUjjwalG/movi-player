@@ -46,6 +46,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Renewed links keep your place** — with `resumekey` unchanged across a `<source>` swap, the player treats it as the same media under new URLs and keeps the position, paused/playing state and speed instead of restarting from 0:00.
 - **"This media needs about N Mbps to play"** — under `smoothwarning`, a stall caused by the link (not the device) names the rate the media needs and the rate it is arriving at. The event carries `link: true`, `neededBps`, `measuredBps`.
 - **The extensions' takeover reaches into frames.** A video inside an iframe — the usual shape of an embed — is taken over as well as one in the page itself. A site switched off in the popup stays off in its frames too, since the switch names the tab's site. Inside a frame the player keeps to the frame, and a video file opened on its own fills the window the way the browser's own viewer did.
+- **`player` is public.** The element's `MoviPlayer` is readable as `element.player`, for the core API the element does not forward — `getPreviewFrame()`, `getMediaInfo()`, `getCacheStats()`. It is replaced on every source, so read it after `loadeddata` rather than keeping it.
 
 ### Changed
 - **The WASM module compiles once and is instantiated many times** — a second player, the preview pipeline, and a post-quality-switch rebuild no longer each pay for their own fetch and compile.

@@ -1826,6 +1826,27 @@ Deliberately separate from `version` — both bundles ship the same release, so 
 
 ---
 
+### The core player
+
+#### `player: MoviPlayer | null` (read it, don't assign it)
+
+The [`MoviPlayer`](./player.md) the element drives — the engine that loads, decodes and plays the current source. It is there for what the element does not forward itself: [`getPreviewFrame()`](./player.md), `getMediaInfo()`, `getCacheStats()`, the track and rendition APIs.
+
+```typescript
+const el = document.querySelector("movi-player");  // with thumb="precise"
+
+el.addEventListener("loadeddata", async () => {
+  const blob = await el.player?.getPreviewFrame(30, null, true);
+  if (blob) img.src = URL.createObjectURL(blob);
+});
+```
+
+- **Take it when you need it.** The element builds a new player for every source (and on some recoveries) and destroys the old one, so a reference kept across a `loadstart` points at one that is gone. Read `el.player` after `loadeddata`.
+- **`null`** before the first load and after `src` is cleared.
+- **Previews need the `thumb` attribute** — without it `getPreviewFrame()` returns `null`. Pass `true` as its third argument to wait for a frame already being made instead of getting `null`.
+
+---
+
 ### Media Properties
 
 #### `src: string | File | null`

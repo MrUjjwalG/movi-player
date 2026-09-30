@@ -873,7 +873,19 @@ export class MoviElement extends HTMLElement {
   // to sinks (and a `movi-qoe` DOM event). Heartbeats while playing.
   private _qoe = new QoECollector();
   private _qoeHeartbeat: number | null = null;
-  private player: MoviPlayer | null = null;
+  /**
+   * The engine behind the element: the `MoviPlayer` that loads, decodes and
+   * plays the current source. For what the element does not forward —
+   * `getPreviewFrame()`, `getMediaInfo()`, `getCacheStats()` and the rest of
+   * the core API.
+   *
+   * Read it, don't assign it, and don't keep it: the element builds a new one
+   * for every source (and on some recoveries) and destroys the old one, so a
+   * reference held across a `loadstart` points at a player that is gone. Take
+   * it after `loadeddata`. `null` before the first load and after `src` is
+   * cleared.
+   */
+  player: MoviPlayer | null = null;
   private isLoading: boolean = false;
   private _isUnsupported: boolean = false;
   private eventHandlers: Map<string, () => void> = new Map();
