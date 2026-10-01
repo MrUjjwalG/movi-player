@@ -1316,6 +1316,7 @@ pixel counts — and worded for the media and the cause:
 | Sound-only source | This audio may not play smoothly on this device | Your device may have trouble keeping up, so you might hear gaps or skips. |
 | Cannot be decoded at all | This video can't be played on this device | Your device or browser doesn't support this file's format. |
 | Measured stutter while playing | This video may not play smoothly on this device | Your device can't decode it fast enough, so the picture may stutter or fall behind the sound. |
+| Measured stutter, on the software decoder | This video switched to software decoding | Hardware decoding didn't work for this video, so a slower software decoder took over. The picture may stutter or fall behind the sound. |
 | The link, not the device, is short | This media needs about N Mbps to play | It's only arriving at about M Mbps — this connection or the server can't deliver it fast enough. |
 
 It sits at the bottom left, opposite the resume prompt, has a dismiss button, and
@@ -1346,10 +1347,14 @@ the file is actually playing:
 
 - **Stutter.** At any speed, if five of the last eight seconds show fewer than
   75% of the frames they should, the notice appears once per source ("Your
-  device can't decode it fast enough…"). Above 1x the "Play at 1x for smoother
-  playback" hint counts the same way. A second in which the host page kept the
-  main thread busy is not counted — that is the page, not the device. The
-  event's `detail` carries `measured: true`.
+  device can't decode it fast enough…"). If the picture is on the software
+  decoder at that point — most notably when hardware decoding refused the
+  stream mid-playback and the player fell back — the notice says that instead
+  ("This video switched to software decoding"), and the event's `detail`
+  carries `software: true` plus a `softwareReason`. Above 1x the "Play at 1x
+  for smoother playback" hint counts the same way. A second in which the host
+  page kept the main thread busy is not counted — that is the page, not the
+  device. The event's `detail` carries `measured: true`.
 - **Link speed.** A source that stalls because its bytes are not arriving fast
   enough — rather than because the device cannot decode it — is probed a few
   times, and if the best reading still falls short the notice says how fast a

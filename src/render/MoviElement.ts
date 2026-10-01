@@ -12979,13 +12979,34 @@ export class MoviElement extends HTMLElement {
   private warnSmoothFromMeasurement(): void {
     if (!this._smoothWarning || this._smoothWarnedByMeasurement) return;
     this._smoothWarnedByMeasurement = true;
-    const message = {
-      title: "This video may not play smoothly on this device",
-      body: "Your device can't decode it fast enough, so the picture may stutter or fall behind the sound.",
-    };
+    // When the stutter is the software decoder's, say so. The generic "your
+    // device can't decode it fast enough" reads as a verdict on the device —
+    // wrong and unactionable when the hardware decoder was carrying this video
+    // fine until it refused the stream mid-playback and the WASM decoder took
+    // over. Name the actual situation so the viewer (and a host listening on
+    // the event) can tell "weak device" from "this video turned hardware away".
+    const software = this.player?.isSoftwareDecoding() ?? false;
+    const softwareReason = software
+      ? (this.player?.softwareDecodeReason() ?? null)
+      : null;
+    const message =
+      software && softwareReason === "hardware-refused"
+        ? {
+            title: "This video switched to software decoding",
+            body: "Hardware decoding didn't work for this video, so a slower software decoder took over. The picture may stutter or fall behind the sound.",
+          }
+        : software
+          ? {
+              title: "This video may not play smoothly on this device",
+              body: "This format can't be hardware-decoded here, so the processor is doing the work and may not keep up. The picture may stutter or fall behind the sound.",
+            }
+          : {
+              title: "This video may not play smoothly on this device",
+              body: "Your device can't decode it fast enough, so the picture may stutter or fall behind the sound.",
+            };
     const allowed = this.dispatchEvent(
       new CustomEvent("smoothwarning", {
-        detail: { measured: true, media: "video", message },
+        detail: { measured: true, media: "video", software, softwareReason, message },
         cancelable: true,
         bubbles: true,
         composed: true,

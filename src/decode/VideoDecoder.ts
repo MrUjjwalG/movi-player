@@ -931,7 +931,7 @@ export class MoviVideoDecoder {
         webCodecsAvailable &&
         !this.forceSoftware &&
         !this.requiresSoftware &&
-        this.shouldRetryHardware(data)
+        this.shouldRetryHardware(data, isIdr)
       ) {
         Logger.info(
           TAG,
@@ -1731,14 +1731,22 @@ export class MoviVideoDecoder {
   /**
    * Helper to check if we should try switching back to hardware
    */
-  private shouldRetryHardware(data: Uint8Array): boolean {
+  private shouldRetryHardware(data: Uint8Array, isIdr: boolean): boolean {
     if (!this.useSoftware || !this.currentTrack) return false;
 
     // Safety: Don't retry too many times if it keeps failing
     if (this.hardwareRetryCount >= 10) return false;
 
-    // CRITICAL: Only retry hardware if this keyframe is actually an IDR/Sync frame.
-    // Hardware decoders will reject non-IDR keyframes as start points after a seek/flush.
+    // Only a true IDR/BLA is a restart point the HW decoder will accept — a
+    // CRA is exactly what it refused when we fell to software, so attempting
+    // resurrection on one just burns a retry (of 10, never refilled until the
+    // next configure()) plus a visible freeze while the failed attempt plays
+    // out. The demuxer classifies this C-side (is_idr); trust it first.
+    if (!isIdr) return false;
+
+    // Second opinion from the packet bytes, for callers that default isIdr to
+    // true. Hardware decoders will reject non-IDR keyframes as start points
+    // after a seek/flush.
     if (!this.isLikelySyncFrame(data)) {
       return false;
     }
@@ -1751,54 +1759,83 @@ export class MoviVideoDecoder {
   }
 
   /**
-   * Bitwise NAL unit inspection to detect true Sync/IDR frames
+   * Bitwise NAL unit inspection to detect true Sync/IDR frames.
+   *
+   * This must WALK the packet's NAL units, not read the first header: keyframe
+   * packets routinely lead with AUD/SPS/PPS/SEI before the slice (the AUD case
+   * is confirmed on the very DoVi/HDR HEVC streams that fall to software — see
+   * stripAudLengthPrefixed). The old single-header read saw the AUD's type,
+   * answered "not a sync frame" for every keyframe in the stream, and hardware
+   * resurrection never fired at all — software until a reload.
+   *
+   * The verdict comes from the first VCL NAL, and CRA does NOT count: a CRA
+   * restart is what the hardware decoder refused when we fell back, so
+   * resurrecting on one only burns a capped retry.
    */
   private isLikelySyncFrame(data: Uint8Array): boolean {
     if (!this.lastConfig) return true;
     const codec = this.lastConfig.codec.toLowerCase();
 
     try {
-      let headerPos = -1;
-      // Search for NAL start code (0001 or 001) or assume AVCC 4-byte size
-      if (data[0] === 0 && data[1] === 0 && data[2] === 1) headerPos = 3;
-      else if (data[0] === 0 && data[1] === 0 && data[2] === 0 && data[3] === 1)
-        headerPos = 4;
-      else if (data.length > 4) headerPos = 4; // Most MP4/MKV hardware chunks are AVCC
-
-      if (headerPos === -1 || headerPos >= data.length) return false;
-
-      const header = data[headerPos];
-
-      // H.264 (AVC)
-      if (codec.includes("avc1") || codec.includes("h264")) {
-        const type = header & 0x1f;
-        return type === 5; // IDR Slice
-      }
-
-      // H.265 (HEVC)
-      if (
+      const isAvc = codec.includes("avc1") || codec.includes("h264");
+      const isHevc =
         codec.includes("hvc1") ||
         codec.includes("hev1") ||
-        codec.includes("h265")
-      ) {
-        const type = (header >> 1) & 0x3f;
-        // Types 16-21 are IRAP (Intra Random Access Point)
-        // 19/20 are IDR, 21 is CRA (Clean Random Access)
-        return type >= 16 && type <= 21;
-      }
+        codec.includes("h265");
+      const isVvc = codec.includes("vvc1") || codec.includes("vvi1");
+      // AV1/VP9 and anything else NAL-less: nothing to inspect, trust the
+      // demuxer's keyframe/isIdr flags.
+      if (!isAvc && !isHevc && !isVvc) return true;
 
-      // H.266 (VVC) — 2-byte NAL header
-      // Byte 1: nal_unit_type(5) | nuh_temporal_id_plus1(3)
-      // IDR_W_RADL=7, IDR_N_LP=8, CRA=9, GDR=10
-      if (codec.includes("vvc1") || codec.includes("vvi1")) {
-        if (headerPos + 1 < data.length) {
-          const type = (data[headerPos + 1] >> 3) & 0x1f;
-          return type >= 7 && type <= 9;
+      for (const [b0, b1] of MoviVideoDecoder.nalUnitHeaders(data)) {
+        if (isAvc) {
+          const type = b0 & 0x1f;
+          if (type >= 1 && type <= 5) return type === 5; // first VCL slice; 5 = IDR
+        } else if (isHevc) {
+          const type = (b0 >> 1) & 0x3f;
+          // VCL range is 0-31; sync = BLA(16-18)/IDR(19-20), NOT CRA(21).
+          if (type <= 31) return type >= 16 && type <= 20;
+        } else {
+          // VVC 2-byte NAL header: type in byte 1. VCL range is 0-11;
+          // sync = IDR_W_RADL(7)/IDR_N_LP(8), NOT CRA(9)/GDR(10).
+          const type = (b1 >> 3) & 0x1f;
+          if (type <= 11) return type >= 7 && type <= 8;
         }
       }
     } catch (e) {}
 
-    return true; // Default to true if parsing fails or codec unknown
+    // No VCL NAL found or parsing failed — don't block the retry on it; the
+    // demuxer's isIdr gate in shouldRetryHardware is the primary authority.
+    return true;
+  }
+
+  /**
+   * First two bytes of every NAL unit in a packet, handling both Annex B
+   * start codes and the 4-byte big-endian length prefixes of avcC/hvcC.
+   * Stops (returning what it has) on a malformed length rather than guessing.
+   */
+  private static nalUnitHeaders(data: Uint8Array): Array<[number, number]> {
+    const headers: Array<[number, number]> = [];
+    if (data.length < 4) return headers;
+    if (
+      data[0] === 0 &&
+      data[1] === 0 &&
+      (data[2] === 1 || (data[2] === 0 && data[3] === 1))
+    ) {
+      for (const nal of this.splitAnnexBNalUnits(data)) {
+        if (nal.length >= 2) headers.push([nal[0], nal[1]]);
+      }
+      return headers;
+    }
+    const view = new DataView(data.buffer, data.byteOffset, data.byteLength);
+    let i = 0;
+    while (i + 4 <= data.length) {
+      const len = view.getUint32(i);
+      if (len <= 0 || i + 4 + len > data.length) return headers;
+      if (len >= 2) headers.push([data[i + 4], data[i + 5]]);
+      i += 4 + len;
+    }
+    return headers;
   }
 
   /**
