@@ -5804,8 +5804,13 @@
       }
 
       @media (max-width: 640px) {
+        /* The light-theme selectors too: the 74px rule above names them, and
+           as the more specific rule it won on a phone in light theme only —
+           a 74px bar over the same page that dark drew at 62. */
         .navbar,
-        .navbar.scrolled { height: 62px; padding-inline: 1rem; }
+        .navbar.scrolled,
+        [data-theme="light"] .navbar,
+        [data-theme="light"] .navbar.scrolled { height: 62px; padding-inline: 1rem; }
         .brand-logo { width: 28px; height: 28px; }
         .brand-text { font-size: 1.08rem; }
         .nav-links { display: none; }
