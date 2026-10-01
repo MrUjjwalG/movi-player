@@ -5,7 +5,7 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [0.4.1] - 2026-09-22
+## [0.4.1] - 2026-10-01
 
 ### Added
 - **Playlist / queue**: `playlist` + `autoadvance` — Next/Previous, `Shift+N`/`Shift+P`, and lock-screen/headset skip, all wired up for free. A `src`-less item hands loading back to the host while the element keeps the transport controls.
@@ -145,6 +145,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Seek previews survive a preview rung that will not open.** Previews are read from the ladder's smallest rung, and when that file failed (another host, a missing header, an expired link) every retry went at the same file, then previews were switched off for the rest of the video. The rung is tried twice, then previews come from the rendition on screen. The extension also now asks for the CORS header on every rung of a taken-over player, not only the one it opened on.
 - **The extension's CORS rules hold when several frames ask at once.** Each frame's request rebuilt the tab's rules and could remove another frame's, and a service worker woken from sleep could fail the whole update on a rule id it had forgotten.
 - **The web app's compare page shows its stats in Safari.** It waited on the native pane's `play()`, which Safari can leave unsettled.
+- **Hardware decoding comes back after a software fallback.** The periodic retry judged restart points by the first NAL in a keyframe packet, so a stream whose keyframes lead with an AUD/SPS/SEI never looked like one and stayed on the software decoder until a reload. The retry now trusts the demuxer's IDR classification and walks the packet to its first slice — and spends none of its capped attempts on the open-GOP keyframes hardware already refused once. When the picture is on the software decoder and stutters, the `smoothwarning` notice now says that — "This video switched to software decoding" — instead of blaming the device, and its event carries `software` and `softwareReason`.
+- **The web app's light theme keeps the phone header height.** The under-640px rule named only the dark selector, so on a phone the light theme's header stood 12px taller over the same page.
 
 ## [0.4.0] - 2026-08-15
 
