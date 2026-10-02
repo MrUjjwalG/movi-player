@@ -2,11 +2,12 @@
 
 The current store set is captured from the unpacked Chrome extension running
 in Chromium. The player is decoding real local media. No controls, playback
-metadata, subtitles, or playlist rows are painted into the screenshots.
-Promotional tiles use the real playback capture with the existing Movi logo
-and promotional text. The small tile places a large logo and the wordmark on
-one line at the left, with a real player preview on the right. The large tile places
-the capture beside the text.
+metadata, subtitles, or playlist rows are painted into the screenshots. The
+hover play button is the real one content.js injects on a demo page; the
+context-menu shot draws a faithful Chrome menu around the extension's real
+"Open with MoviPlayer" entry, because a native menu cannot be captured
+headless. Promotional tiles use the real playback capture — the small tile is
+the marquee's composition at a quarter of the area.
 
 ## Upload files
 
@@ -14,18 +15,20 @@ All generated files are in `chrome-extension/screenshots/` (gitignored).
 
 | File | Size | Contents |
 | --- | --- | --- |
-| `1-home.png` | 1280 × 800 | Current file, folder, and URL picker |
-| `2-playback.png` | 1280 × 800 | MKV video with actual playback controls |
-| `3-playlist.png` | 1280 × 800 | Three local MKV, MP4, and WebM excerpts |
-| `4-subtitles.png` | 1280 × 800 | Embedded credit captions and subtitle menu |
-| `5-audio-tracks.png` | 1280 × 800 | Real stereo and mono AAC tracks |
+| `1-playback.png` | 1280 × 800 | MKV video with actual playback controls |
+| `2-hover-play.png` | 1280 × 800 | Hover play button on a media link, on an ordinary page |
+| `3-context-menu.png` | 1280 × 800 | "Open with MoviPlayer" in the link context menu |
+| `4-playlist.png` | 1280 × 800 | Three local MKV, MP4, and WebM excerpts |
+| `5-subtitles.png` | 1280 × 800 | Embedded credit captions and subtitle menu |
 | `movi-player-promo.png` | 440 × 280 | Small promotional tile |
 | `movi-player-promo-big.png` | 1400 × 560 | Marquee promotional tile |
 
-Use only these five screenshots. The obsolete popup/laptop mockups are kept
-under `screenshots/archive-previous/` for reference, outside the upload set.
-The small promo's existing `mov-` filename is retained for compatibility.
-Nothing in this workflow uploads or publishes to the store.
+Use only these five screenshots — the store takes at most five, so the set IS
+the folder: nothing numbered sits in `screenshots/` without being uploaded.
+The home/audio-tracks captures and the obsolete popup/laptop mockups live in
+`screenshots/archive-previous/`, outside the upload set. The small promo's
+existing `mov-` filename is retained for compatibility. Nothing in this
+workflow uploads or publishes to the store.
 
 [Chrome's image requirements](https://developer.chrome.com/docs/webstore/images)
 allow up to five screenshots. These exports are opaque PNGs at the preferred
@@ -45,6 +48,7 @@ SKIP_BUILD=1 bash chrome-extension/build.sh
 # Downloads the official trailer only when it is missing, then makes samples.
 node chrome-extension/scripts/prepare-store-media.mjs
 node chrome-extension/scripts/capture-store-assets.mjs
+node chrome-extension/scripts/capture-showcase.mjs
 node chrome-extension/scripts/render-promos.mjs
 ```
 

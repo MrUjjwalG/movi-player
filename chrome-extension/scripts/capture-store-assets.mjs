@@ -31,8 +31,8 @@ try {
   await page.goto(`chrome-extension://${extensionId}/player.html`);
   await page.evaluate(() => customElements.whenDefined('movi-player'));
   await page.evaluate(() => document.fonts.ready);
-  await page.screenshot({ path: join(outputDir, '1-home.png') });
-  captures.push({ filename: '1-home.png', width: 1280, height: 800 });
+  await page.screenshot({ path: join(outputDir, 'archive-previous/home.png') });
+  captures.push({ filename: 'archive-previous/home.png', width: 1280, height: 800 });
   await page.locator('#filePicker').setInputFiles(join(mediaDir, 'Sintel-trailer.mkv'));
   await page.waitForFunction(() => document.querySelector('#player').currentTime > 1, null, { timeout: 60000 });
   async function resetCaptureScroll() {
@@ -71,11 +71,14 @@ try {
     await page.waitForFunction(start => document.querySelector('#player').currentTime > start + 1.2, start, { timeout: 60000 });
     await page.evaluate(() => document.querySelector('#player').pause());
     await resetCaptureScroll();
-    await page.mouse.move(520, 740);
+    // Rest ABOVE the seek band, not in it: the band reaches 18px over the
+    // track, and since the first-hover thumbnail got fast the old resting
+    // spot summoned a preview that sat over the picture in every capture.
+    await page.mouse.move(520, 690);
     await page.waitForTimeout(700);
   }
   await showFrame();
-  await capture('2-playback.png');
+  await capture('1-playback.png');
   await page.locator('#player').evaluate(el => el.setAttribute('subtitlesize', '75'));
   await page.getByRole('button', { name: 'Subtitles/Captions', exact: true }).click();
   await resetCaptureScroll();
@@ -83,20 +86,20 @@ try {
   await showFrame();
   await page.locator('.movi-subtitle-track-item.movi-subtitle-track-active').filter({ hasText: 'Film credits' }).waitFor();
   await page.locator('.movi-osd-container').waitFor({ state: 'hidden' });
-  await capture('4-subtitles.png');
+  await capture('5-subtitles.png');
   await page.locator('.movi-subtitle-track-item[data-track-id="null"]').click();
   await page.getByRole('button', { name: 'Subtitles/Captions', exact: true }).click();
   await page.getByRole('button', { name: 'Audio Track', exact: true }).click();
   await resetCaptureScroll();
-  await page.mouse.move(520, 740);
+  await page.mouse.move(520, 690);
   await page.locator('.movi-osd-container').waitFor({ state: 'hidden' });
-  await capture('5-audio-tracks.png');
+  await capture('archive-previous/audio-tracks.png');
   await page.getByRole('button', { name: 'Audio Track', exact: true }).click();
   await page.locator('#filePicker').setInputFiles(['01 - Sintel - Rooftops.mkv', '02 - Sintel - Mountains.mp4', '03 - Sintel - Desert.webm'].map(name => join(mediaDir, name)));
   await page.locator('#playlistPanel').waitFor({ state: 'visible' });
   await page.waitForFunction(() => document.querySelectorAll('.playlist-thumb-img:not([hidden])').length >= 3, null, { timeout: 60000 });
   await showFrame(4);
-  await capture('3-playlist.png');
+  await capture('4-playlist.png');
   const failures = messages.filter(message => ['error', 'pageerror'].includes(message.type) || /EncodingError|decoder.*failed/i.test(message.text));
   if (failures.length) throw new Error(`Capture logged errors: ${JSON.stringify(failures)}`);
   const hashes = {};

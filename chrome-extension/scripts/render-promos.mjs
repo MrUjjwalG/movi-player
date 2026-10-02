@@ -66,23 +66,22 @@ function promoHtml({ screenshot, logo, font, size }) {
     .large .shot { left: 617px; top: 44px; width: 752px; }
     .large .footnote { bottom: 42px; left: 59px; font-size: 13px; letter-spacing: 0.15px; }
     .large .credit { bottom: 20px; left: 617px; font-size: 10px; }
+    /* The small tile is the marquee at a quarter of the area, not its own
+       composition: same reading order (brand, claim, formats, player), same
+       glow behind the shot, so the two tiles read as one campaign. */
     main.small::before {
-      background: radial-gradient(ellipse at 8% 25%, #33387938 0%, transparent 65%);
+      background: radial-gradient(ellipse at 85% 45%, #25336655 0%, transparent 65%);
     }
-    /* The name holds one line. nowrap so it can never break itself, and a size
-       measured to the column the player leaves beside it. */
-    .small .brand { top: 44px; left: 25px; flex-direction: column; align-items: center; gap: 15px; font-size: 22px; line-height: 1.06; letter-spacing: -0.7px; white-space: nowrap; }
-    .small .brand img { width: 84px; height: 84px; }
-    .small h1 { display: none; }
-    .small .shot { top: 52px; left: 153px; width: 268px; border-radius: 8px; outline: 1px solid #65749850; box-shadow: 0 15px 36px #0006; }
-    /* Under the lockup, on the same centre line as it: the formats belong to
-       the name, not to the screenshot. width + justify-content centres the row
-       without having to know how wide it measures. */
-    .small .formats { top: 191px; left: 0; width: 166px; justify-content: center; gap: 7px; font-size: 10px; letter-spacing: 0.9px; color: #b7c3ed; }
-    .small .formats li + li::before { content: '·'; padding-right: 7px; color: #657392; }
+    .small .brand { top: 24px; left: 26px; gap: 9px; font-size: 16px; letter-spacing: -0.4px; }
+    .small .brand img { width: 26px; height: 26px; }
+    .small h1 { top: 82px; left: 26px; font-size: 25px; line-height: 1.22; letter-spacing: -1.1px; }
+    .small h1 span { display: block; }
     .small .description { display: none; }
-    .small .footnote { top: 230px; left: 36px; font-size: 10px; color: #9caac6; }
-    .small .credit { bottom: 7px; left: 25px; font-size: 7.5px; color: #77839a; }
+    .small .formats { top: 170px; left: 26px; gap: 10px; font-size: 10.5px; letter-spacing: 0.8px; color: #b7c3ed; }
+    .small .formats li + li { border-left: 1px solid #35405b; padding-left: 10px; }
+    .small .shot { top: 69px; left: 192px; width: 228px; border-radius: 6px; outline: 1px solid #65749850; box-shadow: 0 15px 36px #0006; }
+    .small .footnote { bottom: 22px; left: 26px; font-size: 9.5px; letter-spacing: 1.4px; color: #9caac6; text-transform: uppercase; }
+    .small .credit { bottom: 8px; left: 192px; font-size: 7.5px; color: #77839a; }
   </style>
 </head>
 <body>
@@ -100,7 +99,7 @@ function promoHtml({ screenshot, logo, font, size }) {
 }
 
 export async function renderPromos({
-  screenshotPath = path.join(extensionDirectory, 'screenshots/2-playback.png'),
+  screenshotPath = path.join(extensionDirectory, 'screenshots/1-playback.png'),
   outputDirectory = path.join(extensionDirectory, 'screenshots'),
   browser = null,
   launchOptions = {},
