@@ -31,8 +31,8 @@ try {
   await page.goto(`chrome-extension://${extensionId}/player.html`);
   await page.evaluate(() => customElements.whenDefined('movi-player'));
   await page.evaluate(() => document.fonts.ready);
-  await page.screenshot({ path: join(outputDir, 'archive-previous/home.png') });
-  captures.push({ filename: 'archive-previous/home.png', width: 1280, height: 800 });
+  await page.screenshot({ path: join(outputDir, '4-home.png') });
+  captures.push({ filename: '4-home.png', width: 1280, height: 800 });
   await page.locator('#filePicker').setInputFiles(join(mediaDir, 'Sintel-trailer.mkv'));
   await page.waitForFunction(() => document.querySelector('#player').currentTime > 1, null, { timeout: 60000 });
   async function resetCaptureScroll() {
@@ -99,7 +99,7 @@ try {
   await page.locator('#playlistPanel').waitFor({ state: 'visible' });
   await page.waitForFunction(() => document.querySelectorAll('.playlist-thumb-img:not([hidden])').length >= 3, null, { timeout: 60000 });
   await showFrame(4);
-  await capture('4-playlist.png');
+  await capture('archive-previous/playlist.png');
   const failures = messages.filter(message => ['error', 'pageerror'].includes(message.type) || /EncodingError|decoder.*failed/i.test(message.text));
   if (failures.length) throw new Error(`Capture logged errors: ${JSON.stringify(failures)}`);
   const hashes = {};
