@@ -78,7 +78,7 @@ try {
     await page.waitForTimeout(700);
   }
   await showFrame();
-  await capture('1-playback.png');
+  await capture('archive-previous/playback.png');
   await page.locator('#player').evaluate(el => el.setAttribute('subtitlesize', '75'));
   await page.getByRole('button', { name: 'Subtitles/Captions', exact: true }).click();
   await resetCaptureScroll();

@@ -15,7 +15,7 @@ All generated files are in `chrome-extension/screenshots/` (gitignored).
 
 | File | Size | Contents |
 | --- | --- | --- |
-| `1-playback.png` | 1280 × 800 | MKV video with actual playback controls |
+| `1-hero.png` | 1280 × 800 | What this is and why: the claim, the formats, the real playback capture |
 | `2-hover-play.png` | 1280 × 800 | Hover play button on a media link, on an ordinary page |
 | `3-context-menu.png` | 1280 × 800 | "Open with MoviPlayer" in the link context menu |
 | `4-playlist.png` | 1280 × 800 | Three local MKV, MP4, and WebM excerpts |
@@ -23,10 +23,15 @@ All generated files are in `chrome-extension/screenshots/` (gitignored).
 | `movi-player-promo.png` | 440 × 280 | Small promotional tile |
 | `movi-player-promo-big.png` | 1400 × 560 | Marquee promotional tile |
 
-Use only these five screenshots — the store takes at most five, so the set IS
-the folder: nothing numbered sits in `screenshots/` without being uploaded.
-The home/audio-tracks captures and the obsolete popup/laptop mockups live in
-`screenshots/archive-previous/`, outside the upload set. The small promo's
+The hero leads because a browsing shopper reads the first image, not the
+listing: it has to say what the extension is and why, and a raw playback
+frame said neither — playback itself now shows inside the hero and again in
+the subtitle shot. Use only these five screenshots — the store takes at most
+five, so the set IS the folder: nothing numbered sits in `screenshots/`
+without being uploaded. The playback/home/audio-tracks captures (the hero and
+promos are rendered FROM `archive-previous/playback.png`) and the obsolete
+popup/laptop mockups live in `screenshots/archive-previous/`, outside the
+upload set. The small promo's
 existing `mov-` filename is retained for compatibility. Nothing in this
 workflow uploads or publishes to the store.
 
