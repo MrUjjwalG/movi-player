@@ -438,52 +438,19 @@ player.addEventListener("movi-fullscreen-request", (e) => {
   window.movi.toggleFullscreen();
 });
 
-// ---------- Open-URL modal (works during playback; the welcome URL bar is hidden then) ----------
-function playUrl(u) {
-  u = (u || "").trim();
-  if (!/^https?:\/\//i.test(u)) {
-    showToast("Enter a full http(s):// link");
-    return false;
-  }
-  clearPlaylist();
-  loadSrc(proxySrc(u));
-  return true;
-}
-
-const urlModal = document.getElementById("url-modal");
-const modalUrlInput = document.getElementById("modal-url-input");
-
+// ---------- Open URL (menu / Cmd+L) ----------
+// The welcome screen's own URL bar is the one place a link goes in — the
+// separate modal this used to open duplicated it. While a video is showing
+// the bar is off screen, so the shortcut does nothing there.
 async function showUrlPrompt() {
-  urlModal.hidden = false;
+  if (!player.hidden) return;
   try {
     const c = ((await window.movi.readClipboard()) || "").trim();
-    if (/^https?:\/\//i.test(c)) modalUrlInput.value = c;
+    if (!urlInput.value && /^https?:\/\//i.test(c)) urlInput.value = c;
   } catch {}
-  modalUrlInput.focus();
-  modalUrlInput.select();
+  urlInput.focus();
+  urlInput.select();
 }
-function hideUrlPrompt() {
-  urlModal.hidden = true;
-  modalUrlInput.value = "";
-}
-
-document.getElementById("url-modal-form").addEventListener("submit", (e) => {
-  e.preventDefault();
-  if (playUrl(modalUrlInput.value)) hideUrlPrompt();
-});
-document.getElementById("url-modal-cancel").addEventListener("click", hideUrlPrompt);
-document.getElementById("modal-url-paste").addEventListener("click", async () => {
-  const text = ((await window.movi.readClipboard()) || "").trim();
-  if (!text) return showToast("Clipboard is empty");
-  modalUrlInput.value = text;
-  modalUrlInput.focus();
-});
-urlModal.addEventListener("mousedown", (e) => {
-  if (e.target === urlModal) hideUrlPrompt();
-});
-document.addEventListener("keydown", (e) => {
-  if (e.key === "Escape" && !urlModal.hidden) hideUrlPrompt();
-});
 
 // Menu "Open URL…" and Cmd/Ctrl+L. The keydown is captured before the player's
 // own handler so it doesn't also toggle loop (its "l" case has no modifier guard).

@@ -92,6 +92,7 @@ let mainWindow = null;
 let serverPort = 0;
 let rendererReady = false;
 const pendingPaths = []; // OS-open paths that arrived before the renderer was wired
+let pendingFocusUrl = false; // Open URL… asked for before the renderer was wired
 
 /** Bring the whole app (not just the window) to the foreground — needed on
  *  macOS when a file is opened while the app is in the background. */
@@ -143,9 +144,32 @@ function sendPaths(paths) {
   }
 }
 
+/** File ▸ Open URL… (Cmd/Ctrl+L). The prompt lives in the renderer, so with
+ *  the window closed (macOS keeps the app running) the menu item used to
+ *  no-op silently — the one moment a keyboard way to open something matters
+ *  most. Same slope as sendPaths: recreate the window, ask once its renderer
+ *  signals ready. */
+function openUrlPrompt() {
+  if (!mainWindow) {
+    pendingFocusUrl = true;
+    if (serverPort) {
+      createWindow();
+      app.focus({ steal: true });
+    }
+    return;
+  }
+  if (rendererReady) {
+    mainWindow.webContents.send("focus-url");
+    foreground();
+  } else {
+    pendingFocusUrl = true;
+  }
+}
+
 async function openViaDialog() {
-  if (!mainWindow) return;
-  const { canceled, filePaths } = await dialog.showOpenDialog(mainWindow, {
+  // No window is not "no": the dialog can stand on its own, and sendPaths
+  // recreates the window for whatever is picked.
+  const { canceled, filePaths } = await dialog.showOpenDialog(mainWindow ?? undefined, {
     title: "Open video or audio",
     properties: ["openFile", "multiSelections"],
     filters: [
@@ -307,6 +331,11 @@ ipcMain.on("renderer-ready", () => {
   rendererReady = true;
   if (pendingPaths.length && mainWindow) {
     mainWindow.webContents.send("load-paths", pendingPaths.splice(0));
+    foreground();
+  }
+  if (pendingFocusUrl && mainWindow) {
+    pendingFocusUrl = false;
+    mainWindow.webContents.send("focus-url");
     foreground();
   }
 });
@@ -569,7 +598,7 @@ if (!gotLock) {
     Menu.setApplicationMenu(
       buildMenu({
         onOpen: openViaDialog,
-        onOpenUrl: () => mainWindow && mainWindow.webContents.send("focus-url"),
+        onOpenUrl: openUrlPrompt,
       })
     );
 

@@ -810,65 +810,6 @@ body.win .xnav {
   height: 26px;
 }
 
-/* ---------- Open-URL modal ---------- */
-.url-modal {
-  position: absolute;
-  inset: 0;
-  z-index: 70;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  background: rgba(6, 10, 22, 0.72);
-  backdrop-filter: blur(6px);
-}
-.url-modal[hidden] {
-  display: none;
-}
-.url-modal-card {
-  width: min(580px, 90%);
-  background: #141d31;
-  border: 1px solid var(--hairline);
-  border-radius: 18px;
-  padding: 1.35rem;
-  box-shadow: 0 30px 90px rgba(0, 0, 0, 0.6);
-}
-.url-modal-card .urlbar {
-  max-width: none;
-  min-height: 52px;
-  margin-top: 0;
-  padding-right: 6px;
-}
-.url-modal-title {
-  margin: 0 0 0.9rem;
-  color: var(--text-strong);
-  font-size: 1rem;
-  font-weight: 700;
-  letter-spacing: -0.01em;
-}
-.url-modal-actions {
-  display: flex;
-  justify-content: flex-end;
-  gap: 0.6rem;
-  margin-top: 1rem;
-}
-.url-modal-actions .play {
-  min-height: 40px;
-  border-radius: 999px;
-}
-.modal-cancel {
-  min-height: 40px;
-  border: 1px solid var(--hairline-2);
-  background: rgba(255, 255, 255, 0.05);
-  color: var(--text);
-  border-radius: 999px;
-  padding: 0 1.1rem;
-  font: 600 14px var(--sans);
-  cursor: pointer;
-}
-.modal-cancel:hover {
-  background: rgba(255, 255, 255, 0.09);
-}
-
 /* ---------- Toast ---------- */
 .toast {
   position: absolute;
@@ -977,17 +918,48 @@ body.win .xnav {
 .urlbar,
 .drop-card,
 .xside,
-.recent,
-.url-modal-card,
 .pl-toggle {
   border: var(--rule);
   border-radius: var(--r-2);
   background: var(--bg-raised);
   box-shadow: none;
 }
-.dropzone:hover,
-.recent:hover { border-color: var(--hairline-2); background: var(--bg-hover); }
+.dropzone:hover { border-color: var(--hairline-2); background: var(--bg-hover); }
 .urlbar:focus-within { border-color: var(--accent); box-shadow: none; }
+
+/* A row is not a card. The recents already sit inside one bordered panel;
+   boxing each row drew a grid of hairlines where a list should read as
+   lines. Rows are flat — the hover is the only surface they get. */
+.recent {
+  border: 0;
+  border-radius: var(--r-2);
+  background: none;
+}
+.recent:hover,
+.recent:focus-visible { background: var(--bg-hover); }
+
+/* The format badge is a label, not a button: same voice as the .xchip row
+   at the bottom of the hero, and no accent — that is spent on Play. The
+   size is a technical string, so it speaks mono and its digits line up. */
+.recent-ext {
+  padding: 3px 6px;
+  border: var(--rule);
+  border-radius: var(--r-1);
+  background: transparent;
+  color: var(--text-dim);
+}
+.recent-meta {
+  font: 500 11px var(--mono);
+  font-variant-numeric: tabular-nums;
+}
+
+/* "Clear" is quiet text with a boundary, not a pill. */
+.link-dim {
+  border: var(--rule);
+  border-radius: var(--r-2);
+  color: var(--text-dim);
+}
+.link-dim:hover { background: var(--bg-hover); color: var(--text); }
 
 /* The accent is for the thing you press — which here is Play, and nothing
    else. .xopen is the row that holds "Open files" and the drop hint, not a
@@ -1009,12 +981,6 @@ body.win .xnav {
   box-shadow: none;
 }
 .url-paste:hover { background: var(--bg-hover); color: var(--text); }
-.modal-cancel {
-  border: var(--rule);
-  border-radius: var(--r-2);
-  background: transparent;
-  color: var(--text);
-}
 
 /* Technical strings speak in mono. */
 .xkicker,
