@@ -95,9 +95,9 @@ function promoHtml({ screenshot, logo, font, size }) {
     .hero .description { top: 318px; left: 68px; max-width: 390px; font-size: 19px; line-height: 1.7; }
     .hero .formats { top: 492px; left: 68px; gap: 26px; font-size: 16px; letter-spacing: 0.8px; }
     .hero .formats li + li { border-left: 1px solid #35405b; padding-left: 26px; }
-    .hero .shot { left: 520px; top: 300px; width: 700px; border-radius: 10px; }
+    .hero .shot { left: 520px; top: 150px; width: 700px; border-radius: 10px; }
     .hero .footnote { bottom: 44px; left: 68px; font-size: 13px; letter-spacing: 0.15px; }
-    .hero .credit { bottom: 16px; left: 520px; font-size: 10px; }
+    .hero .credit { top: 603px; left: 520px; font-size: 10px; }
   </style>
 </head>
 <body>
