@@ -1380,8 +1380,8 @@ needs about N Mbps to play"). The decode notices stay.
 LAN media server streaming the user's own disk from `127.0.0.1`. The player
 sees an ordinary HTTP source with a known size, so when a heavy file stalls it
 probes the "link" and reports loopback's throughput as a shortfall — blaming a
-connection that doesn't exist. Set it per source: the bundled desktop app sets
-it for local files and removes it for proxied URLs, where the network is real.
+connection that doesn't exist. Set it per source: on for files served off the
+machine's own disk, off for URLs the host proxies, where the network is real.
 
 Toggleable at runtime via the attribute or the `noLinkWarning` property; turning
 it on also cancels a probe already in flight.
