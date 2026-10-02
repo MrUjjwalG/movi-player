@@ -7,14 +7,14 @@
 
 [![npm version](https://img.shields.io/npm/v/movi-player.svg?style=flat-square&color=cb3837&logo=npm)](https://www.npmjs.com/package/movi-player)
 [![npm downloads](https://img.shields.io/npm/dm/movi-player.svg?style=flat-square&color=blue&logo=npm&label=npm%20downloads)](https://www.npmjs.com/package/movi-player)
-[![jsDelivr hits](https://img.shields.io/jsdelivr/npm/hy/movi-player?style=flat-square&color=ff5627&logo=jsdelivr&label=jsDelivr%2Fyear)](https://www.jsdelivr.com/package/npm/movi-player)
+[![jsDelivr hits](https://img.shields.io/jsdelivr/npm/hm/movi-player?style=flat-square&color=ff5627&logo=jsdelivr&label=jsDelivr%2Fmonth)](https://www.jsdelivr.com/package/npm/movi-player)
 [![TypeScript](https://img.shields.io/npm/types/movi-player?style=flat-square&logo=typescript&color=3178c6)](https://www.npmjs.com/package/movi-player)
 [![js bundle](https://img.shields.io/badge/js%20bundle-50--410KB-success?style=flat-square)](https://www.npmjs.com/package/movi-player)
 [![with wasm](https://img.shields.io/badge/with%20wasm-~1.8--3.2MB-orange?style=flat-square)](#modules)
 [![License](https://img.shields.io/badge/license-Apache%202.0-blue.svg?style=flat-square)](LICENSE)
 [![GitHub stars](https://img.shields.io/github/stars/MrUjjwalG/movi-player?style=flat-square&color=yellow&logo=github)](https://github.com/MrUjjwalG/movi-player/stargazers)
 
-**[Web App](https://moviplayer.com)** &nbsp;·&nbsp; **[Documentation](https://moviplayer.com/docs/)** &nbsp;·&nbsp; **[Live Demo](https://movi-player-examples.vercel.app/element.html)** &nbsp;·&nbsp; **[Examples](https://moviplayer.com/examples)** &nbsp;·&nbsp; **[Changelog](CHANGELOG.md)**
+**[Web App](https://moviplayer.com)** &nbsp;·&nbsp; **[Documentation](https://moviplayer.com/docs/)** &nbsp;·&nbsp; **[Examples](https://moviplayer.com/examples)** &nbsp;·&nbsp; **[Changelog](CHANGELOG.md)**
 
 ![Movi Player](docs/images/element.gif)
 
@@ -719,7 +719,7 @@ See the [Programmatic API guide](https://moviplayer.com/docs/guide/programmatic-
 
 ![Demuxer](docs/images/demuxer.webp)
 
-[Live Demo](https://movi-player-examples.vercel.app/demuxer.html) | [Source](https://github.com/MrUjjwalG/movi-player-examples/blob/main/demuxer.html)
+[Source](https://github.com/MrUjjwalG/movi-player-examples/blob/main/demuxer.html)
 
 Extract metadata, tracks, HDR info, and thumbnails without playing the video.
 
