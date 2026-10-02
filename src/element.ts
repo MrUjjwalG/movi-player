@@ -299,6 +299,13 @@ export interface MoviPlayerAttributes {
    * `smoothwarning` event first.
    */
   smoothwarning?: boolean | "";
+  /**
+   * Keep `smoothwarning` on but never raise the link-speed notice ("This media
+   * needs about N Mbps"). For hosts serving local files over HTTP (a desktop
+   * shell or LAN server on 127.0.0.1), where the player would probe loopback
+   * and blame a connection that doesn't exist. Decode notices stay.
+   */
+  nolinkwarning?: boolean | "";
   /** Override the video frame rate (0 = use the source's own). */
   fps?: number | string;
   /** Force software decoding (FFmpeg WASM) instead of WebCodecs. `auto` (default) picks per source. */

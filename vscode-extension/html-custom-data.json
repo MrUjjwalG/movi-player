@@ -1218,6 +1218,19 @@
               "url": "https://moviplayer.com/docs/api/element#smoothwarning"
             }
           ]
+        },
+        {
+          "name": "nolinkwarning",
+          "description": {
+            "kind": "markdown",
+            "value": "Keeps `smoothwarning` on but never raises the link-speed notice (\"This media"
+          },
+          "references": [
+            {
+              "name": "Documentation",
+              "url": "https://moviplayer.com/docs/api/element#nolinkwarning"
+            }
+          ]
         }
       ],
       "references": [

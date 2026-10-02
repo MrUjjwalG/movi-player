@@ -359,6 +359,10 @@
             {
               "name": "smoothwarning",
               "description": "Shows a notice when what is loaded is not expected to play smoothly on this"
+            },
+            {
+              "name": "nolinkwarning",
+              "description": "Keeps `smoothwarning` on but never raises the link-speed notice (\"This media"
             }
           ],
           "events": [

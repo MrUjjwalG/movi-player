@@ -1687,6 +1687,12 @@ export class MoviElement extends HTMLElement {
   /** `smoothwarning` — say so when this source is not expected to play
    *  smoothly here. See checkSmoothPlayback. */
   private _smoothWarning: boolean = false;
+  /** `nolinkwarning` — keep smoothwarning on but never raise the link-budget
+   *  notice ("this media needs about N Mbps"). For hosts that serve local
+   *  files over HTTP — the desktop shell streams the user's own disk from
+   *  127.0.0.1, so the player sees a sized HTTP source, probes loopback, and
+   *  blames a connection that doesn't exist. The decode notices stay. */
+  private _noLinkWarning: boolean = false;
   /** The source and speed last judged, so the same question is not asked —
    *  or answered with a popup — twice. */
   private _smoothWarnKey: string | null = null;
@@ -2035,6 +2041,19 @@ export class MoviElement extends HTMLElement {
   }
 
   /**
+   * `nolinkwarning`: suppress only the link-budget notice while smoothwarning
+   * is on. See _noLinkWarning for who needs this. Mirrors the attribute.
+   */
+  get noLinkWarning(): boolean {
+    return this._noLinkWarning;
+  }
+
+  set noLinkWarning(value: boolean) {
+    if (value) this.setAttribute("nolinkwarning", "");
+    else this.removeAttribute("nolinkwarning");
+  }
+
+  /**
    * Ask canPlaySmoothly about what is loaded, and say so if the answer is no.
    *
    * Asked when a source finishes loading and again whenever the speed changes,
@@ -2354,6 +2373,7 @@ export class MoviElement extends HTMLElement {
       "autoadvance",
       "shuffle",
       "smoothwarning",
+      "nolinkwarning",
     ];
   }
 
@@ -12645,7 +12665,8 @@ export class MoviElement extends HTMLElement {
    * nothing is said.
    */
   private sampleLinkBudget(): void {
-    if (!this._smoothWarning || this._warnedLinkBudget) return;
+    if (!this._smoothWarning || this._noLinkWarning || this._warnedLinkBudget)
+      return;
     const p = this.player;
     if (!p || p.getState?.() !== "playing") return;
     const needed = p.requiredLinkBps?.() ?? 0;
@@ -12674,7 +12695,8 @@ export class MoviElement extends HTMLElement {
     this._linkProbeAbort = ac;
     void this.bestLinkBps(url, needed, ac)
       .then((bps) => {
-        if (ac.signal.aborted || !this._smoothWarning) return;
+        if (ac.signal.aborted || !this._smoothWarning || this._noLinkWarning)
+          return;
         // The verdict leaves no other trace — a probe that clears the bar
         // says nothing on screen, and the browser does not log a successful
         // fetch — so a session that stalled without a notice could not tell
@@ -28419,6 +28441,7 @@ export class MoviElement extends HTMLElement {
     this.applyLoop(this.getAttribute("loop"));
     this._shuffle = this.hasAttribute("shuffle");
     this._smoothWarning = this.isSmoothWarningOn(this.getAttribute("smoothwarning"));
+    this._noLinkWarning = this.hasAttribute("nolinkwarning");
     this._muted = this.hasAttribute("muted");
     this._playsinline = this.hasAttribute("playsinline");
     this._preload =
@@ -29072,6 +29095,10 @@ export class MoviElement extends HTMLElement {
         } else {
           this.hideSmoothWarning();
         }
+        break;
+      case "nolinkwarning":
+        this._noLinkWarning = newValue !== null;
+        if (this._noLinkWarning) this._linkProbeAbort?.abort();
         break;
       case "subtitlepicker":
         this._subtitlePicker = newValue !== null;

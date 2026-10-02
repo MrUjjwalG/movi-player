@@ -67,6 +67,11 @@ function prime() {
 }
 function loadSrc(src) {
   prime();
+  // A /_local/ source is this machine's own disk served over loopback, so the
+  // player sees a sized HTTP source and would probe it — "needs 3250 Mbps,
+  // arriving 3240", blaming a connection that doesn't exist. /_proxy/ keeps
+  // the notice: there the network is real.
+  player.toggleAttribute("nolinkwarning", String(src).includes("/_local/"));
   player.src = src;
 }
 async function loadFile(file) {
@@ -76,6 +81,8 @@ async function loadFile(file) {
   // the PiP window and lands in Recents. Fall back to a zero-copy File when the
   // path isn't available (then PiP isn't possible for that source).
   const fp = window.movi.pathForFile(file);
+  // Picked/dropped files are always this machine's disk — see loadSrc.
+  player.toggleAttribute("nolinkwarning", true);
   if (fp) {
     try { await window.movi.grant([fp]); } catch {}
     player.src = localSrc(fp);

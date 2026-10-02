@@ -1367,6 +1367,27 @@ core count, so a fast desktop is not warned about a file it plays perfectly.
 
 ---
 
+#### `nolinkwarning`
+
+Keeps `smoothwarning` on but never raises the link-speed notice ("This media
+needs about N Mbps to play"). The decode notices stay.
+
+```html
+<movi-player src="http://127.0.0.1:9000/file.mkv" controls smoothwarning nolinkwarning></movi-player>
+```
+
+**Use Case:** a host that serves local files over HTTP — a desktop shell or a
+LAN media server streaming the user's own disk from `127.0.0.1`. The player
+sees an ordinary HTTP source with a known size, so when a heavy file stalls it
+probes the "link" and reports loopback's throughput as a shortfall — blaming a
+connection that doesn't exist. Set it per source: the bundled desktop app sets
+it for local files and removes it for proxied URLs, where the network is real.
+
+Toggleable at runtime via the attribute or the `noLinkWarning` property; turning
+it on also cancels a probe already in flight.
+
+---
+
 #### `resume`
 
 Saves playback position to localStorage and shows a resume dialog on reload.

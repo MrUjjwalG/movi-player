@@ -180,6 +180,7 @@ All observed attributes are listed in `MoviElement.observedAttributes` (around [
 - `buffersize` (MB) — LRU cache size override.
 - `vr` / `vrpad` — immersive projection (360 / 180 / fisheye / `sbs`(3d) / `littleplanet`), WebGL2 raycast in `CanvasRenderer` with a spring-animated camera. Auto-enters from the source's spherical metadata (`StreamInfo.projection` from the WASM demuxer); the attribute only forces/overrides it. `vrpad` adds an on-screen joystick.
 - `audiooutput` — route audio to an output device via `AudioContext.setSinkId` in `AudioRenderer`. Accepts a `deviceId` or a label substring (ids are session-salted). `""`/`"default"` = system default.
+- `nolinkwarning` — keep `smoothwarning` on but suppress only the link-budget notice ("needs about N Mbps"). For hosts serving local files over HTTP (the desktop shell streams disk from `127.0.0.1`, so the player probes loopback and blames a connection that doesn't exist). Decode notices stay; the desktop renderer toggles it per source (`/_local/` on, `/_proxy/` off).
 
 **Authoritative list:** `MoviElement.observedAttributes` ([src/render/MoviElement.ts:257](src/render/MoviElement.ts#L257)) is the source of truth — if it's not in there, the element ignores it.
 
