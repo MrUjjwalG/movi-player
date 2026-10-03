@@ -241,6 +241,12 @@ export class HttpSource implements SourceAdapter {
   // size is unknown), so it can't be held whole in memory. We run a bounded
   // forward-only sliding window — playback is linear, seeking is impossible.
   private linearMode: boolean = false;
+  // 200-instead-of-206 answers seen since the last 206, across streams. It was
+  // a per-call counter, and three retries (fetch + 1.5s each) outlast the 6s
+  // stall watchdog in _readInternal, which reopens the stream — so the count
+  // started again at every reopen, never reached the limit, and a server with
+  // no Range support (web.dev's chrome.webm) loaded for ever.
+  private rangeRetryTally: number = 0;
   // Fired once when we enter linearMode, so the UI can disable seek/thumbnails/
   // the timeline. Wired up by MoviPlayer.createSource.
   private onLinearMode: (() => void) | null = null;
@@ -1210,7 +1216,6 @@ export class HttpSource implements SourceAdapter {
     const BASE_DELAY = 1000;
     const MAX_RANGE_RETRIES = 3; // Retries for CDN cache warming (first hit returns 200 instead of 206)
     const RANGE_RETRY_DELAY = 1500; // ms between range retries
-    let rangeRetryCount = 0;
     let consecutiveOnlineFetchFailures = 0;
     // A 4xx is usually the truth — an expired signature, a revoked link — but
     // not always the FINAL truth: a CDN edge can hand back a 403 for a moment
@@ -1361,12 +1366,17 @@ export class HttpSource implements SourceAdapter {
           // CDN cache-warming (e.g. Cloudflare's first hit) sometimes answers
           // 200, then 206 once the file is cached — retry a few times before
           // concluding the server truly lacks Range support.
-          rangeRetryCount++;
-          if (rangeRetryCount <= MAX_RANGE_RETRIES) {
+          // A file the buffer holds whole gains nothing from waiting for a
+          // 206: cached entirely, every seek is served from memory anyway. So
+          // the 200 in hand at offset 0 is taken as the file.
+          const fitsWhole =
+            this.size > 0 && this.size <= this.maxBufferSizeMB * 1024 * 1024;
+          this.rangeRetryTally++;
+          if (!(startOffset === 0 && fitsWhole) && this.rangeRetryTally <= MAX_RANGE_RETRIES) {
             try { response.body?.cancel(); } catch {}
             Logger.warn(
               TAG,
-              `Server returned 200 instead of 206 (attempt ${rangeRetryCount}/${MAX_RANGE_RETRIES}). ` +
+              `Server returned 200 instead of 206 (attempt ${this.rangeRetryTally}/${MAX_RANGE_RETRIES}). ` +
               `CDN may be caching — retrying in ${RANGE_RETRY_DELAY}ms...`
             );
             await new Promise(r => setTimeout(r, RANGE_RETRY_DELAY));
@@ -1378,7 +1388,12 @@ export class HttpSource implements SourceAdapter {
           // (full-cache if it fits the cap, else bounded linear mode). A
           // non-zero offset means a seek, which can't be served without Range.
           if (startOffset === 0) {
-            Logger.warn(TAG, `No Range support after ${MAX_RANGE_RETRIES} retries — falling back to sequential playback.`);
+            Logger.warn(
+              TAG,
+              fitsWhole
+                ? "No Range support (200) — the file fits the buffer, caching it whole."
+                : `No Range support after ${MAX_RANGE_RETRIES} retries — falling back to sequential playback.`,
+            );
             await this.consumeNonRangeStream(response);
             return; // consumeNonRangeStream drives the buffer to EOF + clears streaming
           }
@@ -1393,7 +1408,7 @@ export class HttpSource implements SourceAdapter {
         }
 
         // Reset range retry counter on successful 206
-        rangeRetryCount = 0;
+        this.rangeRetryTally = 0;
         // …and the fatal streak: the URL answered, so whatever it was is over.
         if (response.ok || response.status === 206) {
           this.fatalAttempts = 0;
