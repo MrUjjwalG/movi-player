@@ -11,4 +11,7 @@ early.js
 player.html
 player.js
 upgrade.js
+popup.html
+popup.js
+siteplayer.js
 *.zip
