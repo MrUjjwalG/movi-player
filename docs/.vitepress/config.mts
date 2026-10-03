@@ -64,12 +64,13 @@ export default defineConfig({
       { text: "🔌 API", link: "/api/player" },
       { text: "🎮 Examples", link: "https://moviplayer.com/examples" },
       {
-        text: "v0.4.1",
+        text: "v0.4.2",
         items: [
           {
             text: "Versions",
             items: [
-              { text: "v0.4.1 (Latest)", link: "/changelog#0-4-1" },
+              { text: "v0.4.2 (Latest)", link: "/changelog#0-4-2" },
+              { text: "v0.4.1", link: "/changelog#0-4-1" },
               { text: "v0.4.0", link: "/changelog#0-4-0" },
               { text: "v0.3.5", link: "/changelog#0-3-5" },
               { text: "v0.3.4", link: "/changelog#0-3-4" },

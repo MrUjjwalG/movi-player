@@ -5,6 +5,13 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+## [0.4.2] - 2026-10-03
+
+### Fixed
+- **Servers without Range support now play and seek.** A server that answers every range request with `200` and the whole file (web.dev's `chrome.webm`, for one) never loaded: each reply was retried as if a CDN were warming up, the retries outlasted the stall watchdog, which reopened the stream and started the count over, so the fallback to sequential reading was never reached and the element dropped to the native `<video>`, which could not seek. A file that fits the buffer is now kept whole from the first reply, so it plays and seeks; for larger files the retry count carries across reopens, so the fallback is reached.
+
 ## [0.4.1] - 2026-10-01
 
 ### Added
