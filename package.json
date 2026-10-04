@@ -115,7 +115,7 @@
   "scripts": {
     "build": "npm run build:wasm && npm run build:ts",
     "build:ts": "node scripts/check-wasm.js && tsc && node scripts/build-standalone.js && node scripts/build-wrappers.mjs && node scripts/build-custom-data.mjs",
-    "build:ts:fast": "node scripts/check-wasm.js && tsc --emitDeclarationOnly && MOVI_ENTRY=element,element.slim MOVI_FORMAT=es MOVI_TERSER_PASSES=2 node scripts/build-standalone.js && node scripts/build-wrappers.mjs && node scripts/build-custom-data.mjs",
+    "build:ts:fast": "node scripts/check-wasm.js && tsc --emitDeclarationOnly && MOVI_ENTRY=element,element.slim MOVI_FORMAT=es,iife MOVI_TERSER_PASSES=2 node scripts/build-standalone.js && node scripts/build-wrappers.mjs && node scripts/build-custom-data.mjs",
     "release": "node scripts/release.mjs",
     "sync:element": "node scripts/sync-element.mjs",
     "build:wasm": "mkdir -p dist/wasm && docker compose run --rm build",
@@ -132,7 +132,7 @@
     "app:dev": "cd app && npx wrangler dev --var LOCAL_DEV:true",
     "app:deploy": "cd app && cp worker.js worker.js.bak && sed -i '' \"s|\\\"__BUILD_VERSION__\\\"|\\\"$(date +%s)\\\"|\" worker.js && npx wrangler deploy; mv worker.js.bak worker.js",
     "app:harden": "node scripts/harden-element.js",
-    "app:upload": "npm run app:harden && wrangler r2 object put movi-assets/element.js --file dist/element.js --remote && wrangler r2 object put movi-assets/element.slim.js --file dist/element.slim.js --remote && wrangler r2 object put movi-assets/movi.wasm --file dist/movi.wasm --content-type application/wasm --remote",
+    "app:upload": "npm run app:harden && wrangler r2 object put movi-assets/element.js --file dist/element.js --remote && wrangler r2 object put movi-assets/element.slim.js --file dist/element.slim.js --remote && wrangler r2 object put movi-assets/element.global.js --file dist/element.global.js --content-type application/javascript --remote && wrangler r2 object put movi-assets/element.slim.global.js --file dist/element.slim.global.js --content-type application/javascript --remote && wrangler r2 object put movi-assets/movi.wasm --file dist/movi.wasm --content-type application/wasm --remote",
     "app:upload:icons": "node scripts/upload-app-icons.mjs",
     "app:upload:local": "wrangler r2 object put movi-assets/element.js --file dist/element.js --local --persist-to app/.wrangler/state",
     "app:release": "npm run build:ts && npm run app:upload && npm run app:deploy"
