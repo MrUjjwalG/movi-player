@@ -13909,6 +13909,10 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
   setSubtitleOverlay(overlay: HTMLElement | null): void {
     if (this.videoRenderer) {
       this.videoRenderer.setSubtitleOverlay(overlay);
+      if (this._customSubtitleRenderer) {
+        this.videoRenderer.setHostSubtitleOwned(true);
+        this._mountCustomSubtitleRenderer();
+      }
     }
   }
 
@@ -15786,15 +15790,9 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
     // Handing over or back: drop the internal decoder's cues so the two paths
     // never draw at once.
     this.videoRenderer?.setSubtitleCues([]);
+    this.videoRenderer?.setHostSubtitleOwned(!!renderer);
     if (renderer) {
-      const overlay = this.videoRenderer?.getSubtitleOverlay?.() ?? null;
-      if (overlay && renderer.mount) {
-        try {
-          renderer.mount(overlay);
-        } catch {
-          /* ignore */
-        }
-      }
+      this._mountCustomSubtitleRenderer();
       try {
         renderer.setDelay(this._subtitleDelaySec);
       } catch {
@@ -15802,6 +15800,21 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
       }
       void this._configureCustomSubtitleRenderer();
       this._startSubtitleRenderLoop();
+    }
+  }
+
+  /** Hand the custom renderer the overlay, if both exist yet. The element
+   *  re-applies its renderer to a fresh player BEFORE it attaches the overlay,
+   *  so setSubtitleOverlay() calls this too — otherwise mount() never ran on
+   *  the element path and the renderer had nowhere to draw. */
+  private _mountCustomSubtitleRenderer(): void {
+    const r = this._customSubtitleRenderer;
+    const overlay = this.videoRenderer?.getSubtitleOverlay?.() ?? null;
+    if (!r || !overlay || !r.mount) return;
+    try {
+      r.mount(overlay);
+    } catch {
+      /* ignore */
     }
   }
 

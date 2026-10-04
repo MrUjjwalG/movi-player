@@ -437,6 +437,8 @@ export class CanvasRenderer {
   private _subtitleRerenderRafId: number | null = null;
   private subtitleCues: SubtitleCue[] = [];
   private subtitleOverlay: HTMLElement | null = null;
+  // See setHostSubtitleOwned().
+  private _hostSubtitleOwned = false;
   /** The subtitle overlay element — absolutely positioned over the visible video
    *  (letterbox-aware). Handed to a host SubtitleRenderer as a mount point. */
   getSubtitleOverlay(): HTMLElement | null {
@@ -4029,6 +4031,65 @@ export class CanvasRenderer {
   }
 
   /**
+   * A host SubtitleRenderer (jassub, a canvas ASS engine, …) has been handed
+   * the overlay as its mount point. The internal cue path has nothing to show
+   * then, and with no active cue renderSubtitles() set the overlay to
+   * display:none on every presented frame and wiped its children on a clear —
+   * so whatever the host mounted was never visible. While owned, the overlay
+   * is only kept placed over the visible video; its contents are the host's.
+   */
+  setHostSubtitleOwned(owned: boolean): void {
+    if (this._hostSubtitleOwned === owned) {
+      // Owned before the overlay arrived (the element's order): place it now
+      // rather than at the next presented frame, which a paused load lacks.
+      if (owned) this.layoutHostSubtitleOverlay();
+      return;
+    }
+    this._hostSubtitleOwned = owned;
+    this.activeSubtitleCue = null;
+    this._lastRenderedSubtitleKey = "";
+    this._lastRenderedSubtitlePlain = "";
+    this._lastSubtitleLineCount = 0;
+    if (this.subtitleOverlay) {
+      // Either way the other side's content must go: the internal path's last
+      // line before a host takes over, or the host's leftovers when it leaves.
+      this.subtitleOverlay.innerHTML = "";
+      if (owned) this.layoutHostSubtitleOverlay();
+      else this.subtitleOverlay.style.display = "none";
+    }
+  }
+
+  /** Same box the text path computes, minus the caption-specific padding and
+   *  flex layout, which mean nothing to a host drawing in video coordinates. */
+  private layoutHostSubtitleOverlay(): void {
+    const overlay = this.subtitleOverlay;
+    if (!overlay) return;
+    const canvasEl =
+      this.canvas instanceof HTMLCanvasElement ? this.canvas : null;
+    const rect = canvasEl?.getBoundingClientRect();
+    const w = rect?.width || this.width;
+    const h = rect?.height || this.height;
+    const rot = (((this.rotation ?? 0) % 360) + 360) % 360;
+    const swapped = rot === 90 || rot === 270;
+    const ovW = swapped ? h : w;
+    const ovH = swapped ? w : h;
+    overlay.style.position = "absolute";
+    overlay.style.right = "auto";
+    overlay.style.bottom = "auto";
+    overlay.style.width = `${ovW}px`;
+    overlay.style.height = `${ovH}px`;
+    overlay.style.left = `${(w - ovW) / 2}px`;
+    overlay.style.top = `${(h - ovH) / 2}px`;
+    overlay.style.margin = "0";
+    overlay.style.padding = "0";
+    overlay.style.transformOrigin = "center center";
+    overlay.style.transform = rot ? `rotate(${rot}deg)` : "none";
+    overlay.style.boxSizing = "border-box";
+    overlay.style.display = "block";
+    overlay.style.pointerEvents = "none";
+  }
+
+  /**
    * Tag the subtitle overlay with the source format. The styled black
    * backdrop is opt-in and only painted for WebVTT cues — that's the
    * karaoke-paced format from our YouTube proxy where the box reads as
@@ -4531,7 +4592,7 @@ export class CanvasRenderer {
     this._lastImageCueKey = "";
     this._lastImageDataUrl = "";
     // Clear all subtitle elements from overlay if it exists
-    if (this.subtitleOverlay) {
+    if (this.subtitleOverlay && !this._hostSubtitleOwned) {
       this.subtitleOverlay.innerHTML = "";
     }
   }
@@ -4825,6 +4886,13 @@ export class CanvasRenderer {
     // Canvas fallback uses the Internal Buffer dimensions (rotated)
     // const bufferWidth = this.width;
     // const bufferHeight = this.height;
+
+    if (this._hostSubtitleOwned) {
+      // Cues pushed by the prefetch path (a subtitle delay, the cue browser)
+      // still land in subtitleCues; drawing them would double every line.
+      this.layoutHostSubtitleOverlay();
+      return;
+    }
 
     if (!this.activeSubtitleCue) {
       // Clear overlay if no active cue

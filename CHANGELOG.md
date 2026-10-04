@@ -10,6 +10,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [0.4.2] - 2026-10-03
 
 ### Fixed
+- **A `SubtitleRenderer` mounted on the element now shows up.** The element handed the renderer to a fresh player before the subtitle overlay existed, so `mount()` was never called; and when it was, the built-in caption path, with no cues of its own, hid the overlay on every frame and emptied it on a clear. The overlay is now handed over when it arrives and left to the renderer while one is set.
 - **Servers without Range support now play and seek.** A server that answers every range request with `200` and the whole file (web.dev's `chrome.webm`, for one) never loaded: each reply was retried as if a CDN were warming up, the retries outlasted the stall watchdog, which reopened the stream and started the count over, so the fallback to sequential reading was never reached and the element dropped to the native `<video>`, which could not seek. A file that fits the buffer is now kept whole from the first reply, so it plays and seeks; for larger files the retry count carries across reopens, so the fallback is reached.
 
 ## [0.4.1] - 2026-10-01
