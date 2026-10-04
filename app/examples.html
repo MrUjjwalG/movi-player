@@ -519,6 +519,9 @@
       /* Every example heading is a deep link (#hls-stream-auto-quality …);
          the navbar is fixed, so land the heading below it, not under it. */
       main h3[id], #guides-title { scroll-margin-top: 90px; }
+      /* A card's heading sits ~48px below the card's top edge and its category
+         label; 90px left both under the fixed navbar. */
+      main .card h3[id] { scroll-margin-top: 140px; }
       .guides-list {
         display: grid;
         grid-template-columns: repeat(auto-fill, minmax(260px, 1fr));
@@ -1020,26 +1023,38 @@
           </div>
         </div>
 
-        <!-- ASS/SSA subtitles: pluggable renderer -->
-        <div class="card recipe">
+        <!-- ASS/SSA subtitles: pluggable renderer, live -->
+        <div class="card" data-src="/samples/sintel-ass-demo.mkv" data-ass="true" data-title="Sintel — styled ASS subtitles (CC-BY)">
           <div class="card-head">
             <div class="card-cat">Advanced<span class="tag-new">NEW</span></div>
             <h3 id="ass-ssa-subtitles">ASS/SSA subtitles</h3>
-            <p>MoviPlayer decodes to a canvas, so styled ASS/SSA (positioning, karaoke, embedded fonts) can't ride a native <code class="inline">&lt;track&gt;</code>. Register a <code class="inline">SubtitleRenderer</code> — back it with libass-wasm / jassub — and the player routes the embedded subtitle stream to it: header on <code class="inline">configure</code>, each line on <code class="inline">pushPacket</code>, a frame on <code class="inline">render</code>.</p>
+            <p>MoviPlayer decodes to a canvas, so styled ASS/SSA can't ride a native <code class="inline">&lt;track&gt;</code>. Register a <code class="inline">SubtitleRenderer</code> and the player hands it the embedded stream: the script header on <code class="inline">configure</code>, each line on <code class="inline">pushPacket</code>, a frame on <code class="inline">render</code>. This demo runs a small canvas renderer — styles, <code class="inline">\pos</code>, <code class="inline">\move</code>, <code class="inline">\fad</code>, rotation, karaoke; back it with jassub for full libass output.</p>
           </div>
-          <div class="code">
+          <div class="stage">
+            <button class="stage-poster load-btn" type="button" aria-label="Load the ASS subtitles example">
+              <img class="stage-thumb" src="/samples/posters/ass-sintel.jpg" alt="" loading="lazy" decoding="async" />
+              <span class="play"><svg viewBox="0 0 24 24" fill="#fff"><path d="M7.5 6v12l9-6z"/></svg></span>
+              <span class="load-label">Load example</span>
+              <span class="load-hint">MKV · embedded ASS track</span>
+            </button>
+          </div>
+          <div class="code grow">
             <button class="copy-btn" type="button">Copy</button>
-            <pre><code><span class="tok-com">// Adapt any ASS engine (libass-wasm / jassub) to the interface.</span>
+            <pre><code><span class="tok-com">// Any ASS engine behind seven methods (jassub, libass-wasm, your own).</span>
 <span class="tok-kw">class</span> AssRenderer {           <span class="tok-com">// implements SubtitleRenderer</span>
   mount(overlay)              { <span class="tok-com">/* append your &lt;canvas&gt; here */</span> }
-  configure(track, extradata) { <span class="tok-com">/* init libass w/ the ASS header */</span> }
-  pushPacket(pkt)             { <span class="tok-com">/* feed one dialogue line */</span> }
-  render(time, w, h)          { <span class="tok-com">/* draw the frame at w×h */</span> }
+  configure(track, extradata) { <span class="tok-com">/* [Script Info] + [V4+ Styles] */</span> }
+  pushPacket(pkt)             { <span class="tok-com">/* one Dialogue line, pkt.timestamp */</span> }
+  render(time, w, h)          { <span class="tok-com">/* draw the lines live at time */</span> }
   setDelay(s) {} clear() {} destroy() {}
 }
 
-document.querySelector(<span class="tok-str">'movi-player'</span>)
-  .setSubtitleRenderer(<span class="tok-kw">new</span> AssRenderer());</code></pre>
+<span class="tok-kw">const</span> el = document.querySelector(<span class="tok-str">'movi-player'</span>);
+el.setSubtitleRenderer(<span class="tok-kw">new</span> AssRenderer());
+el.addEventListener(<span class="tok-str">'trackschange'</span>, ({ detail }) =&gt; {
+  <span class="tok-kw">const</span> ass = detail.subtitle.find((t) =&gt; t.codec === <span class="tok-str">'ass'</span>);
+  <span class="tok-kw">if</span> (ass) el.player.selectSubtitleTrack(ass.id);
+}, { once: <span class="tok-kw">true</span> });</code></pre>
           </div>
         </div>
       </div>
@@ -1405,6 +1420,300 @@ npm install movi-player</code></pre>
         "<circle cx='300' cy='300' r='12' fill='#0b0b10'/></svg>"
       );
 
+      // A small, dependency-free ASS/SSA renderer behind movi-player's
+      // SubtitleRenderer hook: script styles + PlayRes scaling, \pos \move \an
+      // \fad \frz \c \1c-\4c \alpha \b \i \u \s \fs \fn \bord \shad \fsp \r,
+      // karaoke \k \kf \K \ko, BorderStyle 3 boxes, \N \h and word wrap. For
+      // pixel-exact libass output (vector \p drawings, \clip, \blur, embedded
+      // fonts) swap in jassub behind the same seven methods.
+      class CanvasAssRenderer {
+        constructor() {
+          this.canvas = document.createElement("canvas");
+          this.canvas.style.cssText = "position:absolute;inset:0;width:100%;height:100%;pointer-events:none";
+          this.ctx = this.canvas.getContext("2d");
+          this.styles = new Map();
+          this.playX = 384;
+          this.playY = 288;
+          this.events = [];
+          this.seen = new Set();
+          this.delay = 0;
+          this.lastKey = "";
+          this.utf8 = new TextDecoder();
+        }
+
+        mount(overlay) {
+          // Called again after a source change empties the overlay.
+          if (this.canvas.parentNode !== overlay) overlay.appendChild(this.canvas);
+        }
+
+        configure(track, extradata) {
+          this.events = [];
+          this.seen.clear();
+          this.clear();
+          this.styles.clear();
+          if (!extradata) return;
+          let fmt = null;
+          let section = "";
+          for (const raw of this.utf8.decode(extradata).split(/\r?\n/)) {
+            const line = raw.trim();
+            if (line.startsWith("[")) { section = line.toLowerCase(); continue; }
+            const i = line.indexOf(":");
+            if (i < 0) continue;
+            const key = line.slice(0, i).trim();
+            const val = line.slice(i + 1).trim();
+            if (section === "[script info]") {
+              if (key === "PlayResX") this.playX = +val || this.playX;
+              if (key === "PlayResY") this.playY = +val || this.playY;
+            } else if (section.includes("styles")) {
+              if (key === "Format") fmt = val.split(",").map((s) => s.trim());
+              else if (key === "Style" && fmt) {
+                const parts = val.split(",");
+                const s = {};
+                fmt.forEach((f, n) => { s[f] = (parts[n] ?? "").trim(); });
+                this.styles.set(s.Name, {
+                  font: s.Fontname || "Arial",
+                  size: +s.Fontsize || 20,
+                  c1: this.color(s.PrimaryColour), c2: this.color(s.SecondaryColour),
+                  c3: this.color(s.OutlineColour), c4: this.color(s.BackColour),
+                  bold: s.Bold !== "0" && s.Bold !== "", italic: s.Italic !== "0" && s.Italic !== "",
+                  underline: s.Underline === "-1" || s.Underline === "1",
+                  strike: s.StrikeOut === "-1" || s.StrikeOut === "1",
+                  spacing: +s.Spacing || 0, angle: +s.Angle || 0,
+                  borderStyle: +s.BorderStyle || 1, bord: +s.Outline || 0, shad: +s.Shadow || 0,
+                  an: +s.Alignment || 2,
+                  ml: +s.MarginL || 0, mr: +s.MarginR || 0, mv: +s.MarginV || 0,
+                });
+              }
+            }
+          }
+        }
+
+        pushPacket(pkt) {
+          // Matroska ASS block: ReadOrder,Layer,Style,Name,MarginL,MarginR,MarginV,Effect,Text
+          const f = this.utf8.decode(pkt.data).split(",");
+          if (f.length < 9) return;
+          const readOrder = +f[0];
+          // The demuxer re-reads around a seek; one dialogue line, one event.
+          if (this.seen.has(readOrder)) return;
+          this.seen.add(readOrder);
+          this.events.push({
+            start: pkt.timestamp, end: pkt.timestamp + pkt.duration, readOrder,
+            layer: +f[1] || 0, style: f[2], ml: +f[4] || 0, mr: +f[5] || 0, mv: +f[6] || 0,
+            text: f.slice(8).join(","),
+          });
+        }
+
+        render(mediaTime, videoWidth, videoHeight) {
+          const t = mediaTime - this.delay;
+          const cv = this.canvas;
+          const dpr = window.devicePixelRatio || 1;
+          const w = Math.round(cv.clientWidth * dpr), h = Math.round(cv.clientHeight * dpr);
+          const active = this.events.filter((e) => e.start <= t && t < e.end)
+            .sort((a, b) => a.layer - b.layer || a.readOrder - b.readOrder);
+          const animated = active.some((e) => /\\(fad|move|k|K)/.test(e.text));
+          const key = w + "x" + h + "/" + videoWidth + "x" + videoHeight + ":" + active.map((e) => e.readOrder).join(",");
+          if (!animated && key === this.lastKey) return;
+          this.lastKey = key;
+          if (cv.width !== w || cv.height !== h) { cv.width = w; cv.height = h; }
+          this.ctx.clearRect(0, 0, w, h);
+          if (!w || !h) return;
+          // The overlay spans the whole player; script coordinates belong to
+          // the picture, which sits letterboxed inside it.
+          const fit = videoWidth && videoHeight ? Math.min(w / videoWidth, h / videoHeight) : 0;
+          const pw = fit ? videoWidth * fit : w, ph = fit ? videoHeight * fit : h;
+          this.box = { w: pw, h: ph };
+          this.ctx.save();
+          this.ctx.translate((w - pw) / 2, (h - ph) / 2);
+          for (const e of active) this.drawEvent(e, (t - e.start) * 1000, pw / this.playX, ph / this.playY);
+          this.ctx.restore();
+        }
+
+        setDelay(s) { this.delay = s; this.lastKey = ""; }
+        // Called on every seek as well as a track change. A seek only re-reads
+        // from the nearest keyframe on, so a line that began before it would
+        // never come back; lines are kept and configure() starts a track over.
+        clear() { this.lastKey = ""; this.ctx.clearRect(0, 0, this.canvas.width, this.canvas.height); }
+        destroy() { this.events = []; this.seen.clear(); this.clear(); this.canvas.remove(); }
+
+        // &HAABBGGRR / &HBBGGRR& -> {r,g,b,a} with a as opacity 0..1
+        color(v, base) {
+          const n = parseInt(String(v || "").replace(/&H|&|h/gi, ""), 16);
+          if (Number.isNaN(n)) return base || { r: 255, g: 255, b: 255, a: 1 };
+          return { r: n & 255, g: (n >>> 8) & 255, b: (n >>> 16) & 255, a: base ? base.a : 1 - ((n >>> 24) & 255) / 255 };
+        }
+        rgba(c, k) { return `rgba(${c.r},${c.g},${c.b},${c.a * k})`; }
+
+        drawEvent(e, ms, sx, sy) {
+          const base = this.styles.get(e.style) || this.styles.get("Default") || this.styles.values().next().value;
+          if (!base) return;
+          const dur = (e.end - e.start) * 1000;
+          const ev = { an: base.an, pos: null, move: null, fade: null, frz: base.angle };
+          let st = { ...base };
+          const runs = [];
+          let kAt = 0;
+          // Split into override blocks and text, applying tags as they come.
+          for (const m of e.text.matchAll(/\{([^}]*)\}|([^{]+)/g)) {
+            if (m[2] !== undefined) {
+              const text = m[2].replace(/\\h/g, " ").replace(/\\n/g, " ");
+              text.split("\\N").forEach((part, i) => {
+                if (i) runs.push({ br: true });
+                if (part) runs.push({ text: part, st: { ...st } });
+              });
+              st.kStart = st.kDur = undefined;
+              continue;
+            }
+            for (const [, name, arg] of m[1].matchAll(/\\(1c|2c|3c|4c|1a|2a|3a|4a|alpha|an|a|pos|move|fade|fad|frz|fr|fscx|fscy|fsp|fs|fn|bord|shad|kf|ko|k|K|b|i|u|s|c|r)([^\\]*)/g)) {
+              const nums = () => arg.replace(/[()]/g, "").split(",").map(Number);
+              switch (name) {
+                case "c": case "1c": st.c1 = this.color(arg, st.c1); break;
+                case "2c": st.c2 = this.color(arg, st.c2); break;
+                case "3c": st.c3 = this.color(arg, st.c3); break;
+                case "4c": st.c4 = this.color(arg, st.c4); break;
+                case "alpha": { const a = 1 - parseInt(arg.replace(/&H|&/gi, ""), 16) / 255; for (const c of ["c1", "c2", "c3", "c4"]) st[c] = { ...st[c], a }; break; }
+                case "1a": case "2a": case "3a": case "4a": { const c = "c" + name[0]; st[c] = { ...st[c], a: 1 - parseInt(arg.replace(/&H|&/gi, ""), 16) / 255 }; break; }
+                case "an": ev.an = +arg || ev.an; break;
+                case "a": { const v = +arg; ev.an = ({ 1: 1, 2: 2, 3: 3, 5: 7, 6: 8, 7: 9, 9: 4, 10: 5, 11: 6 })[v] || ev.an; break; }
+                case "pos": { const [x, y] = nums(); ev.pos = { x, y }; break; }
+                case "move": { const [x1, y1, x2, y2, t1 = 0, t2 = 0] = nums(); ev.move = { x1, y1, x2, y2, t1, t2 }; break; }
+                case "fad": { const [a, b] = nums(); ev.fade = { a, b }; break; }
+                case "frz": case "fr": st.angle = ev.frz = +arg; break;
+                case "fs": st.size = +arg || base.size; break;
+                case "fn": st.font = arg || base.font; break;
+                case "fsp": st.spacing = +arg; break;
+                case "bord": st.bord = +arg; break;
+                case "shad": st.shad = +arg; break;
+                case "b": st.bold = arg !== "0"; break;
+                case "i": st.italic = arg === "1"; break;
+                case "u": st.underline = arg === "1"; break;
+                case "s": st.strike = arg === "1"; break;
+                case "r": st = { ...(this.styles.get(arg) || base) }; break;
+                case "k": case "K": case "kf": case "ko":
+                  st.kStart = kAt; st.kDur = (+arg || 0) * 10; kAt += st.kDur;
+                  st.kMode = name === "k" ? "k" : name === "ko" ? "ko" : "kf";
+                  break;
+              }
+            }
+          }
+          if (!runs.length) return;
+
+          const ctx = this.ctx;
+          const font = (s) => `${s.italic ? "italic " : ""}${s.bold ? "bold " : ""}${s.size * 0.87 * sy}px "${s.font}", Arial, sans-serif`;
+          const measure = (r) => { ctx.font = font(r.st); return ctx.measureText(r.text).width + r.text.length * r.st.spacing * sx; };
+
+          // Lines, then greedy word wrap for anything wider than the margins.
+          const ml = (e.ml || base.ml) * sx, mr = (e.mr || base.mr) * sx, mv = (e.mv || base.mv) * sy;
+          const W = this.box.w, H = this.box.h;
+          const maxW = ev.pos || ev.move ? Infinity : W - ml - mr;
+          const lines = [[]];
+          for (const r of runs) {
+            if (r.br) { lines.push([]); continue; }
+            for (const word of r.text.split(/(?<= )/)) {
+              const piece = { text: word, st: r.st };
+              piece.w = measure(piece);
+              const line = lines[lines.length - 1];
+              const used = line.reduce((n, p) => n + p.w, 0);
+              if (line.length && used + piece.w > maxW && word.trim()) lines.push([piece]);
+              else line.push(piece);
+            }
+          }
+          const metrics = lines.map((l) => ({
+            w: l.reduce((n, p) => n + p.w, 0),
+            h: Math.max(...l.map((p) => p.st.size * sy), base.size * sy),
+          }));
+          const blockW = Math.max(...metrics.map((m) => m.w));
+          const blockH = metrics.reduce((n, m) => n + m.h, 0);
+
+          const col = (ev.an - 1) % 3; // 0 left, 1 centre, 2 right
+          const row = ev.an <= 3 ? 2 : ev.an <= 6 ? 1 : 0; // 0 top, 1 middle, 2 bottom
+          let ax, ay;
+          if (ev.move) {
+            const { x1, y1, x2, y2, t1, t2 } = ev.move;
+            const a = t2 > t1 ? t1 : 0, b = t2 > t1 ? t2 : dur;
+            const k = Math.min(1, Math.max(0, (ms - a) / (b - a || 1)));
+            ax = (x1 + (x2 - x1) * k) * sx; ay = (y1 + (y2 - y1) * k) * sy;
+          } else if (ev.pos) {
+            ax = ev.pos.x * sx; ay = ev.pos.y * sy;
+          } else {
+            ax = col === 0 ? ml : col === 1 ? (ml + W - mr) / 2 : W - mr;
+            ay = row === 0 ? mv : row === 1 ? H / 2 : H - mv;
+          }
+          const left = ax - (col === 0 ? 0 : col === 1 ? blockW / 2 : blockW);
+          const top = ay - (row === 0 ? 0 : row === 1 ? blockH / 2 : blockH);
+
+          let alpha = 1;
+          if (ev.fade) {
+            if (ms < ev.fade.a) alpha = ms / ev.fade.a;
+            else if (ms > dur - ev.fade.b) alpha = Math.max(0, (dur - ms) / ev.fade.b);
+          }
+
+          ctx.save();
+          if (ev.frz) { ctx.translate(ax, ay); ctx.rotate((-ev.frz * Math.PI) / 180); ctx.translate(-ax, -ay); }
+          ctx.textBaseline = "alphabetic";
+          ctx.lineJoin = "round";
+          // Three passes so no line's outline or shadow paints over another's fill.
+          for (const pass of ["shadow", "border", "fill"]) {
+            let y = top;
+            lines.forEach((line, li) => {
+              const m = metrics[li];
+              let x = left + (col === 0 ? 0 : col === 1 ? (blockW - m.w) / 2 : blockW - m.w);
+              const baseline = y + m.h * 0.8;
+              const boxed = line.find((p) => p.st.borderStyle === 3);
+              if (boxed) {
+                // One box per line: per-word boxes overlap, and the overlaps
+                // show as seams once a fade makes them translucent.
+                const s = boxed.st, bord = s.bord * sy, shad = s.shad * sy;
+                const c = pass === "border" ? s.c3 : pass === "shadow" && shad ? s.c4 : null;
+                const off = pass === "shadow" ? shad : 0;
+                if (c) { ctx.fillStyle = this.rgba(c, alpha); ctx.fillRect(x - bord + off, y - bord + off, m.w + bord * 2, m.h + bord * 2); }
+              }
+              for (const p of line) {
+                const s = p.st;
+                ctx.font = font(s);
+                const bord = s.bord * sy, shad = s.shad * sy;
+                const draw = (dx, dy, how) => {
+                  if (!s.spacing) return how(p.text, x + dx, baseline + dy);
+                  let cx = x + dx;
+                  for (const ch of p.text) { how(ch, cx, baseline + dy); cx += ctx.measureText(ch).width + s.spacing * sx; }
+                };
+                const fillWith = (c, dx = 0, dy = 0) => { ctx.fillStyle = this.rgba(c, alpha); draw(dx, dy, (t, X, Y) => ctx.fillText(t, X, Y)); };
+                const kOn = s.kStart === undefined || ms >= s.kStart + s.kDur;
+                if (s.borderStyle !== 3 && pass === "shadow" && shad) {
+                  fillWith(s.c4, shad, shad);
+                } else if (s.borderStyle !== 3 && pass === "border" && bord && (s.kMode !== "ko" || kOn)) {
+                  ctx.strokeStyle = this.rgba(s.c3, alpha);
+                  ctx.lineWidth = bord * 2;
+                  draw(0, 0, (t, X, Y) => ctx.strokeText(t, X, Y));
+                }
+                if (pass === "fill") {
+                  if (s.kStart === undefined || s.kMode === "ko") fillWith(s.c1);
+                  else if (s.kMode === "k") fillWith(kOn ? s.c1 : s.c2);
+                  else {
+                    // \kf: secondary, then primary swept across the syllable.
+                    const k = Math.min(1, Math.max(0, (ms - s.kStart) / (s.kDur || 1)));
+                    fillWith(s.c2);
+                    if (k > 0) {
+                      ctx.save();
+                      ctx.beginPath(); ctx.rect(x, y - m.h, p.w * k, m.h * 3); ctx.clip();
+                      fillWith(s.c1);
+                      ctx.restore();
+                    }
+                  }
+                  if (s.underline || s.strike) {
+                    ctx.fillStyle = this.rgba(s.c1, alpha);
+                    const lh = Math.max(1, s.size * sy * 0.06);
+                    if (s.underline) ctx.fillRect(x, baseline + lh * 2, p.w, lh);
+                    if (s.strike) ctx.fillRect(x, baseline - s.size * sy * 0.25, p.w, lh);
+                  }
+                }
+                x += p.w;
+              }
+              y += m.h;
+            });
+          }
+          ctx.restore();
+        }
+      }
+
       const openModal = async (card) => {
         // Build via the parser, NOT document.createElement: MoviElement's
         // constructor sets attributes on itself, which makes createElement throw
@@ -1450,6 +1759,15 @@ npm install movi-player</code></pre>
         modalTitle.textContent = title;
         modalMount.replaceChildren(player);
         activePlayer = player;
+        if (card.dataset.ass) {
+          // Upgraded now that it is connected. The ASS track is not selected on
+          // load by default, so pick it once the tracks are known.
+          player.setSubtitleRenderer(new CanvasAssRenderer());
+          player.addEventListener("trackschange", ({ detail }) => {
+            const ass = detail.subtitle.find((t) => t.codec === "ass" || t.codec === "ssa");
+            if (ass) player.player?.selectSubtitleTrack(ass.id);
+          }, { once: true });
+        }
         modal.classList.add("open");
         document.body.style.overflow = "hidden";
         // autoplay works here because the click is a user gesture — no forced
