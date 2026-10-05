@@ -159,6 +159,14 @@
       }
     };
     Object.defineProperty(Hooked, "name", { value: Native.name });
+    // WebIDL methods are enumerable; class methods are not, and they shadow
+    // the native ones, so `for (k in observer)` saw no methods at all.
+    // zone.js (Angular — the Firebase console) builds its ResizeObserver
+    // wrapper exactly that way, and every page failed on "a.disconnect is
+    // not a function".
+    for (const method of ["observe", "unobserve", "disconnect"]) {
+      Object.defineProperty(Hooked.prototype, method, { enumerable: true });
+    }
     globalThis[name] = Hooked;
 
     observerKinds.push((video, player) => {
