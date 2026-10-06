@@ -86,6 +86,12 @@ const entries = [
   // to native <video> when that WASM isn't available. `slim: true` swaps the
   // WASM glue via alias and flips the __MOVI_SLIM__ define below.
   { name: 'element.slim', path: 'src/element-slim.ts', slim: true, global: true },
+  // Lean build: the slim build without the adaptive-streaming engines. `lean:
+  // true` aliases the three stream wrappers (Shaka / hls.js / dash.js) to
+  // src/render/StreamWrapperStub.ts so none of the three libraries is bundled,
+  // and flips the __MOVI_LEAN__ define. Slim's wiring (external WASM, native
+  // fallback) applies unchanged.
+  { name: 'element.lean', path: 'src/element-lean.ts', slim: true, lean: true, global: true },
 ];
 
 
@@ -170,20 +176,38 @@ async function buildEntry(entry, format) {
       __MOVI_VERSION__: JSON.stringify(PKG_VERSION),
       // Literal so the dead branch tree-shakes out of the default build.
       __MOVI_SLIM__: entry.slim ? 'true' : 'false',
+      __MOVI_LEAN__: entry.lean ? 'true' : 'false',
     },
     // The slim entry swaps the embedded WASM glue (dist/wasm/movi.js, base64
     // inside) for the external-WASM glue (dist/wasm/external/movi.js, which
     // streams external/movi.wasm). A regex alias so it matches the relative
     // specifier FFmpegLoader imports ("../../dist/wasm/movi.js"), not just an
     // absolute path — string aliases run against the raw specifier.
-    ...(entry.slim
+    //
+    // The lean entry additionally swaps the three stream wrappers MoviPlayer
+    // imports ("../render/ShakaPlayerWrapper" etc.) for the one stub module,
+    // which is how Shaka Player, hls.js and dash.js stay out of that bundle:
+    // nothing else in src imports them.
+    ...(entry.slim || entry.lean
       ? {
           resolve: {
             alias: [
-              {
-                find: /\/dist\/wasm\/movi\.js$/,
-                replacement: '/dist/wasm/external/movi.js',
-              },
+              ...(entry.slim
+                ? [
+                    {
+                      find: /\/dist\/wasm\/movi\.js$/,
+                      replacement: '/dist/wasm/external/movi.js',
+                    },
+                  ]
+                : []),
+              ...(entry.lean
+                ? [
+                    {
+                      find: /\/render\/(ShakaPlayerWrapper|HLSPlayerWrapper|DASHPlayerWrapper)$/,
+                      replacement: '/render/StreamWrapperStub',
+                    },
+                  ]
+                : []),
             ],
           },
         }

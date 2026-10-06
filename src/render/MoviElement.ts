@@ -2224,17 +2224,18 @@ export class MoviElement extends HTMLElement {
   }
 
   /**
-   * Which bundle is running — `"slim"` or `"full"`. Same discoverability as
-   * {@link MoviElement.version} (class, instance, or the `BUILD` export), and
-   * deliberately separate from it: the version says WHAT shipped, this says
-   * HOW the engine is packaged, which is what decides whether a `movi.wasm`
-   * has to be reachable and whether an unplayable source degrades to native
-   * `<video>` on its own.
+   * Which bundle is running — `"lean"`, `"slim"` or `"full"`. Same
+   * discoverability as {@link MoviElement.version} (class, instance, or the
+   * `BUILD` export), and deliberately separate from it: the version says WHAT
+   * shipped, this says HOW the engine is packaged, which is what decides
+   * whether a `movi.wasm` has to be reachable, whether an unplayable source
+   * degrades to native `<video>` on its own, and whether a manifest has an
+   * engine at all (`"lean"` ships none).
    */
-  static readonly build: "slim" | "full" = BUILD;
+  static readonly build: "lean" | "slim" | "full" = BUILD;
 
   /** Instance mirror of {@link MoviElement.build}. */
-  get build(): "slim" | "full" {
+  get build(): "lean" | "slim" | "full" {
     return BUILD;
   }
 

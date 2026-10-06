@@ -12,6 +12,8 @@ Movi-Player is designed with modularity in mind. Use only what you need.
 | **Element (slim)** | `movi-player/element/slim` | ~410KB | 1.00 MB + WASM | 750 KB + WASM | Same player, WASM as a separate file |
 | **Element (global)** | `movi-player/element/global` | — | — | — | The same element as a classic script — registers itself, exports nothing |
 | **Element (slim, global)** | `movi-player/element/slim/global` | — | — | — | The slim build as a classic script |
+| **Element (lean)** | `movi-player/element/lean` | ~410KB | 434 KB + WASM | 330 KB + WASM | The slim build without Shaka / dash.js / hls.js — files only |
+| **Element (lean, global)** | `movi-player/element/lean/global` | — | — | — | The lean build as a classic script |
 
 > Module sizes (first column) exclude the embedded WASM binary. Gzip/Brotli columns show the total transfer size including WASM. Enable Brotli compression on your server for optimal delivery.
 
@@ -238,6 +240,31 @@ Two things to know:
   controls
 ></movi-player>
 ```
+
+## Lean Element Module
+
+The slim build without the adaptive-streaming engines. The slim bundle carries
+Shaka Player, dash.js and hls.js in full even for a page that only plays files;
+the lean build swaps all three for a stub at build time, which takes the script
+from 5.1 MB (1.2 MB gzip, 912 KB brotli) to 1.8 MB (434 KB gzip, 330 KB brotli)
+with the same separate `movi.wasm`. Everything else is the slim build: the same
+element, the same API, [`wasmurl`](/api/element#wasmurl), the automatic native
+fallback.
+
+```typescript
+import "movi-player/element/lean";
+```
+
+What it gives up: an HLS / DASH / Smooth Streaming manifest has no engine in
+this build. Each stream tier refuses at load and Movi hands the URL to the
+browser's own `<video>`, which plays HLS where it does so natively (Safari) and
+nothing elsewhere; single-file DASH still plays through the FFmpeg demuxer. A
+page that needs adaptive streams loads `movi-player/element/slim` or
+`movi-player/element`. At runtime `MoviElement.build` / `el.build` reports
+`"lean"`.
+
+A classic-script twin ships as `movi-player/element/lean/global`
+(`dist/element.lean.global.js`).
 
 ### With a framework wrapper
 

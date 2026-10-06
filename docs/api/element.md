@@ -79,6 +79,9 @@ at, so a CDN's copied "default" line works as printed.
 
 `dist/element.slim.global.js` is the same thing built on the slim bundle —
 a third of the size, fetching `movi.wasm` from beside itself.
+`dist/element.lean.global.js` is the slim bundle without the HLS/DASH engines
+(Shaka Player, dash.js, hls.js) — a third of the slim script again, for a page
+that only plays files.
 
 ### Basic Usage
 
@@ -1837,9 +1840,9 @@ import { VERSION } from "movi-player/element";
 
 ---
 
-#### `build: "slim" | "full"` (read-only)
+#### `build: "lean" | "slim" | "full"` (read-only)
 
-Which bundle is running: `"full"` embeds the FFmpeg WASM in the JS, `"slim"` streams it from a separate `movi.wasm` (see [`wasmurl`](#wasmurl)).
+Which bundle is running: `"full"` embeds the FFmpeg WASM in the JS, `"slim"` streams it from a separate `movi.wasm` (see [`wasmurl`](#wasmurl)), `"lean"` streams it the same way and ships no HLS/DASH engine (see [Modules](/guide/modules#lean-element-module)).
 
 ```typescript
 MoviElement.build;                              // "full"

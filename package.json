@@ -46,6 +46,17 @@
       "require": "./dist/element.slim.global.js",
       "default": "./dist/element.slim.global.js"
     },
+    "./element/lean": {
+      "types": "./dist/element.d.ts",
+      "import": "./dist/element.lean.js",
+      "require": "./dist/element.lean.cjs"
+    },
+    "./element/lean/global": {
+      "types": "./dist/element.d.ts",
+      "import": "./dist/element.lean.global.js",
+      "require": "./dist/element.lean.global.js",
+      "default": "./dist/element.lean.global.js"
+    },
     "./movi.wasm": "./dist/movi.wasm",
     "./react": {
       "types": "./dist/react/index.tsx",
@@ -93,6 +104,7 @@
     "README.md",
     "AGENTS.md",
     "LICENSE",
+    "THIRD_PARTY_NOTICES.md",
     "custom-elements.json"
   ],
   "customElements": "custom-elements.json",

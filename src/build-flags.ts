@@ -8,6 +8,7 @@
  * away, so the default build carries none of the slim-only code.
  */
 declare const __MOVI_SLIM__: boolean | undefined;
+declare const __MOVI_LEAN__: boolean | undefined;
 
 /**
  * The slim build ships the WASM as a separate `movi-slim.wasm` (streamed,
@@ -19,13 +20,28 @@ export const IS_SLIM: boolean =
   typeof __MOVI_SLIM__ !== "undefined" ? __MOVI_SLIM__ : false;
 
 /**
- * Which bundle is running: `"slim"` (WASM streamed from a separate
+ * The lean build is the slim build without the adaptive-streaming engines:
+ * Shaka Player, dash.js and hls.js are swapped for a stub at build time (see
+ * scripts/build-standalone.js), so a page that only plays files does not ship
+ * the three libraries. `true` only in the lean entry's build; a lean build is
+ * always also slim.
+ */
+export const IS_LEAN: boolean =
+  typeof __MOVI_LEAN__ !== "undefined" ? __MOVI_LEAN__ : false;
+
+/**
+ * Which bundle is running: `"lean"` (WASM streamed from a separate
+ * `movi.wasm`, no HLS/DASH engines), `"slim"` (WASM streamed from a separate
  * `movi.wasm`) or `"full"` (WASM embedded in the JS).
  *
- * Deliberately NOT folded into {@link VERSION} — both builds ship the same
+ * Deliberately NOT folded into {@link VERSION} — all builds ship the same
  * release, and a `0.4.0+slim` string would break every consumer that compares
  * versions for equality. This is the separate axis, and the one worth having in
- * a bug report: the two bundles differ in how the engine loads and in what
- * happens when it can't.
+ * a bug report: the bundles differ in how the engine loads, in what happens
+ * when it can't, and in whether a manifest has an engine at all.
  */
-export const BUILD: "slim" | "full" = IS_SLIM ? "slim" : "full";
+export const BUILD: "lean" | "slim" | "full" = IS_LEAN
+  ? "lean"
+  : IS_SLIM
+    ? "slim"
+    : "full";

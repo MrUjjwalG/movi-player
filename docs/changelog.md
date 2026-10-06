@@ -5,6 +5,12 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+- **Lean build** — `movi-player/element/lean` (and `/lean/global`): the slim build without the adaptive-streaming engines. Shaka Player, dash.js and hls.js are swapped for a stub at build time, taking the script from 5.1 MB (1.2 MB gzip) to 1.8 MB (434 KB gzip) with the same separate `movi.wasm`. An HLS/DASH manifest has no engine in this build and goes to the browser's native `<video>`; single-file DASH still plays through the demuxer. `MoviElement.build` / `el.build` now reports `"lean"`, `"slim"` or `"full"`.
+- **`THIRD_PARTY_NOTICES.md`** ships in the package: what `movi.wasm` and the bundles contain (FFmpeg under the LGPL-2.1-or-later, dav1d, zlib, Signalsmith; Shaka Player, hls.js, dash.js in the non-lean bundles), each with its license text, and where the FFmpeg build recipe lives.
+
 ## [0.4.1] - 2026-10-01
 
 ### Added

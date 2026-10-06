@@ -329,6 +329,7 @@ import { MoviPlayer } from "movi-player/react";
 |---|---|---|---|---|
 | `movi-player` / `movi-player/element` | ~410KB | 3.13 MB | 2.37 MB | Full player with UI, controls, gestures |
 | `movi-player/element/slim` | ~410KB | 1.00 MB + WASM | 750 KB + WASM | Same player, WASM shipped as a separate `movi.wasm` |
+| `movi-player/element/lean` | ~410KB | 434 KB + WASM | 330 KB + WASM | The slim build without Shaka / dash.js / hls.js: files only, no HLS/DASH engine |
 | `movi-player/player` | ~180KB | 3.15 MB | 2.38 MB | Programmatic playback, no UI |
 | `movi-player/demuxer` | ~50KB | 2.37 MB | 1.79 MB | Metadata extraction, decoding only |
 
@@ -633,7 +634,17 @@ You host `movi.wasm` yourself — it ships in the package at `movi-player/dist/m
 ></movi-player>
 ```
 
-The framework wrappers have slim twins too — `movi-player/react/slim`, `movi-player/vue/slim`, `movi-player/svelte/slim` — same components, same props. At runtime, `MoviElement.build` / `el.build` reports `"slim"` or `"full"`, and `MoviElement.version` / `el.version` the package version. See [Modules](https://moviplayer.com/docs/guide/modules) for details.
+The framework wrappers have slim twins too — `movi-player/react/slim`, `movi-player/vue/slim`, `movi-player/svelte/slim` — same components, same props. At runtime, `MoviElement.build` / `el.build` reports `"lean"`, `"slim"` or `"full"`, and `MoviElement.version` / `el.version` the package version. See [Modules](https://moviplayer.com/docs/guide/modules) for details.
+
+### Lean Build
+
+`movi-player/element/lean` is the slim build without the adaptive-streaming engines. The slim bundle carries Shaka Player, dash.js and hls.js in full even for a page that only plays files; the lean build leaves all three out, which takes the script from 5.1 MB (1.2 MB gzipped) to 1.8 MB (434 KB gzipped) with the same separate `movi.wasm`. Everything else is the slim build: same element, same API, same `wasmurl`, same automatic native fallback.
+
+```typescript
+import "movi-player/element/lean";
+```
+
+What it gives up: an HLS / DASH / Smooth Streaming manifest has no engine in this build. Movi hands the URL to the browser's own `<video>`, which plays HLS where it does so natively (Safari) and nothing elsewhere; single-file DASH still plays through the FFmpeg demuxer. A page that needs adaptive streams loads `element/slim` or `element`. `el.build` reports `"lean"`.
 
 ### Custom Request Headers
 
