@@ -24611,12 +24611,13 @@ export class MoviElement extends HTMLElement {
       .movi-subtitle-overlay {
         position: absolute;
         /* How far off the bottom the caption sits. A variable rather than the
-           bare 12% it was, because 12% of a 9:16 reel is not 12% of a 16:9
+           bare 12% it was (10.5% now, moved down with the canvas path's
+           default), because 12% of a 9:16 reel is not 12% of a 16:9
            player: on a tall frame that lands the line much further up the
            picture than it does on a wide one, and a host laying out a vertical
            page has no other way to say so. Set --movi-sub-bottom on the
            element; unset, nothing changes. */
-        bottom: var(--movi-sub-bottom, 12%);
+        bottom: var(--movi-sub-bottom, 10.5%);
         left: 0;
         right: 0;
         z-index: 5;

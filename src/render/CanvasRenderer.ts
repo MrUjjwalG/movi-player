@@ -4602,21 +4602,23 @@ export class CanvasRenderer {
    * 60px floor we used to carry was a desktop-era guess at "above the
    * controls bar"; on a 250-pixel-tall embed it pinned the cue 24% up
    * the frame and made small-screen subtitles look like they were
-   * floating mid-screen. Scale primarily with overlay height (≈ 8%),
-   * cap at 80px on large players, and only floor at a low value so
+   * floating mid-screen. Scale primarily with overlay height (≈ 7%),
+   * cap at 70px on large players, and only floor at a low value so
    * tiny embeds still keep a few pixels of breathing room from the
-   * very edge.
+   * very edge. (8% / 24-80px until the owner asked for the line a little
+   * lower; all three moved by the same eighth so the step reads the same
+   * on every size.)
    */
   private static computeSubtitleBottomPadding(overlayHeight: number): number {
-    if (!Number.isFinite(overlayHeight) || overlayHeight <= 0) return 24;
-    return Math.max(Math.min(80, overlayHeight * 0.08), 24);
+    if (!Number.isFinite(overlayHeight) || overlayHeight <= 0) return 20;
+    return Math.max(Math.min(70, overlayHeight * 0.07), 20);
   }
 
   /**
    * How far the caption sits off the bottom of the video.
    *
-   * The default above is 8% of the picture's height, clamped to 24-80px, which
-   * reads well on a wide player. It does not travel: on a 9:16 reel the same 8%
+   * The default above is 7% of the picture's height, clamped to 20-70px, which
+   * reads well on a wide player. It does not travel: on a 9:16 reel the same 7%
    * is a much shorter distance in a much taller frame, and the caption lands on
    * whatever the page has put along the bottom.
    *
