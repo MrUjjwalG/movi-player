@@ -553,6 +553,7 @@ function upgradeOne(
   }
 
   fitToHostSkin(video, player);
+  keepAnsweredKeysFromSkin(video, player);
   hideHostChrome();
   if (!options.keepOverlays) hideOverlaysAfterLayout(player);
 
@@ -929,6 +930,26 @@ function heightComesFromThePage(player: HTMLElement): boolean {
     player.style.display = display;
     player.style.aspectRatio = ratio;
   }
+}
+
+/**
+ * A key the player answered is not the skin's to answer again.
+ *
+ * Skins keep their own shortcuts on the box around the video, and the press
+ * bubbles out of the player into it. Plyr has L for loop and M for mute, the
+ * same letters as ours: the player flipped the loop, Plyr flipped the hidden
+ * element's back, and the forwarded property carried that to the player, so
+ * L never changed anything. Play/pause survived only because the toggle
+ * guard in forwardTo already catches a second answer to one gesture.
+ *
+ * The player's own keydown listener is added in its constructor, so this one
+ * runs after it and can see whether the press was taken.
+ */
+function keepAnsweredKeysFromSkin(video: HTMLVideoElement, player: HTMLElement): void {
+  if (!video.closest?.(HOST_SKINS)) return;
+  player.addEventListener("keydown", (e) => {
+    if (e.defaultPrevented) e.stopPropagation();
+  });
 }
 
 const HOST_CHROME_STYLE_ID = "movi-upgrade-host-chrome";
