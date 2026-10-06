@@ -4438,13 +4438,13 @@
         width: 100% !important;
         max-width: 780px !important;
         margin: 0 auto !important;
-        padding-block: 2.5rem 2rem !important;
+        padding-block: 1rem 2rem !important;
       }
       /* A phone already sees the bar sit right above the hero; 70px of air
          between it and the eyebrow read as a gap rather than a breath. */
       @media (max-width: 640px) {
         .hero--split .hero-content,
-        .hero-content { padding-top: 1.25rem !important; }
+        .hero-content { padding-top: 0.5rem !important; }
       }
       .hero-left,
       .hero-copy,
@@ -7031,6 +7031,93 @@
         .hero-star.is-alive { animation: none; }
       }
       .hero-star-count b { font-weight: inherit; }
+      .hero-uses {
+        margin: 1.4rem 0 1.6rem;
+        text-align: center;
+      }
+      .hero-uses-label {
+        display: block;
+        margin: 0 0 0.6rem;
+        color: var(--text-secondary);
+        font: 500 0.66rem/1 "DM Mono", ui-monospace, monospace;
+        letter-spacing: 0.12em;
+        text-transform: uppercase;
+      }
+      .hero-uses ul {
+        display: flex;
+        flex-wrap: wrap;
+        justify-content: center;
+        gap: 0.5rem;
+        margin: 0;
+        padding: 0;
+        list-style: none;
+      }
+      .hero-uses li {
+        display: inline-flex;
+        align-items: center;
+        gap: 0.45rem;
+        padding: 0.45rem 0.75rem;
+        border: 1px solid var(--border-subtle);
+        border-radius: 999px;
+        background: color-mix(in srgb, var(--text-primary) 4%, transparent);
+        color: var(--text-primary);
+        font: 500 0.82rem/1.2 var(--font-family);
+      }
+      .hero-uses li { position: relative; cursor: default; }
+      .hero-uses li:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+      /* The reason behind each situation, kept off the chip so the row
+         stays one line, and shown on hover or keyboard focus. */
+      .hero-uses-tip {
+        position: absolute;
+        left: 50%;
+        bottom: calc(100% + 0.6rem);
+        z-index: 5;
+        width: max-content;
+        max-width: min(260px, calc(100vw - 2rem));
+        padding: 0.6rem 0.75rem;
+        border-radius: 0.6rem;
+        background: var(--text-primary);
+        color: var(--bg-base);
+        font: 500 0.78rem/1.45 var(--font-family);
+        text-align: left;
+        white-space: normal;
+        box-shadow: 0 8px 24px rgba(0, 0, 0, 0.18);
+        opacity: 0;
+        visibility: hidden;
+        pointer-events: none;
+        transform: translate(-50%, 4px);
+        transition: opacity 150ms ease, transform 150ms ease, visibility 150ms;
+      }
+      .hero-uses-tip::after {
+        content: "";
+        position: absolute;
+        top: 100%;
+        left: 50%;
+        margin-left: -5px;
+        border: 5px solid transparent;
+        border-top-color: var(--text-primary);
+      }
+      .hero-uses li:hover .hero-uses-tip,
+      .hero-uses li:focus-visible .hero-uses-tip {
+        opacity: 1;
+        visibility: visible;
+        transform: translate(-50%, 0);
+      }
+      .hero-uses svg {
+        width: 15px;
+        height: 15px;
+        flex: 0 0 auto;
+        color: var(--accent);
+      }
+      .hero-dev-label {
+        display: block;
+        margin: 0 0 0.45rem;
+        color: var(--text-secondary);
+        font: 500 0.66rem/1 "DM Mono", ui-monospace, monospace;
+        letter-spacing: 0.12em;
+        text-transform: uppercase;
+        opacity: 0.75;
+      }
       /* On a phone the pair does not fit one line; the star goes under
          the install line rather than being squeezed beside it. */
       @media (max-width: 480px) {
@@ -7236,13 +7323,26 @@
              laptop instead of below it. -->
         <div class="hero-left">
         <div class="hero-copy">
-          <p class="hero-kicker"><span></span> Your videos. Your way.</p>
+          <p class="hero-kicker"><span></span> Free online video player</p>
           <h1 aria-label="MoviPlayer — Free online video player. Play any video right in your browser.">
             Play any video<br><span class="highlight">right in your browser</span>
           </h1>
           <p class="hero-tagline">
-            Open a local file, folder, or any video URL and enjoy smooth, high-quality playback. No uploads. No signup. Just open and play.
+            Pick a video from your computer or phone, or paste a link, and it plays right here. Nothing is uploaded, no signup.
           </p>
+
+          <!-- What it is for, in the visitor's words rather than codec names:
+               the headline says "play any video", which a browser already
+               claims to do, so a first-time visitor needs the reason to be
+               here spelled out as the situation they are in. -->
+          <div class="hero-uses">
+            <span class="hero-uses-label">Use it when</span>
+            <ul>
+              <li tabindex="0"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="M12 7.5v5M12 16h.01"/></svg>A video says &ldquo;format not supported&rdquo;<span class="hero-uses-tip" role="tooltip">Phones, TVs and browsers often refuse files like MKV movies. MoviPlayer opens them as they are, no converting.</span></li>
+              <li tabindex="0"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M11 5 6 9H2v6h4l5 4z"/><path d="M22 9l-6 6M16 9l6 6"/></svg>A movie plays with no sound<span class="hero-uses-tip" role="tooltip">Many movies carry cinema sound (AC3, DTS) that most players skip, so the picture plays in silence. MoviPlayer plays that sound.</span></li>
+              <li tabindex="0"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="2" y="5" width="20" height="14" rx="2"/><path d="M7 15h4M15 15h2M7 11h2M13 11h4"/></svg>A movie comes in many languages<span class="hero-uses-tip" role="tooltip">Switch between every language and subtitle the movie comes with, like Hindi, English or Tamil, while it plays.</span></li>
+            </ul>
+          </div>
 
           <div class="hero-meta" aria-label="Playback highlights">
             <span>2026</span><span>4K HDR</span><span>Spatial audio</span><span>All formats</span>
@@ -7261,6 +7361,9 @@
           <!-- The other half of the audience: the same player, as a package.
                One line, and the only thing anyone wants to do with a line like
                this is copy it — so the line IS the button. -->
+          <!-- Named, so a visitor who came to watch something knows the
+               install line and the star are not a step they have to take. -->
+          <span class="hero-dev-label">For developers</span>
           <button
             class="hero-install"
             type="button"
