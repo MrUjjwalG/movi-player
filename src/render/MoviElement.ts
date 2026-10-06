@@ -31768,6 +31768,11 @@ export class MoviElement extends HTMLElement {
       // Load the video
       if (this.player) {
         this.attachFrameCallbackBridge();
+        // Before load(), so the source is built with the cap rather than
+        // shrunk to it once the stream is already running.
+        if (this._bufferSize > 0) {
+          this.player.setMaxBufferSize(this._bufferSize);
+        }
       await this.player.load();
       // Again after the load: a rebuilt renderer is a new object, and the hook
       // lives on the object.
@@ -38871,6 +38876,9 @@ export class MoviElement extends HTMLElement {
 
       this.setupEventHandlers();
       this.attachFrameCallbackBridge();
+      if (this._bufferSize > 0) {
+        this.player.setMaxBufferSize(this._bufferSize);
+      }
       await this.player.load();
       // Again after the load: a rebuilt renderer is a new object, and the hook
       // lives on the object.

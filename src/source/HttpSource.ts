@@ -384,7 +384,50 @@ export class HttpSource implements SourceAdapter {
       const calculatedBufferSize = canCacheEntireFile
         ? this.size
         : Math.floor(this.size * BUFFER_PERCENTAGE);
-      this.resizeBuffer(calculatedBufferSize);
+      const target = Math.max(
+        MIN_BUFFER_SIZE,
+        Math.min(maxBufferBytes, calculatedBufferSize),
+      );
+      if (target === this.bufferSize) return;
+      const live =
+        this.atomicIsStreaming() ||
+        this.atomicGetWritePos() > 0 ||
+        this.fullyBuffered;
+      if (!live) {
+        this.resizeBuffer(calculatedBufferSize);
+        return;
+      }
+      void this.restartWithBufferSize(calculatedBufferSize);
+    }
+  }
+
+  /**
+   * A cap that changes while bytes are already in the window cannot just swap
+   * the array: the stream loop holds the old one for the rest of its chunk,
+   * readers fetch the new one, and the start/write positions still describe
+   * the old. Every read after the swap was served from an empty array — the
+   * element applies `buffersize` after load(), so a 229MB file opened under the
+   * default cap (whole-file mode) and then capped to 50MB played what the
+   * demuxer already held and stalled ~18s in, in every browser. Stop the
+   * stream first, resize, and restart from where the reader is, the same way
+   * a seek does: a few MB fetched twice, once, instead of a dead source.
+   */
+  private async restartWithBufferSize(newSize: number): Promise<void> {
+    const from = Math.max(0, Math.min(this.consumedUpTo(), this.size));
+    await this.stopStream();
+    if (this.closed) return;
+    this.fullyBuffered = false;
+    this.resizeBuffer(newSize);
+    if (this._netSuspended) {
+      this.atomicSetBufferStart(from);
+      this.atomicSetWritePos(0);
+      this.maxBufferedEnd = from;
+      return;
+    }
+    try {
+      await this.startStream(from);
+    } catch (err) {
+      Logger.warn(TAG, "Restart after buffer resize failed", err);
     }
   }
 

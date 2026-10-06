@@ -647,6 +647,8 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
 
   private config: PlayerConfig;
   private source: SourceAdapter | null = null;
+  /** The `buffersize` cap, in MB — see setMaxBufferSize. */
+  private requestedMaxBufferSizeMB: number | undefined;
   private cache: LRUCache;
   private demuxer: Demuxer | null = null;
 
@@ -3989,7 +3991,8 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
       if (factory) {
         return await factory({ url: config.url, headers: config.headers });
       }
-      const maxBufferSizeMB = this.config.cache?.maxSizeMB;
+      const maxBufferSizeMB =
+        this.requestedMaxBufferSizeMB ?? this.config.cache?.maxSizeMB;
       const source = new HttpSource(
         config.url,
         config.headers,
@@ -17535,7 +17538,13 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
    * memory vs. seek responsiveness at deploy time without forking.
    */
   setMaxBufferSize(megabytes: number): void {
-    if (!(megabytes > 0) || !this.source) return;
+    if (!(megabytes > 0)) return;
+    // Kept for the source that does not exist yet. Applied only once the
+    // stream is running, a smaller cap has to throw the window away and
+    // fetch it again; handed to the constructor, the window is sized right
+    // before the first byte.
+    this.requestedMaxBufferSizeMB = megabytes;
+    if (!this.source) return;
     const src = this.source as SourceAdapter & {
       setMaxBufferSize?: (mb: number) => void;
     };
