@@ -1217,17 +1217,8 @@ function forwardTo(
           ) {
             return name === "play" ? Promise.resolve() : undefined;
           }
-          // load() starts the element over on whatever it now declares. A new
-          // src already did that — the player loads on the assignment — and
-          // one the player swallowed above has nothing to load; a skin's
-          // watchdog calling load() to "recover" a player that is fine is a
-          // restart for nothing. Only a changed set of <source> children,
-          // which the page may still hold and rewrite, is news.
-          if (name === "load") {
-            const now = childSources(player).join("\n");
-            if (now === loadedChildren) return undefined;
-            loadedChildren = now;
-          }
+          // load() is decided by the player's own guard below, so that a page
+          // reaching the player directly is answered the same way.
           return (target[name] as ((...a: unknown[]) => unknown) | undefined)?.apply(
             player,
             args,
@@ -1238,6 +1229,46 @@ function forwardTo(
       /* ditto */
     }
   }
+
+  // load() starts the element over on whatever it now declares. A new src
+  // already did that (the player loads on the assignment), and one the player
+  // swallowed above has nothing to load; a skin's watchdog calling load() to
+  // "recover" a player that is fine is a restart for nothing. Only a changed
+  // set of <source> children, which the page may still hold and rewrite, is
+  // news.
+  //
+  // Asked by the player itself, not only by the hidden element: the id moves
+  // across, so a page that finds its video by id holds the PLAYER. An embed
+  // under Plyr does exactly that on its first play (pause, `load()`, wait for
+  // loadeddata, play), and the call went straight to the player's load(): a
+  // cold open from the start, throwing away every second buffered while the
+  // poster sat there (34.6MB, 124s, on the session that found it).
+  //
+  // A <video> answers load() with loadeddata and canplay again, and that page
+  // calls play() only when it hears them. A swallowed load() that said
+  // nothing left the film paused for good, so the player says them again.
+  // Not while it has nothing to say: no player, a load in flight, or an
+  // error, where a fresh load is exactly what is wanted.
+  (player as { _pageLoadGuard?: () => boolean })._pageLoadGuard = () => {
+    const now = childSources(player).join("\n");
+    if (now !== loadedChildren) {
+      loadedChildren = now;
+      return false;
+    }
+    const state = (player as { player?: { getState?: () => string } | null }).player?.getState?.();
+    if (!state || state === "idle" || state === "loading" || state === "error") return false;
+    Logger.info(TAG, "Page asked to load() the film already loaded; the player keeps its buffer");
+    setTimeout(() => {
+      for (const name of ["loadedmetadata", "loadeddata", "canplay", "canplaythrough"]) {
+        try {
+          player.dispatchEvent(new Event(name));
+        } catch {
+          /* a listener that throws is the page's, not ours */
+        }
+      }
+    }, 0);
+    return true;
+  };
 
   // The attribute is the other way a page points a <video> at a file, and it
   // went to the hidden element: the page's next film never reached the

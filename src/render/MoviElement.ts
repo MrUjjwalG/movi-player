@@ -2671,7 +2671,7 @@ export class MoviElement extends HTMLElement {
     // _isUnsupported and hides this overlay.
     const retryBtn = this.brokenIndicator.querySelector(".movi-retry-btn");
     retryBtn?.addEventListener("click", () => {
-      this.load().catch(() => {});
+      this.loadSource().catch(() => {});
     });
 
     this.brokenIndicator
@@ -10543,7 +10543,7 @@ export class MoviElement extends HTMLElement {
     this._pendingPlay = false;
     this._playUnprompted = false;
     this.announceLoadStart(typeof this._src === "string" ? this._src : null);
-    this.load();
+    this.loadSource();
   }
 
   /**
@@ -10986,7 +10986,7 @@ export class MoviElement extends HTMLElement {
     this.updateControlsState();
     // load() tears the old player down and re-inits on a fresh WASM instance,
     // clearing any stuck error state and resuming at _startAt/_pendingSeek.
-    this.load();
+    this.loadSource();
   }
 
   /**
@@ -11096,7 +11096,7 @@ export class MoviElement extends HTMLElement {
     this._isUnsupported = false;
     this.isLoading = false;
     this._src = url;
-    this.load();
+    this.loadSource();
     return true;
   }
 
@@ -12322,7 +12322,7 @@ export class MoviElement extends HTMLElement {
     this._forcedDashRendition = url;
     this._streamDemuxNext = true;
     this._suppressSwReload = true;
-    this.load()
+    this.loadSource()
       .then(() => {
         // Resume playback if it was rolling before the switch — the re-load
         // otherwise lands paused at the seeked position.
@@ -29635,7 +29635,7 @@ export class MoviElement extends HTMLElement {
           this._renderer = newRenderer;
           // Reload if source exists to apply renderer change
           if (this.isConnected && this._src) {
-            this.load();
+            this.loadSource();
           }
         }
         break;
@@ -29693,14 +29693,14 @@ export class MoviElement extends HTMLElement {
         // Suppressed during dispose() so clearing a per-source software
         // fallback doesn't trigger a reload of the about-to-be-replaced src.
         if (this.isConnected && this._src && !this._suppressSwReload) {
-          this.load();
+          this.loadSource();
         }
         break;
       case "fps":
         this._fps = newValue ? parseFloat(newValue) : 0;
         // If fps changes and element is connected with src, reload
         if (this.isConnected && this._src) {
-          this.load();
+          this.loadSource();
         }
         break;
     }
@@ -31898,7 +31898,7 @@ export class MoviElement extends HTMLElement {
           );
           this._src = lower.src;
           this.isLoading = false;
-          void this.load();
+          void this.loadSource();
           return;
         }
         Logger.warn(
@@ -33368,12 +33368,25 @@ export class MoviElement extends HTMLElement {
     queueMicrotask(() => {
       this._attrLoadScheduled = false;
       if (this.isConnected && (this._src || this._sourceAdapter)) {
-        this.load();
+        this.loadSource();
       }
     });
   }
 
+  /**
+   * Set by upgradeVideoElements on a player that took a page's <video>. The
+   * page still believes it holds a <video> and calls load() on it; this says
+   * whether that call asks for anything the player has not already loaded.
+   * Internal reloads go through loadSource() and never consult it.
+   */
+  _pageLoadGuard?: () => boolean;
+
   async load(): Promise<void> {
+    if (this._pageLoadGuard?.()) return;
+    return this.loadSource();
+  }
+
+  private async loadSource(): Promise<void> {
     // NOTE: no generation bump here. load() teardown is synchronous and runs
     // straight into initializePlayer(), whose own bump invalidates anything
     // still in flight. Bumping here as well invalidated in-flight inits on
@@ -36627,7 +36640,7 @@ export class MoviElement extends HTMLElement {
           else if (next === "dashjs" || next === "hlsjs") {
             this._streamEngineNext = next;
           }
-          this.load().catch(() => {});
+          this.loadSource().catch(() => {});
           return;
         }
       }
@@ -36655,7 +36668,7 @@ export class MoviElement extends HTMLElement {
           TAG,
           `Server calls this ${served} — re-loading as ${kind.toUpperCase()} rather than as a file`,
         );
-        this.load().catch(() => {});
+        this.loadSource().catch(() => {});
         return;
       }
     }
@@ -36685,7 +36698,7 @@ export class MoviElement extends HTMLElement {
           TAG,
           `Stream decode error — retrying via ${this._streamEngineNext} (Shaka may be over-strict)`,
         );
-        this.load().catch(() => {});
+        this.loadSource().catch(() => {});
         return;
       }
       if ((isDashSrc || isHlsSrc) && !this._streamDemuxTried) {
@@ -36695,7 +36708,7 @@ export class MoviElement extends HTMLElement {
           TAG,
           "Stream decode error persists — retrying via the FFmpeg-WASM demuxer",
         );
-        this.load().catch(() => {});
+        this.loadSource().catch(() => {});
         return;
       }
     }
@@ -38541,7 +38554,7 @@ export class MoviElement extends HTMLElement {
           this.resetForFreshSource();
           this.updatePoster();
           if (this.isConnected) {
-            this.load();
+            this.loadSource();
           }
         }
       } else {
@@ -38635,7 +38648,7 @@ export class MoviElement extends HTMLElement {
     // live change only takes effect on the next load. Reload if a source is
     // already active.
     if (this.isConnected && (this._src || this._sourceAdapter)) {
-      this.load();
+      this.loadSource();
     }
   }
 
