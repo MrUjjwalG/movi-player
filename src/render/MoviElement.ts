@@ -6619,6 +6619,38 @@ export class MoviElement extends HTMLElement {
       true,
     );
 
+    // A click lands on a control as often as on the picture, and the control
+    // keeps the focus: the centre play button, a bar button. Those hide by
+    // themselves once playback runs, and a hidden element cannot hold focus, so
+    // the browser dropped it to <body> without a word — the next key reached no
+    // player at all. On a page of several players that read as L toggling the
+    // loop once and then never again. Hand the focus back to the host when it is
+    // lost to a control going out of sight; a focus that left because the
+    // viewer clicked elsewhere leaves a control that is still visible, and is
+    // left alone.
+    this.shadowRoot?.addEventListener(
+      "focusout",
+      (e) => {
+        const fe = e as FocusEvent;
+        if (fe.relatedTarget) return;
+        const from = fe.target as HTMLElement | null;
+        if (!from || from === (this as HTMLElement)) return;
+        const gone =
+          !from.isConnected ||
+          (typeof from.checkVisibility === "function"
+            ? !from.checkVisibility({ visibilityProperty: true })
+            : getComputedStyle(from).visibility === "hidden" ||
+              from.offsetParent === null);
+        if (!gone || !this.isConnected) return;
+        queueMicrotask(() => {
+          const now = document.activeElement;
+          if (now && now !== document.body) return;
+          this.focus({ preventScroll: true });
+        });
+      },
+      true,
+    );
+
     this.addEventListener("keydown", (e) => {
       // Check if keyboard controls are disabled
       if (this._noHotkeys) return;
