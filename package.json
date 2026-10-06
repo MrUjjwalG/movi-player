@@ -93,6 +93,7 @@
     "README.md",
     "AGENTS.md",
     "LICENSE",
+    "THIRD_PARTY_NOTICES.md",
     "custom-elements.json"
   ],
   "customElements": "custom-elements.json",
