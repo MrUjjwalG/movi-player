@@ -883,7 +883,52 @@ function ladderFromSkin(
 function fitToHostSkin(video: HTMLVideoElement, player: HTMLElement): void {
   if (!video.closest?.(HOST_SKINS)) return;
   if (!player.style.width) player.style.width = "100%";
-  if (!player.style.height) player.style.height = "100%";
+  if (player.style.height) return;
+  if (heightComesFromThePage(player)) return;
+  player.style.height = "100%";
+}
+
+/**
+ * Not every skin's box has a height of its own. Plyr's wraps the <video> and
+ * is as tall as the video makes it, and the page sizes the VIDEO: an embed
+ * with `#target { width: 100%; height: 100vh }` under a Plyr skin. The id
+ * moved across to the player and that rule matched it, but the inline 100%
+ * above beat it, and 100% of a box with no height of its own is no height
+ * at all — the player fell back to its 16:9 box, which on a wide window is
+ * taller than the window, and the page's `overflow: hidden` cut the controls
+ * off the bottom.
+ *
+ * So where the box would collapse without its contents and the page's own
+ * rules already give the player a height, those rules are left to do it.
+ * Anything else gets the 100% as before.
+ *
+ * "A rule gives it a height" is asked of the player, not compared with the
+ * video: the id that carried the rule across has left the video, so the
+ * hidden element no longer matches it and measures 0. A height that stays put
+ * under two very different aspect ratios is one a rule set; a height the
+ * element is working out for itself follows the ratio.
+ */
+function heightComesFromThePage(player: HTMLElement): boolean {
+  const box = player.parentElement;
+  if (!box) return false;
+  const display = player.style.display;
+  const ratio = player.style.aspectRatio;
+  try {
+    player.style.display = "none";
+    const ownHeight = box.getBoundingClientRect().height;
+    player.style.display = display;
+    if (ownHeight > 1) return false; // the box has a height to fill
+    player.style.aspectRatio = "1 / 1";
+    const square = player.getBoundingClientRect().height;
+    player.style.aspectRatio = "4 / 1";
+    const wide = player.getBoundingClientRect().height;
+    return square > 0 && Math.abs(square - wide) <= 1;
+  } catch {
+    return false;
+  } finally {
+    player.style.display = display;
+    player.style.aspectRatio = ratio;
+  }
 }
 
 const HOST_CHROME_STYLE_ID = "movi-upgrade-host-chrome";
