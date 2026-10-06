@@ -17712,8 +17712,11 @@ export class MoviPlayer extends EventEmitter<PlayerEventMap> {
    * there costs a switch and buys nothing: the bytes for the rung we would
    * leave are already on the machine, and the ones for the rung we would land
    * on are not.
+   *
+   * The link-budget notice asks the same question for the same reason — see
+   * MoviElement.sampleLinkBudget.
    */
-  private nothingLeftToFetch(): boolean {
+  nothingLeftToFetch(): boolean {
     if (
       (this.source as { isFullyCached?: () => boolean } | null)?.isFullyCached?.() === true
     ) {

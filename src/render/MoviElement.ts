@@ -12671,6 +12671,12 @@ export class MoviElement extends HTMLElement {
     if (!p || p.getState?.() !== "playing") return;
     const needed = p.requiredLinkBps?.() ?? 0;
     if (!(needed > 0)) return; // a local file, or a size we never learned
+    // Everything is already downloaded, so the link has no part left in this
+    // playback. The notice used to come up anyway on a fast line with the
+    // whole media buffered: a stall from a seek or the decoder counted against
+    // the link, and the verdict then read the delivery figures of a source with
+    // nothing left to download, which drop when it goes idle.
+    if (p.nothingLeftToFetch?.()) return;
     // …and not while the device is the one falling behind. The decode-bound
     // notice owns that case, and a probe competing with the player's own
     // streaming can read low enough to look like agreement. Unless the
@@ -12697,6 +12703,9 @@ export class MoviElement extends HTMLElement {
       .then((bps) => {
         if (ac.signal.aborted || !this._smoothWarning || this._noLinkWarning)
           return;
+        // The probes take up to three seconds, and a fast line can finish the
+        // download in that time.
+        if (p.nothingLeftToFetch?.()) return;
         // The verdict leaves no other trace — a probe that clears the bar
         // says nothing on screen, and the browser does not log a successful
         // fetch — so a session that stalled without a notice could not tell
@@ -12735,12 +12744,24 @@ export class MoviElement extends HTMLElement {
         // short of the need — it cannot read above the line, and it does not
         // sink with whatever the last few seconds held — and otherwise the
         // sustained average, which is what fell short.
+        //
+        // Only a figure that IS short of the need may be quoted. A small file
+        // downloads in under the five seconds a sustained reading needs, so
+        // there was none; stalls at startup had marked the delivery proven;
+        // and the quote fell through to the probe, which read 90 against a
+        // need of 10. announceLinkShortfall then moved the need one step past
+        // the figure so the two would not match, and the notice said "needs
+        // 100, arriving 90" for media that needed a tenth of that. With no
+        // figure below the line there is nothing true to say.
         const quote =
           arriving > 0 && arriving < needed
             ? arriving
-            : sustained > 0
+            : sustained > 0 && sustained < needed
               ? sustained
-              : bps;
+              : bps > 0 && bps < needed
+                ? bps
+                : -1;
+        if (!(quote > 0)) return;
         this.announceLinkShortfall(needed, quote);
       })
       .catch(() => {
@@ -32645,9 +32666,12 @@ export class MoviElement extends HTMLElement {
       // an 8K file on Google Drive stalled every few seconds and never got
       // its notice. See MoviPlayer.deliveryStarved.
       if (state === "buffering") {
-        const starved = !!this.player?.deliveryStarved?.();
-        if (starved) this._deliveryStalls++;
-        if (starved || !this.player?.deviceIsBottleneck?.()) this._linkStalls++;
+        // A stall with nothing left to download is never the link's.
+        if (!this.player?.nothingLeftToFetch?.()) {
+          const starved = !!this.player?.deliveryStarved?.();
+          if (starved) this._deliveryStalls++;
+          if (starved || !this.player?.deviceIsBottleneck?.()) this._linkStalls++;
+        }
       }
       else this._qoe.bufferingEndNow();
       // A seek requested before the player was ready was held — apply it now
